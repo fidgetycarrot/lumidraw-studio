@@ -750,6 +750,18 @@ function realSetup(ctx) {
     if (el) el.addEventListener('input', scheduleTagSave)
   }
 
+  // All settings text fields auto-save as you type (debounced).
+  let settingsSaveTimer = null
+  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-host', '.ld-port']) {
+    const el = $(sel)
+    if (el) el.addEventListener('input', () => {
+      clearTimeout(settingsSaveTimer)
+      settingsSaveTimer = setTimeout(() => {
+        pushSettings('Settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
+      }, 900)
+    })
+  }
+
   // Story controls save themselves immediately — no Save press needed.
   for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-chartags', '.ld-parser-conn']) {
     const el = $(sel)

@@ -392,6 +392,11 @@ async function quietLLM(system, user, settings, userId) {
   }
   const opts = {
     userId,
+    // Redundant encodings — whichever shape this host's generate API reads,
+    // the instruction is present in it.
+    system,
+    systemPrompt: system,
+    prompt: user,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
@@ -411,7 +416,10 @@ async function quietLLM(system, user, settings, userId) {
       const text = (res && (res.text || res.content ||
         (res.choices && res.choices[0] && (res.choices[0].text || (res.choices[0].message && res.choices[0].message.content))))) ||
         (typeof res === 'string' ? res : null)
-      if (text) return text.trim()
+      if (text) {
+        spindle.log.info('[lumidraw] parser via ' + name + ' → raw reply: ' + text.trim().slice(0, 500))
+        return text.trim()
+      }
       errs.push(`${name}: unrecognized response shape (${res ? Object.keys(res).join(',') : res})`)
     } catch (e) { errs.push(`${name}: ${e.message}`) }
   }
@@ -476,13 +484,15 @@ async function scanStory(userId, force) {
     if (!force && target.id && await wasProcessed(target.id)) {
       return { mode: 'parser', note: 'Latest message already illustrated — press Scan story now to force a re-run.' }
     }
+    const usingCustom = !!(settings.parserInstruction && settings.parserInstruction.trim())
     const instruction = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
       .replaceAll('{{max_images}}', String(settings.maxImages || 2))
+    const instrLabel = usingCustom ? `custom instruction (${instruction.length} chars)` : 'built-in instruction'
     const passage = stripThinking(target.content).replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
     const out = await quietLLM(await resolveMacros(instruction, userId, chatId), passage, settings, userId)
     if (/^\s*NONE\s*$/i.test(out)) {
       if (target.id) await markProcessed(target.id)
-      return { mode: 'parser', note: 'Parser judged no visual moment (NONE).' }
+      return { mode: 'parser', note: `Parser (${instrLabel}) judged no visual moment (NONE).` }
     }
     const lines = out.split('\n').map((l) => l.replace(/^["'`\s]+|["'`\s]+$/g, ''))
       .filter((l) => l && !/^NONE$/i.test(l)).slice(0, settings.maxImages || 2)
@@ -505,7 +515,7 @@ async function scanStory(userId, force) {
     if (!mds.length) return { mode: 'parser', note: 'Parser returned nothing usable: ' + out.slice(0, 140) }
     await updateMessageContent(target.id, target.contentKey, `${mds.join('\n\n')}\n\n${target.content}`, userId, chatId)
     if (target.id) await markProcessed(target.id)
-    return { mode: 'parser', processed: mds.length, note: `Illustrated ${mds.length} moment(s). First prompt: ` + firstPrompt.slice(0, 120) }
+    return { mode: 'parser', processed: mds.length, note: `Illustrated ${mds.length} moment(s) via ${instrLabel}. First prompt: ` + firstPrompt.slice(0, 120) }
   }
 
   return { mode: settings.mode, note: 'No <dt-image> tags in the latest story message.' }
