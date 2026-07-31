@@ -611,7 +611,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // 2b) Native Image Gen + personas surfaces (where character prompt
         // presets likely live, per Swarm Studio's hydration feature)
         report.imageGenApiMethods = spindle.imageGen ? Object.keys(spindle.imageGen) : null
-        for (const fn of ['getConfig', 'getSettings', 'getState', 'getPresets', 'getCharacterPrompts']) {
+        for (const fn of ['getConfig', 'getSettings', 'getState', 'getPresets', 'getCharacterPrompts', 'getPromptPresets', 'listPresets', 'getConnections']) {
           if (spindle.imageGen && typeof spindle.imageGen[fn] === 'function') {
             try {
               const r = await spindle.imageGen[fn](userId)
@@ -619,6 +619,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
             } catch (e) { report['imageGen.' + fn] = 'error: ' + e.message }
           }
         }
+        report.presetsApiMethods = spindle.presets ? Object.keys(spindle.presets) : null
         report.charactersApiMethods = spindle.characters ? Object.keys(spindle.characters) : null
         report.personasApiMethods = spindle.personas ? Object.keys(spindle.personas) : null
 
