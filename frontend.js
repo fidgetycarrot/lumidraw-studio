@@ -2,7 +2,27 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
+function makeId() {
+  if (window.crypto && typeof crypto.randomUUID === 'function') {
+    try { return crypto.randomUUID() } catch { /* insecure context */ }
+  }
+  const a = new Uint8Array(16)
+  crypto.getRandomValues(a)
+  return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 export function setup(ctx) {
+  try {
+    return realSetup(ctx)
+  } catch (err) {
+    console.error('[LumiDraw] setup crashed:', err)
+    return () => {}
+  }
+}
+
+export default setup
+
+function realSetup(ctx) {
   // ------------------------------------------------------------------ state
   let settings = { host: '127.0.0.1', port: 7862 }
   let presets = []
@@ -14,7 +34,7 @@ export function setup(ctx) {
 
   function call(type, data = {}) {
     return new Promise((resolve, reject) => {
-      const requestId = crypto.randomUUID()
+      const requestId = makeId()
       pending.set(requestId, { resolve, reject })
       ctx.sendToBackend({ type, requestId, ...data })
       setTimeout(() => {
