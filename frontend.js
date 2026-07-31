@@ -80,6 +80,7 @@ function realSetup(ctx) {
   let activePreset = null   // name of selected preset
   let syncedConfig = null   // last synced/loaded config powering the form
   let busy = false
+  let defaults = { protocol: '', parserInstruction: '' }
   const pending = new Map() // requestId → {resolve, reject}
 
   function call(type, data = {}, timeoutMs = 630000) {
@@ -108,10 +109,10 @@ function realSetup(ctx) {
   const removeStyle = dom.addStyle(`
     .ld-launcher {
       position: fixed; right: 16px; bottom: 88px; z-index: 9000;
-      width: 50px; height: 50px; border-radius: 50%;
+      width: 58px; height: 58px; border-radius: 16px;
       display: flex; align-items: center; justify-content: center;
       background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
-      color: var(--lumiverse-text, #eceef4); cursor: grab; font-size: 23px; touch-action: none;
+      color: var(--lumiverse-text, #eceef4); cursor: grab; touch-action: none;
       box-shadow: 0 2px 10px rgba(0,0,0,.28); user-select: none;
     }
     .ld-launcher:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
@@ -200,7 +201,13 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio">🎨</button>
+    <button class="ld-launcher" title="LumiDraw Studio" aria-label="LumiDraw Studio">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="3"></rect>
+        <circle cx="9" cy="9" r="1.8"></circle>
+        <path d="M21 15.5l-4.2-4.2a1.6 1.6 0 0 0-2.3 0L6 20"></path>
+      </svg>
+    </button>
     <div class="ld-panel">
       <div class="ld-head">
         <span class="ld-head-title">LumiDraw Studio</span>
@@ -277,6 +284,10 @@ function realSetup(ctx) {
           <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px">
             <input type="checkbox" class="ld-autoscan" style="width:auto" /> Auto-scan after each story message (if supported — otherwise use Scan story now)
           </label>
+          <div style="margin-top:6px">
+            <span class="ld-label">Max images per story message</span>
+            <input class="ld-maximg" type="number" min="1" max="4" step="1" />
+          </div>
         </div>
         <div>
           <span class="ld-label">Parser connection (name/id — optional, persists)</span>
@@ -287,12 +298,14 @@ function realSetup(ctx) {
           <input class="ld-parser-model" placeholder="e.g. your Kimi deployment" />
         </div>
         <div>
-          <span class="ld-label">Parser instruction (blank = built-in Danbooru converter)</span>
-          <textarea class="ld-parser-instr" style="min-height:64px" placeholder="Paste your Kimi→Danbooru parser prompt here to reuse it"></textarea>
+          <span class="ld-label">Parser instruction — sent to the parser model with the story passage (Parser mode). Edit freely; paste your own converter prompt here.</span>
+          <textarea class="ld-parser-instr" style="min-height:80px"></textarea>
+          <button class="ld-btn" data-act="reset-parser" style="margin-top:4px">Reset to default</button>
         </div>
         <div>
-          <span class="ld-label">Inline protocol (blank = built-in; injected only in Inline mode)</span>
-          <textarea class="ld-protocol" style="min-height:64px"></textarea>
+          <span class="ld-label">Inline instruction — added to your story model's prompt (Inline mode) to teach it the &lt;dt-image&gt; tag. This is how it knows what to do. Edit freely.</span>
+          <textarea class="ld-protocol" style="min-height:80px"></textarea>
+          <button class="ld-btn" data-act="reset-protocol" style="margin-top:4px">Reset to default</button>
         </div>
         <div class="ld-status">Story generations use the preset selected in the Generate tab (its prompt prefix becomes the character identity). Settings persist on the server across restarts.</div>
         <div class="ld-status">Tip: Draw Things shows the recipe of whatever image is selected — so select any image you love, hit Sync, and you've captured its exact settings.</div>
@@ -606,6 +619,13 @@ function realSetup(ctx) {
     } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
   })
 
+  $('[data-act="reset-parser"]').addEventListener('click', () => {
+    $('.ld-parser-instr').value = defaults.parserInstruction || ''
+  })
+  $('[data-act="reset-protocol"]').addEventListener('click', () => {
+    $('.ld-protocol').value = defaults.protocol || ''
+  })
+
   $('[data-act="append-last"]').addEventListener('click', () => {
     const last = history[0]
     if (last && last.images && last.images[0]) appendToChat(last.images[0], last)
@@ -650,6 +670,7 @@ function realSetup(ctx) {
         parserModel: $('.ld-parser-model').value,
         parserInstruction: $('.ld-parser-instr').value,
         protocol: $('.ld-protocol').value,
+        maxImages: $('.ld-maximg').value,
       })
       settings = res.settings
       setStatus('.ld-settings-status', `Saved — pointing at ${settings.host}:${settings.port}.`, 'good')
@@ -679,8 +700,10 @@ function realSetup(ctx) {
       $('.ld-autoscan').checked = settings.autoScan !== false
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
-      $('.ld-parser-instr').value = settings.parserInstruction || ''
-      $('.ld-protocol').value = settings.protocol || ''
+      defaults = res.defaults || defaults
+      $('.ld-maximg').value = settings.maxImages || 2
+      $('.ld-parser-instr').value = settings.parserInstruction || defaults.parserInstruction || ''
+      $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
       if (settings.activePreset) { activePreset = settings.activePreset }
       if (activePreset) {
         const p = presets.find((x) => x.name === activePreset)

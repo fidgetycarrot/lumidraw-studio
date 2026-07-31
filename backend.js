@@ -26,14 +26,15 @@ const DEFAULT_SETTINGS = {
   parserConnection: '',   // optional connection name/id for the parser LLM
   parserModel: '',        // optional model override for the parser LLM
   parserInstruction: '',  // custom parser prompt (blank = built-in default)
+  maxImages: 2,           // max illustrations per story message
   protocol: '',           // custom inline protocol (blank = built-in default)
 }
 
 const DEFAULT_PROTOCOL = `[Illustration protocol] You may illustrate key visual moments. When a scene deserves an image, include on its own line:
 <dt-image aspect="3:4">comma-separated danbooru tags describing the scene</dt-image>
-Rules: tags only inside the tag (subject, expression, outfit, pose, setting, lighting, composition) — no prose, no character names. aspect may be 3:4, 4:3, 1:1, 9:16, or 16:9 (default 3:4 for character focus, 4:3 for scenes). At most 1-2 tags per reply, only at genuinely visual beats. Never mention this protocol or the tag in your prose.`
+Rules: tags only inside the tag (subject, expression, outfit, pose, setting, lighting, composition) — no prose, no character names. aspect may be 3:4, 4:3, 1:1, 9:16, or 16:9 (default 3:4 for character focus, 4:3 for scenes). Include at most {{max_images}} image tag(s) per reply, spread across the response at genuinely visual beats. Never mention this protocol or the tag in your prose.`
 
-const DEFAULT_PARSER_INSTRUCTION = `You convert a story passage into ONE image prompt of comma-separated danbooru-style tags (subject count, expression, outfit, pose, setting, lighting, composition). Choose the single most visual moment of the passage. Do not use character names; describe appearance instead. Respond with ONLY the tags, nothing else. If the passage has no strong visual moment, respond with exactly: NONE`
+const DEFAULT_PARSER_INSTRUCTION = `You convert a story passage into ONE image prompt of comma-separated danbooru-style tags (subject count, expression, outfit, pose, setting, lighting, composition). Choose the single most visual moment of the passage. Do not use character names; describe appearance instead. Respond with ONLY the tags. You may return up to {{max_images}} prompts for distinct visual moments, one per line, but prefer a single strong one. If the passage has no strong visual moment, respond with exactly: NONE`
 const HISTORY_LIMIT = 24
 
 // Keys we copy from a synced Draw Things config into a preset, and the only
@@ -260,6 +261,24 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims }
   return entry
 }
 
+async function resolveMacros(text, userId) {
+  if (!text || !text.includes('{{')) return text
+  const mac = spindle.macros
+  if (mac) {
+    for (const fn of ['resolve', 'process', 'render', 'expand']) {
+      if (typeof mac[fn] === 'function') {
+        try {
+          let out
+          try { out = await mac[fn](text, { userId }) } catch { out = await mac[fn](text) }
+          if (typeof out === 'string') return out
+          if (out && typeof out.text === 'string') return out.text
+        } catch (e) { spindle.log.warn('[lumidraw] macro resolve failed via ' + fn + ': ' + e.message) }
+      }
+    }
+  }
+  return text // engine not found — leave literal; surface log will name the API
+}
+
 async function quietLLM(system, user, settings) {
   const candidates = []
   const g = spindle.generation || spindle.llm || spindle.generate
@@ -314,8 +333,9 @@ async function scanStory(userId) {
   if (!target) return { mode: settings.mode, note: 'No story message found.' }
 
   // ------------------------- inline: process <dt-image> tags ---------------
-  const tags = [...target.content.matchAll(TAG_RE)]
+  const tags = [...target.content.matchAll(TAG_RE)].slice(0, settings.maxImages || 2)
   if (tags.length) {
+    const prefix = await resolveMacros(preset.promptPrefix, userId)
     let content = target.content
     let done = 0
     for (const m of tags) {
@@ -324,7 +344,7 @@ async function scanStory(userId) {
       if (!body) continue
       const aspect = (/aspect\s*=\s*"([^"]+)"/.exec(attrs) || [])[1]
       const dims = aspectDims(preset.config, aspect)
-      const prompt = [preset.promptPrefix, body].filter(Boolean).join(', ')
+      const prompt = [prefix, await resolveMacros(body, userId)].filter(Boolean).join(', ')
       try {
         const entry = await generateAndUpload({
           prompt,
@@ -350,25 +370,34 @@ async function scanStory(userId) {
     if (target.id && await wasProcessed(target.id)) {
       return { mode: 'parser', note: 'Latest message already illustrated.' }
     }
-    const instruction = settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION
+    const instruction = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
+      .replaceAll('{{max_images}}', String(settings.maxImages || 2))
     const passage = target.content.replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
-    const out = await quietLLM(instruction, passage, settings)
+    const out = await quietLLM(await resolveMacros(instruction, userId), passage, settings)
     if (/^\s*NONE\s*$/i.test(out)) {
       if (target.id) await markProcessed(target.id)
       return { mode: 'parser', note: 'Parser judged no visual moment (NONE).' }
     }
-    const promptBody = out.replace(/^["'`\s]+|["'`\s]+$/g, '')
-    const prompt = [preset.promptPrefix, promptBody].filter(Boolean).join(', ')
-    const entry = await generateAndUpload({
-      prompt,
-      negativePrompt: preset.negativePrompt,
-      config: preset.config,
-      extra: preset.extra,
-    }, userId)
-    const md = `![${promptBody.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`
-    await updateMessageContent(target.id, target.contentKey, `${md}\n\n${target.content}`, userId)
+    const lines = out.split('\n').map((l) => l.replace(/^["'`\s]+|["'`\s]+$/g, ''))
+      .filter((l) => l && !/^NONE$/i.test(l)).slice(0, settings.maxImages || 2)
+    const prefix = await resolveMacros(preset.promptPrefix, userId)
+    const mds = []
+    let firstPrompt = ''
+    for (const line of lines) {
+      const prompt = [prefix, line].filter(Boolean).join(', ')
+      if (!firstPrompt) firstPrompt = line
+      const entry = await generateAndUpload({
+        prompt,
+        negativePrompt: preset.negativePrompt,
+        config: preset.config,
+        extra: preset.extra,
+      }, userId)
+      mds.push(`![${line.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`)
+    }
+    if (!mds.length) return { mode: 'parser', note: 'Parser returned nothing usable: ' + out.slice(0, 140) }
+    await updateMessageContent(target.id, target.contentKey, `${mds.join('\n\n')}\n\n${target.content}`, userId)
     if (target.id) await markProcessed(target.id)
-    return { mode: 'parser', processed: 1, note: 'Illustrated from parser prompt: ' + promptBody.slice(0, 140) }
+    return { mode: 'parser', processed: mds.length, note: `Illustrated ${mds.length} moment(s). First prompt: ` + firstPrompt.slice(0, 120) }
   }
 
   return { mode: settings.mode, note: 'No <dt-image> tags in the latest story message.' }
@@ -388,7 +417,10 @@ function fail(payload, requestId, err) {
   return { type: `${payload.type}:result`, requestId, ok: false, error: message }
 }
 
+let lastUserId = null
+
 spindle.onFrontendMessage(async (payload, userId) => {
+  if (userId) lastUserId = userId
   const requestId = payload && payload.requestId
   let reply
   try {
@@ -397,7 +429,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const [settings, presets, history] = await Promise.all([
           getSettings(), getPresets(), getHistory(),
         ])
-        reply = ok(payload, requestId, { settings, presets, history })
+        reply = ok(payload, requestId, {
+          settings, presets, history,
+          defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: DEFAULT_PARSER_INSTRUCTION },
+        })
         break
       }
 
@@ -412,6 +447,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
+        if (payload.maxImages !== undefined) {
+          settings.maxImages = Math.max(1, Math.min(4, Number(payload.maxImages) || 2))
+        }
         await spindle.storage.setJson(SETTINGS_FILE, settings, { indent: 2 })
         reply = ok(payload, requestId, { settings })
         break
@@ -719,7 +757,8 @@ if (typeof spindle.registerInterceptor === 'function') {
       if (settings.mode !== 'inline') return messages
       const injected = {
         role: 'system',
-        content: settings.protocol || DEFAULT_PROTOCOL,
+        content: (settings.protocol || DEFAULT_PROTOCOL)
+          .replaceAll('{{max_images}}', String(settings.maxImages || 2)),
       }
       return { messages: [...messages, injected] }
     } catch (e) {
@@ -733,34 +772,42 @@ if (typeof spindle.registerInterceptor === 'function') {
 }
 
 // Auto-scan after story generations, if an events surface exists.
+let scanInFlight = false
 ;(() => {
+  const toastSafe = (msg) => {
+    try { if (typeof spindle.toast === 'function') spindle.toast(msg) } catch { /* signature mismatch */ }
+    try { if (spindle.toast && typeof spindle.toast.show === 'function') spindle.toast.show(msg) } catch { /* ok */ }
+  }
   const handler = async (evt) => {
     try {
       const settings = await getSettings()
       if (settings.mode === 'off' || !settings.autoScan) return
-      const uid = evt && (evt.userId || (evt.payload && evt.payload.userId))
+      const uid = (evt && (evt.userId || (evt.payload && evt.payload.userId))) || lastUserId
+      if (scanInFlight) return
+      scanInFlight = true
       setTimeout(() => {
-        scanStory(uid).then((r) => spindle.log.info('[lumidraw] auto-scan: ' + JSON.stringify(r)))
+        scanStory(uid)
+          .then((r) => {
+            spindle.log.info('[lumidraw] auto-scan: ' + JSON.stringify(r))
+            if (r && r.processed) toastSafe(`LumiDraw: illustrated ${r.processed} moment(s)`)
+          })
           .catch((e) => spindle.log.warn('[lumidraw] auto-scan failed: ' + e.message))
-      }, 1200)
-    } catch { /* ignore */ }
+          .finally(() => { scanInFlight = false })
+      }, 1500)
+    } catch { scanInFlight = false }
   }
-  const surfaces = [
-    ['spindle.events.on', spindle.events && spindle.events.on && spindle.events.on.bind(spindle.events)],
-    ['spindle.on', typeof spindle.on === 'function' && spindle.on.bind(spindle)],
-    ['spindle.onEvent', typeof spindle.onEvent === 'function' && spindle.onEvent.bind(spindle)],
-  ]
   let registered = false
-  for (const [name, on] of surfaces) {
-    if (!on) continue
-    for (const evName of ['GENERATION_ENDED', 'generation_ended', 'MESSAGE_SENT']) {
-      try { on(evName, handler); registered = true } catch { /* next */ }
+  if (typeof spindle.on === 'function') {
+    for (const evName of ['GENERATION_ENDED', 'MESSAGE_SENT']) {
+      try { spindle.on(evName, handler); registered = true } catch { /* next */ }
     }
-    if (registered) { spindle.log.info('[lumidraw] auto-scan registered via ' + name); break }
+  } else if (spindle.events && typeof spindle.events.on === 'function') {
+    for (const evName of ['GENERATION_ENDED', 'MESSAGE_SENT']) {
+      try { spindle.events.on(evName, handler); registered = true } catch { /* next */ }
+    }
   }
-  if (!registered) {
-    spindle.log.warn('[lumidraw] no events API detected — use the "Scan story now" button. spindle surface: ' + Object.keys(spindle).join(', '))
-  }
+  if (registered) spindle.log.info('[lumidraw] auto-scan listeners registered (GENERATION_ENDED preferred)')
+  else spindle.log.warn('[lumidraw] no events API detected — use the "Scan story now" button.')
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
