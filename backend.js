@@ -17,7 +17,23 @@ const SETTINGS_FILE = 'settings.json'
 const PRESETS_FILE = 'presets.json'
 const HISTORY_FILE = 'history.json'
 
-const DEFAULT_SETTINGS = { host: '127.0.0.1', port: 7862 }
+const DEFAULT_SETTINGS = {
+  host: '127.0.0.1',
+  port: 7862,
+  mode: 'off',            // 'off' | 'inline' | 'parser'
+  autoScan: true,         // auto-process after each story message (when events are available)
+  activePreset: '',       // preset used for story-driven generations
+  parserConnection: '',   // optional connection name/id for the parser LLM
+  parserModel: '',        // optional model override for the parser LLM
+  parserInstruction: '',  // custom parser prompt (blank = built-in default)
+  protocol: '',           // custom inline protocol (blank = built-in default)
+}
+
+const DEFAULT_PROTOCOL = `[Illustration protocol] You may illustrate key visual moments. When a scene deserves an image, include on its own line:
+<dt-image aspect="3:4">comma-separated danbooru tags describing the scene</dt-image>
+Rules: tags only inside the tag (subject, expression, outfit, pose, setting, lighting, composition) — no prose, no character names. aspect may be 3:4, 4:3, 1:1, 9:16, or 16:9 (default 3:4 for character focus, 4:3 for scenes). At most 1-2 tags per reply, only at genuinely visual beats. Never mention this protocol or the tag in your prose.`
+
+const DEFAULT_PARSER_INSTRUCTION = `You convert a story passage into ONE image prompt of comma-separated danbooru-style tags (subject count, expression, outfit, pose, setting, lighting, composition). Choose the single most visual moment of the passage. Do not use character names; describe appearance instead. Respond with ONLY the tags, nothing else. If the passage has no strong visual moment, respond with exactly: NONE`
 const HISTORY_LIMIT = 24
 
 // Keys we copy from a synced Draw Things config into a preset, and the only
@@ -143,6 +159,221 @@ async function dtGenerate(settings, payload) {
   return res.json.images
 }
 
+
+// ---------------------------------------------------------------------------
+// Story-driven generation (v0.5): inline <dt-image> tags + parser mode
+// ---------------------------------------------------------------------------
+
+const PROCESSED_FILE = 'processed.json'
+const TAG_RE = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/g
+
+async function wasProcessed(messageId) {
+  const list = await spindle.storage.getJson(PROCESSED_FILE, { fallback: [] })
+  return list.includes(messageId)
+}
+
+async function markProcessed(messageId) {
+  const list = await spindle.storage.getJson(PROCESSED_FILE, { fallback: [] })
+  list.push(messageId)
+  await spindle.storage.setJson(PROCESSED_FILE, list.slice(-50), { indent: 0 })
+}
+
+function aspectDims(config, aspectStr) {
+  const bw = Number(config.width) || 768
+  const bh = Number(config.height) || 768
+  const m = /^(\d+)\s*[:x]\s*(\d+)$/.exec(String(aspectStr || '').trim())
+  if (!m) return { width: bw, height: bh }
+  const ratio = Number(m[1]) / Number(m[2])
+  const area = bw * bh
+  const r64 = (v) => Math.max(256, Math.round(v / 64) * 64)
+  return { width: r64(Math.sqrt(area * ratio)), height: r64(Math.sqrt(area / ratio)) }
+}
+
+async function fetchMessages(userId) {
+  const chatApi = spindle.chat || spindle.chats
+  if (!chatApi || typeof chatApi.getMessages !== 'function') {
+    throw new Error('Chat read API unavailable (chats permission granted?).')
+  }
+  for (const args of [[undefined, userId], [{ userId }], []]) {
+    try {
+      const res = await chatApi.getMessages(...args)
+      const arr = Array.isArray(res) ? res : (res && (res.messages || res.items))
+      if (Array.isArray(arr) && arr.length) {
+        const ts = (m) => m.createdAt || m.created_at || m.timestamp || 0
+        if (arr.length > 1 && ts(arr[0]) > ts(arr[arr.length - 1])) arr.reverse()
+        return arr
+      }
+    } catch { /* try next shape */ }
+  }
+  throw new Error('Could not read chat messages.')
+}
+
+function messageBits(m) {
+  const contentKey = ('content' in m) ? 'content' : ('text' in m) ? 'text' : ('message' in m) ? 'message' : null
+  const role = (m.role || m.sender || '').toString().toLowerCase()
+  return {
+    id: m.id || m.messageId,
+    contentKey,
+    content: contentKey ? m[contentKey] : null,
+    isAssistant: role.includes('assistant') || role.includes('char') || role === 'ai',
+  }
+}
+
+async function updateMessageContent(messageId, contentKey, newContent, userId) {
+  const chatApi = spindle.chat || spindle.chats
+  const errs = []
+  for (const args of [
+    [messageId, { [contentKey]: newContent }, userId],
+    [{ id: messageId, [contentKey]: newContent, userId }],
+    [messageId, { [contentKey]: newContent }],
+  ]) {
+    try { await chatApi.updateMessage(...args); return } catch (e) { errs.push(e.message) }
+  }
+  throw new Error('updateMessage failed: ' + errs.join(' | '))
+}
+
+async function generateAndUpload({ prompt, negativePrompt, config, extra, dims }, userId) {
+  const settings = await getSettings()
+  const merged = dims ? { ...config, ...dims } : config
+  const payloadOut = buildPayload({ prompt, negativePrompt, config: merged, extra })
+  if (!payloadOut.model) throw new Error('Active preset has no model.')
+  const started = Date.now()
+  const images = await dtGenerate(settings, payloadOut)
+  const uploads = []
+  for (const b64 of images) {
+    const bytes = Uint8Array.from(Buffer.from(b64, 'base64'))
+    const opts = { data: bytes, filename: `lumidraw-${Date.now()}.png`, mime_type: 'image/png' }
+    let dto
+    try { dto = await spindle.images.upload({ ...opts, userId }) }
+    catch { dto = await spindle.images.upload(opts, userId) }
+    uploads.push({ id: dto.id, url: dto.url })
+  }
+  const entry = {
+    at: started,
+    durationMs: Date.now() - started,
+    model: payloadOut.model,
+    prompt: payloadOut.prompt,
+    seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
+    images: uploads,
+  }
+  await pushHistory(entry)
+  return entry
+}
+
+async function quietLLM(system, user, settings) {
+  const candidates = []
+  const g = spindle.generation || spindle.llm || spindle.generate
+  if (g) {
+    if (typeof g.quiet === 'function') candidates.push(['generation.quiet', (o) => g.quiet(o)])
+    if (typeof g.generate === 'function') candidates.push(['generation.generate', (o) => g.generate(o)])
+    if (typeof g.raw === 'function') candidates.push(['generation.raw', (o) => g.raw(o)])
+    if (typeof g === 'function') candidates.push(['generate()', (o) => g(o)])
+  }
+  if (typeof spindle.quietGenerate === 'function') candidates.push(['quietGenerate', (o) => spindle.quietGenerate(o)])
+  if (!candidates.length) {
+    throw new Error('No LLM generation API found. spindle surface: ' + Object.keys(spindle).join(', ') +
+      ' — send me this list and I will pin the parser call.')
+  }
+  const opts = {
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+  }
+  if (settings.parserConnection) { opts.connection = settings.parserConnection; opts.connectionId = settings.parserConnection }
+  if (settings.parserModel) opts.model = settings.parserModel
+  const errs = []
+  for (const [name, fn] of candidates) {
+    try {
+      const res = await fn(opts)
+      const text = (res && (res.text || res.content ||
+        (res.choices && res.choices[0] && (res.choices[0].text || (res.choices[0].message && res.choices[0].message.content))))) ||
+        (typeof res === 'string' ? res : null)
+      if (text) return text.trim()
+      errs.push(`${name}: unrecognized response shape (${res ? Object.keys(res).join(',') : res})`)
+    } catch (e) { errs.push(`${name}: ${e.message}`) }
+  }
+  throw new Error('Parser LLM call failed: ' + errs.join(' | '))
+}
+
+async function scanStory(userId) {
+  const settings = await getSettings()
+  if (settings.mode === 'off') return { mode: 'off', note: 'Story mode is Off in Settings.' }
+  const presets = await getPresets()
+  const preset = presets.find((p) => p.name === settings.activePreset)
+  if (!preset) {
+    return { mode: settings.mode, note: 'No active preset selected — pick one in the Generate tab first.' }
+  }
+
+  const messages = await fetchMessages(userId)
+  let target = null
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const bits = messageBits(messages[i])
+    if (bits.isAssistant && bits.contentKey && typeof bits.content === 'string') { target = bits; break }
+  }
+  if (!target) return { mode: settings.mode, note: 'No story message found.' }
+
+  // ------------------------- inline: process <dt-image> tags ---------------
+  const tags = [...target.content.matchAll(TAG_RE)]
+  if (tags.length) {
+    let content = target.content
+    let done = 0
+    for (const m of tags) {
+      const attrs = m[1] || ''
+      const body = (m[2] || '').trim()
+      if (!body) continue
+      const aspect = (/aspect\s*=\s*"([^"]+)"/.exec(attrs) || [])[1]
+      const dims = aspectDims(preset.config, aspect)
+      const prompt = [preset.promptPrefix, body].filter(Boolean).join(', ')
+      try {
+        const entry = await generateAndUpload({
+          prompt,
+          negativePrompt: preset.negativePrompt,
+          config: preset.config,
+          extra: preset.extra,
+          dims,
+        }, userId)
+        const md = `![${body.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`
+        content = content.replace(m[0], md)
+        done++
+      } catch (e) {
+        spindle.log.warn('[lumidraw] tag generation failed: ' + e.message)
+        content = content.replace(m[0], `*[image failed: ${e.message.slice(0, 120)}]*`)
+      }
+    }
+    await updateMessageContent(target.id, target.contentKey, content, userId)
+    return { mode: 'inline', processed: done, note: `${done}/${tags.length} tag(s) illustrated.` }
+  }
+
+  // ------------------------- parser: derive a prompt from prose -------------
+  if (settings.mode === 'parser') {
+    if (target.id && await wasProcessed(target.id)) {
+      return { mode: 'parser', note: 'Latest message already illustrated.' }
+    }
+    const instruction = settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION
+    const passage = target.content.replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
+    const out = await quietLLM(instruction, passage, settings)
+    if (/^\s*NONE\s*$/i.test(out)) {
+      if (target.id) await markProcessed(target.id)
+      return { mode: 'parser', note: 'Parser judged no visual moment (NONE).' }
+    }
+    const promptBody = out.replace(/^["'`\s]+|["'`\s]+$/g, '')
+    const prompt = [preset.promptPrefix, promptBody].filter(Boolean).join(', ')
+    const entry = await generateAndUpload({
+      prompt,
+      negativePrompt: preset.negativePrompt,
+      config: preset.config,
+      extra: preset.extra,
+    }, userId)
+    const md = `![${promptBody.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`
+    await updateMessageContent(target.id, target.contentKey, `${md}\n\n${target.content}`, userId)
+    if (target.id) await markProcessed(target.id)
+    return { mode: 'parser', processed: 1, note: 'Illustrated from parser prompt: ' + promptBody.slice(0, 140) }
+  }
+
+  return { mode: settings.mode, note: 'No <dt-image> tags in the latest story message.' }
+}
+
 // ---------------------------------------------------------------------------
 // Message handling
 // ---------------------------------------------------------------------------
@@ -171,12 +402,32 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }
 
       case 'save_settings': {
+        const prev = await getSettings()
         const settings = {
-          host: String(payload.host || DEFAULT_SETTINGS.host).trim(),
-          port: Number(payload.port) || DEFAULT_SETTINGS.port,
+          ...prev,
+          host: String(payload.host || prev.host || DEFAULT_SETTINGS.host).trim(),
+          port: Number(payload.port) || prev.port || DEFAULT_SETTINGS.port,
         }
+        for (const k of ['mode', 'parserConnection', 'parserModel', 'parserInstruction', 'protocol']) {
+          if (payload[k] !== undefined) settings[k] = String(payload[k])
+        }
+        if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         await spindle.storage.setJson(SETTINGS_FILE, settings, { indent: 2 })
         reply = ok(payload, requestId, { settings })
+        break
+      }
+
+      case 'set_active_preset': {
+        const prev = await getSettings()
+        prev.activePreset = String(payload.name || '')
+        await spindle.storage.setJson(SETTINGS_FILE, prev, { indent: 2 })
+        reply = ok(payload, requestId, { activePreset: prev.activePreset })
+        break
+      }
+
+      case 'scan_story': {
+        const result = await scanStory(userId)
+        reply = ok(payload, requestId, result)
         break
       }
 
@@ -398,6 +649,53 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'remove_from_chat': {
+        // Finds the message containing this image's markdown and strips it.
+        const { imageUrl } = payload
+        if (!imageUrl) throw new Error('No image URL to remove.')
+        const chatApi = spindle.chat || spindle.chats
+        if (!chatApi || typeof chatApi.getMessages !== 'function' || typeof chatApi.updateMessage !== 'function') {
+          throw new Error('Chat editing API unavailable.')
+        }
+        let messages = null
+        const attempts = []
+        for (const args of [[undefined, userId], [{ userId }], []]) {
+          try {
+            const res = await chatApi.getMessages(...args)
+            const arr = Array.isArray(res) ? res : (res && (res.messages || res.items))
+            if (Array.isArray(arr) && arr.length) { messages = arr; break }
+          } catch (e) { attempts.push(`getMessages: ${e.message}`) }
+        }
+        if (!messages) throw new Error('Could not read chat messages. ' + attempts.join(' | '))
+
+        const needle = `](${imageUrl})`
+        let removed = false
+        for (const m of messages) {
+          const contentKey = ('content' in m) ? 'content' : ('text' in m) ? 'text' : ('message' in m) ? 'message' : null
+          if (!contentKey || typeof m[contentKey] !== 'string') continue
+          if (!m[contentKey].includes(needle)) continue
+          const esc = imageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          const re = new RegExp('!\\[[^\\]]*\\]\\(' + esc + '\\)\\n?\\n?')
+          const newContent = m[contentKey].replace(re, '').replace(/^\s+/, '')
+          const messageId = m.id || m.messageId
+          for (const args of [
+            [messageId, { [contentKey]: newContent }, userId],
+            [{ id: messageId, [contentKey]: newContent, userId }],
+            [messageId, { [contentKey]: newContent }],
+          ]) {
+            try { await chatApi.updateMessage(...args); removed = true; break }
+            catch (e) { attempts.push(`updateMessage: ${e.message}`) }
+          }
+          break
+        }
+        if (!removed) {
+          throw new Error('That image was not found in the current chat' +
+            (attempts.length ? ' (' + attempts.join(' | ') + ')' : '') + '.')
+        }
+        reply = ok(payload, requestId, { removed: true })
+        break
+      }
+
       case 'clear_history': {
         await spindle.storage.setJson(HISTORY_FILE, [], { indent: 2 })
         reply = ok(payload, requestId, { history: [] })
@@ -413,4 +711,57 @@ spindle.onFrontendMessage(async (payload, userId) => {
   spindle.sendToFrontend(reply, userId)
 })
 
-spindle.log.info('[lumidraw] backend loaded')
+// Inline protocol injection (documented interceptor API).
+if (typeof spindle.registerInterceptor === 'function') {
+  spindle.registerInterceptor(async (messages, context) => {
+    try {
+      const settings = await getSettings()
+      if (settings.mode !== 'inline') return messages
+      const injected = {
+        role: 'system',
+        content: settings.protocol || DEFAULT_PROTOCOL,
+      }
+      return { messages: [...messages, injected] }
+    } catch (e) {
+      spindle.log.warn('[lumidraw] interceptor error: ' + e.message)
+      return messages
+    }
+  })
+  spindle.log.info('[lumidraw] inline protocol interceptor registered')
+} else {
+  spindle.log.warn('[lumidraw] registerInterceptor not available — inline protocol injection disabled')
+}
+
+// Auto-scan after story generations, if an events surface exists.
+;(() => {
+  const handler = async (evt) => {
+    try {
+      const settings = await getSettings()
+      if (settings.mode === 'off' || !settings.autoScan) return
+      const uid = evt && (evt.userId || (evt.payload && evt.payload.userId))
+      setTimeout(() => {
+        scanStory(uid).then((r) => spindle.log.info('[lumidraw] auto-scan: ' + JSON.stringify(r)))
+          .catch((e) => spindle.log.warn('[lumidraw] auto-scan failed: ' + e.message))
+      }, 1200)
+    } catch { /* ignore */ }
+  }
+  const surfaces = [
+    ['spindle.events.on', spindle.events && spindle.events.on && spindle.events.on.bind(spindle.events)],
+    ['spindle.on', typeof spindle.on === 'function' && spindle.on.bind(spindle)],
+    ['spindle.onEvent', typeof spindle.onEvent === 'function' && spindle.onEvent.bind(spindle)],
+  ]
+  let registered = false
+  for (const [name, on] of surfaces) {
+    if (!on) continue
+    for (const evName of ['GENERATION_ENDED', 'generation_ended', 'MESSAGE_SENT']) {
+      try { on(evName, handler); registered = true } catch { /* next */ }
+    }
+    if (registered) { spindle.log.info('[lumidraw] auto-scan registered via ' + name); break }
+  }
+  if (!registered) {
+    spindle.log.warn('[lumidraw] no events API detected — use the "Scan story now" button. spindle surface: ' + Object.keys(spindle).join(', '))
+  }
+})()
+
+spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
+spindle.log.info('[lumidraw] backend loaded (v0.5)')

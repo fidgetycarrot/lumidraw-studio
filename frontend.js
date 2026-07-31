@@ -180,6 +180,9 @@ function realSetup(ctx) {
       cursor: pointer;
     }
     .ld-thumb .ld-append:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
+    .ld-thumb-row { display: flex; gap: 4px; }
+    .ld-thumb-row .ld-append { flex: 1; padding: 4px 2px; font-size: 11px; }
+    .ld-remove:hover { color: #e5737f; }
     .ld-preset-item {
       display: flex; align-items: center; gap: 6px; padding: 6px 8px;
       border: 1px solid var(--lumiverse-border, #3d4050); border-radius: var(--lumiverse-radius, 8px);
@@ -233,6 +236,7 @@ function realSetup(ctx) {
           </div>
         </div>
         <button class="ld-btn ld-primary" data-act="generate">Generate</button>
+        <button class="ld-btn" data-act="scan" title="Process the latest story message: illustrate its <dt-image> tags, or run the parser on its prose">Scan story now 📖</button>
         <button class="ld-btn" data-act="append-last" style="display:none">Add to chat 💬</button>
         <div class="ld-status ld-gen-status"></div>
         <div>
@@ -263,6 +267,34 @@ function realSetup(ctx) {
           <button class="ld-btn" data-act="test">Test connection</button>
         </div>
         <div class="ld-status ld-settings-status"></div>
+        <div style="border-top:1px solid var(--lumiverse-border, #3d4050); padding-top:10px">
+          <span class="ld-label">Story illustrations</span>
+          <select class="ld-mode">
+            <option value="off">Off — manual only</option>
+            <option value="inline">Inline — story model writes &lt;dt-image&gt; tags</option>
+            <option value="parser">Parser — separate model derives the prompt afterward</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px">
+            <input type="checkbox" class="ld-autoscan" style="width:auto" /> Auto-scan after each story message (if supported — otherwise use Scan story now)
+          </label>
+        </div>
+        <div>
+          <span class="ld-label">Parser connection (name/id — optional, persists)</span>
+          <input class="ld-parser-conn" placeholder="leave blank to use the default connection" />
+        </div>
+        <div>
+          <span class="ld-label">Parser model (optional, persists)</span>
+          <input class="ld-parser-model" placeholder="e.g. your Kimi deployment" />
+        </div>
+        <div>
+          <span class="ld-label">Parser instruction (blank = built-in Danbooru converter)</span>
+          <textarea class="ld-parser-instr" style="min-height:64px" placeholder="Paste your Kimi→Danbooru parser prompt here to reuse it"></textarea>
+        </div>
+        <div>
+          <span class="ld-label">Inline protocol (blank = built-in; injected only in Inline mode)</span>
+          <textarea class="ld-protocol" style="min-height:64px"></textarea>
+        </div>
+        <div class="ld-status">Story generations use the preset selected in the Generate tab (its prompt prefix becomes the character identity). Settings persist on the server across restarts.</div>
         <div class="ld-status">Tip: Draw Things shows the recipe of whatever image is selected — so select any image you love, hit Sync, and you've captured its exact settings.</div>
       </div>
     </div>
@@ -383,13 +415,29 @@ function realSetup(ctx) {
         im.src = img.url
         im.title = `${entry.model}\nseed ${entry.seed}\n${entry.prompt || ''}`.trim()
         im.addEventListener('click', () => window.open(img.url, '_blank'))
+        const row = document.createElement('div')
+        row.className = 'ld-thumb-row'
         const btn = document.createElement('button')
         btn.className = 'ld-append'
         btn.textContent = 'Add to chat'
-        btn.title = 'Post this image into the current conversation'
+        btn.title = 'Place this image at the top of the latest story message'
         btn.addEventListener('click', (ev) => { ev.stopPropagation(); appendToChat(img, entry) })
+        const rm = document.createElement('button')
+        rm.className = 'ld-append ld-remove'
+        rm.textContent = 'Remove'
+        rm.title = 'Remove this image from the chat again'
+        rm.addEventListener('click', async (ev) => {
+          ev.stopPropagation()
+          setStatus('.ld-gen-status', 'Removing from chat…')
+          try {
+            await call('remove_from_chat', { imageUrl: img.url })
+            setStatus('.ld-gen-status', 'Removed from the chat.', 'good')
+          } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
+        })
+        row.appendChild(btn)
+        row.appendChild(rm)
         wrap.appendChild(im)
-        wrap.appendChild(btn)
+        wrap.appendChild(row)
         el.appendChild(wrap)
       }
     }
@@ -398,6 +446,7 @@ function realSetup(ctx) {
   function selectPreset(name) {
     const p = presets.find((x) => x.name === name)
     activePreset = p ? p.name : null
+    call('set_active_preset', { name: activePreset || '' }).catch(() => {})
     if (p) {
       syncedConfig = { ...p.config }
       if (p.promptPrefix && !$('.ld-prompt').value) $('.ld-prompt').value = p.promptPrefix
@@ -474,11 +523,20 @@ function realSetup(ctx) {
 
   function placePanel() {
     const r = launcher.getBoundingClientRect()
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const spaceAbove = r.top - 16
+    const spaceBelow = vh - r.bottom - 16
+    // Open on whichever side has more room, and never let the panel exceed it.
+    const openAbove = spaceAbove >= spaceBelow
+    const maxH = Math.min(720, Math.max(240, (openAbove ? spaceAbove : spaceBelow) - 4))
+    panel.style.maxHeight = maxH + 'px'
     const pw = panel.offsetWidth || 384
-    const ph = panel.offsetHeight || 500
-    const left = clamp(r.right - pw, 8, window.innerWidth - pw - 8)
-    let top = r.top - ph - 10
-    if (top < 8) top = clamp(r.bottom + 10, 8, window.innerHeight - ph - 8)
+    const ph = Math.min(panel.offsetHeight || 500, maxH)
+    const left = clamp(r.right - pw, 8, vw - pw - 8)
+    const top = openAbove
+      ? clamp(r.top - ph - 10, 8, vh - ph - 8)
+      : clamp(r.bottom + 10, 8, vh - ph - 8)
     panel.style.left = left + 'px'
     panel.style.top = top + 'px'
     panel.style.right = 'auto'
@@ -526,13 +584,27 @@ function realSetup(ctx) {
 
   $('.ld-preset-select').addEventListener('change', (e) => {
     if (e.target.value) selectPreset(e.target.value)
-    else { activePreset = null; renderPresetList(); renderPresetSelect() }
+    else {
+      activePreset = null
+      call('set_active_preset', { name: '' }).catch(() => {})
+      renderPresetList(); renderPresetSelect()
+    }
   })
 
   $('[data-act="sync"]').addEventListener('click', () =>
     doSync('.ld-gen-status').catch((e) => setStatus('.ld-gen-status', e.message, 'err')))
 
   $('[data-act="generate"]').addEventListener('click', doGenerate)
+
+  $('[data-act="scan"]').addEventListener('click', async () => {
+    setStatus('.ld-gen-status', 'Scanning the latest story message…')
+    try {
+      const res = await call('scan_story', {})
+      history = (await call('init', {}, 15000)).history
+      renderHistory()
+      setStatus('.ld-gen-status', res.note || `Done (${res.mode}).`, res.processed ? 'good' : undefined)
+    } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
+  })
 
   $('[data-act="append-last"]').addEventListener('click', () => {
     const last = history[0]
@@ -572,6 +644,12 @@ function realSetup(ctx) {
       const res = await call('save_settings', {
         host: $('.ld-host').value,
         port: $('.ld-port').value,
+        mode: $('.ld-mode').value,
+        autoScan: $('.ld-autoscan').checked,
+        parserConnection: $('.ld-parser-conn').value,
+        parserModel: $('.ld-parser-model').value,
+        parserInstruction: $('.ld-parser-instr').value,
+        protocol: $('.ld-protocol').value,
       })
       settings = res.settings
       setStatus('.ld-settings-status', `Saved — pointing at ${settings.host}:${settings.port}.`, 'good')
@@ -597,6 +675,18 @@ function realSetup(ctx) {
       settings = res.settings; presets = res.presets; history = res.history
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
+      $('.ld-mode').value = settings.mode || 'off'
+      $('.ld-autoscan').checked = settings.autoScan !== false
+      $('.ld-parser-conn').value = settings.parserConnection || ''
+      $('.ld-parser-model').value = settings.parserModel || ''
+      $('.ld-parser-instr').value = settings.parserInstruction || ''
+      $('.ld-protocol').value = settings.protocol || ''
+      if (settings.activePreset) { activePreset = settings.activePreset }
+      if (activePreset) {
+        const p = presets.find((x) => x.name === activePreset)
+        if (p) syncedConfig = { ...p.config }
+        else activePreset = null
+      }
       renderPresetSelect(); renderPresetList(); renderHistory(); renderChips()
     } catch (e) {
       setStatus('.ld-gen-status', `Backend not ready: ${e.message}`, 'err')
