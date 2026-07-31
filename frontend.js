@@ -230,6 +230,10 @@ function realSetup(ctx) {
           <input class="ld-quality" placeholder="e.g. masterpiece, best quality, absurdres" />
         </div>
         <div>
+          <span class="ld-label">Character tags (identity; saved with the preset — {{char}}/{{persona}} macros allowed)</span>
+          <textarea class="ld-chartags-input" style="min-height:44px" placeholder="e.g. 1girl, long red hair, green eyes, freckles, slender"></textarea>
+        </div>
+        <div>
           <span class="ld-label">Prompt</span>
           <textarea class="ld-prompt" placeholder="portrait of..."></textarea>
         </div>
@@ -297,8 +301,8 @@ function realSetup(ctx) {
           </label>
         </div>
         <div>
-          <span class="ld-label">Parser connection (name/id — optional, persists)</span>
-          <input class="ld-parser-conn" placeholder="leave blank to use the default connection" />
+          <span class="ld-label">Parser connection (pick a cheap model — persists)</span>
+          <select class="ld-parser-conn"><option value="">— default connection —</option></select>
         </div>
         <div>
           <span class="ld-label">Parser model (optional, persists)</span>
@@ -476,6 +480,7 @@ function realSetup(ctx) {
       if (p.promptPrefix && !$('.ld-prompt').value) $('.ld-prompt').value = p.promptPrefix
       if (p.negativePrompt && !$('.ld-negative').value) $('.ld-negative').value = p.negativePrompt
       $('.ld-quality').value = p.qualityTags || ''
+      $('.ld-chartags-input').value = p.characterTags || ''
     }
     renderChips(); renderPresetSelect(); renderPresetList()
   }
@@ -510,6 +515,7 @@ function realSetup(ctx) {
       const res = await call('generate', {
         prompt: $('.ld-prompt').value,
         qualityTags: $('.ld-quality').value,
+        characterTags: $('.ld-chartags-input').value,
         negativePrompt: $('.ld-negative').value,
         seed: seedRaw === '' ? undefined : Number(seedRaw),
         config: syncedConfig,
@@ -677,6 +683,7 @@ function realSetup(ctx) {
         promptPrefix: $('.ld-prompt').value,
         negativePrompt: $('.ld-negative').value,
         qualityTags: $('.ld-quality').value,
+        characterTags: $('.ld-chartags-input').value,
       })
       presets = res.presets
       activePreset = name.trim()
@@ -716,7 +723,7 @@ function realSetup(ctx) {
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-chartags']) {
+  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-chartags', '.ld-parser-conn']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       pushSettings('Story settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
@@ -755,6 +762,17 @@ function realSetup(ctx) {
       $('.ld-autoscan').checked = settings.autoScan !== false
       $('.ld-maximg').value = settings.maxImages || 2
       $('.ld-chartags').checked = settings.autoCharTags !== false
+      try {
+        const cres = await call('list_connections', {}, 10000)
+        const sel = $('.ld-parser-conn')
+        sel.innerHTML = '<option value="">— default connection —</option>' +
+          (cres.connections || []).map((c) => {
+            const o = document.createElement('option')
+            o.value = c.id
+            o.textContent = c.name + (c.model ? ' — ' + c.model : '')
+            return o.outerHTML
+          }).join('')
+      } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
       $('.ld-parser-instr').value = settings.parserInstruction || defaults.parserInstruction || ''
@@ -762,7 +780,7 @@ function realSetup(ctx) {
       if (settings.activePreset) { activePreset = settings.activePreset }
       if (activePreset) {
         const p = presets.find((x) => x.name === activePreset)
-        if (p) { syncedConfig = { ...p.config }; $('.ld-quality').value = p.qualityTags || '' }
+        if (p) { syncedConfig = { ...p.config }; $('.ld-quality').value = p.qualityTags || ''; $('.ld-chartags-input').value = p.characterTags || '' }
         else activePreset = null
       }
       renderPresetSelect(); renderPresetList(); renderHistory(); renderChips()

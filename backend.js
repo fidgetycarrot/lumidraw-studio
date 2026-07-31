@@ -343,24 +343,37 @@ async function resolveMacros(text, userId, chatId) {
 }
 
 async function getCharacterImageTags(userId, chatId) {
-  const chars = spindle.characters
-  if (!chars) return ''
-  let ch = null
-  const tries = [
-    () => typeof chars.getActive === 'function' && chars.getActive(userId),
-    () => typeof chars.getActive === 'function' && chars.getActive({ chatId, userId }),
-    () => typeof chars.getForChat === 'function' && chars.getForChat(chatId, userId),
-    () => typeof chars.get === 'function' && chars.get({ chatId, userId }),
-  ]
-  for (const t of tries) {
-    try { const r = await t(); if (r) { ch = Array.isArray(r) ? r[0] : r; break } } catch { /* next */ }
+  try {
+    const chatsApi = spindle.chats
+    const charsApi = spindle.characters
+    if (!chatsApi || !charsApi || typeof charsApi.get !== 'function') return ''
+    let chat = null
+    if (typeof chatsApi.get === 'function') {
+      for (const args of [[chatId, userId], [{ chatId, userId }], [chatId]]) {
+        try { const r = await chatsApi.get(...args); if (r) { chat = r; break } } catch { /* next */ }
+      }
+    }
+    const charId = chat && (chat.characterId || chat.character_id ||
+      (Array.isArray(chat.characterIds) && chat.characterIds[0]) ||
+      (Array.isArray(chat.characters) && (chat.characters[0]?.id || chat.characters[0])))
+    if (!charId) {
+      if (chat) spindle.log.info('[lumidraw] chat DTO has no obvious character id. Keys: ' + Object.keys(chat).join(', '))
+      return ''
+    }
+    let ch = null
+    for (const args of [[charId, userId], [{ id: charId, userId }], [charId]]) {
+      try { const r = await charsApi.get(...args); if (r) { ch = r; break } } catch { /* next */ }
+    }
+    if (!ch || typeof ch !== 'object') return ''
+    for (const key of ['base_tags', 'baseTags', 'image_tags', 'imageTags', 'visual_tags', 'visualTags', 'appearance_tags', 'appearanceTags']) {
+      if (typeof ch[key] === 'string' && ch[key].trim()) return ch[key].trim()
+    }
+    spindle.log.info('[lumidraw] character card has no tag field. Keys: ' + Object.keys(ch).join(', '))
+    return ''
+  } catch (e) {
+    spindle.log.warn('[lumidraw] character tag fetch failed: ' + e.message)
+    return ''
   }
-  if (!ch || typeof ch !== 'object') return ''
-  for (const key of ['image_tags', 'imageTags', 'base_tags', 'baseTags', 'visual_tags', 'visualTags', 'appearance_tags', 'appearanceTags']) {
-    if (typeof ch[key] === 'string' && ch[key].trim()) return ch[key].trim()
-  }
-  spindle.log.info('[lumidraw] character found but no image-tag field matched. DTO keys: ' + Object.keys(ch).join(', '))
-  return ''
 }
 
 async function quietLLM(system, user, settings, userId) {
@@ -427,7 +440,7 @@ async function scanStory(userId, force) {
   const tags = [...visibleContent.matchAll(TAG_RE)].slice(0, settings.maxImages || 2)
   if (tags.length) {
     const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
-    const charTags = settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : ''
+    const charTags = preset.characterTags || (settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : '')
     const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
     let content = target.content
     let done = 0
@@ -474,7 +487,7 @@ async function scanStory(userId, force) {
     const lines = out.split('\n').map((l) => l.replace(/^["'`\s]+|["'`\s]+$/g, ''))
       .filter((l) => l && !/^NONE$/i.test(l)).slice(0, settings.maxImages || 2)
     const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
-    const charTags = settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : ''
+    const charTags = preset.characterTags || (settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : '')
     const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
     const mds = []
     let firstPrompt = ''
@@ -647,6 +660,25 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'list_connections': {
+        let out = []
+        try {
+          const conns = spindle.connections
+          for (const args of [[userId], [{ userId }], []]) {
+            try {
+              const r = await conns.list(...args)
+              const arr = Array.isArray(r) ? r : (r && (r.connections || r.items))
+              if (Array.isArray(arr)) {
+                out = arr.map((c) => ({ id: c.id || c.connectionId, name: c.name || c.label || '(unnamed)', model: c.model || c.defaultModel || '' }))
+                break
+              }
+            } catch { /* next */ }
+          }
+        } catch { /* leave empty */ }
+        reply = ok(payload, requestId, { connections: out })
+        break
+      }
+
       case 'scan_story': {
         const result = await scanStory(userId, !!payload.force)
         reply = ok(payload, requestId, result)
@@ -691,6 +723,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           promptPrefix: payload.promptPrefix || '',
           negativePrompt: payload.negativePrompt || '',
           qualityTags: payload.qualityTags || '',
+          characterTags: payload.characterTags || '',
           updatedAt: Date.now(),
         }
         const idx = presets.findIndex((p) => p.name === name)
@@ -712,9 +745,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
       case 'generate': {
         const settings = await getSettings()
         let manualPrompt = payload.prompt || ''
-        if (payload.qualityTags) {
-          manualPrompt = [payload.qualityTags, manualPrompt].filter(Boolean).join(', ')
-        }
+        manualPrompt = [payload.qualityTags, payload.characterTags, manualPrompt].filter(Boolean).join(', ')
         manualPrompt = await resolveMacros(manualPrompt, userId, await resolveActiveChatId(userId))
         const payloadOut = buildPayload({
           prompt: manualPrompt,
