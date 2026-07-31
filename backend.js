@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS = {
   parserModel: '',        // optional model override for the parser LLM
   parserInstruction: '',  // custom parser prompt (blank = built-in default)
   maxImages: 2,           // max illustrations per story message
+  autoCharTags: true,     // prepend the active character's image tags when found
   protocol: '',           // custom inline protocol (blank = built-in default)
 }
 
@@ -302,18 +303,48 @@ async function resolveMacros(text, userId) {
   if (!text || !text.includes('{{')) return text
   const mac = spindle.macros
   if (mac) {
-    for (const fn of ['resolve', 'process', 'render', 'expand']) {
+    for (const fn of ['resolve', 'process', 'render', 'expand', 'evaluate', 'substitute']) {
       if (typeof mac[fn] === 'function') {
         try {
           let out
           try { out = await mac[fn](text, { userId }) } catch { out = await mac[fn](text) }
-          if (typeof out === 'string') return out
-          if (out && typeof out.text === 'string') return out.text
+          const resolved = (typeof out === 'string') ? out
+            : (out && typeof out.text === 'string') ? out.text : null
+          if (resolved !== null) {
+            if (resolved !== text) {
+              spindle.log.info('[lumidraw] macros resolved via macros.' + fn)
+            } else if (resolved.includes('{{')) {
+              spindle.log.warn('[lumidraw] macros.' + fn + ' returned text unchanged — macro may be unknown: ' + text.slice(0, 120))
+            }
+            return resolved
+          }
         } catch (e) { spindle.log.warn('[lumidraw] macro resolve failed via ' + fn + ': ' + e.message) }
       }
     }
+    spindle.log.warn('[lumidraw] no macro method matched. spindle.macros keys: ' + Object.keys(mac).join(', '))
   }
-  return text // engine not found — leave literal; surface log will name the API
+  return text
+}
+
+async function getCharacterImageTags(userId, chatId) {
+  const chars = spindle.characters
+  if (!chars) return ''
+  let ch = null
+  const tries = [
+    () => typeof chars.getActive === 'function' && chars.getActive(userId),
+    () => typeof chars.getActive === 'function' && chars.getActive({ chatId, userId }),
+    () => typeof chars.getForChat === 'function' && chars.getForChat(chatId, userId),
+    () => typeof chars.get === 'function' && chars.get({ chatId, userId }),
+  ]
+  for (const t of tries) {
+    try { const r = await t(); if (r) { ch = Array.isArray(r) ? r[0] : r; break } } catch { /* next */ }
+  }
+  if (!ch || typeof ch !== 'object') return ''
+  for (const key of ['image_tags', 'imageTags', 'base_tags', 'baseTags', 'visual_tags', 'visualTags', 'appearance_tags', 'appearanceTags']) {
+    if (typeof ch[key] === 'string' && ch[key].trim()) return ch[key].trim()
+  }
+  spindle.log.info('[lumidraw] character found but no image-tag field matched. DTO keys: ' + Object.keys(ch).join(', '))
+  return ''
 }
 
 async function quietLLM(system, user, settings, userId) {
@@ -379,6 +410,8 @@ async function scanStory(userId) {
   const tags = [...target.content.matchAll(TAG_RE)].slice(0, settings.maxImages || 2)
   if (tags.length) {
     const prefix = await resolveMacros(preset.promptPrefix, userId)
+    const charTags = settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : ''
+    const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
     let content = target.content
     let done = 0
     for (const m of tags) {
@@ -387,7 +420,7 @@ async function scanStory(userId) {
       if (!body) continue
       const aspect = (/aspect\s*=\s*"([^"]+)"/.exec(attrs) || [])[1]
       const dims = aspectDims(preset.config, aspect)
-      const prompt = [prefix, await resolveMacros(body, userId)].filter(Boolean).join(', ')
+      const prompt = [lead, prefix, await resolveMacros(body, userId)].filter(Boolean).join(', ')
       try {
         const entry = await generateAndUpload({
           prompt,
@@ -424,10 +457,12 @@ async function scanStory(userId) {
     const lines = out.split('\n').map((l) => l.replace(/^["'`\s]+|["'`\s]+$/g, ''))
       .filter((l) => l && !/^NONE$/i.test(l)).slice(0, settings.maxImages || 2)
     const prefix = await resolveMacros(preset.promptPrefix, userId)
+    const charTags = settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : ''
+    const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
     const mds = []
     let firstPrompt = ''
     for (const line of lines) {
-      const prompt = [prefix, line].filter(Boolean).join(', ')
+      const prompt = [lead, prefix, line].filter(Boolean).join(', ')
       if (!firstPrompt) firstPrompt = line
       const entry = await generateAndUpload({
         prompt,
@@ -490,6 +525,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
+        if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
         if (payload.maxImages !== undefined) {
           settings.maxImages = Math.max(1, Math.min(4, Number(payload.maxImages) || 2))
         }
@@ -549,6 +585,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           extra: payload.extra || null,
           promptPrefix: payload.promptPrefix || '',
           negativePrompt: payload.negativePrompt || '',
+          qualityTags: payload.qualityTags || '',
           updatedAt: Date.now(),
         }
         const idx = presets.findIndex((p) => p.name === name)
@@ -569,8 +606,13 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
       case 'generate': {
         const settings = await getSettings()
+        let manualPrompt = payload.prompt || ''
+        if (payload.qualityTags) {
+          manualPrompt = [payload.qualityTags, manualPrompt].filter(Boolean).join(', ')
+        }
+        manualPrompt = await resolveMacros(manualPrompt, userId)
         const payloadOut = buildPayload({
-          prompt: payload.prompt,
+          prompt: manualPrompt,
           negativePrompt: payload.negativePrompt,
           seed: payload.seed,
           config: payload.config,

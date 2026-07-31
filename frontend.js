@@ -226,6 +226,10 @@ function realSetup(ctx) {
           <div class="ld-config-chips" style="margin-top:6px"></div>
         </div>
         <div>
+          <span class="ld-label">Quality tags (always prepended; saved with the preset)</span>
+          <input class="ld-quality" placeholder="e.g. masterpiece, best quality, absurdres" />
+        </div>
+        <div>
           <span class="ld-label">Prompt</span>
           <textarea class="ld-prompt" placeholder="portrait of..."></textarea>
         </div>
@@ -288,6 +292,9 @@ function realSetup(ctx) {
             <span class="ld-label">Max images per story message</span>
             <input class="ld-maximg" type="number" min="1" max="4" step="1" />
           </div>
+          <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px">
+            <input type="checkbox" class="ld-chartags" style="width:auto" /> Auto-include the active character's image tags in story prompts
+          </label>
         </div>
         <div>
           <span class="ld-label">Parser connection (name/id — optional, persists)</span>
@@ -464,6 +471,7 @@ function realSetup(ctx) {
       syncedConfig = { ...p.config }
       if (p.promptPrefix && !$('.ld-prompt').value) $('.ld-prompt').value = p.promptPrefix
       if (p.negativePrompt && !$('.ld-negative').value) $('.ld-negative').value = p.negativePrompt
+      $('.ld-quality').value = p.qualityTags || ''
     }
     renderChips(); renderPresetSelect(); renderPresetList()
   }
@@ -497,6 +505,7 @@ function realSetup(ctx) {
       const seedRaw = $('.ld-seed').value
       const res = await call('generate', {
         prompt: $('.ld-prompt').value,
+        qualityTags: $('.ld-quality').value,
         negativePrompt: $('.ld-negative').value,
         seed: seedRaw === '' ? undefined : Number(seedRaw),
         config: syncedConfig,
@@ -649,6 +658,7 @@ function realSetup(ctx) {
         config: syncedConfig,
         promptPrefix: $('.ld-prompt').value,
         negativePrompt: $('.ld-negative').value,
+        qualityTags: $('.ld-quality').value,
       })
       presets = res.presets
       activePreset = name.trim()
@@ -670,6 +680,7 @@ function realSetup(ctx) {
       parserInstruction: $('.ld-parser-instr').value,
       protocol: $('.ld-protocol').value,
       maxImages: $('.ld-maximg').value,
+      autoCharTags: $('.ld-chartags').checked,
     })
     settings = res.settings
     updateScanLabel()
@@ -687,7 +698,7 @@ function realSetup(ctx) {
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg']) {
+  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-chartags']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       pushSettings('Story settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
@@ -725,6 +736,7 @@ function realSetup(ctx) {
       $('.ld-parser-model').value = settings.parserModel || ''
       defaults = res.defaults || defaults
       $('.ld-maximg').value = settings.maxImages || 2
+      $('.ld-chartags').checked = settings.autoCharTags !== false
       $('.ld-parser-instr').value = settings.parserInstruction || defaults.parserInstruction || ''
       $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
       if (settings.activePreset) { activePreset = settings.activePreset }
