@@ -307,7 +307,7 @@ async function resolveMacros(text, userId) {
   return text // engine not found — leave literal; surface log will name the API
 }
 
-async function quietLLM(system, user, settings) {
+async function quietLLM(system, user, settings, userId) {
   const candidates = []
   const g = spindle.generation || spindle.llm || spindle.generate
   if (g) {
@@ -322,6 +322,7 @@ async function quietLLM(system, user, settings) {
       ' — send me this list and I will pin the parser call.')
   }
   const opts = {
+    userId,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
@@ -332,7 +333,12 @@ async function quietLLM(system, user, settings) {
   const errs = []
   for (const [name, fn] of candidates) {
     try {
-      const res = await fn(opts)
+      let res
+      try { res = await fn(opts) }
+      catch (e1) {
+        if (/userId/i.test(e1.message || '')) res = await fn(opts, userId)
+        else throw e1
+      }
       const text = (res && (res.text || res.content ||
         (res.choices && res.choices[0] && (res.choices[0].text || (res.choices[0].message && res.choices[0].message.content))))) ||
         (typeof res === 'string' ? res : null)
@@ -401,7 +407,7 @@ async function scanStory(userId) {
     const instruction = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
       .replaceAll('{{max_images}}', String(settings.maxImages || 2))
     const passage = target.content.replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
-    const out = await quietLLM(await resolveMacros(instruction, userId), passage, settings)
+    const out = await quietLLM(await resolveMacros(instruction, userId), passage, settings, userId)
     if (/^\s*NONE\s*$/i.test(out)) {
       if (target.id) await markProcessed(target.id)
       return { mode: 'parser', note: 'Parser judged no visual moment (NONE).' }
