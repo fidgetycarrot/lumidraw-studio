@@ -559,6 +559,79 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'diagnose': {
+        const report = {}
+        const chatId = await resolveActiveChatId(userId)
+        report.chatIdResolved = !!chatId
+
+        // 1) Macro probe: resolve a battery of candidate names with context
+        const probeNames = ['char', 'character', 'char_prompt', 'character_prompt',
+          'char_tags', 'char_image_tags', 'character_tags', 'image_tags',
+          'char_visual', 'appearance', 'persona', 'persona_prompt', 'persona_tags', 'user']
+        const probe = probeNames.map((n) => `${n}=[{{${n}}}]`).join('\n')
+        try {
+          report.macroProbe = await resolveMacros(probe, userId, chatId)
+        } catch (e) { report.macroProbe = 'probe failed: ' + e.message }
+        report.macroApiMethods = spindle.macros ? Object.keys(spindle.macros) : null
+        for (const listFn of ['list', 'getAll', 'available', 'names']) {
+          if (spindle.macros && typeof spindle.macros[listFn] === 'function') {
+            try {
+              const r = await spindle.macros[listFn](chatId ? { chatId, userId } : undefined)
+              report['macros.' + listFn] = Array.isArray(r) ? r.slice(0, 80) : r
+            } catch (e) { report['macros.' + listFn] = 'error: ' + e.message }
+          }
+        }
+
+        // 2) Active character DTO fields (string fields previewed)
+        try {
+          const chars = spindle.characters
+          let ch = null
+          const tries = [
+            () => chars && typeof chars.getActive === 'function' && chars.getActive(userId),
+            () => chars && typeof chars.getActive === 'function' && chars.getActive({ chatId, userId }),
+            () => chars && typeof chars.getForChat === 'function' && chars.getForChat(chatId, userId),
+            () => chars && typeof chars.get === 'function' && chars.get({ chatId, userId }),
+          ]
+          for (const t of tries) {
+            try { const r = await t(); if (r) { ch = Array.isArray(r) ? r[0] : r; break } } catch { /* next */ }
+          }
+          if (ch && typeof ch === 'object') {
+            const fields = {}
+            for (const [k, v] of Object.entries(ch)) {
+              if (typeof v === 'string') fields[k] = v.length > 120 ? v.slice(0, 120) + `…(${v.length})` : v
+              else if (v && typeof v === 'object') fields[k] = '<' + (Array.isArray(v) ? 'array:' + v.length : 'object: ' + Object.keys(v).slice(0, 10).join(',')) + '>'
+              else fields[k] = String(v)
+            }
+            report.character = fields
+          } else {
+            report.character = 'not found. characters API methods: ' + (chars ? Object.keys(chars).join(', ') : 'none')
+          }
+        } catch (e) { report.character = 'error: ' + e.message }
+
+        // 3) Connections (for the parser picker)
+        try {
+          const conns = spindle.connections
+          report.connectionsApiMethods = conns ? Object.keys(conns) : null
+          for (const fn of ['list', 'getAll', 'get']) {
+            if (conns && typeof conns[fn] === 'function') {
+              try {
+                const r = await conns[fn](userId)
+                const arr = Array.isArray(r) ? r : (r && (r.connections || r.items))
+                if (Array.isArray(arr)) {
+                  report.connections = arr.slice(0, 20).map((c) => ({
+                    id: c.id || c.connectionId, name: c.name || c.label, model: c.model || c.defaultModel,
+                  }))
+                  break
+                }
+              } catch (e) { report['connections.' + fn] = 'error: ' + e.message }
+            }
+          }
+        } catch (e) { report.connections = 'error: ' + e.message }
+
+        reply = ok(payload, requestId, { report: JSON.stringify(report, null, 2) })
+        break
+      }
+
       case 'scan_story': {
         const result = await scanStory(userId, !!payload.force)
         reply = ok(payload, requestId, result)

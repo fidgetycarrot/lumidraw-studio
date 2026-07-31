@@ -314,6 +314,10 @@ function realSetup(ctx) {
           <textarea class="ld-protocol" style="min-height:80px"></textarea>
           <button class="ld-btn" data-act="reset-protocol" style="margin-top:4px">Reset to default</button>
         </div>
+        <div>
+          <button class="ld-btn" data-act="diagnose">Run diagnostics 🔍</button>
+          <textarea class="ld-diag" readonly style="min-height:120px;display:none;margin-top:6px;font-family:monospace;font-size:11px"></textarea>
+        </div>
         <div class="ld-status">Story generations use the preset selected in the Generate tab (its prompt prefix becomes the character identity). Settings persist on the server across restarts.</div>
         <div class="ld-status">Tip: Draw Things shows the recipe of whatever image is selected — so select any image you love, hit Sync, and you've captured its exact settings.</div>
       </div>
@@ -629,6 +633,17 @@ function realSetup(ctx) {
       renderHistory()
       setStatus('.ld-gen-status', res.note || `Done (${res.mode}).`, res.processed ? 'good' : undefined)
     } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
+  })
+
+  $('[data-act="diagnose"]').addEventListener('click', async () => {
+    setStatus('.ld-settings-status', 'Probing the host…')
+    try {
+      const res = await call('diagnose', {}, 30000)
+      const ta = $('.ld-diag')
+      ta.style.display = ''
+      ta.value = res.report
+      setStatus('.ld-settings-status', 'Done — copy the box below and send it to Claude.', 'good')
+    } catch (e) { setStatus('.ld-settings-status', e.message, 'err') }
   })
 
   $('[data-act="reset-parser"]').addEventListener('click', () => {
