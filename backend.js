@@ -824,19 +824,31 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
 // Inline protocol injection (documented interceptor API).
 if (typeof spindle.registerInterceptor === 'function') {
-  spindle.registerInterceptor(async (messages, context) => {
+  spindle.registerInterceptor(async (a, b) => {
     try {
+      // Shape-agnostic: hosts may pass (messagesArray, ctx) or a single
+      // wrapper object holding .messages. Mirror back whatever we got.
+      const wrapped = !Array.isArray(a) && a && Array.isArray(a.messages)
+      const messages = Array.isArray(a) ? a : (wrapped ? a.messages : null)
       const settings = await getSettings()
-      if (settings.mode !== 'inline') return messages
+      if (!messages) {
+        spindle.log.warn('[lumidraw] interceptor invoked with unrecognized arg shape: ' +
+          (a === null ? 'null' : typeof a) + (a && typeof a === 'object' ? ' keys=' + Object.keys(a).join(',') : ''))
+        return a
+      }
+      spindle.log.info(`[lumidraw] interceptor invoked (mode=${settings.mode}, msgs=${messages.length}, wrapped=${wrapped})`)
+      if (settings.mode !== 'inline') return a
       const injected = {
         role: 'system',
         content: (settings.protocol || DEFAULT_PROTOCOL)
           .replaceAll('{{max_images}}', String(settings.maxImages || 2)),
       }
-      return { messages: [...messages, injected] }
+      const out = [...messages, injected]
+      spindle.log.info('[lumidraw] inline protocol injected (' + injected.content.length + ' chars)')
+      return wrapped ? { ...a, messages: out } : out
     } catch (e) {
       spindle.log.warn('[lumidraw] interceptor error: ' + e.message)
-      return messages
+      return a
     }
   })
   spindle.log.info('[lumidraw] inline protocol interceptor registered')
