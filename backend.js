@@ -299,15 +299,24 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims }
   return entry
 }
 
-async function resolveMacros(text, userId) {
+async function resolveMacros(text, userId, chatId) {
   if (!text || !text.includes('{{')) return text
   const mac = spindle.macros
   if (mac) {
     for (const fn of ['resolve', 'process', 'render', 'expand', 'evaluate', 'substitute']) {
       if (typeof mac[fn] === 'function') {
         try {
-          let out
-          try { out = await mac[fn](text, { userId }) } catch { out = await mac[fn](text) }
+          let out = null
+          const shapes = [
+            () => mac[fn](text, { userId, chatId }),
+            () => mac[fn](text, chatId, userId),
+            () => mac[fn](text, { chatId }),
+            () => mac[fn](text, { userId }),
+            () => mac[fn](text),
+          ]
+          for (const s of shapes) {
+            try { out = await s(); if (out !== null && out !== undefined) break } catch { /* next shape */ }
+          }
           const resolved = (typeof out === 'string') ? out
             : (out && typeof out.text === 'string') ? out.text : null
           if (resolved !== null) {
@@ -409,7 +418,7 @@ async function scanStory(userId) {
   // ------------------------- inline: process <dt-image> tags ---------------
   const tags = [...target.content.matchAll(TAG_RE)].slice(0, settings.maxImages || 2)
   if (tags.length) {
-    const prefix = await resolveMacros(preset.promptPrefix, userId)
+    const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
     const charTags = settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : ''
     const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
     let content = target.content
@@ -420,7 +429,7 @@ async function scanStory(userId) {
       if (!body) continue
       const aspect = (/aspect\s*=\s*"([^"]+)"/.exec(attrs) || [])[1]
       const dims = aspectDims(preset.config, aspect)
-      const prompt = [lead, prefix, await resolveMacros(body, userId)].filter(Boolean).join(', ')
+      const prompt = [lead, prefix, await resolveMacros(body, userId, chatId)].filter(Boolean).join(', ')
       try {
         const entry = await generateAndUpload({
           prompt,
@@ -449,14 +458,14 @@ async function scanStory(userId) {
     const instruction = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
       .replaceAll('{{max_images}}', String(settings.maxImages || 2))
     const passage = target.content.replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
-    const out = await quietLLM(await resolveMacros(instruction, userId), passage, settings, userId)
+    const out = await quietLLM(await resolveMacros(instruction, userId, chatId), passage, settings, userId)
     if (/^\s*NONE\s*$/i.test(out)) {
       if (target.id) await markProcessed(target.id)
       return { mode: 'parser', note: 'Parser judged no visual moment (NONE).' }
     }
     const lines = out.split('\n').map((l) => l.replace(/^["'`\s]+|["'`\s]+$/g, ''))
       .filter((l) => l && !/^NONE$/i.test(l)).slice(0, settings.maxImages || 2)
-    const prefix = await resolveMacros(preset.promptPrefix, userId)
+    const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
     const charTags = settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : ''
     const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
     const mds = []
@@ -610,7 +619,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.qualityTags) {
           manualPrompt = [payload.qualityTags, manualPrompt].filter(Boolean).join(', ')
         }
-        manualPrompt = await resolveMacros(manualPrompt, userId)
+        manualPrompt = await resolveMacros(manualPrompt, userId, await resolveActiveChatId(userId))
         const payloadOut = buildPayload({
           prompt: manualPrompt,
           negativePrompt: payload.negativePrompt,
