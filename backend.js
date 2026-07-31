@@ -190,12 +190,39 @@ function aspectDims(config, aspectStr) {
   return { width: r64(Math.sqrt(area * ratio)), height: r64(Math.sqrt(area / ratio)) }
 }
 
+async function resolveActiveChatId(userId) {
+  if (!spindle.chats) return null
+  for (const fn of ['getActive', 'getActiveChat', 'active']) {
+    if (typeof spindle.chats[fn] === 'function') {
+      try {
+        let active
+        try { active = await spindle.chats[fn](userId) }
+        catch { active = await spindle.chats[fn]() }
+        const id = active && (active.id || active.chatId || active)
+        if (id) return id
+      } catch { /* try next */ }
+    }
+  }
+  return null
+}
+
 async function fetchMessages(userId) {
   const chatApi = spindle.chat || spindle.chats
   if (!chatApi || typeof chatApi.getMessages !== 'function') {
     throw new Error('Chat read API unavailable (chats permission granted?).')
   }
-  for (const args of [[undefined, userId], [{ userId }], []]) {
+  const chatId = await resolveActiveChatId(userId)
+  const shapes = [
+    [chatId, userId],
+    [{ chatId, userId }],
+    [chatId],
+    [undefined, userId],
+    [{ userId }],
+    [],
+  ]
+  const errs = []
+  for (const args of shapes) {
+    if (args.length && args[0] === null) continue
     try {
       const res = await chatApi.getMessages(...args)
       const arr = Array.isArray(res) ? res : (res && (res.messages || res.items))
@@ -204,9 +231,10 @@ async function fetchMessages(userId) {
         if (arr.length > 1 && ts(arr[0]) > ts(arr[arr.length - 1])) arr.reverse()
         return arr
       }
-    } catch { /* try next shape */ }
+      errs.push(`${args.length} arg(s): empty/unrecognized result`)
+    } catch (e) { errs.push(`${args.length} arg(s): ${e.message}`) }
   }
-  throw new Error('Could not read chat messages.')
+  throw new Error('Could not read chat messages (chatId ' + (chatId ? 'resolved' : 'NOT resolved') + '). Tried: ' + errs.join(' | '))
 }
 
 function messageBits(m) {
@@ -695,16 +723,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (!chatApi || typeof chatApi.getMessages !== 'function' || typeof chatApi.updateMessage !== 'function') {
           throw new Error('Chat editing API unavailable.')
         }
-        let messages = null
         const attempts = []
-        for (const args of [[undefined, userId], [{ userId }], []]) {
-          try {
-            const res = await chatApi.getMessages(...args)
-            const arr = Array.isArray(res) ? res : (res && (res.messages || res.items))
-            if (Array.isArray(arr) && arr.length) { messages = arr; break }
-          } catch (e) { attempts.push(`getMessages: ${e.message}`) }
-        }
-        if (!messages) throw new Error('Could not read chat messages. ' + attempts.join(' | '))
+        const messages = await fetchMessages(userId)
 
         const needle = `](${imageUrl})`
         let removed = false
