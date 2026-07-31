@@ -288,24 +288,16 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }
 
       case 'append_to_chat': {
-        // Adds a generated image to the active chat as an assistant image
-        // message via Lumiverse's chat-mutation API (same mechanism as
-        // LumiSwarm-Studio's "Append to chat"). The exact call shape is
-        // feature-detected; on failure we return a diagnostic listing the
-        // real API surface so it can be pinned down in one iteration.
+        // Places a generated image INTO the latest story message (prepended
+        // at its top) via getMessages + updateMessage. Falls back to
+        // appending a new assistant message if in-place editing fails.
         const { imageUrl, alt, chatId } = payload
-        if (!imageUrl) throw new Error('No image URL to append.')
-        const content = `![${(alt || 'Generated image').replace(/[\[\]]/g, '')}](${imageUrl})`
+        if (!imageUrl) throw new Error('No image URL to add.')
+        const md = `![${(alt || 'Generated image').replace(/[\[\]]/g, '')}](${imageUrl})`
 
         const chatApi = spindle.chat || spindle.chats
-        if (!chatApi || typeof chatApi.appendMessage !== 'function') {
-          const surface = {
-            chat: spindle.chat ? Object.keys(spindle.chat) : null,
-            chats: spindle.chats ? Object.keys(spindle.chats) : null,
-          }
-          throw new Error('chat.appendMessage not available. API surface: ' +
-            JSON.stringify(surface) +
-            ' — check that the chats + chat_mutation permissions were granted.')
+        if (!chatApi) {
+          throw new Error('Chat API unavailable — check that the chats + chat_mutation permissions were granted.')
         }
 
         // Resolve a chat id if the frontend didn't supply one.
@@ -324,32 +316,85 @@ spindle.onFrontendMessage(async (payload, userId) => {
           }
         }
 
-        const message = { role: 'assistant', content }
         const attempts = []
-        let appended = null
-        // Shape 1: appendMessage(chatId, message, userId?)
-        if (targetChatId) {
-          try {
-            appended = await chatApi.appendMessage(targetChatId, message, userId)
-          } catch (e1) { attempts.push(`appendMessage(chatId, msg, userId): ${e1.message}`) }
+
+        // --- preferred path: prepend into the latest assistant message ---
+        let inserted = false
+        if (typeof chatApi.getMessages === 'function' && typeof chatApi.updateMessage === 'function') {
+          let messages = null
+          for (const args of [
+            [targetChatId, userId],
+            [{ chatId: targetChatId, userId }],
+            [targetChatId],
+            [],
+          ]) {
+            try {
+              const res = await chatApi.getMessages(...args)
+              const arr = Array.isArray(res) ? res : (res && (res.messages || res.items))
+              if (Array.isArray(arr) && arr.length) { messages = arr; break }
+            } catch (e) { attempts.push(`getMessages(${args.length} args): ${e.message}`) }
+          }
+          if (messages) {
+            // newest last is the common order; verify by timestamps when present
+            const ts = (m) => m.createdAt || m.created_at || m.timestamp || 0
+            if (messages.length > 1 && ts(messages[0]) > ts(messages[messages.length - 1])) {
+              messages = [...messages].reverse()
+            }
+            const isAssistant = (m) => {
+              const r = (m.role || m.sender || '').toString().toLowerCase()
+              return r.includes('assistant') || r.includes('char') || r === 'ai'
+            }
+            let target = null
+            for (let i = messages.length - 1; i >= 0; i--) {
+              if (isAssistant(messages[i])) { target = messages[i]; break }
+            }
+            if (!target) target = messages[messages.length - 1]
+            const messageId = target.id || target.messageId
+            const contentKey = ('content' in target) ? 'content'
+              : ('text' in target) ? 'text'
+              : ('message' in target) ? 'message' : null
+            if (messageId && contentKey) {
+              const newContent = `${md}\n\n${target[contentKey] || ''}`
+              for (const args of [
+                [messageId, { [contentKey]: newContent }, userId],
+                [{ id: messageId, chatId: targetChatId, [contentKey]: newContent, userId }],
+                [messageId, { [contentKey]: newContent }],
+                [targetChatId, messageId, { [contentKey]: newContent }],
+              ]) {
+                try {
+                  await chatApi.updateMessage(...args)
+                  inserted = true
+                  break
+                } catch (e) { attempts.push(`updateMessage(${args.length} args): ${e.message}`) }
+              }
+            } else {
+              attempts.push(`could not identify id/content on message DTO. Keys: ${Object.keys(target).join(',')}`)
+            }
+          }
+        } else {
+          attempts.push('getMessages/updateMessage not exposed: ' +
+            JSON.stringify({ chat: spindle.chat ? Object.keys(spindle.chat) : null }))
         }
-        // Shape 2: appendMessage({ chatId?, role, content, userId })
-        if (!appended) {
-          try {
-            appended = await chatApi.appendMessage({ chatId: targetChatId, ...message, userId })
-          } catch (e2) { attempts.push(`appendMessage({...userId}): ${e2.message}`) }
+
+        // --- fallback: append as a fresh assistant message ---
+        let appendedNew = false
+        if (!inserted && typeof chatApi.appendMessage === 'function') {
+          const message = { role: 'assistant', content: md }
+          for (const args of [
+            [targetChatId, message, userId],
+            [{ chatId: targetChatId, ...message, userId }],
+            [{ chatId: targetChatId, ...message }],
+          ]) {
+            try { await chatApi.appendMessage(...args); appendedNew = true; break }
+            catch (e) { attempts.push(`appendMessage(${args.length} args): ${e.message}`) }
+          }
         }
-        // Shape 3: without userId (user-scoped installs)
-        if (!appended) {
-          try {
-            appended = await chatApi.appendMessage({ chatId: targetChatId, ...message })
-          } catch (e3) { attempts.push(`appendMessage({...}): ${e3.message}`) }
+
+        if (!inserted && !appendedNew) {
+          throw new Error('Could not add image to chat. Tried: ' + attempts.join(' | ') +
+            ' — send me this text and I will pin the exact signatures.')
         }
-        if (!appended && attempts.length) {
-          throw new Error('Could not append to chat. Tried: ' + attempts.join(' | ') +
-            ' — send me this text and I will pin the exact signature.')
-        }
-        reply = ok(payload, requestId, { appended: true })
+        reply = ok(payload, requestId, { mode: inserted ? 'inserted' : 'appended-new' })
         break
       }
 

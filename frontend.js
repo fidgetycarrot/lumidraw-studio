@@ -166,21 +166,20 @@ function realSetup(ctx) {
       max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       vertical-align: bottom;
     }
-    .ld-history { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-    .ld-history .ld-thumb { position: relative; }
+    .ld-history { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .ld-history .ld-thumb { display: flex; flex-direction: column; gap: 4px; }
     .ld-history img {
       width: 100%; aspect-ratio: 1; object-fit: cover;
       border-radius: var(--lumiverse-radius, 8px); border: 1px solid var(--lumiverse-border, #3d4050);
       cursor: pointer; display: block;
     }
     .ld-thumb .ld-append {
-      position: absolute; right: 3px; bottom: 3px;
-      padding: 2px 5px; font-size: 11px; line-height: 1;
+      width: 100%; padding: 5px 4px; font-size: 12px; line-height: 1.1;
       background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
       border-radius: var(--lumiverse-radius, 8px); color: var(--lumiverse-text, #eceef4);
-      cursor: pointer; opacity: .85;
+      cursor: pointer;
     }
-    .ld-thumb .ld-append:hover { opacity: 1; }
+    .ld-thumb .ld-append:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
     .ld-preset-item {
       display: flex; align-items: center; gap: 6px; padding: 6px 8px;
       border: 1px solid var(--lumiverse-border, #3d4050); border-radius: var(--lumiverse-radius, 8px);
@@ -190,6 +189,7 @@ function realSetup(ctx) {
     .ld-preset-name { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ld-preset-model { font-size: 10px; color: var(--lumiverse-text-muted, #a2a5b4); display: block; overflow: hidden; text-overflow: ellipsis; }
     .ld-x { background: none; border: none; color: var(--lumiverse-text-muted, #a2a5b4); cursor: pointer; font-size: 14px; padding: 2px 4px; }
+    .ld-min { font-size: 20px; line-height: 1; padding: 2px 8px; }
     .ld-x:hover { color: #e5737f; }
     .ld-spin { animation: ld-rot 1s linear infinite; display: inline-block; }
     @keyframes ld-rot { to { transform: rotate(360deg); } }
@@ -204,6 +204,7 @@ function realSetup(ctx) {
         <button class="ld-tabbtn ld-active" data-tab="generate">Generate</button>
         <button class="ld-tabbtn" data-tab="presets">Presets</button>
         <button class="ld-tabbtn" data-tab="settings">Settings</button>
+        <button class="ld-x ld-min" title="Minimize back to the icon">&#8211;</button>
       </div>
       <div class="ld-body" data-view="generate">
         <div>
@@ -358,11 +359,13 @@ function realSetup(ctx) {
   async function appendToChat(img, entry) {
     setStatus('.ld-gen-status', 'Adding to chat…')
     try {
-      await call('append_to_chat', {
+      const res = await call('append_to_chat', {
         imageUrl: img.url,
         alt: (entry && entry.prompt) ? entry.prompt.slice(0, 120) : 'Generated image',
       })
-      setStatus('.ld-gen-status', 'Added to the active chat.', 'good')
+      setStatus('.ld-gen-status', res.mode === 'inserted'
+        ? 'Placed at the top of the latest story message.'
+        : 'Could not edit the latest message — posted as a new message instead.', 'good')
     } catch (e) {
       setStatus('.ld-gen-status', e.message, 'err')
     }
@@ -382,8 +385,8 @@ function realSetup(ctx) {
         im.addEventListener('click', () => window.open(img.url, '_blank'))
         const btn = document.createElement('button')
         btn.className = 'ld-append'
-        btn.textContent = '💬+'
-        btn.title = 'Append this image to the active chat'
+        btn.textContent = 'Add to chat'
+        btn.title = 'Post this image into the current conversation'
         btn.addEventListener('click', (ev) => { ev.stopPropagation(); appendToChat(img, entry) })
         wrap.appendChild(im)
         wrap.appendChild(btn)
@@ -518,6 +521,8 @@ function realSetup(ctx) {
       }
     })
   }
+
+  $('.ld-min').addEventListener('click', () => panel.classList.remove('ld-open'))
 
   $('.ld-preset-select').addEventListener('change', (e) => {
     if (e.target.value) selectPreset(e.target.value)
