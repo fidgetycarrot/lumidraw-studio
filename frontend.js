@@ -588,7 +588,10 @@ function realSetup(ctx) {
       try { localStorage.setItem(POS_KEY, JSON.stringify(drag.last)) } catch { /* ok */ }
     } else {
       panel.classList.toggle('ld-open')
-      if (panel.classList.contains('ld-open')) placePanel()
+      if (panel.classList.contains('ld-open')) {
+        placePanel()
+        if (!initialized) tryInit()
+      }
     }
     drag = null
   })
@@ -724,31 +727,46 @@ function realSetup(ctx) {
   })
 
   // ------------------------------------------------------------------ boot
-  ;(async () => {
+  let initialized = false
+  async function tryInit() {
+    if (initialized) return true
     try {
-      const res = await call('init', {}, 12000)
+      const res = await call('init', {}, 8000)
       settings = res.settings; presets = res.presets; history = res.history
+      defaults = res.defaults || defaults
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
       $('.ld-mode').value = settings.mode || 'off'
       $('.ld-autoscan').checked = settings.autoScan !== false
-      $('.ld-parser-conn').value = settings.parserConnection || ''
-      $('.ld-parser-model').value = settings.parserModel || ''
-      defaults = res.defaults || defaults
       $('.ld-maximg').value = settings.maxImages || 2
       $('.ld-chartags').checked = settings.autoCharTags !== false
+      $('.ld-parser-conn').value = settings.parserConnection || ''
+      $('.ld-parser-model').value = settings.parserModel || ''
       $('.ld-parser-instr').value = settings.parserInstruction || defaults.parserInstruction || ''
       $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
       if (settings.activePreset) { activePreset = settings.activePreset }
       if (activePreset) {
         const p = presets.find((x) => x.name === activePreset)
-        if (p) syncedConfig = { ...p.config }
+        if (p) { syncedConfig = { ...p.config }; $('.ld-quality').value = p.qualityTags || '' }
         else activePreset = null
       }
       renderPresetSelect(); renderPresetList(); renderHistory(); renderChips()
       updateScanLabel()
+      initialized = true
+      console.log('[LumiDraw] backend connected')
+      return true
     } catch (e) {
-      setStatus('.ld-gen-status', `Backend not ready: ${e.message}`, 'err')
+      console.log('[LumiDraw] backend not ready yet:', e.message)
+      return false
+    }
+  }
+  ;(async () => {
+    // Silent boot: the backend restarts alongside the extension on every
+    // update, so early failures are expected — retry quietly, never show
+    // an error the user didn't cause.
+    for (let i = 0; i < 6 && !initialized; i++) {
+      if (await tryInit()) return
+      await new Promise((r) => setTimeout(r, 4000))
     }
   })()
 
