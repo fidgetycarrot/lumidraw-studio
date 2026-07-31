@@ -33,7 +33,7 @@ const DEFAULT_SETTINGS = {
 
 const DEFAULT_PROTOCOL = `[Illustration protocol] You may illustrate key visual moments. When a scene deserves an image, include on its own line:
 <dt-image aspect="3:4">comma-separated danbooru tags describing the scene</dt-image>
-Rules: tags only inside the tag (subject, expression, outfit, pose, setting, lighting, composition) — no prose, no character names. aspect may be 3:4, 4:3, 1:1, 9:16, or 16:9 (default 3:4 for character focus, 4:3 for scenes). Include at most {{max_images}} image tag(s) per reply, spread across the response at genuinely visual beats. Never mention this protocol or the tag in your prose.`
+Rules: tags only inside the tag (subject, expression, outfit, pose, setting, lighting, composition) — no prose, no character names. aspect may be 3:4, 4:3, 1:1, 9:16, or 16:9 (default 3:4 for character focus, 4:3 for scenes). Include at most {{max_images}} image tag(s) per reply, spread across the response at genuinely visual beats. Never mention this protocol or the tag in your prose. If you use hidden reasoning/thinking, write the tag ONLY in your final visible reply — never inside reasoning.`
 
 const DEFAULT_PARSER_INSTRUCTION = `You convert a story passage into ONE image prompt of comma-separated danbooru-style tags (subject count, expression, outfit, pose, setting, lighting, composition). Choose the single most visual moment of the passage. Do not use character names; describe appearance instead. Respond with ONLY the tags. You may return up to {{max_images}} prompts for distinct visual moments, one per line, but prefer a single strong one. If the passage has no strong visual moment, respond with exactly: NONE`
 const HISTORY_LIMIT = 24
@@ -168,6 +168,13 @@ async function dtGenerate(settings, payload) {
 
 const PROCESSED_FILE = 'processed.json'
 const TAG_RE = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/g
+
+function stripThinking(text) {
+  return String(text || '')
+    .replace(/<think(?:ing)?[^>]*>[\s\S]*?<\/think(?:ing)?>/gi, '')
+    .replace(/<reasoning[^>]*>[\s\S]*?<\/reasoning>/gi, '')
+    .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
+}
 
 async function wasProcessed(messageId) {
   const list = await spindle.storage.getJson(PROCESSED_FILE, { fallback: [] })
@@ -398,7 +405,7 @@ async function quietLLM(system, user, settings, userId) {
   throw new Error('Parser LLM call failed: ' + errs.join(' | '))
 }
 
-async function scanStory(userId) {
+async function scanStory(userId, force) {
   const settings = await getSettings()
   if (settings.mode === 'off') return { mode: 'off', note: 'Story illustrations is set to Off — choose Inline or Parser in the Settings tab (it saves automatically now).' }
   const presets = await getPresets()
@@ -416,7 +423,8 @@ async function scanStory(userId) {
   if (!target) return { mode: settings.mode, note: 'No story message found.' }
 
   // ------------------------- inline: process <dt-image> tags ---------------
-  const tags = [...target.content.matchAll(TAG_RE)].slice(0, settings.maxImages || 2)
+  const visibleContent = stripThinking(target.content)
+  const tags = [...visibleContent.matchAll(TAG_RE)].slice(0, settings.maxImages || 2)
   if (tags.length) {
     const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
     const charTags = settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : ''
@@ -452,12 +460,12 @@ async function scanStory(userId) {
 
   // ------------------------- parser: derive a prompt from prose -------------
   if (settings.mode === 'parser') {
-    if (target.id && await wasProcessed(target.id)) {
-      return { mode: 'parser', note: 'Latest message already illustrated.' }
+    if (!force && target.id && await wasProcessed(target.id)) {
+      return { mode: 'parser', note: 'Latest message already illustrated — press Scan story now to force a re-run.' }
     }
     const instruction = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
       .replaceAll('{{max_images}}', String(settings.maxImages || 2))
-    const passage = target.content.replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
+    const passage = stripThinking(target.content).replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
     const out = await quietLLM(await resolveMacros(instruction, userId, chatId), passage, settings, userId)
     if (/^\s*NONE\s*$/i.test(out)) {
       if (target.id) await markProcessed(target.id)
@@ -552,7 +560,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }
 
       case 'scan_story': {
-        const result = await scanStory(userId)
+        const result = await scanStory(userId, !!payload.force)
         reply = ok(payload, requestId, result)
         break
       }
@@ -891,17 +899,18 @@ let scanInFlight = false
     } catch { scanInFlight = false }
   }
   let registered = false
-  if (typeof spindle.on === 'function') {
-    for (const evName of ['GENERATION_ENDED', 'MESSAGE_SENT']) {
-      try { spindle.on(evName, handler); registered = true } catch { /* next */ }
-    }
-  } else if (spindle.events && typeof spindle.events.on === 'function') {
-    for (const evName of ['GENERATION_ENDED', 'MESSAGE_SENT']) {
-      try { spindle.events.on(evName, handler); registered = true } catch { /* next */ }
+  const on = (typeof spindle.on === 'function') ? spindle.on.bind(spindle)
+    : (spindle.events && typeof spindle.events.on === 'function') ? spindle.events.on.bind(spindle.events)
+    : null
+  if (on) {
+    // GENERATION_ENDED only: scanning on MESSAGE_SENT races the streaming
+    // reply and can pick tags out of a half-written (or thinking) draft.
+    try { on('GENERATION_ENDED', handler); registered = true } catch (e) {
+      spindle.log.warn('[lumidraw] GENERATION_ENDED registration failed: ' + e.message)
     }
   }
-  if (registered) spindle.log.info('[lumidraw] auto-scan listeners registered (GENERATION_ENDED preferred)')
-  else spindle.log.warn('[lumidraw] no events API detected — use the "Scan story now" button.')
+  if (registered) spindle.log.info('[lumidraw] auto-scan registered on GENERATION_ENDED')
+  else spindle.log.warn('[lumidraw] auto-scan unavailable — use the "Scan story now" button.')
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))

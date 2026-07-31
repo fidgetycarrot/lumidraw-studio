@@ -624,7 +624,7 @@ function realSetup(ctx) {
   $('[data-act="scan"]').addEventListener('click', async () => {
     setStatus('.ld-gen-status', 'Scanning the latest story message…')
     try {
-      const res = await call('scan_story', {})
+      const res = await call('scan_story', { force: true })
       history = (await call('init', {}, 15000)).history
       renderHistory()
       setStatus('.ld-gen-status', res.note || `Done (${res.mode}).`, res.processed ? 'good' : undefined)
