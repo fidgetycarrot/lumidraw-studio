@@ -390,17 +390,17 @@ async function quietLLM(system, user, settings, userId) {
     throw new Error('No LLM generation API found. spindle surface: ' + Object.keys(spindle).join(', ') +
       ' — send me this list and I will pin the parser call.')
   }
+  // The host's generate API reads the prompt field (system/messages shapes
+  // were observed to be ignored), so the instruction rides inside the prompt
+  // itself — stated before the passage and reinforced after it.
+  const combined = system +
+    '\n\n----- STORY PASSAGE -----\n' + user +
+    '\n----- END PASSAGE -----\n\nNow respond with ONLY the output the instruction above requires (comma-separated tag prompt(s), one per line). No prose, no explanations.'
   const opts = {
     userId,
-    // Redundant encodings — whichever shape this host's generate API reads,
-    // the instruction is present in it.
+    prompt: combined,
     system,
-    systemPrompt: system,
-    prompt: user,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
+    messages: [{ role: 'user', content: combined }],
   }
   if (settings.parserConnection) { opts.connection = settings.parserConnection; opts.connectionId = settings.parserConnection }
   if (settings.parserModel) opts.model = settings.parserModel
@@ -494,8 +494,17 @@ async function scanStory(userId, force) {
       if (target.id) await markProcessed(target.id)
       return { mode: 'parser', note: `Parser (${instrLabel}) judged no visual moment (NONE).` }
     }
-    const lines = out.split('\n').map((l) => l.replace(/^["'`\s]+|["'`\s]+$/g, ''))
-      .filter((l) => l && !/^NONE$/i.test(l)).slice(0, settings.maxImages || 2)
+    const looksLikeTags = (l) => {
+      const commas = (l.match(/,/g) || []).length
+      const words = l.split(/\s+/).length
+      return commas >= 3 && words / (commas + 1) <= 4
+    }
+    const allLines = out.split('\n').map((l) => l.replace(/^["'`\s]+|["'`\s]+$/g, ''))
+      .filter((l) => l && !/^NONE$/i.test(l))
+    const lines = allLines.filter(looksLikeTags).slice(0, settings.maxImages || 2)
+    if (!lines.length) {
+      return { mode: 'parser', note: `Parser (${instrLabel}) returned prose instead of tags — nothing generated (no cost). Raw start: ` + out.slice(0, 160) }
+    }
     const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
     const charTags = preset.characterTags || (settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : '')
     const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
