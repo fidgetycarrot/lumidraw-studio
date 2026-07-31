@@ -2,6 +2,8 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
+console.log('[LumiDraw] frontend module imported')
+
 function makeId() {
   if (window.crypto && typeof crypto.randomUUID === 'function') {
     try { return crypto.randomUUID() } catch { /* insecure context */ }
@@ -12,8 +14,12 @@ function makeId() {
 }
 
 export function setup(ctx) {
+  console.log('[LumiDraw] setup called. ctx keys:', ctx ? Object.keys(ctx) : ctx)
+  if (ctx && ctx.dom) console.log('[LumiDraw] ctx.dom keys:', Object.keys(ctx.dom))
   try {
-    return realSetup(ctx)
+    const cleanup = realSetup(ctx)
+    console.log('[LumiDraw] setup finished — launcher should be visible bottom-right')
+    return cleanup
   } catch (err) {
     console.error('[LumiDraw] setup crashed:', err)
     return () => {}
@@ -23,6 +29,50 @@ export function setup(ctx) {
 export default setup
 
 function realSetup(ctx) {
+  // --- resilient DOM layer: prefer host helpers, fall back to document ---
+  const injected = []
+  const dom = {
+    addStyle(css) {
+      if (ctx.dom && typeof ctx.dom.addStyle === 'function') return ctx.dom.addStyle(css)
+      const el = document.createElement('style')
+      el.setAttribute('data-lumidraw', '1')
+      el.textContent = css
+      document.head.appendChild(el)
+      injected.push(el)
+      return () => el.remove()
+    },
+    inject(target, html) {
+      if (ctx.dom && typeof ctx.dom.inject === 'function') {
+        try { return ctx.dom.inject(target, html) } catch (e) {
+          console.warn('[LumiDraw] ctx.dom.inject failed, using document fallback:', e.message)
+        }
+      }
+      const root = document.createElement('div')
+      root.setAttribute('data-lumidraw', '1')
+      root.innerHTML = html
+      document.body.appendChild(root)
+      injected.push(root)
+    },
+    query(sel) {
+      if (ctx.dom && typeof ctx.dom.query === 'function') {
+        try { const r = ctx.dom.query(sel); if (r) return r } catch { /* fall through */ }
+      }
+      return document.querySelector(sel)
+    },
+    queryAll(sel) {
+      if (ctx.dom && typeof ctx.dom.queryAll === 'function') {
+        try { const r = dom.queryAll(sel); if (r && r.length) return r } catch { /* fall through */ }
+      }
+      return Array.from(document.querySelectorAll(sel))
+    },
+    cleanup() {
+      if (ctx.dom && typeof ctx.dom.cleanup === 'function') {
+        try { dom.cleanup() } catch { /* ignore */ }
+      }
+      for (const el of injected) el.remove()
+    },
+  }
+
   // ------------------------------------------------------------------ state
   let settings = { host: '127.0.0.1', port: 7862 }
   let presets = []
@@ -32,7 +82,7 @@ function realSetup(ctx) {
   let busy = false
   const pending = new Map() // requestId → {resolve, reject}
 
-  function call(type, data = {}) {
+  function call(type, data = {}, timeoutMs = 630000) {
     return new Promise((resolve, reject) => {
       const requestId = makeId()
       pending.set(requestId, { resolve, reject })
@@ -40,9 +90,9 @@ function realSetup(ctx) {
       setTimeout(() => {
         if (pending.has(requestId)) {
           pending.delete(requestId)
-          reject(new Error('Backend did not respond (timed out).'))
+          reject(new Error(`Backend did not respond to "${type}" (timed out after ${timeoutMs/1000}s). If this is at startup, the backend module may not be running — check the Lumiverse server log for "[lumidraw] backend loaded".`))
         }
-      }, 630000)
+      }, timeoutMs)
     })
   }
 
@@ -55,7 +105,7 @@ function realSetup(ctx) {
   })
 
   // ------------------------------------------------------------------ styles
-  const removeStyle = ctx.dom.addStyle(`
+  const removeStyle = dom.addStyle(`
     .ld-launcher {
       position: fixed; right: 16px; bottom: 88px; z-index: 9000;
       width: 42px; height: 42px; border-radius: 50%;
@@ -146,7 +196,7 @@ function realSetup(ctx) {
   `)
 
   // ------------------------------------------------------------------ markup
-  ctx.dom.inject('body', `
+  dom.inject('body', `
     <button class="ld-launcher" title="LumiDraw Studio">🎨</button>
     <div class="ld-panel">
       <div class="ld-head">
@@ -217,7 +267,7 @@ function realSetup(ctx) {
     </div>
   `)
 
-  const $ = (sel) => ctx.dom.query(sel)
+  const $ = (sel) => dom.query(sel)
   const launcher = $('.ld-launcher')
   const panel = $('.ld-panel')
 
@@ -404,10 +454,10 @@ function realSetup(ctx) {
   // ------------------------------------------------------------------ wiring
   launcher.addEventListener('click', () => panel.classList.toggle('ld-open'))
 
-  for (const tab of ctx.dom.queryAll('.ld-tabbtn')) {
+  for (const tab of dom.queryAll('.ld-tabbtn')) {
     tab.addEventListener('click', () => {
-      for (const t of ctx.dom.queryAll('.ld-tabbtn')) t.classList.toggle('ld-active', t === tab)
-      for (const v of ctx.dom.queryAll('.ld-body')) {
+      for (const t of dom.queryAll('.ld-tabbtn')) t.classList.toggle('ld-active', t === tab)
+      for (const v of dom.queryAll('.ld-body')) {
         v.style.display = v.getAttribute('data-view') === tab.getAttribute('data-tab') ? 'flex' : 'none'
       }
     })
@@ -482,7 +532,7 @@ function realSetup(ctx) {
   // ------------------------------------------------------------------ boot
   ;(async () => {
     try {
-      const res = await call('init')
+      const res = await call('init', {}, 12000)
       settings = res.settings; presets = res.presets; history = res.history
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
@@ -495,6 +545,6 @@ function realSetup(ctx) {
   return () => {
     unsub()
     removeStyle()
-    ctx.dom.cleanup()
+    dom.cleanup()
   }
 }
