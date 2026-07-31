@@ -659,21 +659,44 @@ function realSetup(ctx) {
     }
   })
 
+  async function pushSettings(statusMsg) {
+    const res = await call('save_settings', {
+      host: $('.ld-host').value,
+      port: $('.ld-port').value,
+      mode: $('.ld-mode').value,
+      autoScan: $('.ld-autoscan').checked,
+      parserConnection: $('.ld-parser-conn').value,
+      parserModel: $('.ld-parser-model').value,
+      parserInstruction: $('.ld-parser-instr').value,
+      protocol: $('.ld-protocol').value,
+      maxImages: $('.ld-maximg').value,
+    })
+    settings = res.settings
+    updateScanLabel()
+    if (statusMsg) setStatus('.ld-settings-status', statusMsg, 'good')
+    return res
+  }
+
+  function updateScanLabel() {
+    const btn = $('[data-act="scan"]')
+    if (!btn) return
+    const mode = $('.ld-mode') ? $('.ld-mode').value : 'off'
+    btn.textContent = mode === 'off'
+      ? 'Scan story now 📖 (mode: Off — set in Settings)'
+      : `Scan story now 📖 (${mode})`
+  }
+
+  // Story controls save themselves immediately — no Save press needed.
+  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg']) {
+    const el = $(sel)
+    if (el) el.addEventListener('change', () => {
+      pushSettings('Story settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
+    })
+  }
+
   $('[data-act="save-settings"]').addEventListener('click', async () => {
     try {
-      const res = await call('save_settings', {
-        host: $('.ld-host').value,
-        port: $('.ld-port').value,
-        mode: $('.ld-mode').value,
-        autoScan: $('.ld-autoscan').checked,
-        parserConnection: $('.ld-parser-conn').value,
-        parserModel: $('.ld-parser-model').value,
-        parserInstruction: $('.ld-parser-instr').value,
-        protocol: $('.ld-protocol').value,
-        maxImages: $('.ld-maximg').value,
-      })
-      settings = res.settings
-      setStatus('.ld-settings-status', `Saved — pointing at ${settings.host}:${settings.port}.`, 'good')
+      await pushSettings(`Saved — pointing at ${$('.ld-host').value}:${$('.ld-port').value}.`)
     } catch (e) {
       setStatus('.ld-settings-status', e.message, 'err')
     }
@@ -711,6 +734,7 @@ function realSetup(ctx) {
         else activePreset = null
       }
       renderPresetSelect(); renderPresetList(); renderHistory(); renderChips()
+      updateScanLabel()
     } catch (e) {
       setStatus('.ld-gen-status', `Backend not ready: ${e.message}`, 'err')
     }

@@ -317,7 +317,7 @@ async function quietLLM(system, user, settings) {
 
 async function scanStory(userId) {
   const settings = await getSettings()
-  if (settings.mode === 'off') return { mode: 'off', note: 'Story mode is Off in Settings.' }
+  if (settings.mode === 'off') return { mode: 'off', note: 'Story illustrations is set to Off — choose Inline or Parser in the Settings tab (it saves automatically now).' }
   const presets = await getPresets()
   const preset = presets.find((p) => p.name === settings.activePreset)
   if (!preset) {
