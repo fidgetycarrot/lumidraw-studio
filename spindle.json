@@ -8,7 +8,7 @@
   "description": "Bridge Draw Things and Lumiverse: sync models and settings straight from the Draw Things API, pin them as named presets, and generate without ever retyping a model filename.",
   "permissions": ["images", "cors_proxy", "chats", "chat_mutation"],
   "requested_capabilities": ["base64_decode"],
-  "entry_backend": "dist/backend.js",
-  "entry_frontend": "dist/frontend.js",
+  "entry_backend": "backend.js",
+  "entry_frontend": "frontend.js",
   "minimum_lumiverse_version": "0.1.0"
 }
