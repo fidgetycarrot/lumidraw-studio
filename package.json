@@ -1,6 +1,6 @@
 {
   "name": "lumidraw-studio",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "description": "Bridge Draw Things and Lumiverse: sync models and settings, pin presets, generate, and append results to chat.",
   "license": "MIT",

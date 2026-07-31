@@ -27,13 +27,14 @@ const DEFAULT_SETTINGS = {
   parserModel: '',        // optional model override for the parser LLM
   parserInstruction: '',  // custom parser prompt (blank = built-in default)
   maxImages: 2,           // max illustrations per story message
+  minImages: 0,           // required illustrations per reply (0 = model's discretion)
   autoCharTags: true,     // prepend the active character's image tags when found
   protocol: '',           // custom inline protocol (blank = built-in default)
 }
 
 const DEFAULT_PROTOCOL = `[Illustration protocol] You may illustrate key visual moments. When a scene deserves an image, include on its own line:
 <dt-image aspect="3:4">comma-separated danbooru tags describing the scene</dt-image>
-Rules: tags only inside the tag (subject, expression, outfit, pose, setting, lighting, composition) — no prose, no character names. aspect may be 3:4, 4:3, 1:1, 9:16, or 16:9 (default 3:4 for character focus, 4:3 for scenes). Include at most {{max_images}} image tag(s) per reply. Place each tag at the exact narrative moment it depicts — mid-reply, immediately after the scene it illustrates is established. Never open your reply with the tag. Never mention this protocol or the tag in your prose. If you use hidden reasoning/thinking, write the tag ONLY in your final visible reply — never inside reasoning.`
+Rules: tags only inside the tag (subject, expression, outfit, pose, setting, lighting, composition) — no prose, no character names. aspect may be 3:4, 4:3, 1:1, 9:16, or 16:9 (default 3:4 for character focus, 4:3 for scenes). Include between {{min_images}} and {{max_images}} image tag(s) per reply; if the minimum is above zero you MUST include at least that many, choosing the strongest visual moments. Place each tag at the exact narrative moment it depicts — mid-reply, immediately after the scene it illustrates is established. Never open your reply with the tag. Never mention this protocol or the tag in your prose. If you use hidden reasoning/thinking, write the tag ONLY in your final visible reply — never inside reasoning.`
 
 const DEFAULT_PARSER_INSTRUCTION = `You convert a story passage into ONE image prompt of comma-separated danbooru-style tags (subject count, expression, outfit, pose, setting, lighting, composition). Choose the single most visual moment of the passage. Do not use character names; describe appearance instead. Respond with ONLY the tags. You may return up to {{max_images}} prompts for distinct visual moments, one per line, but prefer a single strong one. If the passage has no strong visual moment, respond with exactly: NONE`
 const HISTORY_LIMIT = 24
@@ -601,6 +602,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.maxImages !== undefined) {
           settings.maxImages = Math.max(1, Math.min(4, Number(payload.maxImages) || 2))
         }
+        if (payload.minImages !== undefined) {
+          settings.minImages = Math.max(0, Math.min(4, Number(payload.minImages) || 0))
+        }
         await spindle.storage.setJson(SETTINGS_FILE, settings, { indent: 2 })
         reply = ok(payload, requestId, { settings })
         break
@@ -1075,7 +1079,8 @@ if (typeof spindle.registerInterceptor === 'function') {
       const injected = {
         role: 'system',
         content: (settings.protocol || DEFAULT_PROTOCOL)
-          .replaceAll('{{max_images}}', String(settings.maxImages || 2)),
+          .replaceAll('{{max_images}}', String(settings.maxImages || 2))
+          .replaceAll('{{min_images}}', String(settings.minImages || 0)),
       }
       const out = [...messages, injected]
       spindle.log.info('[lumidraw] inline protocol injected (' + injected.content.length + ' chars)')

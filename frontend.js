@@ -295,9 +295,15 @@ function realSetup(ctx) {
           <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px">
             <input type="checkbox" class="ld-autoscan" style="width:auto" /> Auto-scan after each story message (if supported — otherwise use Scan story now)
           </label>
-          <div style="margin-top:6px">
-            <span class="ld-label">Max images per story message</span>
-            <input class="ld-maximg" type="number" min="1" max="4" step="1" />
+          <div class="ld-row" style="margin-top:6px">
+            <div>
+              <span class="ld-label">Min images per reply (0 = model decides)</span>
+              <input class="ld-minimg" type="number" min="0" max="4" step="1" />
+            </div>
+            <div>
+              <span class="ld-label">Max images</span>
+              <input class="ld-maximg" type="number" min="1" max="4" step="1" />
+            </div>
           </div>
           <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px">
             <input type="checkbox" class="ld-chartags" style="width:auto" /> Auto-include the active character's image tags in story prompts
@@ -742,6 +748,7 @@ function realSetup(ctx) {
       parserInstruction: $('.ld-parser-instr').value,
       protocol: $('.ld-protocol').value,
       maxImages: $('.ld-maximg').value,
+      minImages: $('.ld-minimg').value,
       autoCharTags: $('.ld-chartags').checked,
     })
     settings = res.settings
@@ -800,7 +807,7 @@ function realSetup(ctx) {
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-chartags', '.ld-parser-conn']) {
+  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-parser-conn']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       pushSettings('Story settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
@@ -838,6 +845,7 @@ function realSetup(ctx) {
       $('.ld-mode').value = settings.mode || 'off'
       $('.ld-autoscan').checked = settings.autoScan !== false
       $('.ld-maximg').value = settings.maxImages || 2
+      $('.ld-minimg').value = settings.minImages || 0
       $('.ld-chartags').checked = settings.autoCharTags !== false
       try {
         const cres = await call('list_connections', {}, 10000)
