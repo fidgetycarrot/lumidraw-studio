@@ -722,6 +722,34 @@ function realSetup(ctx) {
       : `Scan story now 📖 (${mode})`
   }
 
+  // Quality/Character tags auto-save into the selected preset as you type.
+  let tagSaveTimer = null
+  function scheduleTagSave() {
+    if (!activePreset) return
+    clearTimeout(tagSaveTimer)
+    tagSaveTimer = setTimeout(async () => {
+      const p = presets.find((x) => x.name === activePreset)
+      if (!p) return
+      try {
+        const res = await call('save_preset', {
+          name: p.name,
+          config: p.config,
+          extra: p.extra || null,
+          promptPrefix: p.promptPrefix || '',
+          negativePrompt: p.negativePrompt || '',
+          qualityTags: $('.ld-quality').value,
+          characterTags: $('.ld-chartags-input').value,
+        })
+        presets = res.presets
+        setStatus('.ld-gen-status', 'Preset updated ✓', 'good')
+      } catch (e) { setStatus('.ld-gen-status', 'Preset save failed: ' + e.message, 'err') }
+    }, 800)
+  }
+  for (const sel of ['.ld-quality', '.ld-chartags-input']) {
+    const el = $(sel)
+    if (el) el.addEventListener('input', scheduleTagSave)
+  }
+
   // Story controls save themselves immediately — no Save press needed.
   for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-chartags', '.ld-parser-conn']) {
     const el = $(sel)
