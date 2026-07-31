@@ -229,7 +229,7 @@ async function fetchMessages(userId) {
       if (Array.isArray(arr) && arr.length) {
         const ts = (m) => m.createdAt || m.created_at || m.timestamp || 0
         if (arr.length > 1 && ts(arr[0]) > ts(arr[arr.length - 1])) arr.reverse()
-        return arr
+        return { messages: arr, chatId }
       }
       errs.push(`${args.length} arg(s): empty/unrecognized result`)
     } catch (e) { errs.push(`${args.length} arg(s): ${e.message}`) }
@@ -248,14 +248,23 @@ function messageBits(m) {
   }
 }
 
-async function updateMessageContent(messageId, contentKey, newContent, userId) {
+async function updateMessageContent(messageId, contentKey, newContent, userId, chatId) {
   const chatApi = spindle.chat || spindle.chats
   const errs = []
-  for (const args of [
+  const shapes = []
+  if (chatId) {
+    shapes.push(
+      [{ id: messageId, chatId, [contentKey]: newContent, userId }],
+      [chatId, messageId, { [contentKey]: newContent }, userId],
+      [chatId, messageId, { [contentKey]: newContent }],
+    )
+  }
+  shapes.push(
     [messageId, { [contentKey]: newContent }, userId],
     [{ id: messageId, [contentKey]: newContent, userId }],
     [messageId, { [contentKey]: newContent }],
-  ]) {
+  )
+  for (const args of shapes) {
     try { await chatApi.updateMessage(...args); return } catch (e) { errs.push(e.message) }
   }
   throw new Error('updateMessage failed: ' + errs.join(' | '))
@@ -358,7 +367,7 @@ async function scanStory(userId) {
     return { mode: settings.mode, note: 'No active preset selected — pick one in the Generate tab first.' }
   }
 
-  const messages = await fetchMessages(userId)
+  const { messages, chatId } = await fetchMessages(userId)
   let target = null
   for (let i = messages.length - 1; i >= 0; i--) {
     const bits = messageBits(messages[i])
@@ -395,7 +404,7 @@ async function scanStory(userId) {
         content = content.replace(m[0], `*[image failed: ${e.message.slice(0, 120)}]*`)
       }
     }
-    await updateMessageContent(target.id, target.contentKey, content, userId)
+    await updateMessageContent(target.id, target.contentKey, content, userId, chatId)
     return { mode: 'inline', processed: done, note: `${done}/${tags.length} tag(s) illustrated.` }
   }
 
@@ -429,7 +438,7 @@ async function scanStory(userId) {
       mds.push(`![${line.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`)
     }
     if (!mds.length) return { mode: 'parser', note: 'Parser returned nothing usable: ' + out.slice(0, 140) }
-    await updateMessageContent(target.id, target.contentKey, `${mds.join('\n\n')}\n\n${target.content}`, userId)
+    await updateMessageContent(target.id, target.contentKey, `${mds.join('\n\n')}\n\n${target.content}`, userId, chatId)
     if (target.id) await markProcessed(target.id)
     return { mode: 'parser', processed: mds.length, note: `Illustrated ${mds.length} moment(s). First prompt: ` + firstPrompt.slice(0, 120) }
   }
@@ -730,7 +739,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           throw new Error('Chat editing API unavailable.')
         }
         const attempts = []
-        const messages = await fetchMessages(userId)
+        const { messages, chatId: rmChatId } = await fetchMessages(userId)
 
         const needle = `](${imageUrl})`
         let removed = false
@@ -742,14 +751,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
           const re = new RegExp('!\\[[^\\]]*\\]\\(' + esc + '\\)\\n?\\n?')
           const newContent = m[contentKey].replace(re, '').replace(/^\s+/, '')
           const messageId = m.id || m.messageId
-          for (const args of [
-            [messageId, { [contentKey]: newContent }, userId],
-            [{ id: messageId, [contentKey]: newContent, userId }],
-            [messageId, { [contentKey]: newContent }],
-          ]) {
-            try { await chatApi.updateMessage(...args); removed = true; break }
-            catch (e) { attempts.push(`updateMessage: ${e.message}`) }
-          }
+          try {
+            await updateMessageContent(messageId, contentKey, newContent, userId, rmChatId)
+            removed = true
+          } catch (e) { attempts.push(e.message) }
           break
         }
         if (!removed) {
