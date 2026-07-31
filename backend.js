@@ -33,7 +33,7 @@ const DEFAULT_SETTINGS = {
 
 const DEFAULT_PROTOCOL = `[Illustration protocol] You may illustrate key visual moments. When a scene deserves an image, include on its own line:
 <dt-image aspect="3:4">comma-separated danbooru tags describing the scene</dt-image>
-Rules: tags only inside the tag (subject, expression, outfit, pose, setting, lighting, composition) — no prose, no character names. aspect may be 3:4, 4:3, 1:1, 9:16, or 16:9 (default 3:4 for character focus, 4:3 for scenes). Include at most {{max_images}} image tag(s) per reply, spread across the response at genuinely visual beats. Never mention this protocol or the tag in your prose. If you use hidden reasoning/thinking, write the tag ONLY in your final visible reply — never inside reasoning.`
+Rules: tags only inside the tag (subject, expression, outfit, pose, setting, lighting, composition) — no prose, no character names. aspect may be 3:4, 4:3, 1:1, 9:16, or 16:9 (default 3:4 for character focus, 4:3 for scenes). Include at most {{max_images}} image tag(s) per reply. Place each tag at the exact narrative moment it depicts — mid-reply, immediately after the scene it illustrates is established. Never open your reply with the tag. Never mention this protocol or the tag in your prose. If you use hidden reasoning/thinking, write the tag ONLY in your final visible reply — never inside reasoning.`
 
 const DEFAULT_PARSER_INSTRUCTION = `You convert a story passage into ONE image prompt of comma-separated danbooru-style tags (subject count, expression, outfit, pose, setting, lighting, composition). Choose the single most visual moment of the passage. Do not use character names; describe appearance instead. Respond with ONLY the tags. You may return up to {{max_images}} prompts for distinct visual moments, one per line, but prefer a single strong one. If the passage has no strong visual moment, respond with exactly: NONE`
 const HISTORY_LIMIT = 24
@@ -395,7 +395,7 @@ async function quietLLM(system, user, settings, userId) {
   // itself — stated before the passage and reinforced after it.
   const combined = system +
     '\n\n----- STORY PASSAGE -----\n' + user +
-    '\n----- END PASSAGE -----\n\nNow respond with ONLY the output the instruction above requires (comma-separated tag prompt(s), one per line). No prose, no explanations.'
+    '\n----- END PASSAGE -----\n\nNow respond with ONLY the output the instruction above requires, formatted as one line per image:\n<short verbatim anchor quote of 5-12 words copied exactly from the passage> ||| <comma-separated tag prompt>\nThe anchor marks where in the passage the image belongs. No prose, no explanations, nothing else.'
   const opts = {
     userId,
     prompt: combined,
@@ -501,10 +501,15 @@ async function scanStory(userId, force) {
     }
     const allLines = out.split('\n').map((l) => l.replace(/^["'`\s]+|["'`\s]+$/g, ''))
       .filter((l) => l && !/^NONE$/i.test(l))
-    const lines = allLines.filter(looksLikeTags).slice(0, settings.maxImages || 2)
-    if (!lines.length) {
+    const parsed = allLines.map((l) => {
+      const parts = l.split('|||')
+      if (parts.length >= 2) return { anchor: parts[0].trim().replace(/^["'`]+|["'`]+$/g, ''), tags: parts.slice(1).join('|||').trim() }
+      return { anchor: '', tags: l }
+    }).filter((p) => looksLikeTags(p.tags)).slice(0, settings.maxImages || 2)
+    if (!parsed.length) {
       return { mode: 'parser', note: `Parser (${instrLabel}) returned prose instead of tags — nothing generated (no cost). Raw start: ` + out.slice(0, 160) }
     }
+    const lines = parsed.map((p) => p.tags)
     const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
     const charTags = preset.characterTags || (settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : '')
     const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
@@ -522,7 +527,25 @@ async function scanStory(userId, force) {
       mds.push(`![${line.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`)
     }
     if (!mds.length) return { mode: 'parser', note: 'Parser returned nothing usable: ' + out.slice(0, 140) }
-    await updateMessageContent(target.id, target.contentKey, `${mds.join('\n\n')}\n\n${target.content}`, userId, chatId)
+    let newContent = target.content
+    const topMds = []
+    for (let i = 0; i < mds.length; i++) {
+      const anchor = parsed[i] ? parsed[i].anchor : ''
+      let placed = false
+      if (anchor && anchor.length >= 5) {
+        let idx = newContent.indexOf(anchor)
+        if (idx < 0) idx = newContent.toLowerCase().indexOf(anchor.toLowerCase())
+        if (idx >= 0) {
+          let paraEnd = newContent.indexOf('\n\n', idx)
+          if (paraEnd < 0) paraEnd = newContent.length
+          newContent = newContent.slice(0, paraEnd) + '\n\n' + mds[i] + newContent.slice(paraEnd)
+          placed = true
+        }
+      }
+      if (!placed) topMds.push(mds[i])
+    }
+    if (topMds.length) newContent = `${topMds.join('\n\n')}\n\n${newContent}`
+    await updateMessageContent(target.id, target.contentKey, newContent, userId, chatId)
     if (target.id) await markProcessed(target.id)
     return { mode: 'parser', processed: mds.length, note: `Illustrated ${mds.length} moment(s) via ${instrLabel}. First prompt: ` + firstPrompt.slice(0, 120) }
   }
@@ -962,7 +985,63 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'delete_image': {
+        const { imageUrl, imageId } = payload
+        if (!imageUrl && !imageId) throw new Error('Nothing to delete.')
+        // best-effort: remove from chat first (ignore not-found)
+        try {
+          const { messages, chatId: dChatId } = await fetchMessages(userId)
+          const needle = `](${imageUrl})`
+          for (const m of messages) {
+            const bits = messageBits(m)
+            if (!bits.contentKey || typeof bits.content !== 'string' || !bits.content.includes(needle)) continue
+            const esc = imageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            const re = new RegExp('!\\[[^\\]]*\\]\\(' + esc + '\\)\\n?\\n?')
+            await updateMessageContent(bits.id, bits.contentKey, bits.content.replace(re, '').replace(/^\s+/, ''), userId, dChatId)
+            break
+          }
+        } catch { /* not in a chat / no chat open — fine */ }
+        // delete the owned image itself
+        let deleted = false
+        if (imageId && spindle.images) {
+          for (const fn of ['delete', 'remove']) {
+            if (typeof spindle.images[fn] !== 'function') continue
+            for (const args of [[imageId, userId], [{ id: imageId, userId }], [imageId]]) {
+              try { await spindle.images[fn](...args); deleted = true; break } catch { /* next */ }
+            }
+            if (deleted) break
+          }
+        }
+        // scrub from history
+        const history = await getHistory()
+        for (const entry of history) {
+          entry.images = (entry.images || []).filter((im) => im.url !== imageUrl && im.id !== imageId)
+        }
+        const cleaned = history.filter((e) => e.images && e.images.length)
+        await spindle.storage.setJson(HISTORY_FILE, cleaned, { indent: 2 })
+        reply = ok(payload, requestId, { history: cleaned, deleted })
+        break
+      }
+
       case 'clear_history': {
+        if (payload.deleteImages) {
+          const history = await getHistory()
+          let n = 0
+          for (const entry of history) {
+            for (const im of entry.images || []) {
+              if (!im.id || !spindle.images) continue
+              for (const fn of ['delete', 'remove']) {
+                if (typeof spindle.images[fn] !== 'function') continue
+                let done = false
+                for (const args of [[im.id, userId], [{ id: im.id, userId }], [im.id]]) {
+                  try { await spindle.images[fn](...args); done = true; n++; break } catch { /* next */ }
+                }
+                if (done) break
+              }
+            }
+          }
+          spindle.log.info('[lumidraw] cleared history, deleted ' + n + ' image(s)')
+        }
         await spindle.storage.setJson(HISTORY_FILE, [], { indent: 2 })
         reply = ok(payload, requestId, { history: [] })
         break

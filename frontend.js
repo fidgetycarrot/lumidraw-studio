@@ -167,7 +167,7 @@ function realSetup(ctx) {
       max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       vertical-align: bottom;
     }
-    .ld-history { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .ld-history { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
     .ld-history .ld-thumb { display: flex; flex-direction: column; gap: 4px; }
     .ld-history img {
       width: 100%; aspect-ratio: 1; object-fit: cover;
@@ -255,7 +255,10 @@ function realSetup(ctx) {
         <button class="ld-btn" data-act="append-last" style="display:none">Add to chat 💬</button>
         <div class="ld-status ld-gen-status"></div>
         <div>
-          <span class="ld-label">Recent</span>
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span class="ld-label" style="margin-bottom:0">Recent</span>
+            <button class="ld-x ld-clearall" title="Delete ALL recent images from the library and this list">Clear all</button>
+          </div>
           <div class="ld-history"></div>
         </div>
       </div>
@@ -447,13 +450,13 @@ function realSetup(ctx) {
         row.className = 'ld-thumb-row'
         const btn = document.createElement('button')
         btn.className = 'ld-append'
-        btn.textContent = 'Add to chat'
-        btn.title = 'Place this image at the top of the latest story message'
+        btn.textContent = 'Insert'
+        btn.title = 'Place this image into the latest story message'
         btn.addEventListener('click', (ev) => { ev.stopPropagation(); appendToChat(img, entry) })
         const rm = document.createElement('button')
         rm.className = 'ld-append ld-remove'
         rm.textContent = 'Remove'
-        rm.title = 'Remove this image from the chat again'
+        rm.title = 'Take this image out of the chat (keeps the image)'
         rm.addEventListener('click', async (ev) => {
           ev.stopPropagation()
           setStatus('.ld-gen-status', 'Removing from chat…')
@@ -462,8 +465,23 @@ function realSetup(ctx) {
             setStatus('.ld-gen-status', 'Removed from the chat.', 'good')
           } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
         })
+        const del = document.createElement('button')
+        del.className = 'ld-append ld-remove'
+        del.textContent = 'Delete'
+        del.title = 'Delete this image everywhere: chat, image library, and this list'
+        del.addEventListener('click', async (ev) => {
+          ev.stopPropagation()
+          setStatus('.ld-gen-status', 'Deleting…')
+          try {
+            const res = await call('delete_image', { imageUrl: img.url, imageId: img.id })
+            history = res.history
+            renderHistory()
+            setStatus('.ld-gen-status', res.deleted ? 'Deleted.' : 'Removed from list (library deletion unavailable).', 'good')
+          } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
+        })
         row.appendChild(btn)
         row.appendChild(rm)
+        row.appendChild(del)
         wrap.appendChild(im)
         wrap.appendChild(row)
         el.appendChild(wrap)
@@ -662,6 +680,25 @@ function realSetup(ctx) {
   $('[data-act="append-last"]').addEventListener('click', () => {
     const last = history[0]
     if (last && last.images && last.images[0]) appendToChat(last.images[0], last)
+  })
+
+  let clearArmed = false
+  $('.ld-clearall').addEventListener('click', async () => {
+    if (!clearArmed) {
+      clearArmed = true
+      $('.ld-clearall').textContent = 'Really delete all?'
+      setTimeout(() => { clearArmed = false; $('.ld-clearall').textContent = 'Clear all' }, 4000)
+      return
+    }
+    clearArmed = false
+    $('.ld-clearall').textContent = 'Clear all'
+    setStatus('.ld-gen-status', 'Deleting all recent images…')
+    try {
+      const res = await call('clear_history', { deleteImages: true }, 60000)
+      history = res.history
+      renderHistory()
+      setStatus('.ld-gen-status', 'All recent images deleted.', 'good')
+    } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
   })
 
   $('[data-act="reuse-seed"]').addEventListener('click', () => {
