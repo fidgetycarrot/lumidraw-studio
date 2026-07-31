@@ -108,61 +108,61 @@ function realSetup(ctx) {
   const removeStyle = dom.addStyle(`
     .ld-launcher {
       position: fixed; right: 16px; bottom: 88px; z-index: 9000;
-      width: 42px; height: 42px; border-radius: 50%;
+      width: 50px; height: 50px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      background: var(--lumiverse-fill); border: 1px solid var(--lumiverse-border);
-      color: var(--lumiverse-text); cursor: pointer; font-size: 19px;
+      background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
+      color: var(--lumiverse-text, #eceef4); cursor: grab; font-size: 23px; touch-action: none;
       box-shadow: 0 2px 10px rgba(0,0,0,.28); user-select: none;
     }
-    .ld-launcher:hover { background: var(--lumiverse-fill-subtle); }
+    .ld-launcher:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
     .ld-panel {
       position: fixed; right: 16px; bottom: 140px; z-index: 9001;
-      width: 340px; max-width: calc(100vw - 32px);
-      max-height: min(72vh, 640px); display: none; flex-direction: column;
-      background: var(--lumiverse-fill-subtle);
-      border: 1px solid var(--lumiverse-border);
-      border-radius: var(--lumiverse-radius);
+      width: 384px; max-width: calc(100vw - 24px);
+      max-height: min(78vh, 720px); display: none; flex-direction: column;
+      background: rgba(23, 24, 30, 0.97);
+      border: 1px solid var(--lumiverse-border, #3d4050);
+      border-radius: var(--lumiverse-radius, 8px);
       box-shadow: 0 8px 30px rgba(0,0,0,.4);
-      color: var(--lumiverse-text); font-size: 13px;
+      color: var(--lumiverse-text, #eceef4); font-size: 14px;
     }
     .ld-panel.ld-open { display: flex; }
     .ld-head {
       display: flex; align-items: center; gap: 8px;
-      padding: 10px 12px; border-bottom: 1px solid var(--lumiverse-border);
+      padding: 10px 12px; border-bottom: 1px solid var(--lumiverse-border, #3d4050);
     }
     .ld-head-title { font-weight: 600; flex: 1; }
     .ld-tabbtn {
-      background: none; border: none; color: var(--lumiverse-text-muted);
-      cursor: pointer; padding: 4px 6px; border-radius: var(--lumiverse-radius);
+      background: none; border: none; color: var(--lumiverse-text-muted, #a2a5b4);
+      cursor: pointer; padding: 4px 6px; border-radius: var(--lumiverse-radius, 8px);
       font-size: 12px;
     }
-    .ld-tabbtn.ld-active { color: var(--lumiverse-text); background: var(--lumiverse-fill); }
+    .ld-tabbtn.ld-active { color: var(--lumiverse-text, #eceef4); background: var(--lumiverse-fill, #262833); }
     .ld-body { overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
     .ld-row { display: flex; gap: 8px; align-items: center; }
     .ld-row > * { flex: 1; min-width: 0; }
-    .ld-label { font-size: 11px; color: var(--lumiverse-text-muted); margin-bottom: 3px; display: block; }
+    .ld-label { font-size: 11px; color: var(--lumiverse-text-muted, #a2a5b4); margin-bottom: 3px; display: block; }
     .ld-panel input, .ld-panel select, .ld-panel textarea {
-      width: 100%; box-sizing: border-box; padding: 6px 8px;
-      background: var(--lumiverse-fill); border: 1px solid var(--lumiverse-border);
-      border-radius: var(--lumiverse-radius); color: var(--lumiverse-text);
+      width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 14px !important;
+      background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
+      border-radius: var(--lumiverse-radius, 8px); color: var(--lumiverse-text, #eceef4);
       font-size: 13px;
     }
     .ld-panel textarea { resize: vertical; min-height: 54px; }
     .ld-btn {
-      padding: 7px 10px; border-radius: var(--lumiverse-radius);
-      border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill);
-      color: var(--lumiverse-text); cursor: pointer; font-size: 13px;
+      padding: 7px 10px; border-radius: var(--lumiverse-radius, 8px);
+      border: 1px solid var(--lumiverse-border, #3d4050); background: var(--lumiverse-fill, #262833);
+      color: var(--lumiverse-text, #eceef4); cursor: pointer; font-size: 13px;
     }
-    .ld-btn:hover:not(:disabled) { background: var(--lumiverse-fill-subtle); }
+    .ld-btn:hover:not(:disabled) { background: var(--lumiverse-fill-subtle, #1a1b22); }
     .ld-btn:disabled { opacity: .5; cursor: default; }
     .ld-btn.ld-primary { font-weight: 600; }
-    .ld-status { font-size: 12px; color: var(--lumiverse-text-muted); white-space: pre-wrap; word-break: break-word; }
+    .ld-status { font-size: 12px; color: var(--lumiverse-text-muted, #a2a5b4); white-space: pre-wrap; word-break: break-word; }
     .ld-status.ld-err { color: #e5737f; }
     .ld-status.ld-good { color: #7fbf8e; }
     .ld-chip {
       display: inline-block; padding: 2px 6px; margin: 0 4px 4px 0;
-      background: var(--lumiverse-fill); border: 1px solid var(--lumiverse-border);
-      border-radius: 999px; font-size: 11px; color: var(--lumiverse-text-muted);
+      background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
+      border-radius: 999px; font-size: 11px; color: var(--lumiverse-text-muted, #a2a5b4);
       max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       vertical-align: bottom;
     }
@@ -170,26 +170,26 @@ function realSetup(ctx) {
     .ld-history .ld-thumb { position: relative; }
     .ld-history img {
       width: 100%; aspect-ratio: 1; object-fit: cover;
-      border-radius: var(--lumiverse-radius); border: 1px solid var(--lumiverse-border);
+      border-radius: var(--lumiverse-radius, 8px); border: 1px solid var(--lumiverse-border, #3d4050);
       cursor: pointer; display: block;
     }
     .ld-thumb .ld-append {
       position: absolute; right: 3px; bottom: 3px;
       padding: 2px 5px; font-size: 11px; line-height: 1;
-      background: var(--lumiverse-fill); border: 1px solid var(--lumiverse-border);
-      border-radius: var(--lumiverse-radius); color: var(--lumiverse-text);
+      background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
+      border-radius: var(--lumiverse-radius, 8px); color: var(--lumiverse-text, #eceef4);
       cursor: pointer; opacity: .85;
     }
     .ld-thumb .ld-append:hover { opacity: 1; }
     .ld-preset-item {
       display: flex; align-items: center; gap: 6px; padding: 6px 8px;
-      border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius);
-      background: var(--lumiverse-fill);
+      border: 1px solid var(--lumiverse-border, #3d4050); border-radius: var(--lumiverse-radius, 8px);
+      background: var(--lumiverse-fill, #262833);
     }
-    .ld-preset-item.ld-active { outline: 1px solid var(--lumiverse-text-muted); }
+    .ld-preset-item.ld-active { outline: 1px solid var(--lumiverse-text-muted, #a2a5b4); }
     .ld-preset-name { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .ld-preset-model { font-size: 10px; color: var(--lumiverse-text-muted); display: block; overflow: hidden; text-overflow: ellipsis; }
-    .ld-x { background: none; border: none; color: var(--lumiverse-text-muted); cursor: pointer; font-size: 14px; padding: 2px 4px; }
+    .ld-preset-model { font-size: 10px; color: var(--lumiverse-text-muted, #a2a5b4); display: block; overflow: hidden; text-overflow: ellipsis; }
+    .ld-x { background: none; border: none; color: var(--lumiverse-text-muted, #a2a5b4); cursor: pointer; font-size: 14px; padding: 2px 4px; }
     .ld-x:hover { color: #e5737f; }
     .ld-spin { animation: ld-rot 1s linear infinite; display: inline-block; }
     @keyframes ld-rot { to { transform: rotate(360deg); } }
@@ -452,7 +452,63 @@ function realSetup(ctx) {
   }
 
   // ------------------------------------------------------------------ wiring
-  launcher.addEventListener('click', () => panel.classList.toggle('ld-open'))
+  // Draggable launcher: drag to move (position persists), tap to toggle.
+  const POS_KEY = 'lumidraw_launcher_pos'
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
+  function applyPos(x, y) {
+    x = clamp(x, 4, window.innerWidth - launcher.offsetWidth - 4)
+    y = clamp(y, 4, window.innerHeight - launcher.offsetHeight - 4)
+    launcher.style.left = x + 'px'
+    launcher.style.top = y + 'px'
+    launcher.style.right = 'auto'
+    launcher.style.bottom = 'auto'
+    return { x, y }
+  }
+  try {
+    const saved = JSON.parse(localStorage.getItem(POS_KEY) || 'null')
+    if (saved && Number.isFinite(saved.x)) applyPos(saved.x, saved.y)
+  } catch { /* default CSS position */ }
+
+  function placePanel() {
+    const r = launcher.getBoundingClientRect()
+    const pw = panel.offsetWidth || 384
+    const ph = panel.offsetHeight || 500
+    const left = clamp(r.right - pw, 8, window.innerWidth - pw - 8)
+    let top = r.top - ph - 10
+    if (top < 8) top = clamp(r.bottom + 10, 8, window.innerHeight - ph - 8)
+    panel.style.left = left + 'px'
+    panel.style.top = top + 'px'
+    panel.style.right = 'auto'
+    panel.style.bottom = 'auto'
+  }
+
+  let drag = null
+  launcher.addEventListener('pointerdown', (e) => {
+    const r = launcher.getBoundingClientRect()
+    drag = { sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false }
+    launcher.setPointerCapture(e.pointerId)
+  })
+  launcher.addEventListener('pointermove', (e) => {
+    if (!drag) return
+    const dx = e.clientX - drag.sx
+    const dy = e.clientY - drag.sy
+    if (!drag.moved && Math.hypot(dx, dy) > 5) drag.moved = true
+    if (drag.moved) {
+      const p = applyPos(drag.ox + dx, drag.oy + dy)
+      drag.last = p
+      if (panel.classList.contains('ld-open')) placePanel()
+    }
+  })
+  launcher.addEventListener('pointerup', () => {
+    if (!drag) return
+    if (drag.moved) {
+      try { localStorage.setItem(POS_KEY, JSON.stringify(drag.last)) } catch { /* ok */ }
+    } else {
+      panel.classList.toggle('ld-open')
+      if (panel.classList.contains('ld-open')) placePanel()
+    }
+    drag = null
+  })
 
   for (const tab of dom.queryAll('.ld-tabbtn')) {
     tab.addEventListener('click', () => {

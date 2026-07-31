@@ -251,14 +251,26 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const images = await dtGenerate(settings, payloadOut)
 
         // Persist to Lumiverse's image library (tagged to this extension).
+        // Operator-scoped installs require an explicit userId on user-owned
+        // resources; try both accepted call shapes.
         const uploads = []
         for (const b64 of images) {
           const bytes = Uint8Array.from(Buffer.from(b64, 'base64'))
-          const dto = await spindle.images.upload({
+          const opts = {
             data: bytes,
             filename: `lumidraw-${Date.now()}.png`,
             mime_type: 'image/png',
-          })
+          }
+          let dto
+          try {
+            dto = await spindle.images.upload({ ...opts, userId })
+          } catch (eA) {
+            try {
+              dto = await spindle.images.upload(opts, userId)
+            } catch (eB) {
+              throw new Error(`Image upload failed: ${eA.message} / ${eB.message}`)
+            }
+          }
           uploads.push({ id: dto.id, url: dto.url })
         }
 
@@ -302,7 +314,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
           for (const fn of ['getActive', 'getActiveChat', 'active']) {
             if (typeof spindle.chats[fn] === 'function') {
               try {
-                const active = await spindle.chats[fn]()
+                let active
+                try { active = await spindle.chats[fn](userId) }
+                catch { active = await spindle.chats[fn]() }
                 targetChatId = active && (active.id || active.chatId || active)
                 if (targetChatId) break
               } catch { /* try next shape */ }
@@ -313,17 +327,23 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const message = { role: 'assistant', content }
         const attempts = []
         let appended = null
-        // Shape 1: appendMessage(chatId, message)
+        // Shape 1: appendMessage(chatId, message, userId?)
         if (targetChatId) {
           try {
-            appended = await chatApi.appendMessage(targetChatId, message)
-          } catch (e1) { attempts.push(`appendMessage(chatId, msg): ${e1.message}`) }
+            appended = await chatApi.appendMessage(targetChatId, message, userId)
+          } catch (e1) { attempts.push(`appendMessage(chatId, msg, userId): ${e1.message}`) }
         }
-        // Shape 2: appendMessage({ chatId?, role, content })
+        // Shape 2: appendMessage({ chatId?, role, content, userId })
+        if (!appended) {
+          try {
+            appended = await chatApi.appendMessage({ chatId: targetChatId, ...message, userId })
+          } catch (e2) { attempts.push(`appendMessage({...userId}): ${e2.message}`) }
+        }
+        // Shape 3: without userId (user-scoped installs)
         if (!appended) {
           try {
             appended = await chatApi.appendMessage({ chatId: targetChatId, ...message })
-          } catch (e2) { attempts.push(`appendMessage({...}): ${e2.message}`) }
+          } catch (e3) { attempts.push(`appendMessage({...}): ${e3.message}`) }
         }
         if (!appended && attempts.length) {
           throw new Error('Could not append to chat. Tried: ' + attempts.join(' | ') +
