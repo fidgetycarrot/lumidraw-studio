@@ -608,6 +608,20 @@ spindle.onFrontendMessage(async (payload, userId) => {
           }
         } catch (e) { report.character = 'error: ' + e.message }
 
+        // 2b) Native Image Gen + personas surfaces (where character prompt
+        // presets likely live, per Swarm Studio's hydration feature)
+        report.imageGenApiMethods = spindle.imageGen ? Object.keys(spindle.imageGen) : null
+        for (const fn of ['getConfig', 'getSettings', 'getState', 'getPresets', 'getCharacterPrompts']) {
+          if (spindle.imageGen && typeof spindle.imageGen[fn] === 'function') {
+            try {
+              const r = await spindle.imageGen[fn](userId)
+              report['imageGen.' + fn] = typeof r === 'object' && r ? Object.keys(r).slice(0, 30) : String(r).slice(0, 200)
+            } catch (e) { report['imageGen.' + fn] = 'error: ' + e.message }
+          }
+        }
+        report.charactersApiMethods = spindle.characters ? Object.keys(spindle.characters) : null
+        report.personasApiMethods = spindle.personas ? Object.keys(spindle.personas) : null
+
         // 3) Connections (for the parser picker)
         try {
           const conns = spindle.connections
@@ -987,4 +1001,4 @@ let scanInFlight = false
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded (v0.5)')
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.7.1'))
