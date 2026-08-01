@@ -173,6 +173,15 @@ const pregenInflight = new Set()
 const tagFingerprint = (body) => String(body || '').trim().toLowerCase().replace(/\s+/g, ' ')
 const TAG_RE = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/g
 
+function stripBannedTags(sceneTags, bannedCsv) {
+  if (!bannedCsv || !sceneTags) return sceneTags
+  const banned = new Set(bannedCsv.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean))
+  if (!banned.size) return sceneTags
+  return sceneTags.split(',').map((t) => t.trim())
+    .filter((t) => t && !banned.has(t.toLowerCase()))
+    .join(', ')
+}
+
 function stripThinking(text) {
   return String(text || '')
     .replace(/<think(?:ing)?[^>]*>[\s\S]*?<\/think(?:ing)?>/gi, '')
@@ -462,7 +471,8 @@ async function scanStory(userId, force) {
       if (!body) continue
       const aspect = (/aspect\s*=\s*"([^"]+)"/.exec(attrs) || [])[1]
       const dims = aspectDims(preset.config, aspect)
-      const prompt = [lead, prefix, await resolveMacros(body, userId, chatId)].filter(Boolean).join(', ')
+      const cleanBody = stripBannedTags(await resolveMacros(body, userId, chatId), preset.bannedTags)
+      const prompt = [lead, prefix, cleanBody].filter(Boolean).join(', ')
       try {
         const fp = tagFingerprint(body)
         // wait up to 90s for a streaming pregeneration already underway
@@ -527,7 +537,7 @@ async function scanStory(userId, force) {
     if (!parsed.length) {
       return { mode: 'parser', note: `Parser (${instrLabel}) returned prose instead of tags — nothing generated (no cost). Raw start: ` + out.slice(0, 160) }
     }
-    const lines = parsed.map((p) => p.tags)
+    const lines = parsed.map((p) => stripBannedTags(p.tags, preset.bannedTags)).filter(Boolean)
     const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
     const charTags = preset.characterTags || (settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : '')
     const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
@@ -764,7 +774,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
             const charTags = preset.characterTags || (settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : '')
             const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
             const dims = aspectDims(preset.config, aspect)
-            const prompt = [lead, prefix, await resolveMacros(body, userId, chatId)].filter(Boolean).join(', ')
+            const prompt = [lead, prefix, stripBannedTags(await resolveMacros(body, userId, chatId), preset.bannedTags)].filter(Boolean).join(', ')
             const entry = await generateAndUpload({
               prompt, negativePrompt: preset.negativePrompt, config: preset.config, extra: preset.extra, dims,
             }, userId)
@@ -824,6 +834,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           qualityTags: payload.qualityTags || '',
           characterTags: payload.characterTags || '',
           personaTags: payload.personaTags || '',
+          bannedTags: payload.bannedTags || '',
           updatedAt: Date.now(),
         }
         const idx = presets.findIndex((p) => p.name === name)

@@ -238,6 +238,10 @@ function realSetup(ctx) {
           <textarea class="ld-personatags-input" style="min-height:44px" placeholder="e.g. 1boy, very tall, muscular, short brown hair"></textarea>
         </div>
         <div>
+          <span class="ld-label">Banned tags (stripped from model-written scene tags; saved with preset)</span>
+          <input class="ld-banned-input" placeholder="e.g. realistic, photorealistic, 3d, render" />
+        </div>
+        <div>
           <span class="ld-label">Prompt</span>
           <textarea class="ld-prompt" placeholder="portrait of..."></textarea>
         </div>
@@ -521,6 +525,7 @@ function realSetup(ctx) {
       $('.ld-quality').value = p.qualityTags || ''
       $('.ld-chartags-input').value = p.characterTags || ''
       $('.ld-personatags-input').value = p.personaTags || ''
+      $('.ld-banned-input').value = p.bannedTags || ''
     }
     renderChips(); renderPresetSelect(); renderPresetList()
   }
@@ -744,6 +749,7 @@ function realSetup(ctx) {
         qualityTags: $('.ld-quality').value,
         characterTags: $('.ld-chartags-input').value,
         personaTags: $('.ld-personatags-input').value,
+        bannedTags: $('.ld-banned-input').value,
       })
       presets = res.presets
       activePreset = name.trim()
@@ -801,13 +807,14 @@ function realSetup(ctx) {
           qualityTags: $('.ld-quality').value,
           characterTags: $('.ld-chartags-input').value,
           personaTags: $('.ld-personatags-input').value,
+          bannedTags: $('.ld-banned-input').value,
         })
         presets = res.presets
         setStatus('.ld-gen-status', 'Preset updated ✓', 'good')
       } catch (e) { setStatus('.ld-gen-status', 'Preset save failed: ' + e.message, 'err') }
     }, 800)
   }
-  for (const sel of ['.ld-quality', '.ld-chartags-input', '.ld-personatags-input']) {
+  for (const sel of ['.ld-quality', '.ld-chartags-input', '.ld-personatags-input', '.ld-banned-input']) {
     const el = $(sel)
     if (el) el.addEventListener('input', scheduleTagSave)
   }
@@ -925,7 +932,7 @@ function realSetup(ctx) {
       if (settings.activePreset) { activePreset = settings.activePreset }
       if (activePreset) {
         const p = presets.find((x) => x.name === activePreset)
-        if (p) { syncedConfig = { ...p.config }; $('.ld-quality').value = p.qualityTags || ''; $('.ld-chartags-input').value = p.characterTags || ''; $('.ld-personatags-input').value = p.personaTags || '' }
+        if (p) { syncedConfig = { ...p.config }; $('.ld-quality').value = p.qualityTags || ''; $('.ld-chartags-input').value = p.characterTags || ''; $('.ld-personatags-input').value = p.personaTags || ''; $('.ld-banned-input').value = p.bannedTags || '' }
         else activePreset = null
       }
       renderPresetSelect(); renderPresetList(); renderHistory(); renderChips()
