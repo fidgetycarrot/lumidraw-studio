@@ -879,6 +879,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           bannedTags: payload.bannedTags || '',
           updatedAt: Date.now(),
         }
+        try { await rememberModels(preset.config || {}) } catch { /* best-effort */ }
         const idx = presets.findIndex((p) => p.name === name)
         if (idx >= 0) presets[idx] = preset
         else presets.push(preset)

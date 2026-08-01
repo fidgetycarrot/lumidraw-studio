@@ -276,6 +276,7 @@ function realSetup(ctx) {
           <span class="ld-label" style="margin-top:8px">LoRAs</span>
           <div class="ld-ed-loras" style="display:flex;flex-direction:column;gap:4px"></div>
           <button class="ld-btn" data-act="ed-addlora" style="margin-top:4px;font-size:12px;padding:4px 8px">＋ LoRA</button>
+          <div class="ld-status" style="margin-top:2px">Add as many as you like. Suggestions list LoRAs the extension has seen — sync any Draw Things recipe using a LoRA once (or type its exact filename once) and it's remembered here forever.</div>
           <datalist id="ld-loras"></datalist>
           <span class="ld-label" style="margin-top:8px">Quality tags (always first)</span>
           <input class="ld-ed-quality" />
@@ -754,7 +755,7 @@ function realSetup(ctx) {
     $('.ld-ed-prefix').value = p ? (p.promptPrefix || '') : ''
     $('.ld-ed-negative').value = p ? (p.negativePrompt || '') : ''
     setStatus('.ld-ed-status', p ? '' : (syncedConfig ? 'Starting from the last synced recipe.' : 'No synced recipe yet — Sync on the Generate tab first for model/sampler defaults.'))
-    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    if (box.scrollIntoView) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
 
   $('[data-act="new-preset"]').addEventListener('click', () => openEditor(null))
