@@ -351,10 +351,6 @@ function realSetup(ctx) {
           <button class="ld-btn" data-act="reset-protocol" style="margin-top:4px">Reset to default</button>
         </div>
         <div>
-          <span class="ld-label">Draw Things models folder (only if you moved it — used for the model list scan)</span>
-          <input class="ld-dtpath" placeholder="leave blank for the standard location" />
-        </div>
-        <div>
           <button class="ld-btn" data-act="diagnose">Run diagnostics 🔍</button>
           <textarea class="ld-diag" readonly style="min-height:120px;display:none;margin-top:6px;font-family:monospace;font-size:11px"></textarea>
         </div>
@@ -710,8 +706,8 @@ function realSetup(ctx) {
       const dl = $('#ld-samplers')
       dl.innerHTML = (res.samplers || []).map((s) => `<option value="${s}"></option>`).join('')
       $('.ld-model-source').textContent = res.source.startsWith('scan')
-        ? 'Model list: scanned from Draw Things\u2019 folder — full library available.'
-        : 'Model list: previously synced models only (folder scan unavailable).'
+        ? 'Model list: full library.'
+        : 'Model list: every model you\u2019ve synced so far. Sync a new model once at the Mac and it joins this list forever.'
       modelListLoaded = true
     } catch (e) { $('.ld-model-source').textContent = 'Model list failed: ' + e.message }
   }
@@ -859,7 +855,6 @@ function realSetup(ctx) {
       autoScan: $('.ld-autoscan').checked,
       parserConnection: $('.ld-parser-conn').value,
       parserModel: $('.ld-parser-model').value,
-      dtModelsPath: $('.ld-dtpath').value,
       parserInstruction: $('.ld-parser-instr').value,
       protocol: $('.ld-protocol').value,
       maxImages: $('.ld-maximg').value,
@@ -913,7 +908,7 @@ function realSetup(ctx) {
 
   // All settings text fields auto-save as you type (debounced).
   let settingsSaveTimer = null
-  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-host', '.ld-port', '.ld-dtpath']) {
+  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-host', '.ld-port']) {
     const el = $(sel)
     if (el) el.addEventListener('input', () => {
       clearTimeout(settingsSaveTimer)
@@ -1019,7 +1014,6 @@ function realSetup(ctx) {
       } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
-      $('.ld-dtpath').value = settings.dtModelsPath || ''
       $('.ld-parser-instr').value = settings.parserInstruction || defaults.parserInstruction || ''
       $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
       if (settings.activePreset) { activePreset = settings.activePreset }

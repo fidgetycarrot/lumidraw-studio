@@ -600,50 +600,10 @@ async function rememberModels(config) {
 }
 
 async function scanDtModels() {
-  try {
-    const fsm = await import('node:fs/promises')
-    const osm = await import('node:os')
-    const home = osm.homedir()
-    const settings = await getSettings()
-    const candidates = [
-      settings.dtModelsPath,
-      home + '/Library/Containers/com.liuliu.draw-things/Data/Documents/Models',
-      home + '/Library/Containers/com.liuliu.draw-things-paid/Data/Documents/Models',
-      home + '/Library/Containers/com.liuliu.draw-things/Data/Documents',
-    ].filter(Boolean)
-    for (const dir of candidates) {
-      let files
-      try { files = await fsm.readdir(dir) } catch { continue }
-      const ckpts = files.filter((f) => f.endsWith('.ckpt'))
-      if (!ckpts.length && !files.includes('models.json')) continue
-      const result = { dir, models: ckpts, loras: [], names: {} }
-      // metadata files map filenames to display names and separate loras
-      for (const meta of ['models.json', 'custom.json']) {
-        if (!files.includes(meta)) continue
-        try {
-          const arr = JSON.parse(await fsm.readFile(dir + '/' + meta, 'utf8'))
-          if (Array.isArray(arr)) for (const m of arr) {
-            if (m && m.file) { result.names[m.file] = m.name || m.file; if (!result.models.includes(m.file)) result.models.push(m.file) }
-          }
-        } catch { /* unparseable metadata — filenames still stand */ }
-      }
-      if (files.includes('loras.json')) {
-        try {
-          const arr = JSON.parse(await fsm.readFile(dir + '/loras.json', 'utf8'))
-          if (Array.isArray(arr)) for (const m of arr) {
-            if (m && m.file) { result.loras.push(m.file); result.names[m.file] = m.name || m.file }
-          }
-        } catch { /* ok */ }
-      }
-      spindle.log.info('[lumidraw] model scan OK: ' + result.models.length + ' model(s), ' + result.loras.length + ' lora(s) in ' + dir)
-      return result
-    }
-    spindle.log.info('[lumidraw] model scan: no Draw Things models folder found (set one in Settings if custom)')
-    return null
-  } catch (e) {
-    spindle.log.warn('[lumidraw] model scan unavailable (' + e.message + ') — using remembered models only')
-    return null
-  }
+  // Lumiverse blocks the filesystem module for extension backends
+  // ("blocked backend capabilities: filesystem module access"), so the
+  // model catalog is memory-only: every synced/preset model is remembered.
+  return null
 }
 
 // ---------------------------------------------------------------------------
