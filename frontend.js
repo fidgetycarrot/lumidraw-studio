@@ -644,7 +644,7 @@ function realSetup(ctx) {
   launcher.addEventListener('pointerdown', (e) => {
     const r = launcher.getBoundingClientRect()
     drag = { sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false }
-    launcher.setPointerCapture(e.pointerId)
+    if (launcher.setPointerCapture) { try { launcher.setPointerCapture(e.pointerId) } catch { /* ok */ } }
   })
   launcher.addEventListener('pointermove', (e) => {
     if (!drag) return
@@ -868,15 +868,6 @@ function realSetup(ctx) {
       $('.ld-seed').value = last.seed
     } else {
       setStatus('.ld-gen-status', 'Last generation used a random seed Draw Things picked — no seed to reuse.', 'err')
-    }
-  })
-
-      presets = res.presets
-      activePreset = name.trim()
-      renderPresetList(); renderPresetSelect()
-      setStatus('.ld-preset-status', `Saved "${name.trim()}".`, 'good')
-    } catch (e) {
-      setStatus('.ld-preset-status', e.message, 'err')
     }
   })
 
