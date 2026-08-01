@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS = {
   maxImages: 2,           // max illustrations per story message
   minImages: 0,           // required illustrations per reply (0 = model's discretion)
   autoCharTags: true,     // prepend the active character's image tags when found
+  dtModelsPath: '',       // optional custom Draw Things models folder for scanning
   protocol: '',           // custom inline protocol (blank = built-in default)
 }
 
@@ -582,6 +583,70 @@ async function scanStory(userId, force) {
 }
 
 // ---------------------------------------------------------------------------
+// Model catalog: remembered from every sync/preset, plus optional fs scan of
+// Draw Things' models folder (backend runs on the same Mac).
+// ---------------------------------------------------------------------------
+
+const MODELS_FILE = 'models.json'
+
+async function rememberModels(config) {
+  const known = await spindle.storage.getJson(MODELS_FILE, { fallback: { models: [], samplers: [], loras: [] } })
+  const addTo = (arr, v) => { if (v && !arr.includes(v)) arr.push(v) }
+  addTo(known.models, config.model)
+  addTo(known.models, config.refiner_model)
+  addTo(known.samplers, config.sampler)
+  for (const l of config.loras || []) addTo(known.loras, l.file || l.name || l)
+  await spindle.storage.setJson(MODELS_FILE, known, { indent: 2 })
+}
+
+async function scanDtModels() {
+  try {
+    const fsm = await import('node:fs/promises')
+    const osm = await import('node:os')
+    const home = osm.homedir()
+    const settings = await getSettings()
+    const candidates = [
+      settings.dtModelsPath,
+      home + '/Library/Containers/com.liuliu.draw-things/Data/Documents/Models',
+      home + '/Library/Containers/com.liuliu.draw-things-paid/Data/Documents/Models',
+      home + '/Library/Containers/com.liuliu.draw-things/Data/Documents',
+    ].filter(Boolean)
+    for (const dir of candidates) {
+      let files
+      try { files = await fsm.readdir(dir) } catch { continue }
+      const ckpts = files.filter((f) => f.endsWith('.ckpt'))
+      if (!ckpts.length && !files.includes('models.json')) continue
+      const result = { dir, models: ckpts, loras: [], names: {} }
+      // metadata files map filenames to display names and separate loras
+      for (const meta of ['models.json', 'custom.json']) {
+        if (!files.includes(meta)) continue
+        try {
+          const arr = JSON.parse(await fsm.readFile(dir + '/' + meta, 'utf8'))
+          if (Array.isArray(arr)) for (const m of arr) {
+            if (m && m.file) { result.names[m.file] = m.name || m.file; if (!result.models.includes(m.file)) result.models.push(m.file) }
+          }
+        } catch { /* unparseable metadata — filenames still stand */ }
+      }
+      if (files.includes('loras.json')) {
+        try {
+          const arr = JSON.parse(await fsm.readFile(dir + '/loras.json', 'utf8'))
+          if (Array.isArray(arr)) for (const m of arr) {
+            if (m && m.file) { result.loras.push(m.file); result.names[m.file] = m.name || m.file }
+          }
+        } catch { /* ok */ }
+      }
+      spindle.log.info('[lumidraw] model scan OK: ' + result.models.length + ' model(s), ' + result.loras.length + ' lora(s) in ' + dir)
+      return result
+    }
+    spindle.log.info('[lumidraw] model scan: no Draw Things models folder found (set one in Settings if custom)')
+    return null
+  } catch (e) {
+    spindle.log.warn('[lumidraw] model scan unavailable (' + e.message + ') — using remembered models only')
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Message handling
 // ---------------------------------------------------------------------------
 
@@ -621,7 +686,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           host: String(payload.host || prev.host || DEFAULT_SETTINGS.host).trim(),
           port: Number(payload.port) || prev.port || DEFAULT_SETTINGS.port,
         }
-        for (const k of ['mode', 'parserConnection', 'parserModel', 'parserInstruction', 'protocol']) {
+        for (const k of ['mode', 'parserConnection', 'parserModel', 'parserInstruction', 'protocol', 'dtModelsPath']) {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
@@ -788,6 +853,22 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'list_models': {
+        const known = await spindle.storage.getJson(MODELS_FILE, { fallback: { models: [], samplers: [], loras: [] } })
+        const presets = await getPresets()
+        for (const p of presets) { try { await rememberModels(p.config || {}) } catch { /* ok */ } }
+        const scan = await scanDtModels()
+        const models = new Map()
+        for (const m of known.models) models.set(m, m)
+        if (scan) for (const m of scan.models) models.set(m, scan.names[m] || m)
+        reply = ok(payload, requestId, {
+          models: [...models.entries()].map(([file, name]) => ({ file, name })).sort((a, b) => a.name.localeCompare(b.name)),
+          samplers: known.samplers,
+          source: scan ? 'scan:' + scan.dir : 'memory',
+        })
+        break
+      }
+
       case 'scan_story': {
         const result = await scanStory(userId, !!payload.force)
         reply = ok(payload, requestId, result)
@@ -814,6 +895,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         for (const key of PRESET_KEYS) {
           if (config[key] !== undefined) captured[key] = config[key]
         }
+        try { await rememberModels(captured) } catch { /* best-effort */ }
         reply = ok(payload, requestId, { captured, fullConfig: config })
         break
       }

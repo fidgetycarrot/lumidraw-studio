@@ -224,6 +224,21 @@ function realSetup(ctx) {
             <button class="ld-btn" style="flex:0 0 auto" data-act="sync" title="Capture the recipe currently shown in Draw Things">Sync ⟳</button>
           </div>
           <div class="ld-config-chips" style="margin-top:6px"></div>
+          <button class="ld-btn" data-act="editcfg" style="margin-top:6px;font-size:12px;padding:4px 8px">✎ Edit settings</button>
+          <div class="ld-editcfg" style="display:none;margin-top:8px;padding:8px;border:1px solid var(--lumiverse-border, #3d4050);border-radius:var(--lumiverse-radius, 8px);display:none">
+            <span class="ld-label">Model</span>
+            <select class="ld-cfg-model"></select>
+            <div class="ld-row" style="margin-top:6px">
+              <div><span class="ld-label">Sampler</span><input class="ld-cfg-sampler" list="ld-samplers" /><datalist id="ld-samplers"></datalist></div>
+              <div><span class="ld-label">Steps</span><input class="ld-cfg-steps" type="number" min="1" max="150" /></div>
+            </div>
+            <div class="ld-row" style="margin-top:6px">
+              <div><span class="ld-label">CFG</span><input class="ld-cfg-cfg" type="number" step="0.5" min="0" /></div>
+              <div><span class="ld-label">Width</span><input class="ld-cfg-w" type="number" step="64" min="256" /></div>
+              <div><span class="ld-label">Height</span><input class="ld-cfg-h" type="number" step="64" min="256" /></div>
+            </div>
+            <div class="ld-status ld-model-source" style="margin-top:6px"></div>
+          </div>
         </div>
         <div>
           <span class="ld-label">Quality tags (always prepended; saved with the preset)</span>
@@ -334,6 +349,10 @@ function realSetup(ctx) {
           <span class="ld-label">Inline instruction — added to your story model's prompt (Inline mode) to teach it the &lt;dt-image&gt; tag. This is how it knows what to do. Edit freely.</span>
           <textarea class="ld-protocol" style="min-height:80px"></textarea>
           <button class="ld-btn" data-act="reset-protocol" style="margin-top:4px">Reset to default</button>
+        </div>
+        <div>
+          <span class="ld-label">Draw Things models folder (only if you moved it — used for the model list scan)</span>
+          <input class="ld-dtpath" placeholder="leave blank for the standard location" />
         </div>
         <div>
           <button class="ld-btn" data-act="diagnose">Run diagnostics 🔍</button>
@@ -671,6 +690,78 @@ function realSetup(ctx) {
     }
   })
 
+  let modelListLoaded = false
+  async function loadModelList() {
+    try {
+      const res = await call('list_models', {}, 20000)
+      const sel = $('.ld-cfg-model')
+      const current = (syncedConfig && syncedConfig.model) || ''
+      sel.innerHTML = (res.models || []).map((m) => {
+        const o = document.createElement('option')
+        o.value = m.file
+        o.textContent = m.name !== m.file ? `${m.name} (${m.file})` : m.file
+        return o.outerHTML
+      }).join('') + '<option value="__other">Other (synced elsewhere)…</option>'
+      if (current && ![...sel.options].some((o) => o.value === current)) {
+        const o = document.createElement('option'); o.value = current; o.textContent = current
+        sel.insertBefore(o, sel.firstChild)
+      }
+      sel.value = current || (sel.options[0] && sel.options[0].value) || ''
+      const dl = $('#ld-samplers')
+      dl.innerHTML = (res.samplers || []).map((s) => `<option value="${s}"></option>`).join('')
+      $('.ld-model-source').textContent = res.source.startsWith('scan')
+        ? 'Model list: scanned from Draw Things\u2019 folder — full library available.'
+        : 'Model list: previously synced models only (folder scan unavailable).'
+      modelListLoaded = true
+    } catch (e) { $('.ld-model-source').textContent = 'Model list failed: ' + e.message }
+  }
+
+  function fillCfgForm() {
+    const c = syncedConfig || {}
+    if ($('.ld-cfg-model') && c.model) {
+      const sel = $('.ld-cfg-model')
+      if (![...sel.options].some((o) => o.value === c.model)) {
+        const o = document.createElement('option'); o.value = c.model; o.textContent = c.model
+        sel.insertBefore(o, sel.firstChild)
+      }
+      sel.value = c.model
+    }
+    $('.ld-cfg-sampler').value = c.sampler || ''
+    $('.ld-cfg-steps').value = c.steps !== undefined ? c.steps : ''
+    $('.ld-cfg-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''
+    $('.ld-cfg-w').value = c.width || ''
+    $('.ld-cfg-h').value = c.height || ''
+  }
+
+  function applyCfgEdits() {
+    if (!syncedConfig) syncedConfig = {}
+    const mv = $('.ld-cfg-model').value
+    if (mv && mv !== '__other') syncedConfig.model = mv
+    const sv = $('.ld-cfg-sampler').value.trim(); if (sv) syncedConfig.sampler = sv
+    const num = (sel, key, float) => {
+      const v = $(sel).value
+      if (v !== '') syncedConfig[key] = float ? parseFloat(v) : parseInt(v, 10)
+    }
+    num('.ld-cfg-steps', 'steps'); num('.ld-cfg-cfg', 'guidance_scale', true)
+    num('.ld-cfg-w', 'width'); num('.ld-cfg-h', 'height')
+    renderChips()
+    scheduleTagSave()
+  }
+
+  $('[data-act="editcfg"]').addEventListener('click', async () => {
+    const box = $('.ld-editcfg')
+    const open = box.style.display !== 'none'
+    box.style.display = open ? 'none' : 'block'
+    if (!open) {
+      if (!modelListLoaded) await loadModelList()
+      fillCfgForm()
+    }
+  })
+  for (const sel of ['.ld-cfg-model', '.ld-cfg-sampler', '.ld-cfg-steps', '.ld-cfg-cfg', '.ld-cfg-w', '.ld-cfg-h']) {
+    const el = $(sel)
+    if (el) el.addEventListener('change', applyCfgEdits)
+  }
+
   $('[data-act="sync"]').addEventListener('click', () =>
     doSync('.ld-gen-status').catch((e) => setStatus('.ld-gen-status', e.message, 'err')))
 
@@ -768,6 +859,7 @@ function realSetup(ctx) {
       autoScan: $('.ld-autoscan').checked,
       parserConnection: $('.ld-parser-conn').value,
       parserModel: $('.ld-parser-model').value,
+      dtModelsPath: $('.ld-dtpath').value,
       parserInstruction: $('.ld-parser-instr').value,
       protocol: $('.ld-protocol').value,
       maxImages: $('.ld-maximg').value,
@@ -800,7 +892,7 @@ function realSetup(ctx) {
       try {
         const res = await call('save_preset', {
           name: p.name,
-          config: p.config,
+          config: syncedConfig || p.config,
           extra: p.extra || null,
           promptPrefix: p.promptPrefix || '',
           negativePrompt: p.negativePrompt || '',
@@ -821,7 +913,7 @@ function realSetup(ctx) {
 
   // All settings text fields auto-save as you type (debounced).
   let settingsSaveTimer = null
-  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-host', '.ld-port']) {
+  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-host', '.ld-port', '.ld-dtpath']) {
     const el = $(sel)
     if (el) el.addEventListener('input', () => {
       clearTimeout(settingsSaveTimer)
@@ -927,6 +1019,7 @@ function realSetup(ctx) {
       } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
+      $('.ld-dtpath').value = settings.dtModelsPath || ''
       $('.ld-parser-instr').value = settings.parserInstruction || defaults.parserInstruction || ''
       $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
       if (settings.activePreset) { activePreset = settings.activePreset }
