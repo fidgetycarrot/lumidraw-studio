@@ -224,37 +224,6 @@ function realSetup(ctx) {
             <button class="ld-btn" style="flex:0 0 auto" data-act="sync" title="Capture the recipe currently shown in Draw Things">Sync ⟳</button>
           </div>
           <div class="ld-config-chips" style="margin-top:6px"></div>
-          <button class="ld-btn" data-act="editcfg" style="margin-top:6px;font-size:12px;padding:4px 8px">✎ Edit settings</button>
-          <div class="ld-editcfg" style="display:none;margin-top:8px;padding:8px;border:1px solid var(--lumiverse-border, #3d4050);border-radius:var(--lumiverse-radius, 8px);display:none">
-            <span class="ld-label">Model</span>
-            <select class="ld-cfg-model"></select>
-            <div class="ld-row" style="margin-top:6px">
-              <div><span class="ld-label">Sampler</span><input class="ld-cfg-sampler" list="ld-samplers" /><datalist id="ld-samplers"></datalist></div>
-              <div><span class="ld-label">Steps</span><input class="ld-cfg-steps" type="number" min="1" max="150" /></div>
-            </div>
-            <div class="ld-row" style="margin-top:6px">
-              <div><span class="ld-label">CFG</span><input class="ld-cfg-cfg" type="number" step="0.5" min="0" /></div>
-              <div><span class="ld-label">Width</span><input class="ld-cfg-w" type="number" step="64" min="256" /></div>
-              <div><span class="ld-label">Height</span><input class="ld-cfg-h" type="number" step="64" min="256" /></div>
-            </div>
-            <div class="ld-status ld-model-source" style="margin-top:6px"></div>
-          </div>
-        </div>
-        <div>
-          <span class="ld-label">Quality tags (always prepended; saved with the preset)</span>
-          <input class="ld-quality" placeholder="e.g. masterpiece, best quality, absurdres" />
-        </div>
-        <div>
-          <span class="ld-label">Character tags (identity; saved with the preset — {{char}}/{{persona}} macros allowed)</span>
-          <textarea class="ld-chartags-input" style="min-height:44px" placeholder="e.g. 1girl, long red hair, green eyes, freckles, slender"></textarea>
-        </div>
-        <div>
-          <span class="ld-label">Persona tags (the User's look — used only when the model says you're in frame)</span>
-          <textarea class="ld-personatags-input" style="min-height:44px" placeholder="e.g. 1boy, very tall, muscular, short brown hair"></textarea>
-        </div>
-        <div>
-          <span class="ld-label">Banned tags (stripped from model-written scene tags; saved with preset)</span>
-          <input class="ld-banned-input" placeholder="e.g. realistic, photorealistic, 3d, render" />
         </div>
         <div>
           <span class="ld-label">Prompt</span>
@@ -286,13 +255,46 @@ function realSetup(ctx) {
         </div>
       </div>
       <div class="ld-body" data-view="presets" style="display:none">
-        <div class="ld-status">Sync the current Draw Things recipe, then save it under a name. Selecting a preset pins its full config — model included — for every generation, no matter what the app is set to.</div>
-        <div class="ld-row">
-          <input class="ld-preset-name-input" placeholder="Preset name (e.g. Fanny — story portraits)" />
-          <button class="ld-btn" style="flex:0 0 auto" data-act="save-preset">Save</button>
-        </div>
+        <div class="ld-status">A preset is a complete pinned recipe: model, sampler, LoRAs, sizes, and identity tags. Edit any of it here; the Generate tab just runs whichever preset is selected.</div>
+        <button class="ld-btn" data-act="new-preset">＋ New preset from synced state</button>
         <div class="ld-status ld-preset-status"></div>
         <div class="ld-preset-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        <div class="ld-editor" style="display:none;border:1px solid var(--lumiverse-border, #3d4050);border-radius:var(--lumiverse-radius, 8px);padding:10px;margin-top:4px">
+          <span class="ld-label">Name</span>
+          <input class="ld-ed-name" />
+          <span class="ld-label" style="margin-top:6px">Model</span>
+          <select class="ld-ed-model"></select>
+          <div class="ld-row" style="margin-top:6px">
+            <div><span class="ld-label">Sampler</span><input class="ld-ed-sampler" list="ld-samplers" /><datalist id="ld-samplers"></datalist></div>
+            <div style="flex:0 0 70px"><span class="ld-label">Steps</span><input class="ld-ed-steps" type="number" min="1" max="150" /></div>
+            <div style="flex:0 0 70px"><span class="ld-label">CFG</span><input class="ld-ed-cfg" type="number" step="0.5" min="0" /></div>
+          </div>
+          <div class="ld-row" style="margin-top:6px">
+            <div><span class="ld-label">Width</span><input class="ld-ed-w" type="number" step="64" min="256" /></div>
+            <div><span class="ld-label">Height</span><input class="ld-ed-h" type="number" step="64" min="256" /></div>
+          </div>
+          <span class="ld-label" style="margin-top:8px">LoRAs</span>
+          <div class="ld-ed-loras" style="display:flex;flex-direction:column;gap:4px"></div>
+          <button class="ld-btn" data-act="ed-addlora" style="margin-top:4px;font-size:12px;padding:4px 8px">＋ LoRA</button>
+          <datalist id="ld-loras"></datalist>
+          <span class="ld-label" style="margin-top:8px">Quality tags (always first)</span>
+          <input class="ld-ed-quality" />
+          <span class="ld-label" style="margin-top:6px">Character tags</span>
+          <textarea class="ld-ed-chartags" style="min-height:40px"></textarea>
+          <span class="ld-label" style="margin-top:6px">Persona tags (only when the User is in frame)</span>
+          <textarea class="ld-ed-personatags" style="min-height:40px"></textarea>
+          <span class="ld-label" style="margin-top:6px">Banned tags (stripped from model scene output)</span>
+          <input class="ld-ed-banned" />
+          <span class="ld-label" style="margin-top:6px">Prompt prefix</span>
+          <textarea class="ld-ed-prefix" style="min-height:40px"></textarea>
+          <span class="ld-label" style="margin-top:6px">Negative prompt</span>
+          <textarea class="ld-ed-negative" style="min-height:40px"></textarea>
+          <div class="ld-row" style="margin-top:10px">
+            <button class="ld-btn ld-primary" data-act="ed-save">Save preset</button>
+            <button class="ld-btn" data-act="ed-cancel">Cancel</button>
+          </div>
+          <div class="ld-status ld-ed-status" style="margin-top:6px"></div>
+        </div>
       </div>
       <div class="ld-body" data-view="settings" style="display:none">
         <div>
@@ -430,6 +432,13 @@ function realSetup(ctx) {
       model.textContent = (p.config && p.config.model) || ''
       name.appendChild(model)
       name.addEventListener('click', () => selectPreset(p.name))
+      const ed = document.createElement('button')
+      ed.className = 'ld-append'
+      ed.textContent = 'Edit'
+      ed.style.flex = '0 0 auto'
+      ed.style.width = 'auto'
+      ed.style.padding = '3px 8px'
+      ed.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(p.name) })
       const del = document.createElement('button')
       del.className = 'ld-x'
       del.textContent = '✕'
@@ -443,6 +452,7 @@ function realSetup(ctx) {
         } catch (e) { setStatus('.ld-preset-status', e.message, 'err') }
       })
       item.appendChild(name)
+      item.appendChild(ed)
       item.appendChild(del)
       list.appendChild(item)
     }
@@ -535,12 +545,7 @@ function realSetup(ctx) {
     call('set_active_preset', { name: activePreset || '' }).catch(() => {})
     if (p) {
       syncedConfig = { ...p.config }
-      if (p.promptPrefix && !$('.ld-prompt').value) $('.ld-prompt').value = p.promptPrefix
       if (p.negativePrompt && !$('.ld-negative').value) $('.ld-negative').value = p.negativePrompt
-      $('.ld-quality').value = p.qualityTags || ''
-      $('.ld-chartags-input').value = p.characterTags || ''
-      $('.ld-personatags-input').value = p.personaTags || ''
-      $('.ld-banned-input').value = p.bannedTags || ''
     }
     renderChips(); renderPresetSelect(); renderPresetList()
   }
@@ -570,16 +575,16 @@ function realSetup(ctx) {
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="ld-spin">◌</span> Generating…' }
     setStatus('.ld-gen-status', 'Sent to Draw Things — hold tight…')
     try {
-      const preset = activePresetObj()
+      const preset0 = activePresetObj()
       const seedRaw = $('.ld-seed').value
       const res = await call('generate', {
         prompt: $('.ld-prompt').value,
-        qualityTags: $('.ld-quality').value,
-        characterTags: $('.ld-chartags-input').value,
-        negativePrompt: $('.ld-negative').value,
+        qualityTags: preset0 ? preset0.qualityTags : '',
+        characterTags: preset0 ? preset0.characterTags : '',
+        negativePrompt: $('.ld-negative').value || (preset0 ? preset0.negativePrompt : ''),
         seed: seedRaw === '' ? undefined : Number(seedRaw),
         config: syncedConfig,
-        extra: preset ? preset.extra : null,
+        extra: preset0 ? preset0.extra : null,
       })
       history = res.history
       renderHistory()
@@ -686,77 +691,119 @@ function realSetup(ctx) {
     }
   })
 
-  let modelListLoaded = false
-  async function loadModelList() {
+  // ---------------- preset editor ----------------
+  let editorOriginalName = null
+  let editorExtra = null
+
+  async function loadCatalog() {
     try {
       const res = await call('list_models', {}, 20000)
-      const sel = $('.ld-cfg-model')
-      const current = (syncedConfig && syncedConfig.model) || ''
-      sel.innerHTML = (res.models || []).map((m) => {
-        const o = document.createElement('option')
-        o.value = m.file
-        o.textContent = m.name !== m.file ? `${m.name} (${m.file})` : m.file
-        return o.outerHTML
-      }).join('') + '<option value="__other">Other (synced elsewhere)…</option>'
-      if (current && ![...sel.options].some((o) => o.value === current)) {
-        const o = document.createElement('option'); o.value = current; o.textContent = current
-        sel.insertBefore(o, sel.firstChild)
+      const sel = $('.ld-ed-model')
+      sel.innerHTML = (res.models || []).map((m) => `<option value="${m.file}">${m.file}</option>`).join('')
+      $('#ld-samplers').innerHTML = (res.samplers || []).map((s) => `<option value="${s}"></option>`).join('')
+      $('#ld-loras').innerHTML = (res.loras || []).map((s) => `<option value="${s}"></option>`).join('')
+    } catch (e) { console.log('[LumiDraw] catalog load failed:', e.message) }
+  }
+
+  function loraRow(file, weight) {
+    const row = document.createElement('div')
+    row.className = 'ld-row'
+    const fi = document.createElement('input')
+    fi.setAttribute('list', 'ld-loras')
+    fi.placeholder = 'lora_file.ckpt'
+    fi.value = file || ''
+    fi.className = 'ld-lora-file'
+    const wi = document.createElement('input')
+    wi.type = 'number'; wi.step = '0.05'; wi.style.flex = '0 0 70px'
+    wi.value = weight !== undefined ? weight : 1
+    wi.className = 'ld-lora-weight'
+    const x = document.createElement('button')
+    x.className = 'ld-x'; x.textContent = '✕'; x.style.flex = '0 0 auto'
+    x.addEventListener('click', () => row.remove())
+    row.appendChild(fi); row.appendChild(wi); row.appendChild(x)
+    return row
+  }
+
+  async function openEditor(nameOrNull) {
+    await loadCatalog()
+    const box = $('.ld-editor')
+    box.style.display = 'block'
+    const p = nameOrNull ? presets.find((x) => x.name === nameOrNull) : null
+    editorOriginalName = p ? p.name : null
+    editorExtra = p ? (p.extra || null) : null
+    const c = p ? (p.config || {}) : (syncedConfig || {})
+    $('.ld-ed-name').value = p ? p.name : ''
+    const msel = $('.ld-ed-model')
+    if (c.model && ![...msel.options].some((o) => o.value === c.model)) {
+      const o = document.createElement('option'); o.value = c.model; o.textContent = c.model
+      msel.insertBefore(o, msel.firstChild)
+    }
+    msel.value = c.model || (msel.options[0] ? msel.options[0].value : '')
+    $('.ld-ed-sampler').value = c.sampler || ''
+    $('.ld-ed-steps').value = c.steps !== undefined ? c.steps : ''
+    $('.ld-ed-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''
+    $('.ld-ed-w').value = c.width || ''
+    $('.ld-ed-h').value = c.height || ''
+    const lbox = $('.ld-ed-loras')
+    lbox.innerHTML = ''
+    for (const l of c.loras || []) lbox.appendChild(loraRow(l.file || l.name || '', l.weight))
+    $('.ld-ed-quality').value = p ? (p.qualityTags || '') : ''
+    $('.ld-ed-chartags').value = p ? (p.characterTags || '') : ''
+    $('.ld-ed-personatags').value = p ? (p.personaTags || '') : ''
+    $('.ld-ed-banned').value = p ? (p.bannedTags || '') : ''
+    $('.ld-ed-prefix').value = p ? (p.promptPrefix || '') : ''
+    $('.ld-ed-negative').value = p ? (p.negativePrompt || '') : ''
+    setStatus('.ld-ed-status', p ? '' : (syncedConfig ? 'Starting from the last synced recipe.' : 'No synced recipe yet — Sync on the Generate tab first for model/sampler defaults.'))
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }
+
+  $('[data-act="new-preset"]').addEventListener('click', () => openEditor(null))
+  $('[data-act="ed-cancel"]').addEventListener('click', () => { $('.ld-editor').style.display = 'none' })
+  $('[data-act="ed-addlora"]').addEventListener('click', () => $('.ld-ed-loras').appendChild(loraRow('', 1)))
+
+  $('[data-act="ed-save"]').addEventListener('click', async () => {
+    try {
+      const name = $('.ld-ed-name').value.trim()
+      if (!name) throw new Error('Preset needs a name.')
+      const base = editorOriginalName ? (presets.find((x) => x.name === editorOriginalName) || {}) : {}
+      const config = { ...(base.config || syncedConfig || {}) }
+      config.model = $('.ld-ed-model').value
+      if (!config.model) throw new Error('Pick a model.')
+      const setIf = (sel, key, float) => {
+        const v = $(sel).value
+        if (v !== '') config[key] = float ? parseFloat(v) : (isNaN(Number(v)) ? v : parseInt(v, 10))
+        }
+      const sv = $('.ld-ed-sampler').value.trim(); if (sv) config.sampler = sv
+      setIf('.ld-ed-steps', 'steps'); setIf('.ld-ed-cfg', 'guidance_scale', true)
+      setIf('.ld-ed-w', 'width'); setIf('.ld-ed-h', 'height')
+      config.loras = [...$('.ld-editor').querySelectorAll('.ld-ed-loras .ld-row')].map((row) => ({
+        file: row.querySelector('.ld-lora-file').value.trim(),
+        weight: parseFloat(row.querySelector('.ld-lora-weight').value) || 1,
+      })).filter((l) => l.file)
+      const res = await call('save_preset', {
+        name,
+        config,
+        extra: editorExtra,
+        promptPrefix: $('.ld-ed-prefix').value,
+        negativePrompt: $('.ld-ed-negative').value,
+        qualityTags: $('.ld-ed-quality').value,
+        characterTags: $('.ld-ed-chartags').value,
+        personaTags: $('.ld-ed-personatags').value,
+        bannedTags: $('.ld-ed-banned').value,
+      })
+      presets = res.presets
+      if (editorOriginalName && editorOriginalName !== name) {
+        const res2 = await call('delete_preset', { name: editorOriginalName })
+        presets = res2.presets
       }
-      sel.value = current || (sel.options[0] && sel.options[0].value) || ''
-      const dl = $('#ld-samplers')
-      dl.innerHTML = (res.samplers || []).map((s) => `<option value="${s}"></option>`).join('')
-      $('.ld-model-source').textContent = res.source.startsWith('scan')
-        ? 'Model list: full library.'
-        : 'Model list: every model you\u2019ve synced so far. Sync a new model once at the Mac and it joins this list forever.'
-      modelListLoaded = true
-    } catch (e) { $('.ld-model-source').textContent = 'Model list failed: ' + e.message }
-  }
-
-  function fillCfgForm() {
-    const c = syncedConfig || {}
-    if ($('.ld-cfg-model') && c.model) {
-      const sel = $('.ld-cfg-model')
-      if (![...sel.options].some((o) => o.value === c.model)) {
-        const o = document.createElement('option'); o.value = c.model; o.textContent = c.model
-        sel.insertBefore(o, sel.firstChild)
+      if (!editorOriginalName || activePreset === editorOriginalName || activePreset === name) {
+        selectPreset(name)
       }
-      sel.value = c.model
-    }
-    $('.ld-cfg-sampler').value = c.sampler || ''
-    $('.ld-cfg-steps').value = c.steps !== undefined ? c.steps : ''
-    $('.ld-cfg-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''
-    $('.ld-cfg-w').value = c.width || ''
-    $('.ld-cfg-h').value = c.height || ''
-  }
-
-  function applyCfgEdits() {
-    if (!syncedConfig) syncedConfig = {}
-    const mv = $('.ld-cfg-model').value
-    if (mv && mv !== '__other') syncedConfig.model = mv
-    const sv = $('.ld-cfg-sampler').value.trim(); if (sv) syncedConfig.sampler = sv
-    const num = (sel, key, float) => {
-      const v = $(sel).value
-      if (v !== '') syncedConfig[key] = float ? parseFloat(v) : parseInt(v, 10)
-    }
-    num('.ld-cfg-steps', 'steps'); num('.ld-cfg-cfg', 'guidance_scale', true)
-    num('.ld-cfg-w', 'width'); num('.ld-cfg-h', 'height')
-    renderChips()
-    scheduleTagSave()
-  }
-
-  $('[data-act="editcfg"]').addEventListener('click', async () => {
-    const box = $('.ld-editcfg')
-    const open = box.style.display !== 'none'
-    box.style.display = open ? 'none' : 'block'
-    if (!open) {
-      if (!modelListLoaded) await loadModelList()
-      fillCfgForm()
-    }
+      renderPresetList(); renderPresetSelect(); renderChips()
+      setStatus('.ld-ed-status', `Saved "${name}".`, 'good')
+      editorOriginalName = name
+    } catch (e) { setStatus('.ld-ed-status', e.message, 'err') }
   })
-  for (const sel of ['.ld-cfg-model', '.ld-cfg-sampler', '.ld-cfg-steps', '.ld-cfg-cfg', '.ld-cfg-w', '.ld-cfg-h']) {
-    const el = $(sel)
-    if (el) el.addEventListener('change', applyCfgEdits)
-  }
 
   $('[data-act="sync"]').addEventListener('click', () =>
     doSync('.ld-gen-status').catch((e) => setStatus('.ld-gen-status', e.message, 'err')))
@@ -824,20 +871,6 @@ function realSetup(ctx) {
     }
   })
 
-  $('[data-act="save-preset"]').addEventListener('click', async () => {
-    try {
-      if (!syncedConfig) throw new Error('Nothing to save — sync from Draw Things first (Generate tab).')
-      const name = $('.ld-preset-name-input').value
-      const res = await call('save_preset', {
-        name,
-        config: syncedConfig,
-        promptPrefix: $('.ld-prompt').value,
-        negativePrompt: $('.ld-negative').value,
-        qualityTags: $('.ld-quality').value,
-        characterTags: $('.ld-chartags-input').value,
-        personaTags: $('.ld-personatags-input').value,
-        bannedTags: $('.ld-banned-input').value,
-      })
       presets = res.presets
       activePreset = name.trim()
       renderPresetList(); renderPresetSelect()
@@ -874,36 +907,6 @@ function realSetup(ctx) {
     btn.textContent = mode === 'off'
       ? 'Scan story now 📖 (mode: Off — set in Settings)'
       : `Scan story now 📖 (${mode})`
-  }
-
-  // Quality/Character tags auto-save into the selected preset as you type.
-  let tagSaveTimer = null
-  function scheduleTagSave() {
-    if (!activePreset) return
-    clearTimeout(tagSaveTimer)
-    tagSaveTimer = setTimeout(async () => {
-      const p = presets.find((x) => x.name === activePreset)
-      if (!p) return
-      try {
-        const res = await call('save_preset', {
-          name: p.name,
-          config: syncedConfig || p.config,
-          extra: p.extra || null,
-          promptPrefix: p.promptPrefix || '',
-          negativePrompt: p.negativePrompt || '',
-          qualityTags: $('.ld-quality').value,
-          characterTags: $('.ld-chartags-input').value,
-          personaTags: $('.ld-personatags-input').value,
-          bannedTags: $('.ld-banned-input').value,
-        })
-        presets = res.presets
-        setStatus('.ld-gen-status', 'Preset updated ✓', 'good')
-      } catch (e) { setStatus('.ld-gen-status', 'Preset save failed: ' + e.message, 'err') }
-    }, 800)
-  }
-  for (const sel of ['.ld-quality', '.ld-chartags-input', '.ld-personatags-input', '.ld-banned-input']) {
-    const el = $(sel)
-    if (el) el.addEventListener('input', scheduleTagSave)
   }
 
   // All settings text fields auto-save as you type (debounced).
@@ -1019,7 +1022,7 @@ function realSetup(ctx) {
       if (settings.activePreset) { activePreset = settings.activePreset }
       if (activePreset) {
         const p = presets.find((x) => x.name === activePreset)
-        if (p) { syncedConfig = { ...p.config }; $('.ld-quality').value = p.qualityTags || ''; $('.ld-chartags-input').value = p.characterTags || ''; $('.ld-personatags-input').value = p.personaTags || ''; $('.ld-banned-input').value = p.bannedTags || '' }
+        if (p) { syncedConfig = { ...p.config } }
         else activePreset = null
       }
       renderPresetSelect(); renderPresetList(); renderHistory(); renderChips()

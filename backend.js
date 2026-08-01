@@ -814,17 +814,17 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }
 
       case 'list_models': {
-        const known = await spindle.storage.getJson(MODELS_FILE, { fallback: { models: [], samplers: [], loras: [] } })
         const presets = await getPresets()
         for (const p of presets) { try { await rememberModels(p.config || {}) } catch { /* ok */ } }
-        const scan = await scanDtModels()
-        const models = new Map()
-        for (const m of known.models) models.set(m, m)
-        if (scan) for (const m of scan.models) models.set(m, scan.names[m] || m)
+        const history = await getHistory()
+        for (const h of history) { try { await rememberModels({ model: h.model }) } catch { /* ok */ } }
+        // re-read AFTER backfilling so every preset/history model is included
+        const known = await spindle.storage.getJson(MODELS_FILE, { fallback: { models: [], samplers: [], loras: [] } })
         reply = ok(payload, requestId, {
-          models: [...models.entries()].map(([file, name]) => ({ file, name })).sort((a, b) => a.name.localeCompare(b.name)),
+          models: known.models.map((file) => ({ file, name: file })).sort((a, b) => a.name.localeCompare(b.name)),
           samplers: known.samplers,
-          source: scan ? 'scan:' + scan.dir : 'memory',
+          loras: known.loras,
+          source: 'memory',
         })
         break
       }
