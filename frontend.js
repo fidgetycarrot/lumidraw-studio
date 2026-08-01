@@ -2,7 +2,9 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-console.log('[LumiDraw] frontend module imported')
+const EXTENSION_VERSION = '0.13.1'
+
+console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
 function makeId() {
   if (window.crypto && typeof crypto.randomUUID === 'function') {
@@ -61,13 +63,13 @@ function realSetup(ctx) {
     },
     queryAll(sel) {
       if (ctx.dom && typeof ctx.dom.queryAll === 'function') {
-        try { const r = dom.queryAll(sel); if (r && r.length) return r } catch { /* fall through */ }
+        try { const r = ctx.dom.queryAll(sel); if (r && r.length) return Array.from(r) } catch { /* fall through */ }
       }
       return Array.from(document.querySelectorAll(sel))
     },
     cleanup() {
       if (ctx.dom && typeof ctx.dom.cleanup === 'function') {
-        try { dom.cleanup() } catch { /* ignore */ }
+        try { ctx.dom.cleanup() } catch { /* ignore */ }
       }
       for (const el of injected) el.remove()
     },
@@ -82,6 +84,8 @@ function realSetup(ctx) {
   let busy = false
   let defaults = { protocol: '', parserInstruction: '' }
   const pending = new Map() // requestId → {resolve, reject}
+  let rescanInputAction = null
+  let rescanInputActionUnsub = null
 
   function call(type, data = {}, timeoutMs = 630000) {
     return new Promise((resolve, reject) => {
@@ -127,6 +131,55 @@ function realSetup(ctx) {
       color: var(--lumiverse-text, #eceef4); font-size: 14px;
     }
     .ld-panel.ld-open { display: flex; }
+    .ld-story-picker {
+      position: fixed; inset: 0; z-index: 9200; display: none;
+      align-items: center; justify-content: center; padding: 14px;
+      background: var(--lumiverse-modal-backdrop, rgba(0,0,0,.62));
+    }
+    .ld-story-picker.ld-open { display: flex; }
+    .ld-story-dialog {
+      width: min(680px, 100%); max-height: min(84vh, 820px);
+      display: flex; flex-direction: column; overflow: hidden;
+      background: rgba(23, 24, 30, 0.99);
+      border: 1px solid var(--lumiverse-border, #3d4050);
+      border-radius: var(--lumiverse-radius-lg, 12px);
+      box-shadow: 0 18px 60px rgba(0,0,0,.55);
+      color: var(--lumiverse-text, #eceef4);
+    }
+    .ld-story-head {
+      display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+      border-bottom: 1px solid var(--lumiverse-border, #3d4050);
+    }
+    .ld-story-title { flex: 1; font-weight: 650; }
+    .ld-story-tools { padding: 10px 12px; border-bottom: 1px solid var(--lumiverse-border, #3d4050); }
+    .ld-story-search {
+      width: 100%; box-sizing: border-box; padding: 9px 11px; font-size: 14px;
+      background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
+      border-radius: var(--lumiverse-radius, 8px); color: var(--lumiverse-text, #eceef4);
+    }
+    .ld-story-help { margin-top: 7px; font-size: 11px; color: var(--lumiverse-text-muted, #a2a5b4); }
+    .ld-story-list { overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+    .ld-story-item {
+      width: 100%; padding: 10px 11px; text-align: left; cursor: pointer;
+      background: var(--lumiverse-fill, #262833); color: var(--lumiverse-text, #eceef4);
+      border: 1px solid var(--lumiverse-border, #3d4050); border-radius: var(--lumiverse-radius, 8px);
+    }
+    .ld-story-item:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
+    .ld-story-item-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+    .ld-story-number { font-size: 12px; font-weight: 650; }
+    .ld-story-badge {
+      padding: 2px 6px; border-radius: 999px; font-size: 10px;
+      color: var(--lumiverse-text-muted, #a2a5b4); border: 1px solid var(--lumiverse-border, #3d4050);
+    }
+    .ld-story-preview {
+      font-size: 12px; line-height: 1.4; color: var(--lumiverse-text-muted, #a2a5b4);
+      display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .ld-story-empty { padding: 24px 12px; text-align: center; color: var(--lumiverse-text-muted, #a2a5b4); }
+    @media (max-width: 520px) {
+      .ld-story-picker { align-items: flex-end; padding: 0; }
+      .ld-story-dialog { width: 100%; max-height: 90vh; border-radius: 14px 14px 0 0; }
+    }
     .ld-head {
       display: flex; align-items: center; gap: 8px;
       padding: 10px 12px; border-bottom: 1px solid var(--lumiverse-border, #3d4050);
@@ -201,7 +254,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio" aria-label="LumiDraw Studio">
+    <button class="ld-launcher" title="LumiDraw Studio v0.13.1" aria-label="LumiDraw Studio v0.13.1">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -210,7 +263,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw Studio</span>
+        <span class="ld-head-title">LumiDraw Studio <small style="font-weight:400;opacity:.65">v0.13.1</small></span>
         <button class="ld-tabbtn ld-active" data-tab="generate">Generate</button>
         <button class="ld-tabbtn" data-tab="presets">Presets</button>
         <button class="ld-tabbtn" data-tab="settings">Settings</button>
@@ -244,6 +297,7 @@ function realSetup(ctx) {
         </div>
         <button class="ld-btn ld-primary" data-act="generate">Generate</button>
         <button class="ld-btn" data-act="scan" title="Process the latest story message: illustrate its <dt-image> tags, or run the parser on its prose">Scan story now 📖</button>
+        <button class="ld-btn ld-primary" data-act="scan-old" title="Choose any assistant message in the current chat and run Parser mode on it">Rescan old message 📚</button>
         <button class="ld-btn" data-act="append-last" style="display:none">Add to chat 💬</button>
         <div class="ld-status ld-gen-status"></div>
         <div>
@@ -361,6 +415,19 @@ function realSetup(ctx) {
         <div class="ld-status">Tip: Draw Things shows the recipe of whatever image is selected — so select any image you love, hit Sync, and you've captured its exact settings.</div>
       </div>
     </div>
+    <div class="ld-story-picker" aria-hidden="true">
+      <div class="ld-story-dialog" role="dialog" aria-modal="true" aria-label="Choose a story message">
+        <div class="ld-story-head">
+          <span class="ld-story-title">Choose a story message</span>
+          <button class="ld-x ld-story-close" title="Close">✕</button>
+        </div>
+        <div class="ld-story-tools">
+          <input class="ld-story-search" type="search" placeholder="Search message text…" />
+          <div class="ld-story-help">Newest first. Selecting a message runs Parser mode again and adds the new image without deleting existing images.</div>
+        </div>
+        <div class="ld-story-list"><div class="ld-story-empty">Loading messages…</div></div>
+      </div>
+    </div>
   `)
 
   const $ = (sel) => dom.query(sel)
@@ -374,6 +441,117 @@ function realSetup(ctx) {
     el.textContent = msg || ''
     el.classList.remove('ld-err', 'ld-good')
     if (kind) el.classList.add(kind === 'err' ? 'ld-err' : 'ld-good')
+  }
+
+  let storyMessages = []
+
+  function closeStoryPicker() {
+    const picker = $('.ld-story-picker')
+    if (!picker) return
+    picker.classList.remove('ld-open')
+    picker.setAttribute('aria-hidden', 'true')
+  }
+
+  function renderStoryPicker() {
+    const list = $('.ld-story-list')
+    const search = $('.ld-story-search')
+    if (!list) return
+    const query = String(search && search.value || '').trim().toLowerCase()
+    const filtered = storyMessages.filter((item) => {
+      if (!query) return true
+      return String(item.preview || '').toLowerCase().includes(query) || String(item.turn || '').includes(query)
+    })
+
+    list.innerHTML = ''
+    if (!filtered.length) {
+      const empty = document.createElement('div')
+      empty.className = 'ld-story-empty'
+      empty.textContent = storyMessages.length ? 'No messages match that search.' : 'No assistant story messages were found in this chat.'
+      list.appendChild(empty)
+      return
+    }
+
+    for (const item of filtered) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'ld-story-item'
+      button.title = 'Run Parser mode on this message'
+
+      const top = document.createElement('div')
+      top.className = 'ld-story-item-top'
+      const number = document.createElement('span')
+      number.className = 'ld-story-number'
+      number.textContent = `Story message ${item.turn}`
+      top.appendChild(number)
+
+      if (item.isLatest) {
+        const badge = document.createElement('span')
+        badge.className = 'ld-story-badge'
+        badge.textContent = 'Latest'
+        top.appendChild(badge)
+      }
+      if (item.hasImage) {
+        const badge = document.createElement('span')
+        badge.className = 'ld-story-badge'
+        badge.textContent = 'Has image'
+        top.appendChild(badge)
+      } else if (item.processed) {
+        const badge = document.createElement('span')
+        badge.className = 'ld-story-badge'
+        badge.textContent = 'Scanned'
+        top.appendChild(badge)
+      }
+
+      const preview = document.createElement('div')
+      preview.className = 'ld-story-preview'
+      preview.textContent = item.preview || '(No visible prose)'
+      button.appendChild(top)
+      button.appendChild(preview)
+      button.addEventListener('click', () => runStoryScan(item.id, `story message ${item.turn}`))
+      list.appendChild(button)
+    }
+  }
+
+  async function openStoryPicker() {
+    const mode = $('.ld-mode') ? $('.ld-mode').value : settings.mode
+    if (mode !== 'parser') {
+      setStatus('.ld-gen-status', 'Choose Parser mode in Settings before rescanning an old message.', 'err')
+      return
+    }
+    const picker = $('.ld-story-picker')
+    const list = $('.ld-story-list')
+    const search = $('.ld-story-search')
+    if (!picker || !list) return
+    storyMessages = []
+    if (search) search.value = ''
+    list.innerHTML = '<div class="ld-story-empty">Loading messages…</div>'
+    picker.classList.add('ld-open')
+    picker.setAttribute('aria-hidden', 'false')
+    try {
+      const res = await call('list_story_messages', { limit: 500 }, 30000)
+      storyMessages = Array.isArray(res.messages) ? res.messages : []
+      renderStoryPicker()
+      if (search) search.focus()
+    } catch (e) {
+      list.innerHTML = ''
+      const empty = document.createElement('div')
+      empty.className = 'ld-story-empty'
+      empty.textContent = e.message
+      list.appendChild(empty)
+    }
+  }
+
+  async function runStoryScan(messageId, label = 'latest story message') {
+    closeStoryPicker()
+    setStatus('.ld-gen-status', `Scanning ${label}…`)
+    try {
+      const payload = { force: true }
+      if (messageId !== undefined && messageId !== null && messageId !== '') payload.messageId = messageId
+      const res = await call('scan_story', payload)
+      history = (await call('init', {}, 15000)).history
+      renderHistory()
+      setStatus('.ld-gen-status', res.note || `Done (${res.mode}).`, res.processed ? 'good' : undefined)
+    } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
   }
 
   function renderChips() {
@@ -811,15 +989,34 @@ function realSetup(ctx) {
 
   $('[data-act="generate"]').addEventListener('click', doGenerate)
 
-  $('[data-act="scan"]').addEventListener('click', async () => {
-    setStatus('.ld-gen-status', 'Scanning the latest story message…')
+  $('[data-act="scan"]').addEventListener('click', () => runStoryScan(null, 'the latest story message'))
+  $('[data-act="scan-old"]').addEventListener('click', openStoryPicker)
+
+  // Also expose the picker through Lumiverse's native chat-input Extras menu.
+  // This gives the feature a second, host-managed entry point and makes it
+  // obvious when the updated frontend bundle is actually loaded.
+  if (ctx.ui && typeof ctx.ui.registerInputBarAction === 'function') {
     try {
-      const res = await call('scan_story', { force: true })
-      history = (await call('init', {}, 15000)).history
-      renderHistory()
-      setStatus('.ld-gen-status', res.note || `Done (${res.mode}).`, res.processed ? 'good' : undefined)
-    } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
+      rescanInputAction = ctx.ui.registerInputBarAction({
+        id: 'rescan-old-story-message',
+        label: 'Rescan old message',
+        enabled: true,
+        iconSvg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v6h6"/><path d="M12 7v5l3 2"/></svg>',
+      })
+      rescanInputActionUnsub = rescanInputAction.onClick(openStoryPicker)
+    } catch (e) {
+      console.log('[LumiDraw] input-bar rescan action unavailable:', e.message)
+    }
+  }
+  $('.ld-story-close').addEventListener('click', closeStoryPicker)
+  $('.ld-story-search').addEventListener('input', renderStoryPicker)
+  $('.ld-story-picker').addEventListener('click', (event) => {
+    if (event.target === $('.ld-story-picker')) closeStoryPicker()
   })
+  const onStoryPickerKeyDown = (event) => {
+    if (event.key === 'Escape' && $('.ld-story-picker').classList.contains('ld-open')) closeStoryPicker()
+  }
+  window.addEventListener('keydown', onStoryPickerKeyDown)
 
   $('[data-act="diagnose"]').addEventListener('click', async () => {
     setStatus('.ld-settings-status', 'Probing the host…')
@@ -894,11 +1091,19 @@ function realSetup(ctx) {
 
   function updateScanLabel() {
     const btn = $('[data-act="scan"]')
-    if (!btn) return
+    const oldBtn = $('[data-act="scan-old"]')
     const mode = $('.ld-mode') ? $('.ld-mode').value : 'off'
-    btn.textContent = mode === 'off'
-      ? 'Scan story now 📖 (mode: Off — set in Settings)'
-      : `Scan story now 📖 (${mode})`
+    if (btn) {
+      btn.textContent = mode === 'off'
+        ? 'Scan story now 📖 (mode: Off — set in Settings)'
+        : `Scan story now 📖 (${mode})`
+    }
+    if (oldBtn) {
+      oldBtn.disabled = mode !== 'parser'
+      oldBtn.title = mode === 'parser'
+        ? 'Choose any assistant message in the current chat and run Parser mode on it'
+        : 'Old-message rescanning is available when Story illustrations is set to Parser'
+    }
   }
 
   // All settings text fields auto-save as you type (debounced).
@@ -1020,7 +1225,7 @@ function realSetup(ctx) {
       renderPresetSelect(); renderPresetList(); renderHistory(); renderChips()
       updateScanLabel()
       initialized = true
-      console.log('[LumiDraw] backend connected')
+      console.log(`[LumiDraw] backend connected — UI v${EXTENSION_VERSION}`)
       return true
     } catch (e) {
       console.log('[LumiDraw] backend not ready yet:', e.message)
@@ -1038,6 +1243,9 @@ function realSetup(ctx) {
   })()
 
   return () => {
+    if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()
+    if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
+    window.removeEventListener('keydown', onStoryPickerKeyDown)
     unsub()
     removeStyle()
     dom.cleanup()

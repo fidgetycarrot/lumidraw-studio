@@ -39,6 +39,13 @@ UI. Tinker freely; story gens stay pinned.
 - **Generate tab** — prompt, optional seed (blank = random, `↩ last` reuses
   the previous seed), Generate. Results land in the panel history and in
   Lumiverse's image library.
+- **Rescan old message 📚** — in Parser mode, choose any earlier assistant
+  message from the active chat and generate another illustration for that exact
+  passage. The same action also appears in the chat input bar's **Extras** menu.
+- **Choose old message 📚** — while Story illustrations is set to **Parser**,
+  opens a searchable list of assistant messages in the current chat. Pick any
+  passage to run the parser again and add a newly generated illustration to
+  that exact message. Existing images are preserved.
 
 ## Verified Draw Things API behavior (July 2026)
 
@@ -56,7 +63,6 @@ UI. Tinker freely; story gens stay pinned.
 - **Cloud provider** — per-preset compute target using the official Draw
   Things Cloud API (api.drawthings.ai) with a DT+ API key stored in the
   secure enclave, so heavy story gens run on their GPUs instead of your Mac
-- Insert results directly into the active chat message
 - img2img support
 - Optional model catalog via Draw Things' gRPC server or model directory scan
 
@@ -67,3 +73,10 @@ UI. Tinker freely; story gens stay pinned.
   than Draw Things, set the host accordingly (e.g. a Tailscale address).
 - `requested_capabilities: ["base64_decode"]` is declared because the backend
   decodes Draw Things' base64 image responses for upload to the image library.
+
+## Verifying an update
+
+The panel header displays the loaded frontend version. For this release it must
+show **v0.13.1**. If an older version remains visible after replacing files,
+disable and re-enable the extension, then reload Lumiverse from origin so the
+browser fetches the new frontend bundle.

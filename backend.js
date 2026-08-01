@@ -266,8 +266,47 @@ function messageBits(m) {
     id: m.id || m.messageId,
     contentKey,
     content: contentKey ? m[contentKey] : null,
+    createdAt: m.createdAt || m.created_at || m.timestamp || null,
     isAssistant: role.includes('assistant') || role.includes('char') || role === 'ai',
   }
+}
+
+function storyPreview(content, maxLength = 260) {
+  const clean = stripThinking(content)
+    .replace(TAG_RE, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[`*_>#~|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!clean) return '(No visible prose)'
+  return clean.length > maxLength ? clean.slice(0, maxLength - 1).trimEnd() + '…' : clean
+}
+
+async function listStoryMessages(userId, requestedLimit = 120) {
+  const { messages, chatId } = await fetchMessages(userId)
+  const limit = Math.max(1, Math.min(500, Number(requestedLimit) || 120))
+  const processed = new Set(await spindle.storage.getJson(PROCESSED_FILE, { fallback: [] }))
+  const eligible = []
+
+  for (const message of messages) {
+    const bits = messageBits(message)
+    if (!bits.id || !bits.isAssistant || !bits.contentKey || typeof bits.content !== 'string') continue
+    eligible.push(bits)
+  }
+
+  const total = eligible.length
+  const items = eligible.slice(-limit).reverse().map((bits, newestIndex) => ({
+    id: String(bits.id),
+    turn: total - newestIndex,
+    preview: storyPreview(bits.content),
+    createdAt: bits.createdAt,
+    processed: processed.has(bits.id) || processed.has(String(bits.id)),
+    hasImage: /!\[[^\]]*\]\([^)]*\)/.test(bits.content),
+    isLatest: newestIndex === 0,
+  }))
+
+  return { chatId, total, messages: items }
 }
 
 async function updateMessageContent(messageId, contentKey, newContent, userId, chatId) {
@@ -440,7 +479,13 @@ async function quietLLM(system, user, settings, userId) {
   throw new Error('Parser LLM call failed: ' + errs.join(' | '))
 }
 
-async function scanStory(userId, force) {
+async function scanStory(userId, options = {}) {
+  // Keep compatibility with older internal callers that passed a boolean.
+  if (typeof options === 'boolean') options = { force: options }
+  const force = !!options.force
+  const requestedMessageId = options.messageId === undefined || options.messageId === null
+    ? ''
+    : String(options.messageId)
   const settings = await getSettings()
   if (settings.mode === 'off') return { mode: 'off', note: 'Story illustrations is set to Off — choose Inline or Parser in the Settings tab (it saves automatically now).' }
   const presets = await getPresets()
@@ -451,9 +496,22 @@ async function scanStory(userId, force) {
 
   const { messages, chatId } = await fetchMessages(userId)
   let target = null
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const bits = messageBits(messages[i])
-    if (bits.isAssistant && bits.contentKey && typeof bits.content === 'string') { target = bits; break }
+  if (requestedMessageId) {
+    for (const message of messages) {
+      const bits = messageBits(message)
+      if (String(bits.id) === requestedMessageId && bits.isAssistant && bits.contentKey && typeof bits.content === 'string') {
+        target = bits
+        break
+      }
+    }
+    if (!target) {
+      return { mode: settings.mode, note: 'That story message could not be found. Reopen the message picker and try again.' }
+    }
+  } else {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const bits = messageBits(messages[i])
+      if (bits.isAssistant && bits.contentKey && typeof bits.content === 'string') { target = bits; break }
+    }
   }
   if (!target) return { mode: settings.mode, note: 'No story message found.' }
 
@@ -508,7 +566,7 @@ async function scanStory(userId, force) {
   // ------------------------- parser: derive a prompt from prose -------------
   if (settings.mode === 'parser') {
     if (!force && target.id && await wasProcessed(target.id)) {
-      return { mode: 'parser', note: 'Latest message already illustrated — press Scan story now to force a re-run.' }
+      return { mode: 'parser', note: 'This message was already illustrated — choose it again to force another parser run.' }
     }
     const usingCustom = !!(settings.parserInstruction && settings.parserInstruction.trim())
     let instruction = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
@@ -579,7 +637,7 @@ async function scanStory(userId, force) {
     return { mode: 'parser', processed: mds.length, note: `Illustrated ${mds.length} moment(s) via ${instrLabel}. First prompt: ` + firstPrompt.slice(0, 120) }
   }
 
-  return { mode: settings.mode, note: 'No <dt-image> tags in the latest story message.' }
+  return { mode: settings.mode, note: 'No <dt-image> tags in the selected story message.' }
 }
 
 // ---------------------------------------------------------------------------
@@ -634,6 +692,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history,
+          version: (spindle.manifest && spindle.manifest.version) || '0.13.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -829,8 +888,17 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'list_story_messages': {
+        const result = await listStoryMessages(userId, payload.limit)
+        reply = ok(payload, requestId, result)
+        break
+      }
+
       case 'scan_story': {
-        const result = await scanStory(userId, !!payload.force)
+        const result = await scanStory(userId, {
+          force: !!payload.force,
+          messageId: payload.messageId,
+        })
         reply = ok(payload, requestId, result)
         break
       }
