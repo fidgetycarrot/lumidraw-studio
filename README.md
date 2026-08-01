@@ -1,5 +1,7 @@
 # LumiDraw Studio
 
+**Current build: v0.14.1**
+
 A Spindle extension that bridges **Draw Things** and **Lumiverse**. Sync models
 and settings straight from the Draw Things API, pin them as named presets, and
 generate from inside Lumiverse — without ever hand-typing a case-sensitive
@@ -80,3 +82,14 @@ The panel header displays the loaded frontend version. For this release it must
 show **v0.13.1**. If an older version remains visible after replacing files,
 disable and re-enable the extension, then reload Lumiverse from origin so the
 browser fetches the new frontend bundle.
+
+
+## v0.14.1 workspace
+
+The Generate tab now separates the **committed chat preset** from a temporary
+**Workspace / draft settings** area. Manual generations use the workspace.
+Parser and inline story generations continue using the committed chat preset
+until you explicitly choose **Update active preset** or **Save as new preset**.
+
+The corrected installation ZIP places `spindle.json` at the ZIP root, as
+Lumiverse expects.

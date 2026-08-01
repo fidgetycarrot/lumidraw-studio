@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.13.1'
+const EXTENSION_VERSION = '0.14.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -81,6 +81,10 @@ function realSetup(ctx) {
   let history = []
   let activePreset = null   // name of selected preset
   let syncedConfig = null   // last synced/loaded config powering the form
+  let draftConfig = null    // temporary workspace config for manual generation
+  let draftDirty = false
+  let draftSourceLabel = ''
+  let catalog = { models: [], samplers: [], loras: [], source: 'memory' }
   let busy = false
   let defaults = { protocol: '', parserInstruction: '' }
   const pending = new Map() // requestId → {resolve, reject}
@@ -249,12 +253,17 @@ function realSetup(ctx) {
     .ld-min { font-size: 20px; line-height: 1; padding: 2px 8px; }
     .ld-x:hover { color: #e5737f; }
     .ld-spin { animation: ld-rot 1s linear infinite; display: inline-block; }
+    .ld-subsection { border: 1px solid var(--lumiverse-border, #3d4050); border-radius: var(--lumiverse-radius, 8px); padding: 10px; }
+    .ld-subtitle { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+    .ld-help { font-size: 11px; color: var(--lumiverse-text-muted, #a2a5b4); }
+    .ld-compact { font-size: 12px; padding: 4px 8px; }
+    .ld-section-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
     @keyframes ld-rot { to { transform: rotate(360deg); } }
   `)
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.13.1" aria-label="LumiDraw Studio v0.13.1">
+    <button class="ld-launcher" title="LumiDraw Studio v0.14.1" aria-label="LumiDraw Studio v0.14.1">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -263,7 +272,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw Studio <small style="font-weight:400;opacity:.65">v0.13.1</small></span>
+        <span class="ld-head-title">LumiDraw Studio <small style="font-weight:400;opacity:.65">v0.14.1</small></span>
         <button class="ld-tabbtn ld-active" data-tab="generate">Generate</button>
         <button class="ld-tabbtn" data-tab="presets">Presets</button>
         <button class="ld-tabbtn" data-tab="settings">Settings</button>
@@ -271,20 +280,47 @@ function realSetup(ctx) {
       </div>
       <div class="ld-body" data-view="generate">
         <div>
-          <span class="ld-label">Preset</span>
+          <span class="ld-label">Chat preset</span>
           <div class="ld-row">
             <select class="ld-preset-select"><option value="">— none (synced state) —</option></select>
             <button class="ld-btn" style="flex:0 0 auto" data-act="sync" title="Capture the recipe currently shown in Draw Things">Sync ⟳</button>
           </div>
-          <div class="ld-config-chips" style="margin-top:6px"></div>
+          <div class="ld-help" style="margin-top:6px">The chat preset stays committed for parser and inline story images. The workspace below is only for experimentation until you save it.</div>
+        </div>
+        <div class="ld-subsection">
+          <div class="ld-subtitle">Workspace / draft settings</div>
+          <div class="ld-config-chips" style="margin-top:2px"></div>
+          <div class="ld-status ld-draft-status" style="margin-top:6px"></div>
+          <div style="margin-top:8px">
+            <span class="ld-label">Model</span>
+            <select class="ld-draft-model"><option value="">— choose model —</option></select>
+          </div>
+          <div class="ld-row" style="margin-top:6px">
+            <div><span class="ld-label">Sampler</span><input class="ld-draft-sampler" list="ld-samplers" /></div>
+            <div style="flex:0 0 70px"><span class="ld-label">Steps</span><input class="ld-draft-steps" type="number" min="1" max="150" /></div>
+            <div style="flex:0 0 70px"><span class="ld-label">CFG</span><input class="ld-draft-cfg" type="number" step="0.5" min="0" /></div>
+          </div>
+          <div class="ld-row" style="margin-top:6px">
+            <div><span class="ld-label">Width</span><input class="ld-draft-w" type="number" step="64" min="256" /></div>
+            <div><span class="ld-label">Height</span><input class="ld-draft-h" type="number" step="64" min="256" /></div>
+          </div>
+          <span class="ld-label" style="margin-top:8px">LoRAs</span>
+          <div class="ld-draft-loras" style="display:flex;flex-direction:column;gap:4px"></div>
+          <button class="ld-btn ld-compact" data-act="draft-addlora" style="margin-top:4px">＋ LoRA</button>
+          <div class="ld-help" style="margin-top:6px">The lists contain models and LoRAs LumiDraw has already learned. Exact names can still be typed manually.</div>
+          <div style="margin-top:8px">
+            <span class="ld-label">Negative prompt</span>
+            <textarea class="ld-negative" style="min-height:36px"></textarea>
+          </div>
+          <div class="ld-section-actions">
+            <button class="ld-btn" data-act="draft-reset">Reset workspace</button>
+            <button class="ld-btn" data-act="draft-save-new">Save as new preset</button>
+            <button class="ld-btn" data-act="draft-save-active">Update active preset</button>
+          </div>
         </div>
         <div>
           <span class="ld-label">Prompt</span>
           <textarea class="ld-prompt" placeholder="portrait of..."></textarea>
-        </div>
-        <div>
-          <span class="ld-label">Negative prompt</span>
-          <textarea class="ld-negative" style="min-height:36px"></textarea>
         </div>
         <div class="ld-row">
           <div>
@@ -295,9 +331,9 @@ function realSetup(ctx) {
             <button class="ld-btn" data-act="reuse-seed" title="Copy the seed from the last generation">↩ last</button>
           </div>
         </div>
-        <button class="ld-btn ld-primary" data-act="generate">Generate</button>
-        <button class="ld-btn" data-act="scan" title="Process the latest story message: illustrate its <dt-image> tags, or run the parser on its prose">Scan story now 📖</button>
-        <button class="ld-btn ld-primary" data-act="scan-old" title="Choose any assistant message in the current chat and run Parser mode on it">Rescan old message 📚</button>
+        <button class="ld-btn ld-primary" data-act="generate">Generate with workspace</button>
+        <button class="ld-btn" data-act="scan" title="Process the latest story message using the committed chat preset">Scan story now 📖</button>
+        <button class="ld-btn ld-primary" data-act="scan-old" title="Choose any assistant message in the current chat and run Parser mode on it using the committed chat preset">Rescan old message 📚</button>
         <button class="ld-btn" data-act="append-last" style="display:none">Add to chat 💬</button>
         <div class="ld-status ld-gen-status"></div>
         <div>
@@ -443,6 +479,167 @@ function realSetup(ctx) {
     if (kind) el.classList.add(kind === 'err' ? 'ld-err' : 'ld-good')
   }
 
+  const DRAFT_KEY = 'lumidraw_generate_draft_v1'
+
+  function cloneJson(value) {
+    return value ? JSON.parse(JSON.stringify(value)) : value
+  }
+
+  function activeSourceForDraft() {
+    const preset = activePresetObj()
+    if (preset) {
+      return {
+        config: preset.config || {},
+        negativePrompt: preset.negativePrompt || '',
+        label: `chat preset “${preset.name}”`,
+      }
+    }
+    if (syncedConfig) {
+      return {
+        config: syncedConfig,
+        negativePrompt: $('.ld-negative') ? $('.ld-negative').value : '',
+        label: 'synced Draw Things state',
+      }
+    }
+    return null
+  }
+
+  function saveDraftLocal() {
+    try {
+      if (!draftConfig) return
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        config: draftConfig,
+        negativePrompt: $('.ld-negative') ? $('.ld-negative').value : '',
+      }))
+    } catch { /* best effort */ }
+  }
+
+  function loadDraftLocal() {
+    try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null') }
+    catch { return null }
+  }
+
+  function ensureDraftModelOption(value) {
+    const select = $('.ld-draft-model')
+    if (!select || !value) return
+    if (![...select.options].some((option) => option.value === value)) {
+      const option = document.createElement('option')
+      option.value = value
+      option.textContent = value
+      select.insertBefore(option, select.firstChild)
+    }
+  }
+
+  function draftLoraRow(file, weight) {
+    const row = document.createElement('div')
+    row.className = 'ld-row'
+    const fileInput = document.createElement('input')
+    fileInput.setAttribute('list', 'ld-loras')
+    fileInput.placeholder = 'lora_file.ckpt'
+    fileInput.value = file || ''
+    fileInput.className = 'ld-lora-file'
+    const weightInput = document.createElement('input')
+    weightInput.type = 'number'
+    weightInput.step = '0.05'
+    weightInput.style.flex = '0 0 70px'
+    weightInput.value = weight !== undefined ? weight : 1
+    weightInput.className = 'ld-lora-weight'
+    const remove = document.createElement('button')
+    remove.className = 'ld-x'
+    remove.textContent = '✕'
+    remove.style.flex = '0 0 auto'
+    remove.addEventListener('click', () => { row.remove(); onDraftControlChange() })
+    fileInput.addEventListener('input', onDraftControlChange)
+    weightInput.addEventListener('input', onDraftControlChange)
+    row.appendChild(fileInput)
+    row.appendChild(weightInput)
+    row.appendChild(remove)
+    return row
+  }
+
+  function readDraftConfigFromControls() {
+    const config = cloneJson(draftConfig) || {}
+    const model = $('.ld-draft-model').value || ''
+    const sampler = $('.ld-draft-sampler').value.trim()
+    const steps = $('.ld-draft-steps').value
+    const cfg = $('.ld-draft-cfg').value
+    const width = $('.ld-draft-w').value
+    const height = $('.ld-draft-h').value
+    if (model) config.model = model
+    else delete config.model
+    if (sampler) config.sampler = sampler
+    else delete config.sampler
+    if (steps !== '') config.steps = parseInt(steps, 10)
+    else delete config.steps
+    if (cfg !== '') config.guidance_scale = parseFloat(cfg)
+    else delete config.guidance_scale
+    if (width !== '') config.width = parseInt(width, 10)
+    else delete config.width
+    if (height !== '') config.height = parseInt(height, 10)
+    else delete config.height
+    config.loras = [...dom.queryAll('.ld-draft-loras .ld-row')].map((row) => ({
+      file: row.querySelector('.ld-lora-file').value.trim(),
+      weight: parseFloat(row.querySelector('.ld-lora-weight').value) || 1,
+    })).filter((lora) => lora.file)
+    return config
+  }
+
+  function renderDraftControls() {
+    const config = draftConfig || {}
+    ensureDraftModelOption(config.model || '')
+    $('.ld-draft-model').value = config.model || ''
+    $('.ld-draft-sampler').value = config.sampler || ''
+    $('.ld-draft-steps').value = config.steps !== undefined ? config.steps : ''
+    $('.ld-draft-cfg').value = config.guidance_scale !== undefined ? config.guidance_scale : ''
+    $('.ld-draft-w').value = config.width || ''
+    $('.ld-draft-h').value = config.height || ''
+    const loraBox = $('.ld-draft-loras')
+    loraBox.innerHTML = ''
+    for (const lora of config.loras || []) {
+      loraBox.appendChild(draftLoraRow(lora.file || lora.name || '', lora.weight))
+    }
+    if (!(config.loras || []).length) loraBox.appendChild(draftLoraRow('', 1))
+  }
+
+  function hydrateDraftFromSource(source, { force = false } = {}) {
+    if (!source || !source.config) return false
+    if (draftDirty && !force && draftConfig) return false
+    draftConfig = cloneJson(source.config || {}) || {}
+    draftSourceLabel = source.label || ''
+    draftDirty = false
+    renderDraftControls()
+    $('.ld-negative').value = source.negativePrompt || ''
+    renderChips()
+    saveDraftLocal()
+    setStatus('.ld-draft-status', draftSourceLabel
+      ? `Workspace loaded from ${draftSourceLabel}.`
+      : 'Workspace loaded.', 'good')
+    return true
+  }
+
+  function onDraftControlChange() {
+    draftConfig = readDraftConfigFromControls()
+    draftDirty = true
+    renderChips()
+    saveDraftLocal()
+    const source = draftSourceLabel ? ` Based on ${draftSourceLabel}.` : ''
+    setStatus('.ld-draft-status', 'Workspace modified. Manual Generate uses these temporary settings.' + source)
+  }
+
+  function currentDraftBundle() {
+    const preset = activePresetObj() || {}
+    return {
+      config: readDraftConfigFromControls(),
+      extra: preset.extra || null,
+      promptPrefix: preset.promptPrefix || '',
+      negativePrompt: $('.ld-negative').value || '',
+      qualityTags: preset.qualityTags || '',
+      characterTags: preset.characterTags || '',
+      personaTags: preset.personaTags || '',
+      bannedTags: preset.bannedTags || '',
+    }
+  }
+
   let storyMessages = []
 
   function closeStoryPicker() {
@@ -557,11 +754,11 @@ function realSetup(ctx) {
   function renderChips() {
     const el = $('.ld-config-chips')
     if (!el) return
-    if (!syncedConfig) {
-      el.innerHTML = '<span class="ld-status">No config loaded — press Sync or pick a preset.</span>'
+    if (!draftConfig) {
+      el.innerHTML = '<span class="ld-status">No workspace loaded yet — choose a preset or press Sync.</span>'
       return
     }
-    const c = syncedConfig
+    const c = draftConfig
     const bits = []
     if (c.model) bits.push(`model: ${c.model}`)
     if (c.sampler) bits.push(`sampler: ${c.sampler}`)
@@ -719,12 +916,20 @@ function realSetup(ctx) {
   }
 
   function selectPreset(name) {
-    const p = presets.find((x) => x.name === name)
-    activePreset = p ? p.name : null
+    const preset = presets.find((item) => item.name === name)
+    activePreset = preset ? preset.name : null
     call('set_active_preset', { name: activePreset || '' }).catch(() => {})
-    if (p) {
-      syncedConfig = { ...p.config }
-      if (p.negativePrompt && !$('.ld-negative').value) $('.ld-negative').value = p.negativePrompt
+    if (preset) {
+      syncedConfig = { ...preset.config }
+      if (!draftConfig || !draftDirty) {
+        hydrateDraftFromSource({
+          config: preset.config || {},
+          negativePrompt: preset.negativePrompt || '',
+          label: `chat preset “${preset.name}”`,
+        }, { force: true })
+      } else {
+        setStatus('.ld-draft-status', `Chat preset changed to “${preset.name}”. Your temporary workspace was kept; use Reset workspace to load the preset.`)
+      }
     }
     renderChips(); renderPresetSelect(); renderPresetList()
   }
@@ -739,14 +944,25 @@ function realSetup(ctx) {
     const res = await call('sync_state')
     syncedConfig = res.captured
     activePreset = null
-    renderChips(); renderPresetSelect()
+    renderPresetSelect()
+    if (!draftConfig || !draftDirty) {
+      hydrateDraftFromSource({
+        config: syncedConfig,
+        negativePrompt: $('.ld-negative').value || '',
+        label: 'synced Draw Things state',
+      }, { force: true })
+    } else {
+      setStatus('.ld-draft-status', 'Draw Things state captured. Your temporary workspace was kept; use Reset workspace to load the new sync.')
+      renderChips()
+    }
     setStatus(statusSel, `Captured ${res.captured.model || '(no model)'}`, 'good')
   }
 
   async function doGenerate() {
     if (busy) return
-    if (!syncedConfig) {
-      setStatus('.ld-gen-status', 'No config — press Sync or pick a preset first.', 'err')
+    draftConfig = readDraftConfigFromControls()
+    if (!draftConfig || !draftConfig.model) {
+      setStatus('.ld-gen-status', 'No model set in the workspace — choose a preset, press Sync, or pick a model.', 'err')
       return
     }
     busy = true
@@ -754,16 +970,16 @@ function realSetup(ctx) {
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="ld-spin">◌</span> Generating…' }
     setStatus('.ld-gen-status', 'Sent to Draw Things — hold tight…')
     try {
-      const preset0 = activePresetObj()
+      const bundle = currentDraftBundle()
       const seedRaw = $('.ld-seed').value
       const res = await call('generate', {
         prompt: $('.ld-prompt').value,
-        qualityTags: preset0 ? preset0.qualityTags : '',
-        characterTags: preset0 ? preset0.characterTags : '',
-        negativePrompt: $('.ld-negative').value || (preset0 ? preset0.negativePrompt : ''),
+        qualityTags: bundle.qualityTags,
+        characterTags: bundle.characterTags,
+        negativePrompt: bundle.negativePrompt,
         seed: seedRaw === '' ? undefined : Number(seedRaw),
-        config: syncedConfig,
-        extra: preset0 ? preset0.extra : null,
+        config: bundle.config,
+        extra: bundle.extra,
       })
       history = res.history
       renderHistory()
@@ -775,7 +991,7 @@ function realSetup(ctx) {
       setStatus('.ld-gen-status', e.message, 'err')
     } finally {
       busy = false
-      if (btn) { btn.disabled = false; btn.textContent = 'Generate' }
+      if (btn) { btn.disabled = false; btn.textContent = 'Generate with workspace' }
     }
   }
 
@@ -877,10 +1093,22 @@ function realSetup(ctx) {
   async function loadCatalog() {
     try {
       const res = await call('list_models', {}, 20000)
+      catalog = {
+        models: res.models || [],
+        samplers: res.samplers || [],
+        loras: res.loras || [],
+        source: res.source || 'memory',
+      }
       const sel = $('.ld-ed-model')
-      sel.innerHTML = (res.models || []).map((m) => `<option value="${m.file}">${m.file}</option>`).join('')
-      $('#ld-samplers').innerHTML = (res.samplers || []).map((s) => `<option value="${s}"></option>`).join('')
-      $('#ld-loras').innerHTML = (res.loras || []).map((s) => `<option value="${s}"></option>`).join('')
+      sel.innerHTML = catalog.models.map((model) => `<option value="${model.file}">${model.file}</option>`).join('')
+      const draftSelect = $('.ld-draft-model')
+      if (draftSelect) {
+        draftSelect.innerHTML = '<option value="">— choose model —</option>' +
+          catalog.models.map((model) => `<option value="${model.file}">${model.file}</option>`).join('')
+      }
+      $('#ld-samplers').innerHTML = catalog.samplers.map((sampler) => `<option value="${sampler}"></option>`).join('')
+      $('#ld-loras').innerHTML = catalog.loras.map((lora) => `<option value="${lora}"></option>`).join('')
+      if (draftConfig) renderDraftControls()
     } catch (e) { console.log('[LumiDraw] catalog load failed:', e.message) }
   }
 
@@ -903,14 +1131,15 @@ function realSetup(ctx) {
     return row
   }
 
-  async function openEditor(nameOrNull) {
+  async function openEditor(nameOrNull, seedPreset = null) {
     await loadCatalog()
     const box = $('.ld-editor')
     box.style.display = 'block'
     const p = nameOrNull ? presets.find((x) => x.name === nameOrNull) : null
+    const seed = seedPreset || null
     editorOriginalName = p ? p.name : null
-    editorExtra = p ? (p.extra || null) : null
-    const c = p ? (p.config || {}) : (syncedConfig || {})
+    editorExtra = p ? (p.extra || null) : (seed ? (seed.extra || null) : null)
+    const c = p ? (p.config || {}) : (seed ? (seed.config || {}) : (syncedConfig || {}))
     $('.ld-ed-name').value = p ? p.name : ''
     const msel = $('.ld-ed-model')
     if (c.model && ![...msel.options].some((o) => o.value === c.model)) {
@@ -926,19 +1155,72 @@ function realSetup(ctx) {
     const lbox = $('.ld-ed-loras')
     lbox.innerHTML = ''
     for (const l of c.loras || []) lbox.appendChild(loraRow(l.file || l.name || '', l.weight))
-    $('.ld-ed-quality').value = p ? (p.qualityTags || '') : ''
-    $('.ld-ed-chartags').value = p ? (p.characterTags || '') : ''
-    $('.ld-ed-personatags').value = p ? (p.personaTags || '') : ''
-    $('.ld-ed-banned').value = p ? (p.bannedTags || '') : ''
-    $('.ld-ed-prefix').value = p ? (p.promptPrefix || '') : ''
-    $('.ld-ed-negative').value = p ? (p.negativePrompt || '') : ''
-    setStatus('.ld-ed-status', p ? '' : (syncedConfig ? 'Starting from the last synced recipe.' : 'No synced recipe yet — Sync on the Generate tab first for model/sampler defaults.'))
+    $('.ld-ed-quality').value = p ? (p.qualityTags || '') : (seed ? (seed.qualityTags || '') : '')
+    $('.ld-ed-chartags').value = p ? (p.characterTags || '') : (seed ? (seed.characterTags || '') : '')
+    $('.ld-ed-personatags').value = p ? (p.personaTags || '') : (seed ? (seed.personaTags || '') : '')
+    $('.ld-ed-banned').value = p ? (p.bannedTags || '') : (seed ? (seed.bannedTags || '') : '')
+    $('.ld-ed-prefix').value = p ? (p.promptPrefix || '') : (seed ? (seed.promptPrefix || '') : '')
+    $('.ld-ed-negative').value = p ? (p.negativePrompt || '') : (seed ? (seed.negativePrompt || '') : '')
+    setStatus('.ld-ed-status', p ? '' : (seed ? 'Starting from the current workspace.' : (syncedConfig ? 'Starting from the last synced recipe.' : 'No synced recipe yet — Sync on the Generate tab first for model/sampler defaults.')))
     if (box.scrollIntoView) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
 
   $('[data-act="new-preset"]').addEventListener('click', () => openEditor(null))
   $('[data-act="ed-cancel"]').addEventListener('click', () => { $('.ld-editor').style.display = 'none' })
   $('[data-act="ed-addlora"]').addEventListener('click', () => $('.ld-ed-loras').appendChild(loraRow('', 1)))
+
+  $('[data-act="draft-addlora"]').addEventListener('click', () => {
+    $('.ld-draft-loras').appendChild(draftLoraRow('', 1))
+    onDraftControlChange()
+  })
+
+  $('[data-act="draft-reset"]').addEventListener('click', () => {
+    const source = activeSourceForDraft()
+    if (!source) {
+      setStatus('.ld-draft-status', 'Nothing to reset from yet — choose a preset or press Sync first.', 'err')
+      return
+    }
+    hydrateDraftFromSource(source, { force: true })
+  })
+
+  $('[data-act="draft-save-new"]').addEventListener('click', () => {
+    const bundle = currentDraftBundle()
+    if (!bundle.config || !bundle.config.model) {
+      setStatus('.ld-draft-status', 'Choose a model in the workspace first.', 'err')
+      return
+    }
+    openEditor(null, bundle)
+  })
+
+  $('[data-act="draft-save-active"]').addEventListener('click', async () => {
+    try {
+      if (!activePreset) throw new Error('No active preset selected. Choose one or use Save as new preset.')
+      const bundle = currentDraftBundle()
+      const result = await call('save_preset', {
+        name: activePreset,
+        config: bundle.config,
+        extra: bundle.extra,
+        promptPrefix: bundle.promptPrefix,
+        negativePrompt: bundle.negativePrompt,
+        qualityTags: bundle.qualityTags,
+        characterTags: bundle.characterTags,
+        personaTags: bundle.personaTags,
+        bannedTags: bundle.bannedTags,
+      })
+      presets = result.presets
+      syncedConfig = cloneJson(bundle.config)
+      draftDirty = false
+      renderPresetList(); renderPresetSelect(); renderChips()
+      setStatus('.ld-draft-status', `Updated active preset “${activePreset}” from the workspace.`, 'good')
+    } catch (error) {
+      setStatus('.ld-draft-status', error.message, 'err')
+    }
+  })
+
+  for (const selector of ['.ld-draft-model', '.ld-draft-sampler', '.ld-draft-steps', '.ld-draft-cfg', '.ld-draft-w', '.ld-draft-h', '.ld-negative']) {
+    const control = $(selector)
+    if (control) control.addEventListener('input', onDraftControlChange)
+  }
 
   $('[data-act="ed-save"]').addEventListener('click', async () => {
     try {
@@ -1216,11 +1498,29 @@ function realSetup(ctx) {
       $('.ld-parser-model').value = settings.parserModel || ''
       $('.ld-parser-instr').value = settings.parserInstruction || defaults.parserInstruction || ''
       $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
+      await loadCatalog()
       if (settings.activePreset) { activePreset = settings.activePreset }
       if (activePreset) {
         const p = presets.find((x) => x.name === activePreset)
         if (p) { syncedConfig = { ...p.config } }
         else activePreset = null
+      }
+      const savedDraft = loadDraftLocal()
+      if (savedDraft && savedDraft.config && savedDraft.config.model) {
+        draftConfig = savedDraft.config
+        renderDraftControls()
+        $('.ld-negative').value = savedDraft.negativePrompt || ''
+        renderChips()
+        setStatus('.ld-draft-status', 'Restored your last workspace draft.')
+      } else if (activePreset) {
+        const p = presets.find((x) => x.name === activePreset)
+        if (p) {
+          hydrateDraftFromSource({
+            config: p.config || {},
+            negativePrompt: p.negativePrompt || '',
+            label: `chat preset “${p.name}”`,
+          }, { force: true })
+        }
       }
       renderPresetSelect(); renderPresetList(); renderHistory(); renderChips()
       updateScanLabel()
