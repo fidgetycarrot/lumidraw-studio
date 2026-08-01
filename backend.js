@@ -168,6 +168,9 @@ async function dtGenerate(settings, payload) {
 // ---------------------------------------------------------------------------
 
 const PROCESSED_FILE = 'processed.json'
+const pregenCache = new Map()   // fingerprint -> generated entry
+const pregenInflight = new Set()
+const tagFingerprint = (body) => String(body || '').trim().toLowerCase().replace(/\s+/g, ' ')
 const TAG_RE = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/g
 
 function stripThinking(text) {
@@ -461,13 +464,24 @@ async function scanStory(userId, force) {
       const dims = aspectDims(preset.config, aspect)
       const prompt = [lead, prefix, await resolveMacros(body, userId, chatId)].filter(Boolean).join(', ')
       try {
-        const entry = await generateAndUpload({
-          prompt,
-          negativePrompt: preset.negativePrompt,
-          config: preset.config,
-          extra: preset.extra,
-          dims,
-        }, userId)
+        const fp = tagFingerprint(body)
+        // wait up to 90s for a streaming pregeneration already underway
+        for (let w = 0; w < 90 && pregenInflight.has(fp); w++) {
+          await new Promise((r) => setTimeout(r, 1000))
+        }
+        let entry = pregenCache.get(fp)
+        if (entry) {
+          pregenCache.delete(fp)
+          spindle.log.info('[lumidraw] used pregenerated image for tag')
+        } else {
+          entry = await generateAndUpload({
+            prompt,
+            negativePrompt: preset.negativePrompt,
+            config: preset.config,
+            extra: preset.extra,
+            dims,
+          }, userId)
+        }
         const md = `![${body.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`
         content = content.replace(m[0], md)
         done++
@@ -486,8 +500,11 @@ async function scanStory(userId, force) {
       return { mode: 'parser', note: 'Latest message already illustrated — press Scan story now to force a re-run.' }
     }
     const usingCustom = !!(settings.parserInstruction && settings.parserInstruction.trim())
-    const instruction = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
+    let instruction = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
       .replaceAll('{{max_images}}', String(settings.maxImages || 2))
+    if (preset.personaTags) {
+      instruction += '\n\nUser/persona visual tags — use ONLY when the User is visibly present in the chosen moment, and only the visible parts (respect POV): ' + preset.personaTags
+    }
     const instrLabel = usingCustom ? `custom instruction (${instruction.length} chars)` : 'built-in instruction'
     const passage = stripThinking(target.content).replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
     const out = await quietLLM(await resolveMacros(instruction, userId, chatId), passage, settings, userId)
@@ -725,6 +742,42 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'pregenerate': {
+        // Fired by the frontend streaming tag interceptor the moment a
+        // <dt-image> tag completes mid-reply: start Draw Things early so the
+        // image is ready when the message finishes.
+        const body = String(payload.body || '').trim()
+        const aspect = payload.aspect || ''
+        if (!body) { reply = ok(payload, requestId, { started: false }); break }
+        const fp = tagFingerprint(body)
+        if (pregenCache.has(fp) || pregenInflight.has(fp)) { reply = ok(payload, requestId, { started: false, dup: true }); break }
+        const settings = await getSettings()
+        const presets = await getPresets()
+        const preset = presets.find((p) => p.name === settings.activePreset)
+        if (!preset || settings.mode !== 'inline') { reply = ok(payload, requestId, { started: false }); break }
+        pregenInflight.add(fp)
+        reply = ok(payload, requestId, { started: true })
+        ;(async () => {
+          try {
+            const chatId = await resolveActiveChatId(userId)
+            const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
+            const charTags = preset.characterTags || (settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : '')
+            const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
+            const dims = aspectDims(preset.config, aspect)
+            const prompt = [lead, prefix, await resolveMacros(body, userId, chatId)].filter(Boolean).join(', ')
+            const entry = await generateAndUpload({
+              prompt, negativePrompt: preset.negativePrompt, config: preset.config, extra: preset.extra, dims,
+            }, userId)
+            pregenCache.set(fp, entry)
+            if (pregenCache.size > 8) pregenCache.delete(pregenCache.keys().next().value)
+            spindle.log.info('[lumidraw] pregenerated image for streaming tag (' + fp.slice(0, 60) + '…)')
+          } catch (e) {
+            spindle.log.warn('[lumidraw] pregeneration failed: ' + e.message)
+          } finally { pregenInflight.delete(fp) }
+        })()
+        break
+      }
+
       case 'scan_story': {
         const result = await scanStory(userId, !!payload.force)
         reply = ok(payload, requestId, result)
@@ -770,6 +823,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           negativePrompt: payload.negativePrompt || '',
           qualityTags: payload.qualityTags || '',
           characterTags: payload.characterTags || '',
+          personaTags: payload.personaTags || '',
           updatedAt: Date.now(),
         }
         const idx = presets.findIndex((p) => p.name === name)
@@ -1076,12 +1130,17 @@ if (typeof spindle.registerInterceptor === 'function') {
       }
       spindle.log.info(`[lumidraw] interceptor invoked (mode=${settings.mode}, msgs=${messages.length}, wrapped=${wrapped})`)
       if (settings.mode !== 'inline') return a
-      const injected = {
-        role: 'system',
-        content: (settings.protocol || DEFAULT_PROTOCOL)
-          .replaceAll('{{max_images}}', String(settings.maxImages || 2))
-          .replaceAll('{{min_images}}', String(settings.minImages || 0)),
-      }
+      let protocolText = (settings.protocol || DEFAULT_PROTOCOL)
+        .replaceAll('{{max_images}}', String(settings.maxImages || 2))
+        .replaceAll('{{min_images}}', String(settings.minImages || 0))
+      try {
+        const presets = await getPresets()
+        const ap = presets.find((p) => p.name === settings.activePreset)
+        if (ap && ap.personaTags) {
+          protocolText += '\nWhen the User/persona is visibly present in an illustrated moment, represent them with these tags (include only the parts actually visible; respect POV framing): ' + ap.personaTags
+        }
+      } catch { /* preset read failed — inject base protocol */ }
+      const injected = { role: 'system', content: protocolText }
       const out = [...messages, injected]
       spindle.log.info('[lumidraw] inline protocol injected (' + injected.content.length + ' chars)')
       return wrapped ? { ...a, messages: out } : out

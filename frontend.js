@@ -234,6 +234,10 @@ function realSetup(ctx) {
           <textarea class="ld-chartags-input" style="min-height:44px" placeholder="e.g. 1girl, long red hair, green eyes, freckles, slender"></textarea>
         </div>
         <div>
+          <span class="ld-label">Persona tags (the User's look — used only when the model says you're in frame)</span>
+          <textarea class="ld-personatags-input" style="min-height:44px" placeholder="e.g. 1boy, very tall, muscular, short brown hair"></textarea>
+        </div>
+        <div>
           <span class="ld-label">Prompt</span>
           <textarea class="ld-prompt" placeholder="portrait of..."></textarea>
         </div>
@@ -465,11 +469,16 @@ function realSetup(ctx) {
         rm.title = 'Take this image out of the chat (keeps the image)'
         rm.addEventListener('click', async (ev) => {
           ev.stopPropagation()
-          setStatus('.ld-gen-status', 'Removing from chat…')
+          const orig = rm.textContent
+          rm.textContent = '…'
           try {
             await call('remove_from_chat', { imageUrl: img.url })
-            setStatus('.ld-gen-status', 'Removed from the chat.', 'good')
-          } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
+            rm.textContent = 'Not in chat ✓'
+            setTimeout(() => { rm.textContent = orig }, 2500)
+          } catch (e) {
+            rm.textContent = orig
+            setStatus('.ld-gen-status', e.message, 'err')
+          }
         })
         const del = document.createElement('button')
         del.className = 'ld-append ld-remove'
@@ -477,13 +486,19 @@ function realSetup(ctx) {
         del.title = 'Delete this image everywhere: chat, image library, and this list'
         del.addEventListener('click', async (ev) => {
           ev.stopPropagation()
-          setStatus('.ld-gen-status', 'Deleting…')
+          wrap.style.opacity = '0.35'
+          wrap.style.pointerEvents = 'none'
+          del.textContent = 'Deleting…'
           try {
             const res = await call('delete_image', { imageUrl: img.url, imageId: img.id })
             history = res.history
             renderHistory()
-            setStatus('.ld-gen-status', res.deleted ? 'Deleted.' : 'Removed from list (library deletion unavailable).', 'good')
-          } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
+          } catch (e) {
+            wrap.style.opacity = ''
+            wrap.style.pointerEvents = ''
+            del.textContent = 'Delete'
+            setStatus('.ld-gen-status', e.message, 'err')
+          }
         })
         row.appendChild(btn)
         row.appendChild(rm)
@@ -505,6 +520,7 @@ function realSetup(ctx) {
       if (p.negativePrompt && !$('.ld-negative').value) $('.ld-negative').value = p.negativePrompt
       $('.ld-quality').value = p.qualityTags || ''
       $('.ld-chartags-input').value = p.characterTags || ''
+      $('.ld-personatags-input').value = p.personaTags || ''
     }
     renderChips(); renderPresetSelect(); renderPresetList()
   }
@@ -727,6 +743,7 @@ function realSetup(ctx) {
         negativePrompt: $('.ld-negative').value,
         qualityTags: $('.ld-quality').value,
         characterTags: $('.ld-chartags-input').value,
+        personaTags: $('.ld-personatags-input').value,
       })
       presets = res.presets
       activePreset = name.trim()
@@ -783,13 +800,14 @@ function realSetup(ctx) {
           negativePrompt: p.negativePrompt || '',
           qualityTags: $('.ld-quality').value,
           characterTags: $('.ld-chartags-input').value,
+          personaTags: $('.ld-personatags-input').value,
         })
         presets = res.presets
         setStatus('.ld-gen-status', 'Preset updated ✓', 'good')
       } catch (e) { setStatus('.ld-gen-status', 'Preset save failed: ' + e.message, 'err') }
     }, 800)
   }
-  for (const sel of ['.ld-quality', '.ld-chartags-input']) {
+  for (const sel of ['.ld-quality', '.ld-chartags-input', '.ld-personatags-input']) {
     const el = $(sel)
     if (el) el.addEventListener('input', scheduleTagSave)
   }
@@ -832,6 +850,48 @@ function realSetup(ctx) {
     }
   })
 
+  // Streaming tag interception: pre-generate the moment a <dt-image> tag
+  // completes mid-reply, so the image is ready when the message finishes.
+  ;(() => {
+    const m = ctx.messages
+    if (!m || typeof m.registerTagInterceptor !== 'function') {
+      console.log('[LumiDraw] messages.registerTagInterceptor unavailable — inline images generate after the reply completes (compat mode)')
+      return
+    }
+    const onTag = (payload) => {
+      try {
+        let body = ''
+        let aspect = ''
+        if (typeof payload === 'string') {
+          const mm = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/.exec(payload)
+          if (mm) { body = mm[2]; aspect = (/aspect\s*=\s*"([^"]+)"/.exec(mm[1] || '') || [])[1] || '' }
+          else body = payload
+        } else if (payload && typeof payload === 'object') {
+          body = payload.body || payload.content || payload.inner || payload.text || ''
+          const attrs = payload.attributes || payload.attrs || {}
+          aspect = attrs.aspect || ''
+          if (!body && payload.raw) {
+            const mm = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/.exec(payload.raw)
+            if (mm) { body = mm[2]; aspect = aspect || (/aspect\s*=\s*"([^"]+)"/.exec(mm[1] || '') || [])[1] || '' }
+          }
+        }
+        body = String(body || '').trim()
+        if (!body) { console.log('[LumiDraw] streaming tag payload unrecognized:', typeof payload, payload && Object.keys(payload)); return }
+        console.log('[LumiDraw] streaming tag complete — pregenerating')
+        ctx.sendToBackend({ type: 'pregenerate', requestId: makeId(), body, aspect })
+      } catch (e) { console.log('[LumiDraw] tag interceptor error:', e.message) }
+    }
+    const shapes = [
+      () => m.registerTagInterceptor('dt-image', onTag),
+      () => m.registerTagInterceptor({ tag: 'dt-image', handler: onTag }),
+      () => m.registerTagInterceptor({ tagName: 'dt-image', onComplete: onTag }),
+    ]
+    for (const s of shapes) {
+      try { s(); console.log('[LumiDraw] streaming tag interceptor registered'); return } catch { /* next shape */ }
+    }
+    console.log('[LumiDraw] registerTagInterceptor exists but no call shape accepted — compat mode')
+  })()
+
   // ------------------------------------------------------------------ boot
   let initialized = false
   async function tryInit() {
@@ -865,7 +925,7 @@ function realSetup(ctx) {
       if (settings.activePreset) { activePreset = settings.activePreset }
       if (activePreset) {
         const p = presets.find((x) => x.name === activePreset)
-        if (p) { syncedConfig = { ...p.config }; $('.ld-quality').value = p.qualityTags || ''; $('.ld-chartags-input').value = p.characterTags || '' }
+        if (p) { syncedConfig = { ...p.config }; $('.ld-quality').value = p.qualityTags || ''; $('.ld-chartags-input').value = p.characterTags || ''; $('.ld-personatags-input').value = p.personaTags || '' }
         else activePreset = null
       }
       renderPresetSelect(); renderPresetList(); renderHistory(); renderChips()
