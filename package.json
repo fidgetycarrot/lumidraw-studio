@@ -1,8 +1,8 @@
 {
   "name": "lumidraw-studio",
-  "version": "0.16.4",
+  "version": "0.17.0",
   "private": true,
-  "description": "A redesigned Studio and Story workspace for Draw Things with Bridge-powered model, sampler, and LoRA catalogs.",
+  "description": "A redesigned Studio and Story workspace for Draw Things with structured subject binding and Bridge-powered catalogs.",
   "license": "MIT",
   "dependencies": {}
 }

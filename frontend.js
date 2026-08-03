@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.16.4'
+const EXTENSION_VERSION = '0.17.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -88,6 +88,7 @@ function realSetup(ctx) {
   let settings = { host: '127.0.0.1', port: 7862 }
   let presets = []
   let history = []
+  let storyDebug = null
   let activePreset = null   // name of selected preset
   let syncedConfig = null   // last synced/loaded config powering the form
   let draftConfig = null    // temporary workspace config for manual generation
@@ -326,6 +327,12 @@ function realSetup(ctx) {
 
     .ld-form-view { width:min(920px, 100%); margin:0 auto; padding:12px; box-sizing:border-box; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
     .ld-story-hero { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; }
+    .ld-profile-block { margin-top:9px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px; background:var(--lumiverse-fill-subtle, #1a1b22); overflow:hidden; }
+    .ld-profile-block > summary { cursor:pointer; padding:9px 11px; font-size:12px; font-weight:650; user-select:none; }
+    .ld-profile-fields { padding:0 11px 11px; display:flex; flex-direction:column; gap:7px; }
+    .ld-profile-grid { display:grid; grid-template-columns:1fr 110px; gap:7px; }
+    .ld-story-debug textarea { min-height:92px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; }
+    .ld-binding-note { margin-top:7px; padding:8px 9px; border-radius:8px; background:var(--lumiverse-fill-subtle, #1a1b22); font-size:11px; line-height:1.45; color:var(--lumiverse-text-muted, #a2a5b4); }
     .ld-mode-segment { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; }
     .ld-mode-note { margin-top:5px; }
     .ld-subsection { border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px; padding:10px; }
@@ -417,6 +424,7 @@ function realSetup(ctx) {
       .ld-lora-grid { grid-template-columns:1fr; }
       .ld-form-view { padding:8px; }
       .ld-story-hero { grid-template-columns:1fr; }
+      .ld-profile-grid { grid-template-columns:1fr; }
       .ld-text-editor { padding:0; }
       .ld-text-editor-dialog { width:100%; height:100dvh; border-radius:0; border:none; }
       .ld-text-editor-area { margin:10px; width:calc(100% - 20px) !important; }
@@ -447,7 +455,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.16.4" aria-label="LumiDraw Studio v0.16.4">
+    <button class="ld-launcher" title="LumiDraw Studio v0.17.0" aria-label="LumiDraw Studio v0.17.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -456,7 +464,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.16.4</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.17.0</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -598,7 +606,9 @@ function realSetup(ctx) {
             </select>
             <div class="ld-mode-note ld-help">Inline is fastest. Parser gives you a separate prompt-conversion step and supports rescanning old messages.</div>
             <label style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px"><input type="checkbox" class="ld-autoscan" style="width:auto" /> Auto-scan after each story message when supported</label>
-            <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Include active character image tags</label>
+            <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
+            <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-subject-binding" style="width:auto" /> Subject binding compiler — structured scene JSON, locked identities, compact final clauses</label>
+            <div class="ld-binding-note">The LLM does not write the final natural-language prompt. It returns short structured fields; LumiDraw rejects prose and compiles the final prompt with fixed templates. This reduces dependence on an unusually smart parser model.</div>
             <div class="ld-row" style="margin-top:9px">
               <div><span class="ld-label">Minimum images (0 = model decides)</span><input class="ld-minimg" type="number" min="0" max="4" step="1" /></div>
               <div><span class="ld-label">Maximum images</span><input class="ld-maximg" type="number" min="1" max="4" step="1" /></div>
@@ -612,14 +622,24 @@ function realSetup(ctx) {
             </div>
           </div>
           <div class="ld-card">
-            <span class="ld-label">Parser instruction</span>
+            <span class="ld-label">Parser scene-selection guidance</span>
             <textarea class="ld-parser-instr" style="min-height:110px"></textarea>
             <button class="ld-btn ld-compact" data-act="reset-parser" style="margin-top:6px">Reset to default</button>
           </div>
           <div class="ld-card">
-            <span class="ld-label">Inline instruction</span>
+            <span class="ld-label">Inline scene-selection guidance</span>
             <textarea class="ld-protocol" style="min-height:110px"></textarea>
             <button class="ld-btn ld-compact" data-act="reset-protocol" style="margin-top:6px">Reset to default</button>
+          </div>
+          <div class="ld-card ld-story-debug">
+            <div class="ld-subtitle">Last subject compile</div>
+            <div class="ld-help">This shows exactly what LumiDraw sent to Draw Things after binding subjects. Invalid JSON or prose is rejected before generation.</div>
+            <span class="ld-label" style="margin-top:8px">Final Draw Things prompt</span>
+            <textarea class="ld-story-final-prompt" readonly placeholder="No structured story prompt has been compiled yet."></textarea>
+            <details class="ld-profile-block">
+              <summary>Parsed scene / parser reply</summary>
+              <div class="ld-profile-fields"><textarea class="ld-story-parsed" readonly></textarea></div>
+            </details>
           </div>
         </div>
       </section>
@@ -650,8 +670,35 @@ function realSetup(ctx) {
             <div class="ld-ed-loras" style="display:flex;flex-direction:column;gap:5px"></div>
             <button class="ld-btn ld-compact" data-act="ed-addlora" style="margin-top:5px">＋ LoRA</button>
             <span class="ld-label" style="margin-top:9px">Quality tags (always first)</span><input class="ld-ed-quality" />
-            <span class="ld-label" style="margin-top:7px">Character tags</span><textarea class="ld-ed-chartags" style="min-height:58px"></textarea>
-            <span class="ld-label" style="margin-top:7px">Persona tags</span><textarea class="ld-ed-personatags" style="min-height:58px"></textarea>
+            <details class="ld-profile-block" open>
+              <summary>Main character identity profile</summary>
+              <div class="ld-profile-fields">
+                <div class="ld-profile-grid">
+                  <div><span class="ld-label">Anchor / name</span><input class="ld-ed-char-anchor" placeholder="Mara" /></div>
+                  <div><span class="ld-label">Count tag</span><input class="ld-ed-char-count" placeholder="1girl" /></div>
+                </div>
+                <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-char-subject" placeholder="adult woman" /></div>
+                <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-chartags" style="min-height:58px" placeholder="feminine appearance, tall, curvy, long black hair, green eyes"></textarea></div>
+                <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-char-outfit" style="min-height:48px" placeholder="black fitted jacket, dark trousers"></textarea></div>
+                <div><span class="ld-label">Anatomy / visibility-dependent traits</span><textarea class="ld-ed-char-anatomy" style="min-height:48px" placeholder="penis"></textarea></div>
+                <div><span class="ld-label">Automatic anatomy inclusion</span><select class="ld-ed-char-anatomy-mode"><option value="relevant">Only when explicitly visible or relevant</option><option value="always">Always include</option><option value="manual">Never include automatically</option></select></div>
+                <div class="ld-help">Keep stable body traits such as breasts in permanent appearance. Put visibility-dependent genital anatomy here. Keep pose, expression, actions, and scene-specific clothing out of the profile.</div>
+              </div>
+            </details>
+            <details class="ld-profile-block">
+              <summary>User / persona identity profile</summary>
+              <div class="ld-profile-fields">
+                <div class="ld-profile-grid">
+                  <div><span class="ld-label">Anchor / name</span><input class="ld-ed-persona-anchor" placeholder="User" /></div>
+                  <div><span class="ld-label">Count tag</span><input class="ld-ed-persona-count" placeholder="1boy" /></div>
+                </div>
+                <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-persona-subject" placeholder="adult man" /></div>
+                <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-personatags" style="min-height:58px"></textarea></div>
+                <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-persona-outfit" style="min-height:48px"></textarea></div>
+                <div><span class="ld-label">Anatomy / visibility-dependent traits</span><textarea class="ld-ed-persona-anatomy" style="min-height:48px"></textarea></div>
+                <div><span class="ld-label">Automatic anatomy inclusion</span><select class="ld-ed-persona-anatomy-mode"><option value="relevant">Only when explicitly visible or relevant</option><option value="always">Always include</option><option value="manual">Never include automatically</option></select></div>
+              </div>
+            </details>
             <span class="ld-label" style="margin-top:7px">Banned tags</span><input class="ld-ed-banned" />
             <span class="ld-label" style="margin-top:7px">Prompt prefix</span><textarea class="ld-ed-prefix" style="min-height:58px"></textarea>
             <span class="ld-label" style="margin-top:7px">Negative prompt</span><textarea class="ld-ed-negative" style="min-height:58px"></textarea>
@@ -1211,6 +1258,64 @@ function realSetup(ctx) {
     setStatus('.ld-draft-status', 'Workspace modified. Manual Generate uses these temporary settings.' + source)
   }
 
+  function profileFromPreset(preset, kind) {
+    const p = preset || {}
+    const profile = (kind === 'character' ? p.characterProfile : p.personaProfile) || {}
+    const legacyTags = kind === 'character' ? (p.characterTags || '') : (p.personaTags || '')
+    return {
+      anchor: profile.anchor || '',
+      countTag: profile.countTag || '',
+      subject: profile.subject || '',
+      appearanceTags: profile.appearanceTags || legacyTags || '',
+      defaultOutfitTags: profile.defaultOutfitTags || '',
+      anatomyTags: profile.anatomyTags || '',
+      anatomyMode: profile.anatomyMode || 'relevant',
+    }
+  }
+
+  function editorProfile(kind) {
+    const prefix = kind === 'character' ? 'char' : 'persona'
+    const appearanceSelector = kind === 'character' ? '.ld-ed-chartags' : '.ld-ed-personatags'
+    return {
+      anchor: $(`.ld-ed-${prefix}-anchor`).value.trim(),
+      countTag: $(`.ld-ed-${prefix}-count`).value.trim(),
+      subject: $(`.ld-ed-${prefix}-subject`).value.trim(),
+      appearanceTags: $(appearanceSelector).value.trim(),
+      defaultOutfitTags: $(`.ld-ed-${prefix}-outfit`).value.trim(),
+      anatomyTags: $(`.ld-ed-${prefix}-anatomy`).value.trim(),
+      anatomyMode: $(`.ld-ed-${prefix}-anatomy-mode`).value || 'relevant',
+    }
+  }
+
+  function writeEditorProfile(kind, profile) {
+    const value = profile || {}
+    const prefix = kind === 'character' ? 'char' : 'persona'
+    const appearanceSelector = kind === 'character' ? '.ld-ed-chartags' : '.ld-ed-personatags'
+    $(`.ld-ed-${prefix}-anchor`).value = value.anchor || ''
+    $(`.ld-ed-${prefix}-count`).value = value.countTag || ''
+    $(`.ld-ed-${prefix}-subject`).value = value.subject || ''
+    $(appearanceSelector).value = value.appearanceTags || ''
+    $(`.ld-ed-${prefix}-outfit`).value = value.defaultOutfitTags || ''
+    $(`.ld-ed-${prefix}-anatomy`).value = value.anatomyTags || ''
+    $(`.ld-ed-${prefix}-anatomy-mode`).value = value.anatomyMode || 'relevant'
+  }
+
+  function renderStoryDebug() {
+    const prompt = $('.ld-story-final-prompt')
+    const parsed = $('.ld-story-parsed')
+    if (!prompt || !parsed) return
+    const debug = storyDebug || null
+    prompt.value = debug && debug.lastCompiledPrompt ? debug.lastCompiledPrompt : ''
+    parsed.value = debug ? JSON.stringify({
+      mode: debug.mode,
+      subjectBinding: debug.subjectBinding,
+      error: debug.error || null,
+      rawReply: debug.rawReply || null,
+      entries: debug.entries || [],
+      at: debug.at || null,
+    }, null, 2) : ''
+  }
+
   function currentDraftBundle() {
     const preset = activePresetObj() || {}
     return {
@@ -1221,6 +1326,8 @@ function realSetup(ctx) {
       qualityTags: preset.qualityTags || '',
       characterTags: preset.characterTags || '',
       personaTags: preset.personaTags || '',
+      characterProfile: preset.characterProfile || null,
+      personaProfile: preset.personaProfile || null,
       bannedTags: preset.bannedTags || '',
     }
   }
@@ -1330,8 +1437,11 @@ function realSetup(ctx) {
       const payload = { force: true }
       if (messageId !== undefined && messageId !== null && messageId !== '') payload.messageId = messageId
       const res = await call('scan_story', payload)
-      history = (await call('init', {}, 15000)).history
+      const refreshed = await call('init', {}, 15000)
+      history = refreshed.history
+      storyDebug = res.storyDebug || refreshed.storyDebug || storyDebug
       renderHistory()
+      renderStoryDebug()
       setStatus('.ld-gen-status', res.note || `Done (${res.mode}).`, res.processed ? 'good' : undefined)
     } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
   }
@@ -2004,8 +2114,8 @@ ${entry.prompt || ''}`.trim()
     for (const l of c.loras || []) lbox.appendChild(loraRow(l.file || l.name || '', l.weight))
     if (!(c.loras || []).length) lbox.appendChild(loraRow('', 1))
     $('.ld-ed-quality').value = p ? (p.qualityTags || '') : (seed ? (seed.qualityTags || '') : '')
-    $('.ld-ed-chartags').value = p ? (p.characterTags || '') : (seed ? (seed.characterTags || '') : '')
-    $('.ld-ed-personatags').value = p ? (p.personaTags || '') : (seed ? (seed.personaTags || '') : '')
+    writeEditorProfile('character', profileFromPreset(p || seed || {}, 'character'))
+    writeEditorProfile('persona', profileFromPreset(p || seed || {}, 'persona'))
     $('.ld-ed-banned').value = p ? (p.bannedTags || '') : (seed ? (seed.bannedTags || '') : '')
     $('.ld-ed-prefix').value = p ? (p.promptPrefix || '') : (seed ? (seed.promptPrefix || '') : '')
     $('.ld-ed-negative').value = p ? (p.negativePrompt || '') : (seed ? (seed.negativePrompt || '') : '')
@@ -2066,6 +2176,8 @@ ${entry.prompt || ''}`.trim()
         qualityTags: bundle.qualityTags,
         characterTags: bundle.characterTags,
         personaTags: bundle.personaTags,
+        characterProfile: bundle.characterProfile,
+        personaProfile: bundle.personaProfile,
         bannedTags: bundle.bannedTags,
       })
       presets = result.presets
@@ -2114,6 +2226,8 @@ ${entry.prompt || ''}`.trim()
         qualityTags: $('.ld-ed-quality').value,
         characterTags: $('.ld-ed-chartags').value,
         personaTags: $('.ld-ed-personatags').value,
+        characterProfile: editorProfile('character'),
+        personaProfile: editorProfile('persona'),
         bannedTags: $('.ld-ed-banned').value,
       })
       presets = res.presets
@@ -2247,6 +2361,7 @@ ${entry.prompt || ''}`.trim()
       maxImages: $('.ld-maximg').value,
       minImages: $('.ld-minimg').value,
       autoCharTags: $('.ld-chartags').checked,
+      subjectBinding: $('.ld-subject-binding').checked,
     })
     settings = res.settings
     updateScanLabel()
@@ -2284,7 +2399,7 @@ ${entry.prompt || ''}`.trim()
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-parser-conn']) {
+  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-subject-binding', '.ld-parser-conn']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       pushSettings('Story settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
@@ -2370,7 +2485,7 @@ ${entry.prompt || ''}`.trim()
     if (initialized) return true
     try {
       const res = await call('init', {}, 8000)
-      settings = res.settings; presets = res.presets; history = res.history
+      settings = res.settings; presets = res.presets; history = res.history; storyDebug = res.storyDebug || null
       defaults = res.defaults || defaults
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
@@ -2381,6 +2496,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-maximg').value = settings.maxImages || 2
       $('.ld-minimg').value = settings.minImages || 0
       $('.ld-chartags').checked = settings.autoCharTags !== false
+      $('.ld-subject-binding').checked = settings.subjectBinding !== false
       try {
         const cres = await call('list_connections', {}, 10000)
         const sel = $('.ld-parser-conn')
@@ -2420,7 +2536,7 @@ ${entry.prompt || ''}`.trim()
           }, { force: true })
         }
       }
-      renderPresetSelect(); renderPresetList(); renderHistory(); renderChips()
+      renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug()
       updateScanLabel()
       initialized = true
       console.log(`[LumiDraw] backend connected — UI v${EXTENSION_VERSION}`)
