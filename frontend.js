@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.14.1'
+const EXTENSION_VERSION = '0.14.2'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -135,6 +135,21 @@ function realSetup(ctx) {
       color: var(--lumiverse-text, #eceef4); font-size: 14px;
     }
     .ld-panel.ld-open { display: flex; }
+    .ld-panel.ld-fullscreen {
+      inset: 0 !important; width: 100vw !important; max-width: none !important;
+      height: 100dvh !important; max-height: none !important;
+      border-radius: 0; border-left: none; border-right: none;
+    }
+    .ld-panel.ld-fullscreen .ld-body {
+      width: min(100%, 1100px); margin: 0 auto; box-sizing: border-box;
+      padding-left: max(14px, env(safe-area-inset-left));
+      padding-right: max(14px, env(safe-area-inset-right));
+      padding-bottom: max(18px, env(safe-area-inset-bottom));
+    }
+    .ld-panel.ld-fullscreen .ld-history {
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    }
+    body.ld-fullscreen-lock { overflow: hidden !important; }
     .ld-story-picker {
       position: fixed; inset: 0; z-index: 9200; display: none;
       align-items: center; justify-content: center; padding: 14px;
@@ -251,6 +266,47 @@ function realSetup(ctx) {
     .ld-preset-model { font-size: 10px; color: var(--lumiverse-text-muted, #a2a5b4); display: block; overflow: hidden; text-overflow: ellipsis; }
     .ld-x { background: none; border: none; color: var(--lumiverse-text-muted, #a2a5b4); cursor: pointer; font-size: 14px; padding: 2px 4px; }
     .ld-min { font-size: 20px; line-height: 1; padding: 2px 8px; }
+    .ld-fullscreen-toggle { font-size: 18px; line-height: 1; padding: 3px 7px; }
+    .ld-textarea-wrap { position: relative; }
+    .ld-textarea-wrap textarea { padding-right: 42px !important; }
+    .ld-textarea-expand {
+      position: absolute; top: 5px; right: 5px; z-index: 2;
+      min-width: 30px; height: 28px; padding: 0 6px;
+      border: 1px solid var(--lumiverse-border, #3d4050);
+      border-radius: 7px; background: rgba(23,24,30,.88);
+      color: var(--lumiverse-text-muted, #a2a5b4); cursor: pointer;
+      font-size: 15px; line-height: 1;
+    }
+    .ld-textarea-expand:hover { color: var(--lumiverse-text, #eceef4); }
+    .ld-text-editor {
+      position: fixed; inset: 0; z-index: 9400; display: none;
+      align-items: center; justify-content: center; padding: 14px;
+      background: var(--lumiverse-modal-backdrop, rgba(0,0,0,.68));
+    }
+    .ld-text-editor.ld-open { display: flex; }
+    .ld-text-editor-dialog {
+      width: min(960px, 100%); height: min(88dvh, 920px);
+      display: flex; flex-direction: column; overflow: hidden;
+      background: rgba(23,24,30,.995);
+      border: 1px solid var(--lumiverse-border, #3d4050);
+      border-radius: var(--lumiverse-radius-lg, 12px);
+      box-shadow: 0 18px 60px rgba(0,0,0,.58);
+    }
+    .ld-text-editor-head, .ld-text-editor-actions {
+      display: flex; align-items: center; gap: 8px; padding: 11px 13px;
+      border-bottom: 1px solid var(--lumiverse-border, #3d4050);
+    }
+    .ld-text-editor-actions { border-top: 1px solid var(--lumiverse-border, #3d4050); border-bottom: none; justify-content: flex-end; }
+    .ld-text-editor-title { flex: 1; font-weight: 650; }
+    .ld-text-editor-area {
+      flex: 1; min-height: 0 !important; resize: none !important;
+      margin: 12px; width: calc(100% - 24px) !important; box-sizing: border-box;
+      padding: 14px; font-size: 16px !important; line-height: 1.45;
+      background: var(--lumiverse-fill, #262833);
+      border: 1px solid var(--lumiverse-border, #3d4050);
+      border-radius: var(--lumiverse-radius, 8px);
+      color: var(--lumiverse-text, #eceef4);
+    }
     .ld-x:hover { color: #e5737f; }
     .ld-spin { animation: ld-rot 1s linear infinite; display: inline-block; }
     .ld-subsection { border: 1px solid var(--lumiverse-border, #3d4050); border-radius: var(--lumiverse-radius, 8px); padding: 10px; }
@@ -258,12 +314,22 @@ function realSetup(ctx) {
     .ld-help { font-size: 11px; color: var(--lumiverse-text-muted, #a2a5b4); }
     .ld-compact { font-size: 12px; padding: 4px 8px; }
     .ld-section-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+    @media (max-width: 620px) {
+      .ld-head { flex-wrap: wrap; padding-top: max(8px, env(safe-area-inset-top)); }
+      .ld-head-title { flex: 1 1 calc(100% - 84px); }
+      .ld-tabbtn { flex: 1 1 30%; order: 3; text-align: center; padding: 7px 4px; }
+      .ld-fullscreen-toggle, .ld-min { order: 2; }
+      .ld-panel.ld-fullscreen .ld-body { width: 100%; }
+      .ld-text-editor { padding: 0; }
+      .ld-text-editor-dialog { width: 100%; height: 100dvh; border-radius: 0; border-left: none; border-right: none; }
+      .ld-text-editor-area { margin: 10px; width: calc(100% - 20px) !important; }
+    }
     @keyframes ld-rot { to { transform: rotate(360deg); } }
   `)
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.14.1" aria-label="LumiDraw Studio v0.14.1">
+    <button class="ld-launcher" title="LumiDraw Studio v0.14.2" aria-label="LumiDraw Studio v0.14.2">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -272,10 +338,11 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw Studio <small style="font-weight:400;opacity:.65">v0.14.1</small></span>
+        <span class="ld-head-title">LumiDraw Studio <small style="font-weight:400;opacity:.65">v0.14.2</small></span>
         <button class="ld-tabbtn ld-active" data-tab="generate">Generate</button>
         <button class="ld-tabbtn" data-tab="presets">Presets</button>
         <button class="ld-tabbtn" data-tab="settings">Settings</button>
+        <button class="ld-x ld-fullscreen-toggle" title="Open fullscreen" aria-label="Open fullscreen" aria-pressed="false">⛶</button>
         <button class="ld-x ld-min" title="Minimize back to the icon">&#8211;</button>
       </div>
       <div class="ld-body" data-view="generate">
@@ -464,11 +531,31 @@ function realSetup(ctx) {
         <div class="ld-story-list"><div class="ld-story-empty">Loading messages…</div></div>
       </div>
     </div>
+    <div class="ld-text-editor" aria-hidden="true">
+      <div class="ld-text-editor-dialog" role="dialog" aria-modal="true" aria-label="Expanded text editor">
+        <div class="ld-text-editor-head">
+          <span class="ld-text-editor-title">Edit text</span>
+          <button class="ld-x ld-text-editor-close" title="Cancel and close">✕</button>
+        </div>
+        <textarea class="ld-text-editor-area" spellcheck="true"></textarea>
+        <div class="ld-text-editor-actions">
+          <span class="ld-help" style="margin-right:auto">Escape cancels · ⌘/Ctrl+Enter applies</span>
+          <button class="ld-btn ld-text-editor-cancel">Cancel</button>
+          <button class="ld-btn ld-primary ld-text-editor-apply">Apply</button>
+        </div>
+      </div>
+    </div>
   `)
 
   const $ = (sel) => dom.query(sel)
   const launcher = $('.ld-launcher')
   const panel = $('.ld-panel')
+  const fullscreenToggle = $('.ld-fullscreen-toggle')
+  const textEditor = $('.ld-text-editor')
+  const textEditorArea = $('.ld-text-editor-area')
+  const textEditorTitle = $('.ld-text-editor-title')
+  const FULLSCREEN_KEY = 'lumidraw_panel_fullscreen_v1'
+  let expandedTextarea = null
 
   // ------------------------------------------------------------------ helpers
   function setStatus(sel, msg, kind) {
@@ -751,6 +838,81 @@ function realSetup(ctx) {
     } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
   }
 
+  function setFullscreen(enabled, persist = true) {
+    const on = !!enabled
+    panel.classList.toggle('ld-fullscreen', on)
+    document.body.classList.toggle('ld-fullscreen-lock', on && panel.classList.contains('ld-open'))
+    fullscreenToggle.textContent = on ? '↙' : '⛶'
+    fullscreenToggle.title = on ? 'Return to floating panel' : 'Open fullscreen'
+    fullscreenToggle.setAttribute('aria-label', fullscreenToggle.title)
+    fullscreenToggle.setAttribute('aria-pressed', String(on))
+    if (persist) {
+      try { localStorage.setItem(FULLSCREEN_KEY, on ? '1' : '0') } catch { /* ignore */ }
+    }
+    if (!on && panel.classList.contains('ld-open')) placePanel()
+  }
+
+  function textareaTitle(textarea) {
+    const titles = [
+      ['ld-prompt', 'Generation prompt'],
+      ['ld-negative', 'Workspace negative prompt'],
+      ['ld-ed-chartags', 'Character tags'],
+      ['ld-ed-personatags', 'Persona tags'],
+      ['ld-ed-prefix', 'Prompt prefix'],
+      ['ld-ed-negative', 'Preset negative prompt'],
+      ['ld-parser-instr', 'Parser instruction'],
+      ['ld-protocol', 'Inline instruction'],
+    ]
+    for (const [className, title] of titles) if (textarea.classList.contains(className)) return title
+    const parentLabel = textarea.parentElement && textarea.parentElement.querySelector('.ld-label')
+    return parentLabel ? parentLabel.textContent.trim() : 'Expanded text editor'
+  }
+
+  function openTextEditor(textarea) {
+    if (!textarea) return
+    expandedTextarea = textarea
+    textEditorTitle.textContent = textareaTitle(textarea)
+    textEditorArea.value = textarea.value || ''
+    textEditor.classList.add('ld-open')
+    textEditor.setAttribute('aria-hidden', 'false')
+    document.body.classList.add('ld-fullscreen-lock')
+    setTimeout(() => {
+      textEditorArea.focus()
+      textEditorArea.setSelectionRange(textEditorArea.value.length, textEditorArea.value.length)
+    }, 0)
+  }
+
+  function closeTextEditor(apply) {
+    if (apply && expandedTextarea) {
+      expandedTextarea.value = textEditorArea.value
+      expandedTextarea.dispatchEvent(new Event('input', { bubbles: true }))
+      expandedTextarea.dispatchEvent(new Event('change', { bubbles: true }))
+    }
+    expandedTextarea = null
+    textEditor.classList.remove('ld-open')
+    textEditor.setAttribute('aria-hidden', 'true')
+    document.body.classList.toggle('ld-fullscreen-lock', panel.classList.contains('ld-fullscreen') && panel.classList.contains('ld-open'))
+  }
+
+  function decorateTextareas() {
+    for (const textarea of dom.queryAll('.ld-panel textarea')) {
+      if (textarea.readOnly || textarea.dataset.ldExpandable === '1') continue
+      textarea.dataset.ldExpandable = '1'
+      const wrapper = document.createElement('div')
+      wrapper.className = 'ld-textarea-wrap'
+      textarea.parentNode.insertBefore(wrapper, textarea)
+      wrapper.appendChild(textarea)
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'ld-textarea-expand'
+      button.textContent = '⛶'
+      button.title = `Expand ${textareaTitle(textarea)}`
+      button.setAttribute('aria-label', button.title)
+      button.addEventListener('click', () => openTextEditor(textarea))
+      wrapper.appendChild(button)
+    }
+  }
+
   function renderChips() {
     const el = $('.ld-config-chips')
     if (!el) return
@@ -1014,6 +1176,7 @@ function realSetup(ctx) {
   } catch { /* default CSS position */ }
 
   function placePanel() {
+    if (panel.classList.contains('ld-fullscreen')) return
     const r = launcher.getBoundingClientRect()
     const vw = window.innerWidth
     const vh = window.innerHeight
@@ -1060,7 +1223,10 @@ function realSetup(ctx) {
       panel.classList.toggle('ld-open')
       if (panel.classList.contains('ld-open')) {
         placePanel()
+        document.body.classList.toggle('ld-fullscreen-lock', panel.classList.contains('ld-fullscreen'))
         if (!initialized) tryInit()
+      } else {
+        document.body.classList.remove('ld-fullscreen-lock')
       }
     }
     drag = null
@@ -1075,7 +1241,25 @@ function realSetup(ctx) {
     })
   }
 
-  $('.ld-min').addEventListener('click', () => panel.classList.remove('ld-open'))
+  fullscreenToggle.addEventListener('click', () => setFullscreen(!panel.classList.contains('ld-fullscreen')))
+  $('.ld-min').addEventListener('click', () => {
+    panel.classList.remove('ld-open')
+    document.body.classList.remove('ld-fullscreen-lock')
+  })
+  $('.ld-text-editor-close').addEventListener('click', () => closeTextEditor(false))
+  $('.ld-text-editor-cancel').addEventListener('click', () => closeTextEditor(false))
+  $('.ld-text-editor-apply').addEventListener('click', () => closeTextEditor(true))
+  textEditor.addEventListener('click', (event) => {
+    if (event.target === textEditor) closeTextEditor(false)
+  })
+  textEditorArea.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault()
+      closeTextEditor(true)
+    }
+  })
+  decorateTextareas()
+  try { setFullscreen(localStorage.getItem(FULLSCREEN_KEY) === '1', false) } catch { setFullscreen(false, false) }
 
   $('.ld-preset-select').addEventListener('change', (e) => {
     if (e.target.value) selectPreset(e.target.value)
@@ -1296,7 +1480,16 @@ function realSetup(ctx) {
     if (event.target === $('.ld-story-picker')) closeStoryPicker()
   })
   const onStoryPickerKeyDown = (event) => {
-    if (event.key === 'Escape' && $('.ld-story-picker').classList.contains('ld-open')) closeStoryPicker()
+    if (event.key !== 'Escape') return
+    if (textEditor.classList.contains('ld-open')) {
+      closeTextEditor(false)
+      return
+    }
+    if ($('.ld-story-picker').classList.contains('ld-open')) {
+      closeStoryPicker()
+      return
+    }
+    if (panel.classList.contains('ld-fullscreen')) setFullscreen(false)
   }
   window.addEventListener('keydown', onStoryPickerKeyDown)
 
@@ -1546,6 +1739,7 @@ function realSetup(ctx) {
     if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
     window.removeEventListener('keydown', onStoryPickerKeyDown)
+    document.body.classList.remove('ld-fullscreen-lock')
     unsub()
     removeStyle()
     dom.cleanup()

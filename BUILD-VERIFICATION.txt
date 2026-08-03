@@ -1,0 +1,14 @@
+LumiDraw Studio 0.14.2
+
+Validated:
+- frontend.js syntax: PASS
+- backend.js syntax: PASS
+- package.json: PASS, version 0.14.2
+- spindle.json: PASS, version 0.14.2
+- fullscreen toggle present
+- expanded textarea editor present
+- workspace controls retained
+- old-message rescan retained
+- package ZIP is flat: spindle.json is at ZIP root
+
+Known-good fallback 0.13.1 was not modified.

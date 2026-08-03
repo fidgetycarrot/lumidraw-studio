@@ -692,7 +692,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history,
-          version: (spindle.manifest && spindle.manifest.version) || '0.14.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.14.2',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
