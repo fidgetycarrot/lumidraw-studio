@@ -1,9 +1,27 @@
-# LumiDraw Studio 0.17.7
+# LumiDraw Studio 0.17.9
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.17.7 — Anima hybrid compiler
+## 0.17.9 — documented parser transport
+
+Parser requests now use Lumiverse’s documented generation request shape:
+
+- separate system and user messages;
+- `connection_id` for the selected parser connection;
+- `parameters` with a compact output cap and low temperature;
+- `reasoning: { source: "off" }` so scene extraction does not inherit extended thinking;
+- the existing abort signal and four-minute timeout.
+
+Terminal logs now identify the actual connection provider/model when Lumiverse
+exposes them, the generation method used, reasoning state, output cap, duration,
+finish reason, and token usage when returned.
+
+If the optional model override differs from the selected connection model,
+LumiDraw uses the documented raw route with that connection’s provider. When no
+override is needed, it uses `generate.quiet()` and the connection’s current model.
+
+## Anima hybrid compiler
 
 Parser mode still uses a dedicated LLM to extract a compact structured JSON
 scene. The parser chooses subjects, current clothing, pose, support surfaces,
@@ -59,7 +77,7 @@ sentences.
 
 ## Verify
 
-The header and Terminal should show **v0.17.7**.
+The header and Terminal should show **v0.17.9**.
 
 1. Run Parser mode on a two-character interaction.
 2. Open **Last Anima parser compile**.
@@ -69,3 +87,10 @@ The header and Terminal should show **v0.17.7**.
 4. Confirm the preset negative prompt remains unchanged.
 5. Confirm conditional anatomy stays absent unless the story explicitly names
    it as belonging to that visible subject.
+
+
+## Retained from 0.17.8
+
+- Live Parser stages, elapsed time, cancellation, and four-minute timeout.
+- Safe late-result discard and cancellation guards around Draw Things and insertion.
+- Parser-trigger deduplication and hard maximum-image enforcement.

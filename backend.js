@@ -550,15 +550,18 @@ async function updateMessageContent(messageId, contentKey, newContent, userId, c
   throw new Error('updateMessage failed: ' + errs.join(' | '))
 }
 
-async function generateAndUpload({ prompt, negativePrompt, config, extra, dims }, userId) {
+async function generateAndUpload({ prompt, negativePrompt, config, extra, dims }, userId, scan = null) {
+  assertStoryScanActive(scan)
   const settings = await getSettings()
   const merged = dims ? { ...config, ...dims } : config
   const payloadOut = buildPayload({ prompt, negativePrompt, config: merged, extra })
   if (!payloadOut.model) throw new Error('Active preset has no model.')
   const started = Date.now()
   const images = await dtGenerate(settings, payloadOut)
+  assertStoryScanActive(scan)
   const uploads = []
   for (const b64 of images) {
+    assertStoryScanActive(scan)
     const bytes = Uint8Array.from(Buffer.from(b64, 'base64'))
     const opts = { data: bytes, filename: `lumidraw-${Date.now()}.png`, mime_type: 'image/png' }
     let dto
@@ -575,6 +578,7 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims }
     seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
     images: uploads,
   }
+  assertStoryScanActive(scan)
   const history = await pushHistory(entry)
   notifyFrontend(userId, 'history_updated', { history, entry })
   return entry
@@ -1357,79 +1361,200 @@ async function compileInlineBody(body, preset, settings, userId, chatId) {
   return { prompt: [lead, prefix, core].filter(Boolean).join(', '), core, scene: null, profiles: null, aspect: '', format: 'legacy-inline' }
 }
 
-async function quietLLM(system, user, settings, userId, structured = false) {
-  const candidates = []
-  const g = spindle.generation || spindle.llm || spindle.generate
-  if (g) {
-    if (typeof g.quiet === 'function') candidates.push(['generation.quiet', (o) => g.quiet(o)])
-    if (typeof g.generate === 'function') candidates.push(['generation.generate', (o) => g.generate(o)])
-    if (typeof g.raw === 'function') candidates.push(['generation.raw', (o) => g.raw(o)])
-    if (typeof g === 'function') candidates.push(['generate()', (o) => g(o)])
+
+const PARSER_TIMEOUT_MS = 240000
+
+class StoryScanCancelledError extends Error {
+  constructor(message = 'Story scan cancelled.') {
+    super(message)
+    this.name = 'StoryScanCancelledError'
   }
-  if (typeof spindle.quietGenerate === 'function') candidates.push(['quietGenerate', (o) => spindle.quietGenerate(o)])
-  if (!candidates.length) {
-    throw new Error('No LLM generation API found. spindle surface: ' + Object.keys(spindle).join(', ') +
-      ' — send me this list and I will pin the parser call.')
-  }
-  // The host's generate API reads the prompt field (system/messages shapes
-  // were observed to be ignored), so the instruction rides inside the prompt
-  // itself — stated before the passage and reinforced after it.
-  const finalReminder = structured
-    ? '\n----- END PASSAGE -----\n\nReturn only the compact JSON object required above. No prose, no markdown fences, no explanations.'
-    : '\n----- END PASSAGE -----\n\nNow respond with ONLY the output the instruction above requires, formatted as one line per image:\n<short verbatim anchor quote of 5-12 words copied exactly from the passage> ||| <comma-separated tag prompt>\nThe anchor marks where in the passage the image belongs. No prose, no explanations, nothing else.'
-  const combined = system +
-    '\n\n----- STORY PASSAGE -----\n' + user +
-    finalReminder
-  const opts = {
-    userId,
-    prompt: combined,
-    system,
-    messages: [{ role: 'user', content: combined }],
-  }
-  if (settings.parserConnection) { opts.connection = settings.parserConnection; opts.connectionId = settings.parserConnection }
-  if (settings.parserModel) opts.model = settings.parserModel
-  const errs = []
-  const parserStarted = Date.now()
-  spindle.log.info('[lumidraw] parser request started' +
-    (settings.parserModel ? ' · model=' + settings.parserModel : '') +
-    (settings.parserConnection ? ' · connection=' + settings.parserConnection : ''))
-  for (const [name, fn] of candidates) {
-    try {
-      let res
-      try { res = await fn(opts) }
-      catch (e1) {
-        if (/userId/i.test(e1.message || '')) res = await fn(opts, userId)
-        else throw e1
-      }
-      const text = (res && (res.text || res.content ||
-        (res.choices && res.choices[0] && (res.choices[0].text || (res.choices[0].message && res.choices[0].message.content))))) ||
-        (typeof res === 'string' ? res : null)
-      if (text) {
-        spindle.log.info('[lumidraw] parser completed in ' + (Date.now() - parserStarted) + 'ms via ' + name + ' → raw reply: ' + text.trim().slice(0, 500))
-        return text.trim()
-      }
-      errs.push(`${name}: unrecognized response shape (${res ? Object.keys(res).join(',') : res})`)
-    } catch (e) { errs.push(`${name}: ${e.message}`) }
-  }
-  throw new Error('Parser LLM call failed: ' + errs.join(' | '))
 }
 
-let storyScanInFlight = false
+function assertStoryScanActive(scan) {
+  if (scan && scan.cancelled) throw new StoryScanCancelledError()
+}
+
+function setStoryScanStage(scan, stage, note = '') {
+  if (!scan) return
+  scan.stage = stage
+  scan.note = note
+  const elapsedMs = Date.now() - scan.startedAt
+  spindle.log.info('[lumidraw] story scan stage · ' + stage + ' · ' + elapsedMs + 'ms' + (scan.messageId ? ' · message=' + scan.messageId : '') + (note ? ' · ' + note : ''))
+  notifyFrontend(scan.userId, 'scan_status', {
+    scan: {
+      id: scan.id,
+      stage,
+      note,
+      messageId: scan.messageId || '',
+      startedAt: scan.startedAt,
+      elapsedMs,
+      cancellable: !['done', 'cancelled', 'error'].includes(stage),
+    },
+  })
+}
+
+async function quietLLM(system, user, settings, userId, structured = false, scan = null) {
+  const generateApi = spindle.generate || spindle.generation || spindle.llm
+  if (!generateApi || (typeof generateApi.quiet !== 'function' && typeof generateApi.raw !== 'function')) {
+    throw new Error('Lumiverse generation API unavailable. Expected spindle.generate.quiet(). Surface: ' + Object.keys(spindle).join(', '))
+  }
+
+  const finalReminder = structured
+    ? '\n----- END PASSAGE -----\n\nReturn only the compact JSON object required by the system instruction. No prose, no markdown fences, no explanations.'
+    : '\n----- END PASSAGE -----\n\nRespond only with one line per image in this format:\n<5-12 exact consecutive words copied from the passage> ||| <comma-separated image tags>\nNo prose or explanations.'
+
+  const messages = [
+    { role: 'system', content: system },
+    { role: 'user', content: '----- STORY PASSAGE -----\n' + user + finalReminder },
+  ]
+
+  const parserController = new AbortController()
+  if (scan) scan.abortController = parserController
+
+  let connection = null
+  if (settings.parserConnection && spindle.connections && typeof spindle.connections.get === 'function') {
+    for (const args of [[settings.parserConnection, userId], [settings.parserConnection], [{ connectionId: settings.parserConnection, userId }]]) {
+      try {
+        connection = await spindle.connections.get(...args)
+        if (connection) break
+      } catch { /* try the next documented/legacy shape */ }
+    }
+  }
+
+  const connectionId = settings.parserConnection || undefined
+  const connectionModel = connection && (connection.model || connection.defaultModel)
+  const requestedModel = String(settings.parserModel || '').trim()
+  const useRawOverride = !!(requestedModel && connection && connection.provider && requestedModel !== connectionModel && typeof generateApi.raw === 'function')
+  const methodName = useRawOverride ? 'generate.raw' : 'generate.quiet'
+  const method = useRawOverride ? generateApi.raw.bind(generateApi) : generateApi.quiet.bind(generateApi)
+
+  const opts = {
+    messages,
+    parameters: {
+      temperature: 0.2,
+      max_tokens: structured ? 1800 : 1200,
+    },
+    reasoning: { source: 'off' },
+    signal: parserController.signal,
+  }
+  if (connectionId) opts.connection_id = connectionId
+  if (useRawOverride) {
+    opts.provider = connection.provider
+    opts.model = requestedModel
+  }
+
+  const parserStarted = Date.now()
+  const providerLabel = connection && connection.provider ? connection.provider : 'connection default'
+  const modelLabel = useRawOverride ? requestedModel : (connectionModel || requestedModel || 'connection default')
+  spindle.log.info('[lumidraw] parser request started' +
+    ' · api=' + methodName +
+    ' · provider=' + providerLabel +
+    ' · model=' + modelLabel +
+    (connectionId ? ' · connection_id=' + connectionId : '') +
+    ' · reasoning=off · max_tokens=' + opts.parameters.max_tokens)
+
+  if (requestedModel && !useRawOverride && connectionModel && requestedModel !== connectionModel) {
+    spindle.log.warn('[lumidraw] parser model override could not be applied because the selected connection did not expose a raw provider route; using connection model ' + connectionModel)
+  }
+
+  let timer
+  try {
+    assertStoryScanActive(scan)
+    const remaining = Math.max(1, PARSER_TIMEOUT_MS - (Date.now() - parserStarted))
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        try { parserController.abort() } catch { /* ignore */ }
+        const error = new Error(`Parser request timed out after ${Math.round(PARSER_TIMEOUT_MS / 1000)} seconds.`)
+        error.name = 'ParserTimeoutError'
+        reject(error)
+      }, remaining)
+    })
+
+    const requestPromise = (async () => {
+      try {
+        return await method(opts)
+      } catch (error) {
+        if (/userId/i.test(error && error.message || '')) return await method(opts, userId)
+        throw error
+      }
+    })()
+
+    const res = await Promise.race([requestPromise, timeoutPromise])
+    assertStoryScanActive(scan)
+
+    const responseText = (res && (res.content || res.text ||
+      (res.choices && res.choices[0] && (res.choices[0].text || (res.choices[0].message && res.choices[0].message.content))))) ||
+      (typeof res === 'string' ? res : null)
+    if (!responseText) {
+      throw new Error('Parser returned an unrecognized response shape: ' + (res ? Object.keys(res).join(',') : String(res)))
+    }
+
+    const elapsed = Date.now() - parserStarted
+    const usage = res && res.usage
+    const usageText = usage
+      ? ' · tokens=' + [usage.prompt_tokens ?? '?', usage.completion_tokens ?? '?', usage.total_tokens ?? '?'].join('/')
+      : ''
+    const finishText = res && res.finish_reason ? ' · finish=' + res.finish_reason : ''
+    spindle.log.info('[lumidraw] parser completed in ' + elapsed + 'ms via ' + methodName + usageText + finishText + ' → raw reply: ' + responseText.trim().slice(0, 500))
+    return responseText.trim()
+  } catch (error) {
+    if (error && error.name === 'AbortError') {
+      if (scan && scan.cancelled) throw new StoryScanCancelledError()
+      const timeout = new Error(`Parser request timed out after ${Math.round(PARSER_TIMEOUT_MS / 1000)} seconds.`)
+      timeout.name = 'ParserTimeoutError'
+      throw timeout
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+    if (scan) scan.abortController = null
+  }
+}
+
+let activeStoryScan = null
+let storyScanSequence = 0
+const pendingParserTriggerIds = new Set()
 
 async function scanStory(userId, options = {}) {
-  if (storyScanInFlight) {
+  const requestedMessageId = options && options.messageId ? String(options.messageId) : ''
+  if (activeStoryScan) {
     return {
       mode: 'busy',
       processed: 0,
       skipped: true,
-      note: 'A story scan is already running. LumiDraw skipped this duplicate request.',
+      activeStage: activeStoryScan.stage,
+      activeMessageId: activeStoryScan.messageId,
+      note: 'A story scan is already running' + (activeStoryScan.stage ? ' (' + activeStoryScan.stage + ')' : '') + '. LumiDraw skipped this duplicate request.',
     }
   }
-  storyScanInFlight = true
+  const scan = {
+    id: 'scan-' + Date.now() + '-' + (++storyScanSequence),
+    userId,
+    messageId: requestedMessageId,
+    startedAt: Date.now(),
+    stage: 'starting',
+    note: '',
+    cancelled: false,
+    abortController: null,
+  }
+  activeStoryScan = scan
+  setStoryScanStage(scan, 'starting', 'Preparing story message.')
   try {
-    return await scanStoryCore(userId, options)
+    const result = await scanStoryCore(userId, { ...(options || {}), _scan: scan })
+    assertStoryScanActive(scan)
+    setStoryScanStage(scan, 'done', result && result.note ? result.note : 'Story scan finished.')
+    return result
+  } catch (error) {
+    if (error && error.name === 'StoryScanCancelledError') {
+      setStoryScanStage(scan, 'cancelled', 'Cancelled. No later parser result will start Draw Things.')
+      return { mode: 'cancelled', processed: 0, cancelled: true, note: 'Story scan cancelled. No image was generated.' }
+    }
+    setStoryScanStage(scan, 'error', error && error.message ? error.message : String(error))
+    throw error
   } finally {
-    storyScanInFlight = false
+    if (scan.abortController) { try { scan.abortController.abort() } catch { /* ignore */ } }
+    if (activeStoryScan === scan) activeStoryScan = null
   }
 }
 
@@ -1437,6 +1562,8 @@ async function scanStoryCore(userId, options = {}) {
   // Keep compatibility with older internal callers that passed a boolean.
   if (typeof options === 'boolean') options = { force: options }
   const force = !!options.force
+  const scan = options._scan || null
+  assertStoryScanActive(scan)
   const requestedMessageId = options.messageId === undefined || options.messageId === null
     ? ''
     : String(options.messageId)
@@ -1468,6 +1595,8 @@ async function scanStoryCore(userId, options = {}) {
     }
   }
   if (!target) return { mode: settings.mode, note: 'No story message found.' }
+  if (scan) scan.messageId = String(target.id || requestedMessageId || '')
+  assertStoryScanActive(scan)
 
   // ------------------------- inline: process <dt-image> tags ---------------
   const visibleContent = stripParserTrigger(stripThinking(target.content))
@@ -1543,7 +1672,10 @@ async function scanStoryCore(userId, options = {}) {
       const resolvedGuidance = await resolveMacros(guidance, userId, chatId)
       const instruction = resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles)
       const instrLabel = usingCustom ? `custom guidance + structured compiler (${instruction.length} chars)` : 'structured subject compiler'
-      const out = await quietLLM(instruction, passage, settings, userId, true)
+      setStoryScanStage(scan, 'parsing', 'Waiting for the selected parser model.')
+      const out = await quietLLM(instruction, passage, settings, userId, true, scan)
+      assertStoryScanActive(scan)
+      setStoryScanStage(scan, 'compiling', 'Parser returned structured JSON; compiling the Anima prompt.')
       let parsed
       try {
         parsed = parseParserScenes(out, settings.maxImages || 2)
@@ -1572,7 +1704,12 @@ async function scanStoryCore(userId, options = {}) {
 
       const mds = []
       const debugEntries = []
-      for (const item of parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2)))) {
+      const limitedParsed = parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2)))
+      let parserImageIndex = 0
+      for (const item of limitedParsed) {
+        parserImageIndex++
+        assertStoryScanActive(scan)
+        setStoryScanStage(scan, 'generating', `Sending image ${parserImageIndex} of ${limitedParsed.length} to Draw Things.`)
         const compiled = await compileSceneWithPreset(item.scene, preset, settings, userId, chatId, passage)
         const dims = aspectDims(preset.config, compiled.aspect)
         const entry = await generateAndUpload({
@@ -1581,7 +1718,7 @@ async function scanStoryCore(userId, options = {}) {
           config: preset.config,
           extra: preset.extra,
           dims,
-        }, userId)
+        }, userId, scan)
         mds.push(`![${compiled.core.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`)
         debugEntries.push({
           anchor: item.anchor,
@@ -1591,6 +1728,8 @@ async function scanStoryCore(userId, options = {}) {
         })
       }
 
+      assertStoryScanActive(scan)
+      setStoryScanStage(scan, 'inserting', 'Adding generated images to the story message.')
       let newContent = target.content
       const topMds = []
       const generatedParsed = parsed.slice(0, mds.length)
@@ -1637,7 +1776,10 @@ async function scanStoryCore(userId, options = {}) {
       instruction += '\n\nUser/persona visual tags — use ONLY when the User is visibly present in the chosen moment, and only the visible parts (respect POV): ' + preset.personaTags
     }
     const instrLabel = usingCustom ? `custom instruction (${instruction.length} chars)` : 'legacy tag instruction'
-    const out = await quietLLM(await resolveMacros(instruction, userId, chatId), passage, settings, userId, false)
+    setStoryScanStage(scan, 'parsing', 'Waiting for the selected parser model.')
+    const out = await quietLLM(await resolveMacros(instruction, userId, chatId), passage, settings, userId, false, scan)
+    assertStoryScanActive(scan)
+    setStoryScanStage(scan, 'compiling', 'Parser returned tags; preparing the final prompt.')
     if (/^\s*NONE\s*$/i.test(out)) {
       if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
       if (target.id) await markProcessed(target.id)
@@ -1665,7 +1807,11 @@ async function scanStoryCore(userId, options = {}) {
     const lead = [preset.qualityTags, charTags].filter(Boolean).join(', ')
     const mds = []
     let firstPrompt = ''
+    let legacyImageIndex = 0
     for (const line of lines) {
+      legacyImageIndex++
+      assertStoryScanActive(scan)
+      setStoryScanStage(scan, 'generating', `Sending image ${legacyImageIndex} of ${lines.length} to Draw Things.`)
       const prompt = [lead, prefix, line].filter(Boolean).join(', ')
       if (!firstPrompt) firstPrompt = line
       const entry = await generateAndUpload({
@@ -1673,9 +1819,11 @@ async function scanStoryCore(userId, options = {}) {
         negativePrompt: preset.negativePrompt,
         config: preset.config,
         extra: preset.extra,
-      }, userId)
+      }, userId, scan)
       mds.push(`![${line.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`)
     }
+    assertStoryScanActive(scan)
+    setStoryScanStage(scan, 'inserting', 'Adding generated images to the story message.')
     let newContent = target.content
     const topMds = []
     for (let i = 0; i < mds.length; i++) {
@@ -1827,7 +1975,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.17.7',
+          version: (spindle.manifest && spindle.manifest.version) || '0.17.9',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -1984,8 +2132,43 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'cancel_story_scan': {
+        if (!activeStoryScan) {
+          reply = ok(payload, requestId, { cancelled: false, note: 'No story scan is currently running.' })
+          break
+        }
+        activeStoryScan.cancelled = true
+        activeStoryScan.note = 'Cancellation requested.'
+        if (activeStoryScan.abortController) {
+          try { activeStoryScan.abortController.abort() } catch { /* ignore */ }
+        }
+        spindle.log.warn('[lumidraw] story scan cancellation requested · stage=' + activeStoryScan.stage + (activeStoryScan.messageId ? ' · message=' + activeStoryScan.messageId : ''))
+        notifyFrontend(userId, 'scan_status', {
+          scan: {
+            id: activeStoryScan.id,
+            stage: 'cancelling',
+            note: activeStoryScan.stage === 'generating'
+              ? 'Cancellation requested. Draw Things may finish its current local render, but LumiDraw will discard it.'
+              : 'Cancellation requested. Waiting for the current provider call to release.',
+            messageId: activeStoryScan.messageId || '',
+            startedAt: activeStoryScan.startedAt,
+            elapsedMs: Date.now() - activeStoryScan.startedAt,
+            cancellable: false,
+          },
+        })
+        reply = ok(payload, requestId, { cancelled: true, stage: activeStoryScan.stage })
+        break
+      }
+
       case 'parser_trigger': {
         const triggerMessageId = payload.messageId ? String(payload.messageId) : ''
+        const triggerKey = triggerMessageId || '__latest__'
+        if (pendingParserTriggerIds.has(triggerKey) || (activeStoryScan && (!triggerMessageId || !activeStoryScan.messageId || activeStoryScan.messageId === triggerMessageId))) {
+          spindle.log.info('[lumidraw] duplicate parser trigger ignored' + (triggerMessageId ? ' for message ' + triggerMessageId : ''))
+          reply = ok(payload, requestId, { accepted: false, duplicate: true, messageId: triggerMessageId, stage: activeStoryScan ? activeStoryScan.stage : 'queued' })
+          break
+        }
+        pendingParserTriggerIds.add(triggerKey)
         spindle.log.info('[lumidraw] parser trigger received' + (triggerMessageId ? ' for message ' + triggerMessageId : ' for latest message'))
         reply = ok(payload, requestId, { accepted: true, messageId: triggerMessageId })
         setTimeout(async () => {
@@ -2010,6 +2193,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           } catch (e) {
             spindle.log.warn('[lumidraw] parser trigger failed: ' + e.message)
             setAutoStatus(userId, { mode: 'parser', status: 'error', messageId: triggerMessageId, note: e.message })
+          } finally {
+            pendingParserTriggerIds.delete(triggerKey)
           }
         }, 500)
         break
@@ -2167,6 +2352,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // resources; try both accepted call shapes.
         const uploads = []
         for (const b64 of images) {
+    assertStoryScanActive(scan)
           const bytes = Uint8Array.from(Buffer.from(b64, 'base64'))
           const opts = {
             data: bytes,
@@ -2195,7 +2381,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
           images: uploads,
         }
-        const history = await pushHistory(entry)
+        assertStoryScanActive(scan)
+  const history = await pushHistory(entry)
         reply = ok(payload, requestId, { entry, history })
         break
       }
@@ -2543,4 +2730,4 @@ let lastAutoHandledMessageId = ''
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.17.7'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.17.9'))

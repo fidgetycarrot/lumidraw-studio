@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.17.7'
+const EXTENSION_VERSION = '0.17.9'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -90,6 +90,8 @@ function realSetup(ctx) {
   let history = []
   let storyDebug = null
   let autoStatus = null
+  let liveScanStatus = null
+  let scanElapsedTimer = null
   let activePreset = null   // name of selected preset
   let syncedConfig = null   // last synced/loaded config powering the form
   let draftConfig = null    // temporary workspace config for manual generation
@@ -126,6 +128,11 @@ function realSetup(ctx) {
     if (payload.type === 'auto_status') {
       autoStatus = payload.status || autoStatus
       renderStoryStatus()
+      return
+    }
+    if (payload.type === 'scan_status') {
+      liveScanStatus = payload.scan || null
+      renderLiveScanStatus()
       return
     }
     if (!payload.requestId || !pending.has(payload.requestId)) return
@@ -468,7 +475,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.17.7" aria-label="LumiDraw Studio v0.17.7">
+    <button class="ld-launcher" title="LumiDraw Studio v0.17.9" aria-label="LumiDraw Studio v0.17.9">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -477,7 +484,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.17.7</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.17.9</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -608,6 +615,7 @@ function realSetup(ctx) {
             <div class="ld-row" style="min-width:250px">
               <button class="ld-btn" data-act="scan">Scan latest 📖</button>
               <button class="ld-btn ld-primary" data-act="scan-old">Choose old message 📚</button>
+              <button class="ld-btn ld-cancel-scan" data-act="cancel-scan" style="display:none">Cancel parser</button>
             </div>
           </div>
           <div class="ld-card">
@@ -1317,6 +1325,41 @@ function realSetup(ctx) {
   }
 
 
+
+  function stopScanElapsedTimer() {
+    if (scanElapsedTimer) clearInterval(scanElapsedTimer)
+    scanElapsedTimer = null
+  }
+
+  function renderLiveScanStatus() {
+    const cancelButton = $('[data-act="cancel-scan"]')
+    const scanButton = $('[data-act="scan"]')
+    const oldButton = $('[data-act="scan-old"]')
+    const scan = liveScanStatus
+    const active = !!(scan && !['done', 'cancelled', 'error'].includes(scan.stage))
+    if (cancelButton) {
+      cancelButton.style.display = active ? '' : 'none'
+      cancelButton.disabled = !active || scan.cancellable === false
+      cancelButton.textContent = scan && scan.stage === 'cancelling' ? 'Cancelling…' : 'Cancel parser'
+    }
+    if (scanButton) scanButton.disabled = active
+    if (oldButton) oldButton.disabled = active || (($('.ld-mode') ? $('.ld-mode').value : settings.mode) !== 'parser')
+    if (!scan || !scan.startedAt) {
+      stopScanElapsedTimer()
+      return
+    }
+    const update = () => {
+      const elapsed = Math.max(0, Math.round((Date.now() - Number(scan.startedAt)) / 1000))
+      const message = scan.messageId ? `message ${scan.messageId.slice(0, 8)}…` : 'story message'
+      const stageLabel = String(scan.stage || 'working').replace(/_/g, ' ')
+      setStatus('.ld-gen-status', `${stageLabel[0].toUpperCase() + stageLabel.slice(1)} ${message} · ${elapsed}s${scan.note ? ' — ' + scan.note : ''}`, scan.stage === 'error' ? 'err' : (scan.stage === 'done' ? 'good' : undefined))
+      if (['done', 'cancelled', 'error'].includes(scan.stage)) stopScanElapsedTimer()
+    }
+    update()
+    if (active && !scanElapsedTimer) scanElapsedTimer = setInterval(update, 1000)
+    if (!active) stopScanElapsedTimer()
+  }
+
   function renderStoryStatus() {
     const el = $('.ld-story-last-status')
     if (!el) return
@@ -1463,7 +1506,11 @@ function realSetup(ctx) {
 
   async function runStoryScan(messageId, label = 'latest story message', force = false) {
     closeStoryPicker()
-    setStatus('.ld-gen-status', `Scanning ${label}…`)
+    liveScanStatus = {
+      stage: 'starting', note: `Scanning ${label}.`, messageId: messageId || '',
+      startedAt: Date.now(), cancellable: true,
+    }
+    renderLiveScanStatus()
     try {
       const payload = { force: !!force }
       if (messageId !== undefined && messageId !== null && messageId !== '') payload.messageId = messageId
@@ -1474,8 +1521,17 @@ function realSetup(ctx) {
       autoStatus = refreshed.lastAutoStatus || autoStatus
       renderHistory()
       renderStoryDebug(); renderStoryStatus()
-      setStatus('.ld-gen-status', res.note || `Done (${res.mode}).`, res.processed ? 'good' : undefined)
-    } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
+      liveScanStatus = {
+        ...(liveScanStatus || {}),
+        stage: res.cancelled ? 'cancelled' : (res.mode === 'busy' ? 'error' : 'done'),
+        note: res.note || `Done (${res.mode}).`,
+        cancellable: false,
+      }
+      renderLiveScanStatus()
+    } catch (e) {
+      liveScanStatus = { ...(liveScanStatus || {}), stage: 'error', note: e.message, cancellable: false }
+      renderLiveScanStatus()
+    }
   }
 
   function setFullscreen(enabled, persist = true) {
@@ -2306,6 +2362,23 @@ ${entry.prompt || ''}`.trim()
   $('[data-act="generate"]').addEventListener('click', doGenerate)
 
   $('[data-act="scan"]').addEventListener('click', () => runStoryScan(null, 'the latest story message', false))
+  $('[data-act="cancel-scan"]').addEventListener('click', async () => {
+    const btn = $('[data-act="cancel-scan"]')
+    if (btn) { btn.disabled = true; btn.textContent = 'Cancelling…' }
+    try {
+      const res = await call('cancel_story_scan', {}, 15000)
+      liveScanStatus = {
+        ...(liveScanStatus || {}),
+        stage: res.cancelled ? 'cancelling' : 'cancelled',
+        note: res.note || (res.cancelled ? 'Cancellation requested.' : 'No scan was running.'),
+        cancellable: false,
+      }
+      renderLiveScanStatus()
+    } catch (e) {
+      liveScanStatus = { ...(liveScanStatus || {}), stage: 'error', note: e.message, cancellable: false }
+      renderLiveScanStatus()
+    }
+  })
   $('[data-act="scan-old"]').addEventListener('click', openStoryPicker)
 
   // Also expose the picker through Lumiverse's native chat-input Extras menu.
