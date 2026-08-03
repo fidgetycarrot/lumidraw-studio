@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.16.1'
+const EXTENSION_VERSION = '0.16.2'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -138,13 +138,21 @@ function realSetup(ctx) {
       width: min(1180px, calc(100vw - 24px)); max-width: calc(100vw - 24px);
       height: min(82vh, 820px); max-height: calc(100dvh - 24px);
       display: none; flex-direction: column; overflow: hidden;
-      background: rgba(23, 24, 30, 0.985);
+      background: #17181e;
       border: 1px solid var(--lumiverse-border, #3d4050);
       border-radius: 12px;
       box-shadow: 0 14px 48px rgba(0,0,0,.48);
       color: var(--lumiverse-text, #eceef4); font-size: 14px;
     }
     .ld-panel.ld-open { display: flex; }
+    /* Safari compatibility: keep the fixed workspace in one ordinary paint tree.
+       Nested containment/isolation/transforms can make hit-testing oscillate. */
+    .ld-panel, .ld-panel *, .ld-panel *::before, .ld-panel *::after {
+      -webkit-backdrop-filter:none !important; backdrop-filter:none !important;
+      filter:none; mix-blend-mode:normal; perspective:none;
+    }
+    .ld-panel { pointer-events:auto; transform:none; will-change:auto; }
+    .ld-pane { contain:none !important; isolation:auto !important; transform:none; will-change:auto; }
     .ld-panel.ld-fullscreen {
       inset: 0 !important; width: 100vw !important; max-width: none !important;
       height: 100dvh !important; max-height: none !important;
@@ -174,12 +182,12 @@ function realSetup(ctx) {
     .ld-statebar {
       flex: 0 0 auto; display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:8px;
       padding: 8px 12px; border-bottom:1px solid var(--lumiverse-border, #3d4050);
-      background: rgba(31,32,40,.72);
+      background: #1f2028;
     }
     .ld-state-pill {
       display:flex; align-items:center; gap:7px; min-width:0; padding:7px 9px;
       border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px;
-      background:rgba(38,40,51,.65); font-size:11px;
+      background:var(--lumiverse-fill, #262833); font-size:11px;
     }
     .ld-state-key { color:var(--lumiverse-text-muted, #a2a5b4); flex:0 0 auto; }
     .ld-state-value { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
@@ -190,7 +198,7 @@ function realSetup(ctx) {
     .ld-global-status {
       flex:0 0 auto; min-height:18px; padding:6px 12px;
       border-bottom:1px solid var(--lumiverse-border, #3d4050);
-      background:rgba(18,19,24,.42);
+      background:#121318;
     }
     .ld-global-status { display:none; }
     .ld-view { flex:1 1 auto; min-height:0; overflow:hidden; display:none; }
@@ -211,17 +219,17 @@ function realSetup(ctx) {
       grid-template-areas:
         "tune create history"
         "library library stack";
-      background:rgba(11,12,16,.35);
+      background:#0f1015;
     }
     .ld-pane {
       min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden;
       border:1px solid var(--lumiverse-border, #3d4050); border-radius:10px;
-      background:rgba(27,28,35,.96); contain:layout paint; isolation:isolate;
+      background:#1b1c23; contain:none; isolation:auto;
     }
     .ld-pane-head {
       flex:0 0 auto; display:flex; align-items:center; gap:8px; min-height:38px; padding:8px 10px;
       border-bottom:1px solid var(--lumiverse-border, #3d4050); font-weight:650; font-size:12px;
-      background:rgba(37,39,49,.55);
+      background:#252731;
     }
     .ld-pane-title { flex:1; }
     .ld-pane-body { flex:1; min-height:0; overflow-y:auto; padding:10px; }
@@ -232,7 +240,7 @@ function realSetup(ctx) {
     .ld-library-pane { grid-area:library; }
     .ld-stack-pane { grid-area:stack; }
 
-    .ld-card { border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px; padding:9px; background:rgba(38,40,51,.42); }
+    .ld-card { border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px; padding:9px; background:var(--lumiverse-fill, #262833); }
     .ld-card + .ld-card { margin-top:8px; }
     .ld-subtitle { font-size:12px; font-weight:650; margin-bottom:7px; }
     .ld-help { font-size:11px; line-height:1.4; color:var(--lumiverse-text-muted, #a2a5b4); }
@@ -251,7 +259,7 @@ function realSetup(ctx) {
     }
     .ld-btn:hover:not(:disabled) { background:var(--lumiverse-fill-subtle, #1a1b22); }
     .ld-btn:disabled { opacity:.5; cursor:default; }
-    .ld-btn.ld-primary { font-weight:700; background:rgba(63,68,88,.72); }
+    .ld-btn.ld-primary { font-weight:700; background:#3f4458; }
     .ld-btn.ld-wide { width:100%; }
     .ld-compact { font-size:12px; padding:4px 8px; }
     .ld-section-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
@@ -269,16 +277,16 @@ function realSetup(ctx) {
     .ld-output-stage {
       flex:1 1 42%; min-height:180px; display:flex; align-items:center; justify-content:center;
       overflow:hidden; border:1px dashed var(--lumiverse-border, #3d4050); border-radius:10px;
-      background:rgba(12,13,17,.62); position:relative;
+      background:#0c0d11; position:relative;
     }
     .ld-output-stage img { width:100%; height:100%; object-fit:contain; display:block; cursor:zoom-in; -webkit-user-drag:none; user-select:none; }
     .ld-output-empty { text-align:center; padding:24px; color:var(--lumiverse-text-muted, #a2a5b4); font-size:12px; }
     .ld-output-meta {
       position:absolute; left:8px; right:8px; bottom:8px; padding:6px 8px; border-radius:8px;
-      background:rgba(10,11,15,.92); pointer-events:none; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+      background:#0a0b0f; pointer-events:none; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
     }
     .ld-prompt-zone { display:flex; flex-direction:column; gap:8px; }
-    .ld-generate-bar { flex:0 0 auto; display:flex; gap:7px; padding-top:2px; background:rgba(27,28,35,.96); }
+    .ld-generate-bar { flex:0 0 auto; display:flex; gap:7px; padding-top:2px; background:#1b1c23; }
     .ld-generate-bar [data-act="generate"] { flex:1; min-height:42px; }
 
     .ld-history { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:9px; }
@@ -293,7 +301,7 @@ function realSetup(ctx) {
     .ld-lora-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px,1fr)); gap:7px; }
     .ld-lora-card {
       display:flex; align-items:center; gap:8px; min-width:0; padding:8px;
-      border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px; background:rgba(38,40,51,.42);
+      border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px; background:var(--lumiverse-fill, #262833);
     }
     .ld-lora-card-main { flex:1; min-width:0; }
     .ld-lora-card-name { font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -313,12 +321,12 @@ function realSetup(ctx) {
 
     .ld-textarea-wrap { position:relative; }
     .ld-textarea-wrap textarea { padding-right:42px !important; }
-    .ld-textarea-expand { position:absolute; top:5px; right:5px; z-index:2; min-width:30px; height:28px; padding:0 6px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:7px; background:rgba(23,24,30,.88); color:var(--lumiverse-text-muted, #a2a5b4); cursor:pointer; font-size:15px; line-height:1; }
+    .ld-textarea-expand { position:absolute; top:5px; right:5px; z-index:2; min-width:30px; height:28px; padding:0 6px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:7px; background:#17181e; color:var(--lumiverse-text-muted, #a2a5b4); cursor:pointer; font-size:15px; line-height:1; }
     .ld-textarea-expand:hover { color:var(--lumiverse-text, #eceef4); }
 
     .ld-story-picker { position:fixed; inset:0; z-index:9200; display:none; align-items:center; justify-content:center; padding:14px; background:var(--lumiverse-modal-backdrop, rgba(0,0,0,.62)); }
     .ld-story-picker.ld-open { display:flex; }
-    .ld-story-dialog { width:min(680px,100%); max-height:min(84vh,820px); display:flex; flex-direction:column; overflow:hidden; background:rgba(23,24,30,.99); border:1px solid var(--lumiverse-border, #3d4050); border-radius:12px; box-shadow:0 18px 60px rgba(0,0,0,.55); color:var(--lumiverse-text, #eceef4); }
+    .ld-story-dialog { width:min(680px,100%); max-height:min(84vh,820px); display:flex; flex-direction:column; overflow:hidden; background:#17181e; border:1px solid var(--lumiverse-border, #3d4050); border-radius:12px; box-shadow:0 18px 60px rgba(0,0,0,.55); color:var(--lumiverse-text, #eceef4); }
     .ld-story-head { display:flex; align-items:center; gap:10px; padding:12px 14px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
     .ld-story-title { flex:1; font-weight:650; }
     .ld-story-tools { padding:10px 12px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
@@ -335,7 +343,7 @@ function realSetup(ctx) {
 
     .ld-text-editor { position:fixed; inset:0; z-index:9400; display:none; align-items:center; justify-content:center; padding:14px; background:var(--lumiverse-modal-backdrop, rgba(0,0,0,.68)); }
     .ld-text-editor.ld-open { display:flex; }
-    .ld-text-editor-dialog { width:min(960px,100%); height:min(88dvh,920px); display:flex; flex-direction:column; overflow:hidden; background:rgba(23,24,30,.995); border:1px solid var(--lumiverse-border, #3d4050); border-radius:12px; box-shadow:0 18px 60px rgba(0,0,0,.58); }
+    .ld-text-editor-dialog { width:min(960px,100%); height:min(88dvh,920px); display:flex; flex-direction:column; overflow:hidden; background:#17181e; border:1px solid var(--lumiverse-border, #3d4050); border-radius:12px; box-shadow:0 18px 60px rgba(0,0,0,.58); }
     .ld-text-editor-head, .ld-text-editor-actions { display:flex; align-items:center; gap:8px; padding:11px 13px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
     .ld-text-editor-actions { border-top:1px solid var(--lumiverse-border, #3d4050); border-bottom:none; justify-content:flex-end; }
     .ld-text-editor-title { flex:1; font-weight:650; }
@@ -381,7 +389,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.16.1" aria-label="LumiDraw Studio v0.16.1">
+    <button class="ld-launcher" title="LumiDraw Studio v0.16.2" aria-label="LumiDraw Studio v0.16.2">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -390,7 +398,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.16.1</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.16.2</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
