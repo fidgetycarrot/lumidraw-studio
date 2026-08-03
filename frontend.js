@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.16.2'
+const EXTENSION_VERSION = '0.16.3'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -212,15 +212,20 @@ function realSetup(ctx) {
     .ld-mobile-tab.ld-active { background:var(--lumiverse-fill, #262833); border-color:var(--lumiverse-border, #3d4050); color:var(--lumiverse-text, #eceef4); }
 
     .ld-studio-shell { min-height:0; flex:1; display:flex; flex-direction:column; }
+    /* Desktop deliberately uses plain nested flex rows instead of CSS Grid.
+       Safari 27 beta can oscillate hit-testing when independently scrolling
+       grid children and replaced images share a fixed-position ancestor. */
     .ld-studio-workspace {
-      flex:1; min-height:0; display:grid; gap:8px; padding:8px;
-      grid-template-columns:minmax(225px,.82fr) minmax(360px,1.65fr) minmax(245px,.95fr);
-      grid-template-rows:minmax(0,1fr) minmax(176px,.46fr);
-      grid-template-areas:
-        "tune create history"
-        "library library stack";
+      flex:1; min-height:0; display:flex; flex-direction:column; gap:8px; padding:8px;
       background:#0f1015;
     }
+    .ld-studio-top { flex:1 1 auto; min-height:0; display:flex; gap:8px; }
+    .ld-studio-bottom { flex:0 0 min(30%, 230px); min-height:176px; display:flex; gap:8px; }
+    .ld-studio-top > .ld-tune-pane { flex:.82 1 225px; }
+    .ld-studio-top > .ld-create-pane { flex:1.65 1 360px; }
+    .ld-studio-top > .ld-history-pane { flex:.95 1 245px; }
+    .ld-studio-bottom > .ld-library-pane { flex:1.7 1 520px; }
+    .ld-studio-bottom > .ld-stack-pane { flex:.8 1 280px; }
     .ld-pane {
       min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden;
       border:1px solid var(--lumiverse-border, #3d4050); border-radius:10px;
@@ -232,7 +237,7 @@ function realSetup(ctx) {
       background:#252731;
     }
     .ld-pane-title { flex:1; }
-    .ld-pane-body { flex:1; min-height:0; overflow-y:auto; padding:10px; }
+    .ld-pane-body { flex:1; min-height:0; overflow-y:scroll; scrollbar-gutter:stable; padding:10px; }
     .ld-pane-body.ld-stack-body { display:flex; flex-direction:column; gap:7px; }
     .ld-tune-pane { grid-area:tune; }
     .ld-create-pane { grid-area:create; }
@@ -279,7 +284,12 @@ function realSetup(ctx) {
       overflow:hidden; border:1px dashed var(--lumiverse-border, #3d4050); border-radius:10px;
       background:#0c0d11; position:relative;
     }
-    .ld-output-stage img { width:100%; height:100%; object-fit:contain; display:block; cursor:zoom-in; -webkit-user-drag:none; user-select:none; }
+    .ld-image-hit {
+      appearance:none; -webkit-appearance:none; border:0; margin:0; padding:0; min-width:0;
+      background:transparent; color:inherit; display:block; cursor:pointer; overflow:hidden;
+    }
+    .ld-output-stage .ld-image-hit { width:100%; height:100%; }
+    .ld-output-stage img { width:100%; height:100%; object-fit:contain; display:block; pointer-events:none; -webkit-user-drag:none; user-select:none; }
     .ld-output-empty { text-align:center; padding:24px; color:var(--lumiverse-text-muted, #a2a5b4); font-size:12px; }
     .ld-output-meta {
       position:absolute; left:8px; right:8px; bottom:8px; padding:6px 8px; border-radius:8px;
@@ -291,7 +301,8 @@ function realSetup(ctx) {
 
     .ld-history { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:9px; }
     .ld-history .ld-thumb { display:flex; flex-direction:column; gap:4px; min-width:0; }
-    .ld-history img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:8px; border:1px solid var(--lumiverse-border, #3d4050); cursor:pointer; display:block; -webkit-user-drag:none; user-select:none; }
+    .ld-history .ld-image-hit { width:100%; border-radius:8px; }
+    .ld-history img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:8px; border:1px solid var(--lumiverse-border, #3d4050); display:block; pointer-events:none; -webkit-user-drag:none; user-select:none; }
     .ld-thumb .ld-append { width:100%; padding:5px 4px; font-size:11px; line-height:1.1; background:var(--lumiverse-fill, #262833); border:1px solid var(--lumiverse-border, #3d4050); border-radius:7px; color:var(--lumiverse-text, #eceef4); cursor:pointer; }
     .ld-thumb-row { display:flex; gap:4px; }
     .ld-thumb-row .ld-append { flex:1; padding:4px 2px; font-size:10px; }
@@ -323,6 +334,37 @@ function realSetup(ctx) {
     .ld-textarea-wrap textarea { padding-right:42px !important; }
     .ld-textarea-expand { position:absolute; top:5px; right:5px; z-index:2; min-width:30px; height:28px; padding:0 6px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:7px; background:#17181e; color:var(--lumiverse-text-muted, #a2a5b4); cursor:pointer; font-size:15px; line-height:1; }
     .ld-textarea-expand:hover { color:var(--lumiverse-text, #eceef4); }
+
+    /* Keep one cursor shape inside the desktop workspace. The controls remain
+       fully clickable; this prevents WebKit from visibly alternating cursors
+       while it recalculates a fixed extension surface. */
+    @media (hover:hover) and (pointer:fine) {
+      .ld-panel, .ld-panel * { cursor:default !important; }
+    }
+
+    .ld-lightbox {
+      position:fixed; inset:0; z-index:9600; display:none; align-items:center; justify-content:center;
+      padding:18px; background:rgba(0,0,0,.86); color:var(--lumiverse-text, #eceef4);
+    }
+    .ld-lightbox.ld-open { display:flex; }
+    .ld-lightbox-dialog {
+      width:min(1180px,100%); height:min(92dvh,960px); min-height:0; display:flex; flex-direction:column;
+      overflow:hidden; border:1px solid var(--lumiverse-border, #3d4050); border-radius:12px;
+      background:#111217; box-shadow:0 22px 80px rgba(0,0,0,.65);
+    }
+    .ld-lightbox-head, .ld-lightbox-foot {
+      flex:0 0 auto; display:flex; align-items:center; gap:9px; padding:10px 12px;
+      background:#1b1c23;
+    }
+    .ld-lightbox-head { border-bottom:1px solid var(--lumiverse-border, #3d4050); }
+    .ld-lightbox-foot { border-top:1px solid var(--lumiverse-border, #3d4050); }
+    .ld-lightbox-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:650; }
+    .ld-lightbox-stage { flex:1; min-height:0; display:flex; align-items:center; gap:10px; padding:10px; background:#08090c; }
+    .ld-lightbox-image-wrap { flex:1; min-width:0; min-height:0; height:100%; display:flex; align-items:center; justify-content:center; }
+    .ld-lightbox-image { max-width:100%; max-height:100%; object-fit:contain; display:block; -webkit-user-drag:none; user-select:none; }
+    .ld-lightbox-nav { flex:0 0 42px; width:42px; height:62px; border-radius:9px; font-size:30px; line-height:1; }
+    .ld-lightbox-meta { flex:1; min-width:0; font-size:11px; line-height:1.35; color:var(--lumiverse-text-muted, #a2a5b4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .ld-lightbox-actions { display:flex; gap:7px; flex:0 0 auto; }
 
     .ld-story-picker { position:fixed; inset:0; z-index:9200; display:none; align-items:center; justify-content:center; padding:14px; background:var(--lumiverse-modal-backdrop, rgba(0,0,0,.62)); }
     .ld-story-picker.ld-open { display:flex; }
@@ -360,8 +402,9 @@ function realSetup(ctx) {
       .ld-state-pill { padding:5px 8px; }
       .ld-mobile-tabs { display:flex; }
       .ld-studio-workspace { display:block; padding:7px; overflow:hidden; }
-      .ld-studio-workspace > [data-mobile-panel] { display:none !important; height:100%; }
-      .ld-studio-workspace > [data-mobile-panel].ld-mobile-active { display:flex !important; }
+      .ld-studio-top, .ld-studio-bottom { display:contents; }
+      .ld-studio-workspace [data-mobile-panel] { display:none !important; height:100%; }
+      .ld-studio-workspace [data-mobile-panel].ld-mobile-active { display:flex !important; }
       .ld-pane { border-radius:9px; }
       .ld-pane-body { padding:9px; }
       .ld-output-stage { min-height:220px; }
@@ -372,6 +415,13 @@ function realSetup(ctx) {
       .ld-text-editor { padding:0; }
       .ld-text-editor-dialog { width:100%; height:100dvh; border-radius:0; border:none; }
       .ld-text-editor-area { margin:10px; width:calc(100% - 20px) !important; }
+      .ld-lightbox { padding:0; }
+      .ld-lightbox-dialog { width:100%; height:100dvh; border:0; border-radius:0; }
+      .ld-lightbox-stage { padding:5px; gap:4px; }
+      .ld-lightbox-nav { flex-basis:34px; width:34px; height:54px; padding:0; }
+      .ld-lightbox-foot { align-items:flex-start; flex-direction:column; }
+      .ld-lightbox-actions { width:100%; }
+      .ld-lightbox-actions .ld-btn { flex:1; }
     }
     @media (max-width: 520px) {
       .ld-panel { inset:6px !important; width:auto !important; height:auto !important; max-height:none !important; border-radius:12px; }
@@ -389,7 +439,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.16.2" aria-label="LumiDraw Studio v0.16.2">
+    <button class="ld-launcher" title="LumiDraw Studio v0.16.3" aria-label="LumiDraw Studio v0.16.3">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -398,7 +448,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.16.2</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.16.3</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -426,6 +476,7 @@ function realSetup(ctx) {
             <button class="ld-mobile-tab" data-mobile-tab="history">History</button>
           </div>
           <div class="ld-studio-workspace">
+            <div class="ld-studio-top">
             <section class="ld-pane ld-tune-pane" data-mobile-panel="tune">
               <div class="ld-pane-head"><span class="ld-pane-title">Tune</span><button class="ld-btn ld-compact" data-act="sync" title="Capture the recipe currently shown in Draw Things">Sync ⟳</button></div>
               <div class="ld-pane-body">
@@ -492,7 +543,9 @@ function realSetup(ctx) {
               <div class="ld-pane-head"><span class="ld-pane-title">History</span><button class="ld-x ld-clearall" title="Delete ALL recent images from the library and this list">Clear all</button></div>
               <div class="ld-pane-body"><div class="ld-history"></div></div>
             </section>
+            </div>
 
+            <div class="ld-studio-bottom">
             <section class="ld-pane ld-library-pane" data-mobile-panel="library">
               <div class="ld-pane-head"><span class="ld-pane-title">LoRA Library</span><span class="ld-help ld-lora-count"></span></div>
               <div class="ld-pane-body">
@@ -511,6 +564,7 @@ function realSetup(ctx) {
                 <div class="ld-help">LoRAs here are temporary Studio settings until you update or save a preset.</div>
               </div>
             </section>
+            </div>
           </div>
         </div>
       </section>
@@ -629,6 +683,27 @@ function realSetup(ctx) {
       </section>
     </div>
 
+    <div class="ld-lightbox" aria-hidden="true">
+      <div class="ld-lightbox-dialog" role="dialog" aria-modal="true" aria-label="Generated image viewer">
+        <div class="ld-lightbox-head">
+          <span class="ld-lightbox-title">Generated image</span>
+          <button class="ld-x ld-lightbox-close" title="Close image viewer" aria-label="Close image viewer">✕</button>
+        </div>
+        <div class="ld-lightbox-stage">
+          <button class="ld-btn ld-lightbox-nav ld-lightbox-prev" title="Previous image" aria-label="Previous image">‹</button>
+          <div class="ld-lightbox-image-wrap"><img class="ld-lightbox-image" alt="Generated image" draggable="false" /></div>
+          <button class="ld-btn ld-lightbox-nav ld-lightbox-next" title="Next image" aria-label="Next image">›</button>
+        </div>
+        <div class="ld-lightbox-foot">
+          <div class="ld-lightbox-meta"></div>
+          <div class="ld-lightbox-actions">
+            <button class="ld-btn ld-lightbox-insert">Insert into chat</button>
+            <button class="ld-btn ld-primary ld-lightbox-done">Done</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="ld-story-picker" aria-hidden="true">
       <div class="ld-story-dialog" role="dialog" aria-modal="true" aria-label="Choose a story message">
         <div class="ld-story-head"><span class="ld-story-title">Choose a story message</span><button class="ld-x ld-story-close" title="Close">✕</button></div>
@@ -652,10 +727,16 @@ function realSetup(ctx) {
   const textEditor = $('.ld-text-editor')
   const textEditorArea = $('.ld-text-editor-area')
   const textEditorTitle = $('.ld-text-editor-title')
+  const lightbox = $('.ld-lightbox')
+  const lightboxImage = $('.ld-lightbox-image')
+  const lightboxTitle = $('.ld-lightbox-title')
+  const lightboxMeta = $('.ld-lightbox-meta')
   const liveInstance = { panel, launcher }
   window[INSTANCE_KEY] = liveInstance
   const FULLSCREEN_KEY = 'lumidraw_panel_fullscreen_v1'
   let expandedTextarea = null
+  let lightboxIndex = 0
+  let lightboxItems = []
 
   // ------------------------------------------------------------------ helpers
   function setStatus(sel, msg, kind) {
@@ -668,6 +749,52 @@ function realSetup(ctx) {
       const bar = el.closest('.ld-global-status')
       if (bar) bar.style.display = msg ? 'block' : 'none'
     }
+  }
+
+  function flattenHistoryImages() {
+    const out = []
+    for (const entry of history || []) {
+      for (const image of entry.images || []) out.push({ image, entry })
+    }
+    return out
+  }
+
+  function renderLightbox() {
+    const item = lightboxItems[lightboxIndex]
+    if (!item) { closeLightbox(); return }
+    const { image, entry } = item
+    lightboxImage.src = image.url
+    lightboxImage.alt = (entry.prompt || 'Generated image').slice(0, 180)
+    lightboxTitle.textContent = `Image ${lightboxIndex + 1} of ${lightboxItems.length}`
+    const details = [entry.model, entry.seed !== undefined ? `seed ${entry.seed}` : '', entry.durationMs ? `${(entry.durationMs / 1000).toFixed(1)}s` : '', entry.prompt || ''].filter(Boolean)
+    lightboxMeta.textContent = details.join(' · ')
+    lightboxMeta.title = details.join(' · ')
+    $('.ld-lightbox-prev').disabled = lightboxItems.length < 2
+    $('.ld-lightbox-next').disabled = lightboxItems.length < 2
+  }
+
+  function openLightbox(imageUrl) {
+    lightboxItems = flattenHistoryImages()
+    const found = lightboxItems.findIndex(({ image }) => image.url === imageUrl)
+    lightboxIndex = found >= 0 ? found : 0
+    if (!lightboxItems.length) return
+    renderLightbox()
+    lightbox.classList.add('ld-open')
+    lightbox.setAttribute('aria-hidden', 'false')
+    document.body.classList.add('ld-fullscreen-lock')
+  }
+
+  function closeLightbox() {
+    lightbox.classList.remove('ld-open')
+    lightbox.setAttribute('aria-hidden', 'true')
+    lightboxImage.removeAttribute('src')
+    if (!panel.classList.contains('ld-fullscreen')) document.body.classList.remove('ld-fullscreen-lock')
+  }
+
+  function moveLightbox(delta) {
+    if (!lightboxItems.length) return
+    lightboxIndex = (lightboxIndex + delta + lightboxItems.length) % lightboxItems.length
+    renderLightbox()
   }
 
   const MAIN_VIEW_KEY = 'lumidraw_main_view_v2'
@@ -1302,18 +1429,24 @@ function realSetup(ctx) {
       stage.appendChild(empty)
       return
     }
+    const hit = document.createElement('button')
+    hit.type = 'button'
+    hit.className = 'ld-image-hit'
+    hit.title = 'Open image viewer'
+    hit.setAttribute('aria-label', 'Open generated image viewer')
     const img = document.createElement('img')
     img.src = image.url
     img.alt = (entry.prompt || 'Generated image').slice(0, 160)
-    img.title = 'Open full size'
-    img.addEventListener('click', () => window.open(image.url, '_blank'))
+    img.draggable = false
+    hit.addEventListener('click', () => openLightbox(image.url))
+    hit.appendChild(img)
     const meta = document.createElement('div')
     meta.className = 'ld-output-meta'
     const parts = [entry.model, entry.seed !== undefined ? `seed ${entry.seed}` : '', entry.durationMs ? `${(entry.durationMs / 1000).toFixed(1)}s` : ''].filter(Boolean)
     meta.textContent = parts.join(' · ')
     meta.title = `${parts.join(' · ')}
 ${entry.prompt || ''}`.trim()
-    stage.appendChild(img)
+    stage.appendChild(hit)
     stage.appendChild(meta)
   }
 
@@ -1333,10 +1466,19 @@ ${entry.prompt || ''}`.trim()
       for (const img of entry.images || []) {
         const wrap = document.createElement('div')
         wrap.className = 'ld-thumb'
+        const hit = document.createElement('button')
+        hit.type = 'button'
+        hit.className = 'ld-image-hit'
+        hit.title = `${entry.model}
+seed ${entry.seed}
+${entry.prompt || ''}`.trim()
+        hit.setAttribute('aria-label', 'Open generated image viewer')
         const im = document.createElement('img')
         im.src = img.url
-        im.title = `${entry.model}\nseed ${entry.seed}\n${entry.prompt || ''}`.trim()
-        im.addEventListener('click', () => window.open(img.url, '_blank'))
+        im.alt = (entry.prompt || 'Generated image').slice(0, 160)
+        im.draggable = false
+        hit.addEventListener('click', () => openLightbox(img.url))
+        hit.appendChild(im)
         const row = document.createElement('div')
         row.className = 'ld-thumb-row'
         const btn = document.createElement('button')
@@ -1384,7 +1526,7 @@ ${entry.prompt || ''}`.trim()
         row.appendChild(btn)
         row.appendChild(rm)
         row.appendChild(del)
-        wrap.appendChild(im)
+        wrap.appendChild(hit)
         wrap.appendChild(row)
         el.appendChild(wrap)
       }
@@ -1559,6 +1701,17 @@ ${entry.prompt || ''}`.trim()
   $('.ld-min').addEventListener('click', () => {
     panel.classList.remove('ld-open')
     document.body.classList.remove('ld-fullscreen-lock')
+  })
+  $('.ld-lightbox-close').addEventListener('click', closeLightbox)
+  $('.ld-lightbox-done').addEventListener('click', closeLightbox)
+  $('.ld-lightbox-prev').addEventListener('click', () => moveLightbox(-1))
+  $('.ld-lightbox-next').addEventListener('click', () => moveLightbox(1))
+  $('.ld-lightbox-insert').addEventListener('click', () => {
+    const item = lightboxItems[lightboxIndex]
+    if (item) appendToChat(item.image, item.entry)
+  })
+  lightbox.addEventListener('click', (event) => {
+    if (event.target === lightbox) closeLightbox()
   })
   $('.ld-text-editor-close').addEventListener('click', () => closeTextEditor(false))
   $('.ld-text-editor-cancel').addEventListener('click', () => closeTextEditor(false))
@@ -1817,6 +1970,14 @@ ${entry.prompt || ''}`.trim()
     if (event.target === $('.ld-story-picker')) closeStoryPicker()
   })
   const onStoryPickerKeyDown = (event) => {
+    if (lightbox.classList.contains('ld-open')) {
+      if (event.key === 'Escape') closeLightbox()
+      else if (event.key === 'ArrowLeft') moveLightbox(-1)
+      else if (event.key === 'ArrowRight') moveLightbox(1)
+      else return
+      event.preventDefault()
+      return
+    }
     if (event.key !== 'Escape') return
     if (textEditor.classList.contains('ld-open')) {
       closeTextEditor(false)
@@ -2093,6 +2254,7 @@ ${entry.prompt || ''}`.trim()
     if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
     window.removeEventListener('keydown', onStoryPickerKeyDown)
+    closeLightbox()
     document.body.classList.remove('ld-fullscreen-lock')
     if (window[INSTANCE_KEY] === liveInstance) delete window[INSTANCE_KEY]
     unsub()
