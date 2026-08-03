@@ -1,112 +1,68 @@
 # LumiDraw Studio
 
-## v0.14.3 safety hotfix
+**Current build: v0.15.0**
 
-- Forces Draw Things `batch_count` to `1` for every LumiDraw generation.
-- Keeps only the first returned image if Draw Things returns an unexpected batch.
-- Prevents hidden legacy `extra` values from overriding the model, LoRAs, sampler, steps, CFG, size, clip skip, or shift shown in the preset editor.
-- Logs a compact payload summary to the Lumiverse server log for diagnosis.
+A Spindle extension that bridges **Draw Things**, **LumiDraw Bridge**, and
+**Lumiverse**. It keeps stable per-chat image presets while providing a separate
+workspace for experiments and complete native dropdowns for installed image
+models and LoRAs.
 
+## v0.15.0 — Bridge catalog integration
 
-**Current build: v0.14.3**
+- Connects from the Lumiverse backend to LumiDraw Bridge at `127.0.0.1:7863`.
+  This works while Lumiverse is being used remotely on a phone because the
+  browser never needs to reach localhost itself.
+- Loads installed Draw Things image-model candidates and LoRAs from the native
+  Bridge catalog.
+- Filters obvious support weights such as VAEs, CLIP/text encoders, Qwen 3
+  language weights, and LTX/Wan video weights out of the image-model dropdown.
+- Converts model, sampler, and LoRA selection to real `<select>` dropdowns in
+  both the temporary workspace and preset editor.
+- Adds **Rescan catalog ⟳** to the Generate tab.
+- Adds Bridge host/port, connection testing, and catalog status to Settings.
+- Falls back to the remembered catalog and all saved preset values if Bridge is
+  unavailable.
+- Sampler choices combine the current Draw Things recipe, sampler values found
+  in `/sdapi/v1/options`, previously saved samplers, and a conservative built-in
+  compatibility list.
 
-A Spindle extension that bridges **Draw Things** and **Lumiverse**. Sync models
-and settings straight from the Draw Things API, pin them as named presets, and
-generate from inside Lumiverse — without ever hand-typing a case-sensitive
-model filename again.
+## Safety retained from v0.14.3
 
-Inspired by the workflow of LumiSwarm-Studio, rebuilt for Draw Things' API.
+- Forces Draw Things `batch_count` to `1` for each requested illustration.
+- Keeps only the first returned image if Draw Things unexpectedly returns a
+  batch anyway.
+- Visible preset values override hidden legacy `extra` values.
+- Logs the effective Draw Things payload in the Lumiverse server log.
 
-## Why this exists
+## Core workflow
 
-Draw Things' HTTP API doesn't implement the A1111 listing endpoints
-(`/sdapi/v1/sd-models`, `/loras`, `/samplers` all 404), so Lumiverse's built-in
-A1111 connector can't populate its model dropdown. But `GET /` returns the
-app's full current recipe — exact model filename included — and
-`/sdapi/v1/txt2img` honors a per-request top-level `model` key. This extension
-leans on both: **capture recipes from the app, replay them exactly, forever.**
+- **Chat preset** — committed recipe used by Parser and Inline story images.
+- **Workspace / draft settings** — temporary model, sampler, steps, CFG, size,
+  LoRA, and negative-prompt changes for experimentation.
+- **Update active preset** — commits the workspace to the selected chat preset.
+- **Save as new preset** — preserves the experiment as a separate preset.
+- **Rescan old message 📚** — runs Parser mode on a selected earlier assistant
+  message and inserts the image back into that exact message.
+- **Fullscreen and expanded text editors** — designed for phone use.
 
-Because every generation carries its complete config, your presets are
-independent of whatever you're currently experimenting with in the Draw Things
-UI. Tinker freely; story gens stay pinned.
+## Requirements
 
-## Setup
+1. Draw Things HTTP API enabled, normally at `127.0.0.1:7862`.
+2. LumiDraw Bridge 0.2.0 or newer running at `127.0.0.1:7863` with the Draw
+   Things Models folder authorized.
+3. Install this extension by replacing its root files or importing the flat ZIP
+   where `spindle.json` is at the archive root.
 
-1. In **Draw Things**: Settings → API Server → enable, protocol **HTTP**.
-   Note the port (avoid 7860 if Lumiverse uses it — e.g. 7862).
-2. Install this extension in Lumiverse's Extensions panel.
-3. Click the 🎨 launcher (bottom right) → **Settings** tab → set host/port →
-   **Test connection**.
+## Verify the update
 
-## Usage
+The panel header must show **v0.15.0**. In the Generate tab, the catalog line
+should report a connected Bridge and counts for image models, LoRAs, and
+samplers. Use **Rescan catalog ⟳** after installing or removing Draw Things
+models.
 
-- **Sync ⟳** — captures the recipe Draw Things is currently showing. Note: DT
-  displays the settings of whatever image is *selected*, so you can select any
-  old favorite in the app and capture its exact recipe.
-- **Presets tab** — name the synced recipe and save. Selecting a preset pins
-  its full config (model, sampler, steps, CFG, size, LoRAs, clip skip, shift)
-  for every generation. A prompt prefix and negative prompt can ride along.
-- **Generate tab** — prompt, optional seed (blank = random, `↩ last` reuses
-  the previous seed), Generate. Results land in the panel history and in
-  Lumiverse's image library.
-- **Rescan old message 📚** — in Parser mode, choose any earlier assistant
-  message from the active chat and generate another illustration for that exact
-  passage. The same action also appears in the chat input bar's **Extras** menu.
-- **Choose old message 📚** — while Story illustrations is set to **Parser**,
-  opens a searchable list of assistant messages in the current chat. Pick any
-  passage to run the parser again and add a newly generated illustration to
-  that exact message. Existing images are preserved.
+## Draw Things API notes
 
-## Verified Draw Things API behavior (July 2026)
-
-- `GET /` → full current config as JSON (exact model names)
-- `POST /sdapi/v1/txt2img` → accepts DT-native keys; a top-level `"model"`
-  selects the checkpoint per request (verified via fixed-seed A/B outputs)
-- Unknown payload keys are rejected loudly:
-  `{"error":"HTTPException","detail":"Unrecognized keys: [...]"}` — typos fail
-  fast instead of silently generating with wrong settings
-- `override_settings` (A1111 style) is **not** supported; use top-level keys
-- No `/sdapi/v1/sd-models`, `/loras`, `/samplers`, `/progress` (all 404)
-
-## Roadmap
-
-- **Cloud provider** — per-preset compute target using the official Draw
-  Things Cloud API (api.drawthings.ai) with a DT+ API key stored in the
-  secure enclave, so heavy story gens run on their GPUs instead of your Mac
-- img2img support
-- Optional model catalog via Draw Things' gRPC server or model directory scan
-
-## Notes
-
-- The backend runs in Spindle's `process` runtime and reaches Draw Things at
-  `127.0.0.1` directly. If your Lumiverse server runs on a different machine
-  than Draw Things, set the host accordingly (e.g. a Tailscale address).
-- `requested_capabilities: ["base64_decode"]` is declared because the backend
-  decodes Draw Things' base64 image responses for upload to the image library.
-
-## Verifying an update
-
-The panel header displays the loaded frontend version. For this release it must
-show **v0.14.3**. If an older version remains visible after replacing files,
-disable and re-enable the extension, then reload Lumiverse from origin so the
-browser fetches the new frontend bundle.
-
-
-## v0.14.3 fullscreen workspace
-
-The Generate tab now separates the **committed chat preset** from a temporary
-**Workspace / draft settings** area. Manual generations use the workspace.
-Parser and inline story generations continue using the committed chat preset
-until you explicitly choose **Update active preset** or **Save as new preset**.
-
-The header now includes a **fullscreen toggle**. Fullscreen fills the available
-phone or desktop viewport while retaining the same Generate, Presets, and
-Settings tabs.
-
-Every editable multiline field also has an **expand** button. It opens a large
-focused editor; **Apply** writes the text back to the original field and
-triggers the same save/change behavior as editing it inline. Escape cancels,
-and Command/Ctrl+Enter applies.
-
-The installation ZIP places `spindle.json` at the ZIP root, as Lumiverse
-expects.
+Draw Things' HTTP API reports the current recipe and accepts complete generation
+configurations, but does not implement the usual A1111 listing endpoints for
+models and LoRAs. LumiDraw Bridge supplies the missing filesystem-backed
+catalog, while LumiDraw continues to send generation requests to Draw Things.

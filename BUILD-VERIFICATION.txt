@@ -1,14 +1,9 @@
-LumiDraw Studio 0.14.3
+LumiDraw Studio v0.15.0 build verification
 
-Validated:
-- frontend.js syntax: PASS
-- backend.js syntax: PASS
-- package.json: PASS, version 0.14.3
-- spindle.json: PASS, version 0.14.3
-- fullscreen toggle present
-- expanded textarea editor present
-- workspace controls retained
-- old-message rescan retained
-- package ZIP is flat: spindle.json is at ZIP root
-
-Known-good fallback 0.13.1 was not modified.
+- ZIP must be flat with spindle.json at archive root.
+- spindle.json and package.json must both report 0.15.0.
+- frontend header must visibly report v0.15.0.
+- backend and frontend must pass JavaScript syntax validation.
+- list_models must merge Bridge catalog with remembered preset values.
+- Bridge model filter must exclude Qwen 3 support weights and tiny LTX stubs.
+- batch_count safety remains forced to 1.

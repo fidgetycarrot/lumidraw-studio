@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.14.3'
+const EXTENSION_VERSION = '0.15.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -84,7 +84,7 @@ function realSetup(ctx) {
   let draftConfig = null    // temporary workspace config for manual generation
   let draftDirty = false
   let draftSourceLabel = ''
-  let catalog = { models: [], samplers: [], loras: [], source: 'memory' }
+  let catalog = { models: [], samplers: [], loras: [], source: 'memory', bridge: null, currentRecipe: null }
   let busy = false
   let defaults = { protocol: '', parserInstruction: '' }
   const pending = new Map() // requestId → {resolve, reject}
@@ -329,7 +329,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.14.3" aria-label="LumiDraw Studio v0.14.3">
+    <button class="ld-launcher" title="LumiDraw Studio v0.15.0" aria-label="LumiDraw Studio v0.15.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -338,7 +338,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw Studio <small style="font-weight:400;opacity:.65">v0.14.3</small></span>
+        <span class="ld-head-title">LumiDraw Studio <small style="font-weight:400;opacity:.65">v0.15.0</small></span>
         <button class="ld-tabbtn ld-active" data-tab="generate">Generate</button>
         <button class="ld-tabbtn" data-tab="presets">Presets</button>
         <button class="ld-tabbtn" data-tab="settings">Settings</button>
@@ -363,7 +363,7 @@ function realSetup(ctx) {
             <select class="ld-draft-model"><option value="">— choose model —</option></select>
           </div>
           <div class="ld-row" style="margin-top:6px">
-            <div><span class="ld-label">Sampler</span><input class="ld-draft-sampler" list="ld-samplers" /></div>
+            <div><span class="ld-label">Sampler</span><select class="ld-draft-sampler"><option value="">— choose sampler —</option></select></div>
             <div style="flex:0 0 70px"><span class="ld-label">Steps</span><input class="ld-draft-steps" type="number" min="1" max="150" /></div>
             <div style="flex:0 0 70px"><span class="ld-label">CFG</span><input class="ld-draft-cfg" type="number" step="0.5" min="0" /></div>
           </div>
@@ -374,7 +374,11 @@ function realSetup(ctx) {
           <span class="ld-label" style="margin-top:8px">LoRAs</span>
           <div class="ld-draft-loras" style="display:flex;flex-direction:column;gap:4px"></div>
           <button class="ld-btn ld-compact" data-act="draft-addlora" style="margin-top:4px">＋ LoRA</button>
-          <div class="ld-help" style="margin-top:6px">The lists contain models and LoRAs LumiDraw has already learned. Exact names can still be typed manually.</div>
+          <div class="ld-row" style="margin-top:7px;align-items:center">
+            <div class="ld-status ld-catalog-status">Checking LumiDraw Bridge…</div>
+            <button class="ld-btn ld-compact" style="flex:0 0 auto" data-act="refresh-catalog">Rescan catalog ⟳</button>
+          </div>
+          <div class="ld-help" style="margin-top:6px">Image models and LoRAs come from the native Bridge catalog. Saved presets remain available if the Bridge is offline.</div>
           <div style="margin-top:8px">
             <span class="ld-label">Negative prompt</span>
             <textarea class="ld-negative" style="min-height:36px"></textarea>
@@ -422,7 +426,7 @@ function realSetup(ctx) {
           <span class="ld-label" style="margin-top:6px">Model</span>
           <select class="ld-ed-model"></select>
           <div class="ld-row" style="margin-top:6px">
-            <div><span class="ld-label">Sampler</span><input class="ld-ed-sampler" list="ld-samplers" /><datalist id="ld-samplers"></datalist></div>
+            <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
             <div style="flex:0 0 70px"><span class="ld-label">Steps</span><input class="ld-ed-steps" type="number" min="1" max="150" /></div>
             <div style="flex:0 0 70px"><span class="ld-label">CFG</span><input class="ld-ed-cfg" type="number" step="0.5" min="0" /></div>
           </div>
@@ -433,8 +437,7 @@ function realSetup(ctx) {
           <span class="ld-label" style="margin-top:8px">LoRAs</span>
           <div class="ld-ed-loras" style="display:flex;flex-direction:column;gap:4px"></div>
           <button class="ld-btn" data-act="ed-addlora" style="margin-top:4px;font-size:12px;padding:4px 8px">＋ LoRA</button>
-          <div class="ld-status" style="margin-top:2px">Add as many as you like. Suggestions list LoRAs the extension has seen — sync any Draw Things recipe using a LoRA once (or type its exact filename once) and it's remembered here forever.</div>
-          <datalist id="ld-loras"></datalist>
+          <div class="ld-status" style="margin-top:2px">Add as many as you like. The dropdown is loaded from LumiDraw Bridge and preserves any LoRA already saved in a preset.</div>
           <span class="ld-label" style="margin-top:8px">Quality tags (always first)</span>
           <input class="ld-ed-quality" />
           <span class="ld-label" style="margin-top:6px">Character tags</span>
@@ -468,6 +471,16 @@ function realSetup(ctx) {
           <button class="ld-btn" data-act="test">Test connection</button>
         </div>
         <div class="ld-status ld-settings-status"></div>
+        <div class="ld-subsection">
+          <div class="ld-subtitle">LumiDraw Bridge catalog</div>
+          <div class="ld-row">
+            <div><span class="ld-label">Bridge host</span><input class="ld-bridge-host" value="127.0.0.1" /></div>
+            <div style="flex:0 0 92px"><span class="ld-label">Port</span><input class="ld-bridge-port" type="number" value="7863" /></div>
+          </div>
+          <button class="ld-btn" data-act="test-bridge" style="margin-top:7px">Test Bridge and reload catalog</button>
+          <div class="ld-status ld-bridge-status" style="margin-top:6px"></div>
+          <div class="ld-help" style="margin-top:5px">The extension backend connects locally on your Mac, so these dropdowns still work while Lumiverse is open on your phone.</div>
+        </div>
         <div style="border-top:1px solid var(--lumiverse-border, #3d4050); padding-top:10px">
           <span class="ld-label">Story illustrations</span>
           <select class="ld-mode">
@@ -606,6 +619,51 @@ function realSetup(ctx) {
     catch { return null }
   }
 
+  function populateSelect(select, values, currentValue = '', placeholder = '') {
+    if (!select) return
+    const current = String(currentValue || '')
+    select.innerHTML = ''
+    if (placeholder) {
+      const blank = document.createElement('option')
+      blank.value = ''
+      blank.textContent = placeholder
+      select.appendChild(blank)
+    }
+    const seen = new Set()
+    for (const raw of values || []) {
+      const value = String(raw || '').trim()
+      if (!value || seen.has(value.toLowerCase())) continue
+      seen.add(value.toLowerCase())
+      const option = document.createElement('option')
+      option.value = value
+      option.textContent = value
+      select.appendChild(option)
+    }
+    if (current && !seen.has(current.toLowerCase())) {
+      const option = document.createElement('option')
+      option.value = current
+      option.textContent = current + ' (saved)'
+      select.insertBefore(option, placeholder ? select.children[1] || null : select.firstChild)
+    }
+    select.value = current
+  }
+
+  function renderCatalogStatus() {
+    const bridge = catalog.bridge || {}
+    let message
+    let kind
+    if (bridge.connected) {
+      const version = bridge.version ? ` ${bridge.version}` : ''
+      message = `Bridge${version} connected · ${catalog.models.length} image models · ${catalog.loras.length} LoRAs · ${catalog.samplers.length} samplers`
+      kind = 'good'
+    } else {
+      message = `Bridge offline — using remembered catalog${bridge.error ? ': ' + bridge.error : ''}`
+      kind = 'err'
+    }
+    setStatus('.ld-catalog-status', message, kind)
+    setStatus('.ld-bridge-status', message, kind)
+  }
+
   function ensureDraftModelOption(value) {
     const select = $('.ld-draft-model')
     if (!select || !value) return
@@ -620,11 +678,9 @@ function realSetup(ctx) {
   function draftLoraRow(file, weight) {
     const row = document.createElement('div')
     row.className = 'ld-row'
-    const fileInput = document.createElement('input')
-    fileInput.setAttribute('list', 'ld-loras')
-    fileInput.placeholder = 'lora_file.ckpt'
-    fileInput.value = file || ''
+    const fileInput = document.createElement('select')
     fileInput.className = 'ld-lora-file'
+    populateSelect(fileInput, catalog.loras, file || '', '— choose LoRA —')
     const weightInput = document.createElement('input')
     weightInput.type = 'number'
     weightInput.step = '0.05'
@@ -675,7 +731,7 @@ function realSetup(ctx) {
     const config = draftConfig || {}
     ensureDraftModelOption(config.model || '')
     $('.ld-draft-model').value = config.model || ''
-    $('.ld-draft-sampler').value = config.sampler || ''
+    populateSelect($('.ld-draft-sampler'), catalog.samplers, config.sampler || '', '— choose sampler —')
     $('.ld-draft-steps').value = config.steps !== undefined ? config.steps : ''
     $('.ld-draft-cfg').value = config.guidance_scale !== undefined ? config.guidance_scale : ''
     $('.ld-draft-w').value = config.width || ''
@@ -1274,36 +1330,42 @@ function realSetup(ctx) {
   let editorOriginalName = null
   let editorExtra = null
 
-  async function loadCatalog() {
+  async function loadCatalog(refresh = false) {
+    setStatus('.ld-catalog-status', refresh ? 'Rescanning Bridge catalog…' : 'Loading catalog…')
     try {
-      const res = await call('list_models', {}, 20000)
+      const res = await call('list_models', { refresh }, refresh ? 40000 : 20000)
       catalog = {
         models: res.models || [],
         samplers: res.samplers || [],
         loras: res.loras || [],
         source: res.source || 'memory',
+        bridge: res.bridge || null,
+        currentRecipe: res.currentRecipe || null,
       }
-      const sel = $('.ld-ed-model')
-      sel.innerHTML = catalog.models.map((model) => `<option value="${model.file}">${model.file}</option>`).join('')
-      const draftSelect = $('.ld-draft-model')
-      if (draftSelect) {
-        draftSelect.innerHTML = '<option value="">— choose model —</option>' +
-          catalog.models.map((model) => `<option value="${model.file}">${model.file}</option>`).join('')
-      }
-      $('#ld-samplers').innerHTML = catalog.samplers.map((sampler) => `<option value="${sampler}"></option>`).join('')
-      $('#ld-loras').innerHTML = catalog.loras.map((lora) => `<option value="${lora}"></option>`).join('')
+      const editorModelValue = $('.ld-ed-model') ? $('.ld-ed-model').value : ''
+      populateSelect($('.ld-ed-model'), catalog.models.map((model) => model.file), editorModelValue, '— choose model —')
+      const draftModelValue = (draftConfig && draftConfig.model) || ($('.ld-draft-model') && $('.ld-draft-model').value) || ''
+      populateSelect($('.ld-draft-model'), catalog.models.map((model) => model.file), draftModelValue, '— choose model —')
+      const editorSamplerValue = $('.ld-ed-sampler') ? $('.ld-ed-sampler').value : ''
+      populateSelect($('.ld-ed-sampler'), catalog.samplers, editorSamplerValue, '— choose sampler —')
       if (draftConfig) renderDraftControls()
-    } catch (e) { console.log('[LumiDraw] catalog load failed:', e.message) }
+      else populateSelect($('.ld-draft-sampler'), catalog.samplers, '', '— choose sampler —')
+      renderCatalogStatus()
+      return res
+    } catch (e) {
+      catalog.bridge = { connected: false, error: e.message }
+      renderCatalogStatus()
+      console.log('[LumiDraw] catalog load failed:', e.message)
+      throw e
+    }
   }
 
   function loraRow(file, weight) {
     const row = document.createElement('div')
     row.className = 'ld-row'
-    const fi = document.createElement('input')
-    fi.setAttribute('list', 'ld-loras')
-    fi.placeholder = 'lora_file.ckpt'
-    fi.value = file || ''
+    const fi = document.createElement('select')
     fi.className = 'ld-lora-file'
+    populateSelect(fi, catalog.loras, file || '', '— choose LoRA —')
     const wi = document.createElement('input')
     wi.type = 'number'; wi.step = '0.05'; wi.style.flex = '0 0 70px'
     wi.value = weight !== undefined ? weight : 1
@@ -1330,8 +1392,8 @@ function realSetup(ctx) {
       const o = document.createElement('option'); o.value = c.model; o.textContent = c.model
       msel.insertBefore(o, msel.firstChild)
     }
-    msel.value = c.model || (msel.options[0] ? msel.options[0].value : '')
-    $('.ld-ed-sampler').value = c.sampler || ''
+    msel.value = c.model || ''
+    populateSelect($('.ld-ed-sampler'), catalog.samplers, c.sampler || '', '— choose sampler —')
     $('.ld-ed-steps').value = c.steps !== undefined ? c.steps : ''
     $('.ld-ed-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''
     $('.ld-ed-w').value = c.width || ''
@@ -1339,6 +1401,7 @@ function realSetup(ctx) {
     const lbox = $('.ld-ed-loras')
     lbox.innerHTML = ''
     for (const l of c.loras || []) lbox.appendChild(loraRow(l.file || l.name || '', l.weight))
+    if (!(c.loras || []).length) lbox.appendChild(loraRow('', 1))
     $('.ld-ed-quality').value = p ? (p.qualityTags || '') : (seed ? (seed.qualityTags || '') : '')
     $('.ld-ed-chartags').value = p ? (p.characterTags || '') : (seed ? (seed.characterTags || '') : '')
     $('.ld-ed-personatags').value = p ? (p.personaTags || '') : (seed ? (seed.personaTags || '') : '')
@@ -1348,6 +1411,15 @@ function realSetup(ctx) {
     setStatus('.ld-ed-status', p ? '' : (seed ? 'Starting from the current workspace.' : (syncedConfig ? 'Starting from the last synced recipe.' : 'No synced recipe yet — Sync on the Generate tab first for model/sampler defaults.')))
     if (box.scrollIntoView) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
+
+  $('[data-act="refresh-catalog"]').addEventListener('click', async () => {
+    try {
+      await loadCatalog(true)
+      setStatus('.ld-gen-status', 'Bridge catalog refreshed.', 'good')
+    } catch (error) {
+      setStatus('.ld-gen-status', error.message, 'err')
+    }
+  })
 
   $('[data-act="new-preset"]').addEventListener('click', () => openEditor(null))
   $('[data-act="ed-cancel"]').addEventListener('click', () => { $('.ld-editor').style.display = 'none' })
@@ -1403,7 +1475,10 @@ function realSetup(ctx) {
 
   for (const selector of ['.ld-draft-model', '.ld-draft-sampler', '.ld-draft-steps', '.ld-draft-cfg', '.ld-draft-w', '.ld-draft-h', '.ld-negative']) {
     const control = $(selector)
-    if (control) control.addEventListener('input', onDraftControlChange)
+    if (control) {
+      control.addEventListener('input', onDraftControlChange)
+      if (control.tagName === 'SELECT') control.addEventListener('change', onDraftControlChange)
+    }
   }
 
   $('[data-act="ed-save"]').addEventListener('click', async () => {
@@ -1548,6 +1623,8 @@ function realSetup(ctx) {
     const res = await call('save_settings', {
       host: $('.ld-host').value,
       port: $('.ld-port').value,
+      bridgeHost: $('.ld-bridge-host').value,
+      bridgePort: $('.ld-bridge-port').value,
       mode: $('.ld-mode').value,
       autoScan: $('.ld-autoscan').checked,
       parserConnection: $('.ld-parser-conn').value,
@@ -1583,7 +1660,7 @@ function realSetup(ctx) {
 
   // All settings text fields auto-save as you type (debounced).
   let settingsSaveTimer = null
-  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-host', '.ld-port']) {
+  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port']) {
     const el = $(sel)
     if (el) el.addEventListener('input', () => {
       clearTimeout(settingsSaveTimer)
@@ -1600,6 +1677,19 @@ function realSetup(ctx) {
       pushSettings('Story settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
     })
   }
+
+  $('[data-act="test-bridge"]').addEventListener('click', async () => {
+    setStatus('.ld-bridge-status', 'Connecting to LumiDraw Bridge…')
+    try {
+      await pushSettings()
+      const result = await call('test_bridge', {}, 12000)
+      await loadCatalog(true)
+      const count = result.health && result.health.counts
+      setStatus('.ld-bridge-status', `Bridge ${result.health.version || ''} connected${count ? ` · ${count.models || 0} raw model files · ${count.loras || 0} LoRAs` : ''}.`, 'good')
+    } catch (error) {
+      setStatus('.ld-bridge-status', error.message, 'err')
+    }
+  })
 
   $('[data-act="save-settings"]').addEventListener('click', async () => {
     try {
@@ -1671,6 +1761,8 @@ function realSetup(ctx) {
       defaults = res.defaults || defaults
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
+      $('.ld-bridge-host').value = settings.bridgeHost || '127.0.0.1'
+      $('.ld-bridge-port').value = settings.bridgePort || 7863
       $('.ld-mode').value = settings.mode || 'off'
       $('.ld-autoscan').checked = settings.autoScan !== false
       $('.ld-maximg').value = settings.maxImages || 2

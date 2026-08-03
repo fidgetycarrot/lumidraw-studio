@@ -1,11 +1,11 @@
 {
-  "version": "0.14.3",
+  "version": "0.15.0",
   "name": "LumiDraw Studio",
   "identifier": "lumidraw_studio",
   "author": "fidgetycarrot",
   "github": "https://github.com/fidgetycarrot/lumidraw-studio",
   "homepage": "https://github.com/fidgetycarrot/lumidraw-studio",
-  "description": "Bridge Draw Things and Lumiverse: keep stable chat presets while experimenting with model, sampler, steps, CFG, size, and LoRAs in a temporary workspace.",
+  "description": "Bridge Draw Things and Lumiverse with native catalog dropdowns for image models, LoRAs, and samplers while keeping stable chat presets.",
   "permissions": [
     "images",
     "image_gen",

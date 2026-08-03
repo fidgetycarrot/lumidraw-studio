@@ -29,7 +29,9 @@ const DEFAULT_SETTINGS = {
   maxImages: 2,           // max illustrations per story message
   minImages: 0,           // required illustrations per reply (0 = model's discretion)
   autoCharTags: true,     // prepend the active character's image tags when found
-  dtModelsPath: '',       // optional custom Draw Things models folder for scanning
+  dtModelsPath: '',       // retained for compatibility with older settings
+  bridgeHost: '127.0.0.1', // native LumiDraw Bridge runs on the Lumiverse Mac
+  bridgePort: 7863,
   protocol: '',           // custom inline protocol (blank = built-in default)
 }
 
@@ -195,6 +197,142 @@ async function dtGenerate(settings, payload) {
     spindle.log.warn(`[lumidraw] Draw Things returned ${res.json.images.length} images despite batch_count=1; keeping only the first.`)
   }
   return [res.json.images[0]]
+}
+
+// ---------------------------------------------------------------------------
+// LumiDraw Bridge client — native catalog helper on the Lumiverse Mac
+// ---------------------------------------------------------------------------
+
+const DEFAULT_SAMPLERS = [
+  'Euler A Trailing',
+  'Euler A',
+  'Euler',
+  'DPM++ 2M Karras',
+  'DPM++ 2M',
+  'DPM++ SDE Karras',
+  'DPM++ SDE',
+  'DPM++ 2M SDE Karras',
+  'DPM++ 2M SDE',
+  'DPM++ 3M SDE Karras',
+  'DPM++ 3M SDE',
+  'DPM++ 2S A Karras',
+  'DPM++ 2S A',
+  'DDIM',
+  'UniPC',
+  'LCM',
+  'TCD',
+]
+
+function bridgeBaseUrl(settings) {
+  const host = String(settings.bridgeHost || DEFAULT_SETTINGS.bridgeHost).trim()
+  const port = Number(settings.bridgePort) || DEFAULT_SETTINGS.bridgePort
+  return `http://${host}:${port}`
+}
+
+async function bridgeFetch(settings, path, options = {}, timeoutMs = 12000) {
+  const url = `${bridgeBaseUrl(settings)}${path}`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal })
+    const text = await res.text()
+    let json = null
+    try { json = JSON.parse(text) } catch { /* non-JSON body */ }
+    if (!res.ok) {
+      const detail = json && (json.error || json.message)
+      throw new Error(detail || text || `HTTP ${res.status}`)
+    }
+    if (!json) throw new Error('Bridge returned a non-JSON response.')
+    return json
+  } catch (err) {
+    const reason = err && err.name === 'AbortError'
+      ? `timed out after ${timeoutMs / 1000}s`
+      : ((err && err.message) || String(err))
+    throw new Error(`Could not reach LumiDraw Bridge at ${url} (${reason})`)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function uniqueByLower(values) {
+  const out = []
+  const seen = new Set()
+  for (const value of values || []) {
+    const text = String(value || '').trim()
+    if (!text) continue
+    const key = text.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(text)
+  }
+  return out
+}
+
+function looksLikeImageModel(item, currentModelSet = new Set()) {
+  const file = String((item && (item.file || item.name)) || '').trim()
+  if (!file) return false
+  const lower = file.toLowerCase()
+  if (currentModelSet.has(lower)) return true
+  if (item && item.confidence === 'high' && !item.subtype) return true
+
+  // Draw Things stores support weights beside checkpoints. Keep likely image
+  // checkpoints while excluding obvious text/video/auxiliary weights.
+  const excluded = [
+    /(^|[_-])vae([_.-]|$)/,
+    /(^|[_-])clip([_.-]|$)/,
+    /(^|[_-])t5([_.-]|$)/,
+    /(^|[_-])llama([_.-]|$)/,
+    /(^|[_-])tokenizer([_.-]|$)/,
+    /(^|[_-])text[_-]?encoder([_.-]|$)/,
+    /^qwen[_-]?3(?:[_.-]|$)/,
+    /^ltx(?:[_.-]|$)/,
+    /^wan(?:[_.-]|$)/,
+  ]
+  if (excluded.some((pattern) => pattern.test(lower))) return false
+  const size = Number(item && item.sizeBytes)
+  if (Number.isFinite(size) && size > 0 && size < 50 * 1024 * 1024) return false
+  return true
+}
+
+async function getBridgeCatalog(settings, refresh = false) {
+  const suffix = refresh ? '?refresh=1' : ''
+  return bridgeFetch(settings, `/catalog${suffix}`, {}, refresh ? 30000 : 12000)
+}
+
+async function dtSamplerCandidates(settings) {
+  try {
+    const res = await dtFetch(settings, '/sdapi/v1/options', {}, 8000)
+    if (!res.ok || !res.json || typeof res.json !== 'object') return []
+    const found = []
+    const visit = (value, keyHint = '', depth = 0) => {
+      if (depth > 5 || value === null || value === undefined) return
+      if (Array.isArray(value)) {
+        if (/sampler/i.test(keyHint)) {
+          for (const item of value) {
+            if (typeof item === 'string') found.push(item)
+            else if (item && typeof item === 'object') {
+              const name = item.name || item.label || item.value || item.id
+              if (typeof name === 'string') found.push(name)
+            }
+          }
+        }
+        for (const item of value) visit(item, keyHint, depth + 1)
+        return
+      }
+      if (typeof value !== 'object') {
+        if (/sampler/i.test(keyHint) && typeof value === 'string') found.push(value)
+        return
+      }
+      for (const [key, child] of Object.entries(value)) {
+        visit(child, key, depth + 1)
+      }
+    }
+    visit(res.json)
+    return uniqueByLower(found)
+  } catch (err) {
+    spindle.log.warn('[lumidraw] Draw Things sampler options unavailable: ' + err.message)
+    return []
+  }
 }
 
 
@@ -691,11 +829,79 @@ async function rememberModels(config) {
   await spindle.storage.setJson(MODELS_FILE, known, { indent: 2 })
 }
 
-async function scanDtModels() {
-  // Lumiverse blocks the filesystem module for extension backends
-  // ("blocked backend capabilities: filesystem module access"), so the
-  // model catalog is memory-only: every synced/preset model is remembered.
-  return null
+async function rememberCatalog({ models = [], samplers = [], loras = [] }) {
+  const known = await spindle.storage.getJson(MODELS_FILE, { fallback: { models: [], samplers: [], loras: [] } })
+  known.models = uniqueByLower([...(known.models || []), ...models])
+  known.samplers = uniqueByLower([...(known.samplers || []), ...samplers])
+  known.loras = uniqueByLower([...(known.loras || []), ...loras])
+  await spindle.storage.setJson(MODELS_FILE, known, { indent: 2 })
+  return known
+}
+
+async function buildCatalog(settings, { refresh = false } = {}) {
+  let bridgeCatalog = null
+  let bridgeError = null
+  try {
+    bridgeCatalog = await getBridgeCatalog(settings, refresh)
+  } catch (err) {
+    bridgeError = err.message
+    spindle.log.warn('[lumidraw] Bridge catalog unavailable: ' + bridgeError)
+  }
+
+  const currentRecipe = bridgeCatalog && bridgeCatalog.currentDrawThingsRecipe
+  const currentModelSet = new Set([currentRecipe && currentRecipe.model].filter(Boolean).map((v) => String(v).toLowerCase()))
+  const bridgeModels = bridgeCatalog
+    ? (bridgeCatalog.models || []).filter((item) => looksLikeImageModel(item, currentModelSet)).map((item) => item.file || item.name)
+    : []
+  const bridgeLoras = bridgeCatalog
+    ? (bridgeCatalog.loras || []).map((item) => item.file || item.name)
+    : []
+  const bridgeSamplers = uniqueByLower([
+    currentRecipe && currentRecipe.sampler,
+    ...((bridgeCatalog && bridgeCatalog.samplers) || []),
+  ])
+
+  const optionSamplers = await dtSamplerCandidates(settings)
+  let known = await spindle.storage.getJson(MODELS_FILE, { fallback: { models: [], samplers: [], loras: [] } })
+  if (bridgeCatalog || optionSamplers.length) {
+    known = await rememberCatalog({ models: bridgeModels, loras: bridgeLoras, samplers: [...bridgeSamplers, ...optionSamplers] })
+  }
+
+  const models = uniqueByLower([
+    currentRecipe && currentRecipe.model,
+    ...bridgeModels,
+    ...(known.models || []),
+  ]).sort((a, b) => a.localeCompare(b))
+  const loras = uniqueByLower([
+    ...bridgeLoras,
+    ...((currentRecipe && currentRecipe.loras) || []),
+    ...(known.loras || []),
+  ]).sort((a, b) => a.localeCompare(b))
+  const samplers = uniqueByLower([
+    currentRecipe && currentRecipe.sampler,
+    ...optionSamplers,
+    ...(known.samplers || []),
+    ...DEFAULT_SAMPLERS,
+  ])
+
+  return {
+    models: models.map((file) => ({ file, name: file })),
+    samplers,
+    loras,
+    source: bridgeCatalog ? 'bridge+memory' : 'memory',
+    currentRecipe: currentRecipe || null,
+    bridge: {
+      connected: !!bridgeCatalog,
+      url: bridgeBaseUrl(settings),
+      version: bridgeCatalog && bridgeCatalog.version,
+      generatedAt: bridgeCatalog && bridgeCatalog.generatedAt,
+      filesystemReadable: !!(bridgeCatalog && bridgeCatalog.access && bridgeCatalog.access.filesystemReadable),
+      rawCounts: (bridgeCatalog && bridgeCatalog.summary) || null,
+      filteredModelCount: bridgeModels.length,
+      loraCount: bridgeLoras.length,
+      error: bridgeError,
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -726,7 +932,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history,
-          version: (spindle.manifest && spindle.manifest.version) || '0.14.2',
+          version: (spindle.manifest && spindle.manifest.version) || '0.15.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -739,9 +945,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
           host: String(payload.host || prev.host || DEFAULT_SETTINGS.host).trim(),
           port: Number(payload.port) || prev.port || DEFAULT_SETTINGS.port,
         }
-        for (const k of ['mode', 'parserConnection', 'parserModel', 'parserInstruction', 'protocol', 'dtModelsPath']) {
+        for (const k of ['mode', 'parserConnection', 'parserModel', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost']) {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
+        if (payload.bridgePort !== undefined) settings.bridgePort = Number(payload.bridgePort) || DEFAULT_SETTINGS.bridgePort
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
         if (payload.maxImages !== undefined) {
@@ -911,14 +1118,16 @@ spindle.onFrontendMessage(async (payload, userId) => {
         for (const p of presets) { try { await rememberModels(p.config || {}) } catch { /* ok */ } }
         const history = await getHistory()
         for (const h of history) { try { await rememberModels({ model: h.model }) } catch { /* ok */ } }
-        // re-read AFTER backfilling so every preset/history model is included
-        const known = await spindle.storage.getJson(MODELS_FILE, { fallback: { models: [], samplers: [], loras: [] } })
-        reply = ok(payload, requestId, {
-          models: known.models.map((file) => ({ file, name: file })).sort((a, b) => a.name.localeCompare(b.name)),
-          samplers: known.samplers,
-          loras: known.loras,
-          source: 'memory',
-        })
+        const settings = await getSettings()
+        const catalog = await buildCatalog(settings, { refresh: !!payload.refresh })
+        reply = ok(payload, requestId, catalog)
+        break
+      }
+
+      case 'test_bridge': {
+        const settings = await getSettings()
+        const health = await bridgeFetch(settings, '/health', {}, 8000)
+        reply = ok(payload, requestId, { health, url: bridgeBaseUrl(settings) })
         break
       }
 
