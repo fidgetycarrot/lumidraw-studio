@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.18.3'
+const EXTENSION_VERSION = '0.18.4'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -475,7 +475,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.18.3" aria-label="LumiDraw Studio v0.18.3">
+    <button class="ld-launcher" title="LumiDraw Studio v0.18.4" aria-label="LumiDraw Studio v0.18.4">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -484,7 +484,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.3</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.4</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -708,6 +708,8 @@ function realSetup(ctx) {
                 <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-char-subject" placeholder="adult woman" /></div>
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-chartags" style="min-height:58px" placeholder="feminine appearance, tall, curvy, long black hair, green eyes"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-char-outfit" style="min-height:48px" placeholder="black fitted jacket, dark trousers"></textarea></div>
+                <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-ed-char-aliases" style="min-height:48px" placeholder="Aegis-fang = single massive warhammer"></textarea></div>
+                <div class="ld-help">Optional, one per line: <code>proper name = visual description</code>. The description is injected only when that prop appears in this character's parsed scene.</div>
                 <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-ed-char-anatomy" style="min-height:48px" placeholder="penis"></textarea></div>
                 <div><span class="ld-label">Conditional anatomy rule</span><select class="ld-ed-char-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Include in every NSFW/explicit scene</option><option value="manual">Never include automatically</option></select></div>
                 <div class="ld-help">Enter only concrete anatomy that may be hidden by clothing or framing, such as penis. Put identity and presentation tags—femboy, feminine male, trans woman, androgynous—and stable body traits under Permanent appearance. Unsupported phrases are ignored by the Anima compiler.</div>
@@ -723,6 +725,8 @@ function realSetup(ctx) {
                 <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-persona-subject" placeholder="adult man" /></div>
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-personatags" style="min-height:58px"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-persona-outfit" style="min-height:48px"></textarea></div>
+                <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-ed-persona-aliases" style="min-height:48px" placeholder="Named weapon = visual description"></textarea></div>
+                <div class="ld-help">Optional, one per line: <code>proper name = visual description</code>. The description is injected only when that prop appears in this persona's parsed scene.</div>
                 <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-ed-persona-anatomy" style="min-height:48px"></textarea></div>
                 <div><span class="ld-label">Conditional anatomy rule</span><select class="ld-ed-persona-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Include in every NSFW/explicit scene</option><option value="manual">Never include automatically</option></select></div>
                 <div class="ld-help">Enter only concrete anatomy that may be hidden by clothing or framing, such as penis. Put identity and presentation tags—femboy, feminine male, trans woman, androgynous—and stable body traits under Permanent appearance. Unsupported phrases are ignored by the Anima compiler.</div>
@@ -1297,6 +1301,7 @@ function realSetup(ctx) {
       subject: profile.subject || '',
       appearanceTags: profile.appearanceTags || legacyTags || '',
       defaultOutfitTags: profile.defaultOutfitTags || '',
+      visualAliases: profile.visualAliases || '',
       anatomyTags: profile.anatomyTags || '',
       anatomyMode: profile.anatomyMode || 'relevant',
     }
@@ -1311,6 +1316,7 @@ function realSetup(ctx) {
       subject: $(`.ld-ed-${prefix}-subject`).value.trim(),
       appearanceTags: $(appearanceSelector).value.trim(),
       defaultOutfitTags: $(`.ld-ed-${prefix}-outfit`).value.trim(),
+      visualAliases: $(`.ld-ed-${prefix}-aliases`).value.trim(),
       anatomyTags: $(`.ld-ed-${prefix}-anatomy`).value.trim(),
       anatomyMode: $(`.ld-ed-${prefix}-anatomy-mode`).value || 'relevant',
     }
@@ -1325,6 +1331,7 @@ function realSetup(ctx) {
     $(`.ld-ed-${prefix}-subject`).value = value.subject || ''
     $(appearanceSelector).value = value.appearanceTags || ''
     $(`.ld-ed-${prefix}-outfit`).value = value.defaultOutfitTags || ''
+    $(`.ld-ed-${prefix}-aliases`).value = value.visualAliases || ''
     $(`.ld-ed-${prefix}-anatomy`).value = value.anatomyTags || ''
     $(`.ld-ed-${prefix}-anatomy-mode`).value = value.anatomyMode || 'relevant'
   }

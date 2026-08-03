@@ -729,6 +729,40 @@ function normalizeConditionalAnatomy(items) {
   return out
 }
 
+// Named props are stored as compact visual aliases. Each line uses:
+//   Aegis-fang = single massive warhammer
+// The proper name is retained for story continuity while the descriptor gives
+// Anima a visual concept it is more likely to understand.
+function normalizeVisualAliases(value, label = 'visual alias') {
+  const raw = Array.isArray(value)
+    ? value
+    : String(value || '').split(/[\r\n;]+/).map((line) => line.trim()).filter(Boolean)
+  const out = []
+  const seen = new Set()
+  for (const entry of raw.slice(0, 12)) {
+    let name = ''
+    let description = ''
+    if (entry && typeof entry === 'object') {
+      name = String(entry.name || entry.key || '').trim()
+      description = String(entry.description || entry.visual || entry.value || '').trim()
+    } else {
+      const match = String(entry || '').match(/^\s*([^=]{1,64}?)\s*=\s*(.{1,96})\s*$/)
+      if (!match) continue
+      name = match[1].trim()
+      description = match[2].trim()
+    }
+    name = shortPhrase(name, `${label} name`, 6, 64, true)
+    description = shortPhrase(description, `${label} description`, 10, 96, true)
+    if (!name || !description) continue
+    const key = normalizeIdentityText(name)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push({ name, description })
+    if (out.length >= 8) break
+  }
+  return out
+}
+
 function normalizeIdentityText(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
@@ -833,6 +867,7 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
     subject: shortPhrase(source.subject || '', `${fallbackRef} subject phrase`, 8, 72, true),
     appearance: shortList(appearance, `${fallbackRef} appearance`, { maxItems: 32, maxWords: 7, maxChars: 72 }),
     defaultOutfit: shortList(source.defaultOutfitTags || '', `${fallbackRef} default outfit`, { maxItems: 12, maxWords: 7, maxChars: 72 }),
+    visualAliases: normalizeVisualAliases(source.visualAliases || source.namedVisualAliases || '', `${fallbackRef} visual alias`),
     anatomy: normalizeConditionalAnatomy(shortList(source.anatomyTags || '', `${fallbackRef} conditional anatomy`, { maxItems: 12, maxWords: 7, maxChars: 72 })),
     anatomyMode: normalizeAnatomyMode(source.anatomyMode),
   }
@@ -855,6 +890,10 @@ async function resolveProfile(profile, userId, chatId) {
     subject: await resolveOne(profile.subject),
     appearance: await resolveMany(profile.appearance, `${profile.ref} appearance`),
     defaultOutfit: await resolveMany(profile.defaultOutfit, `${profile.ref} outfit`),
+    visualAliases: normalizeVisualAliases(await Promise.all((profile.visualAliases || []).map(async (alias) => ({
+      name: await resolveMacros(alias.name, userId, chatId),
+      description: await resolveMacros(alias.description, userId, chatId),
+    }))), `${profile.ref} visual alias`),
     anatomy: normalizeConditionalAnatomy(await resolveMany(profile.anatomy, `${profile.ref} conditional anatomy`)),
   }
 }
@@ -1274,6 +1313,133 @@ function outfitCaptionSentences(anchor, outfit) {
   return sentences
 }
 
+function outfitExposureState(outfit) {
+  const joined = animaTagList(outfit).join(', ')
+  return {
+    joined,
+    upperExposed: /\b(?:shirtless|topless|nude|naked|bare shoulders?|sleeveless|open chest|open shirt|off shoulder|one shoulder bare)\b/.test(joined),
+    midriffExposed: /\b(?:nude|naked|bare midriff|midriff|crop top|cropped shirt|open shirt|open jacket)\b/.test(joined),
+    earsCovered: /\b(?:helmet|full helmet|hood|hooded|headwrap)\b/.test(joined),
+    upperCovered: /\b(?:armor|armour|shirt|robe|coat|jacket|tunic|sweater|hoodie|dress|uniform)\b/.test(joined),
+  }
+}
+
+function appearanceTraitVisible(tag, outfit) {
+  const value = animaTag(tag)
+  if (!value) return false
+  const state = outfitExposureState(outfit)
+  if (/\b(?:tattoo|body marking|scar|birthmark)\b/.test(value)) {
+    const upperRegion = /\b(?:shoulder|arm|chest|torso|back|rib|navel|stomach|abdomen)\b/.test(value)
+    if ((upperRegion || state.upperCovered) && state.upperCovered && !state.upperExposed) return false
+  }
+  if (/\bnavel piercing\b/.test(value) && state.upperCovered && !state.midriffExposed) return false
+  if (/\bear piercing\b/.test(value) && state.earsCovered) return false
+  return true
+}
+
+function filterAppearanceByVisibility(appearance, outfit) {
+  return (appearance || []).filter((tag) => appearanceTraitVisible(tag, outfit))
+}
+
+function signaturePriority(tag) {
+  const value = animaTag(tag)
+  if (/\b(?:round glasses|glasses|eyewear|goggles|monocle|eyepatch)\b/.test(value)) return 1
+  if (/\b(?:pointed elf ears|elf ears|horns?|wings?|tail)\b/.test(value)) return 2
+  if (/\b(?:tattoo|scar|birthmark|body marking)\b/.test(value)) return 3
+  if (/\bpiercing\b/.test(value)) return 4
+  return 99
+}
+
+function signatureOwnershipSentence(tag, anchor) {
+  const value = animaTag(tag)
+  if (!value || signaturePriority(value) >= 99) return ''
+  const name = sentenceName(anchor)
+  if (/\b(?:glasses|eyewear|goggles|monocle|eyepatch)\b/.test(value)) return `${name} wears ${value}.`
+  return `${name} has ${value}.`
+}
+
+function aliasMentioned(text, alias) {
+  const haystack = normalizeIdentityText(text)
+  const needle = normalizeIdentityText(alias && alias.name)
+  return !!needle && haystack.includes(needle)
+}
+
+function subjectSceneText(item, scene) {
+  const subject = item.subject || {}
+  const relationBits = []
+  for (const relation of scene.relations || []) {
+    if (relation.actor === subject.ref || relation.target === subject.ref) {
+      relationBits.push(relation.action, ...(relation.details || []))
+    }
+  }
+  return [
+    ...(subject.outfit || []),
+    ...(subject.pose || []),
+    subject.support || '',
+    ...(subject.action || []),
+    ...relationBits,
+  ].filter(Boolean).join(', ')
+}
+
+function aliasDescriptorWithArticle(description) {
+  const value = String(description || '').trim()
+  if (!value) return ''
+  if (/^(?:a|an|the)\s+/i.test(value)) return value
+  return `${articleFor(value)} ${value}`
+}
+
+function aliasIsSheathable(description) {
+  return /\b(?:sword|dagger|knife|blade|rapier|saber|sabre)\b/i.test(String(description || ''))
+}
+
+function normalizeAliasTag(tag, alias) {
+  let value = normalizeVisualPhrase(tag)
+  if (!aliasMentioned(value, alias)) return value
+  if (/\bsheathed\b/i.test(value) && !aliasIsSheathable(alias.description)) {
+    value = value.replace(/\bsheathed\b/gi, 'carried on back')
+  }
+  return value
+}
+
+function activeAliasesForSubject(item, scene) {
+  const aliases = item.profile && Array.isArray(item.profile.visualAliases) ? item.profile.visualAliases : []
+  const text = subjectSceneText(item, scene)
+  return aliases.filter((alias) => aliasMentioned(text, alias)).slice(0, 2)
+}
+
+function aliasOwnershipSentence(alias, item, scene) {
+  const name = sentenceName(item.anchor)
+  const subjectText = normalizeIdentityText(subjectSceneText(item, scene))
+  const prop = String(alias.name || '').trim()
+  const description = aliasDescriptorWithArticle(alias.description)
+  if (!prop || !description) return ''
+  if (/\b(?:hold|holds|holding|wield|wields|wielding|grip|grips|gripping)\b/.test(subjectText)) {
+    return `${name} holds ${prop}, ${description}.`
+  }
+  if (/\b(?:carry|carries|carrying|sheathed|on back|at back)\b/.test(subjectText)) {
+    return `${name} carries ${prop}, ${description}.`
+  }
+  return `${prop} is ${name}'s ${String(alias.description || '').trim()}.`
+}
+
+function subjectOwnershipAnchors(item, scene) {
+  const anchors = []
+  const signature = [...(item.appearance || [])]
+    .filter((tag) => appearanceTraitVisible(tag, item.outfit))
+    .sort((a, b) => signaturePriority(a) - signaturePriority(b))
+    .find((tag) => signaturePriority(tag) < 99)
+  if (signature) {
+    const sentence = signatureOwnershipSentence(signature, item.anchor)
+    if (sentence) anchors.push(sentence)
+  }
+  for (const alias of activeAliasesForSubject(item, scene)) {
+    const sentence = aliasOwnershipSentence(alias, item, scene)
+    if (sentence) anchors.push(sentence)
+    if (anchors.length >= 2) break
+  }
+  return uniqueStrings(anchors).slice(0, 2)
+}
+
 function subjectTagLine(item, scene, descriptors) {
   const anchor = sentenceName(item.anchor)
   const noun = animaTag(item.noun) || 'subject'
@@ -1281,14 +1447,27 @@ function subjectTagLine(item, scene, descriptors) {
   const actions = item.action
     .filter((part) => !actionDuplicatesRelation(part, item.subject.ref, scene.relations))
     .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
+  const aliases = activeAliasesForSubject(item, scene)
+  const normalizeWithAliases = (part) => {
+    let value = part
+    for (const alias of aliases) value = normalizeAliasTag(value, alias)
+    return animaTag(value)
+  }
+  // In multi-subject scenes the ownership sentence already carries the proper
+  // name, so repeat only the visual descriptor in the tag block. Solo scenes
+  // retain both name and descriptor because they do not receive prose anchors.
+  const aliasTags = aliases.flatMap((alias) => descriptors.length > 1
+    ? [alias.description]
+    : [alias.name, alias.description])
   const tags = uniqueStrings([
     noun,
-    ...item.appearance,
+    ...filterAppearanceByVisibility(item.appearance, item.outfit),
     ...item.outfit,
     ...poses,
     ...item.expression,
     ...actions,
-  ].map(animaTag).filter(Boolean))
+    ...aliasTags,
+  ].map(normalizeWithAliases).filter(Boolean))
   return [anchor, ...tags].filter(Boolean).join(', ')
 }
 
@@ -1338,6 +1517,13 @@ function compileStructuredScene(scene, profiles, sourcePassage = '') {
   if (relationAnchors.length) sections.push(relationAnchors.join(' '))
 
   for (const item of descriptors) {
+    // Signature ownership anchors are used only in multi-subject scenes, where
+    // glasses, markings, species features, and named props are most likely to
+    // bleed onto the wrong subject. Keep solo prompts tag-only and compact.
+    if (descriptors.length > 1) {
+      const ownership = subjectOwnershipAnchors(item, scene)
+      if (ownership.length) sections.push(ownership.join(' '))
+    }
     const line = subjectTagLine(item, scene, descriptors)
     if (line) sections.push(line)
     const anatomy = visibleAnatomySentence(item, scene)
@@ -1370,7 +1556,8 @@ function profileSchemaHints(profiles) {
     const profile = profiles[ref]
     if (!profile) continue
     const label = [profile.anchor, profile.subject].filter(Boolean).join(' — ')
-    hints.push(`- ref "${ref}" means ${label || ref}. Do not output permanent appearance for this ref.`)
+    const aliases = (profile.visualAliases || []).map((alias) => `${alias.name} = ${alias.description}`).join('; ')
+    hints.push(`- ref "${ref}" means ${label || ref}. Do not output permanent appearance for this ref.${aliases ? ` Named visual aliases: ${aliases}. Use the exact prop name when it is present.` : ''}`)
   }
   return hints.join('\n')
 }
@@ -1406,6 +1593,10 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
     ...profile,
     appearance: applyBannedToList(profile.appearance, preset.bannedTags),
     defaultOutfit: applyBannedToList(profile.defaultOutfit, preset.bannedTags),
+    visualAliases: (profile.visualAliases || []).filter((alias) => {
+      const kept = applyBannedToList([alias.name, alias.description], preset.bannedTags)
+      return kept.length === 2
+    }),
     anatomy: applyBannedToList(profile.anatomy, preset.bannedTags),
   })
   const profiles = { character: filterProfile(rawProfiles.character), persona: filterProfile(rawProfiles.persona) }
@@ -1419,7 +1610,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   // compiler owns safety/count → short interaction anchors → character tag blocks → scene tags.
   const customHeader = joinPromptParts([preset.qualityTags, prefix])
   const prompt = joinPromptParts([customHeader, core])
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v3' }
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v4' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -1807,7 +1998,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v3',
+          compiler: compiled.compiler || 'anima-hybrid-v4',
         })
         done++
       } catch (e) {
@@ -1894,7 +2085,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v3',
+          compiler: compiled.compiler || 'anima-hybrid-v4',
         })
       }
 
@@ -2146,7 +2337,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.18.3',
+          version: (spindle.manifest && spindle.manifest.version) || '0.18.4',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -2902,4 +3093,4 @@ let lastAutoHandledMessageId = ''
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.3'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.4'))

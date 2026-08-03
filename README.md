@@ -1,62 +1,70 @@
-# LumiDraw Studio 0.18.3
+# LumiDraw Studio 0.18.4
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.18.3 — Selective Anima hybrid and anatomy controls
+## 0.18.4 — Signature ownership and named prop aliases
 
-Parser mode still has two clearly separated engines.
+Parser mode still has two clearly separated engines. **Legacy instruction-only**
+remains unchanged and dependable. This build changes only the experimental Anima
+hybrid compiler.
 
-### Legacy instruction-only — version 0.13 behavior
+### Signature ownership anchors
 
-This remains the dependable daily-driver path and is unchanged in this build.
+Multi-character prompts now lift at most one distinctive visible trait per
+subject into a short ownership sentence immediately beside that subject's tag
+block. This is deliberately narrow and prioritizes details that commonly bleed:
 
-- Uses the working instruction-only parser flow.
-- Accepts the parser's comma-separated tag prompt directly.
-- Prepends the committed preset's quality tags, character tags, and prompt prefix.
-- Does not use structured identity JSON or the Anima compiler.
-- Existing custom legacy Parser instructions remain preserved.
+- glasses and other eyewear;
+- pointed ears, horns, wings, or a tail;
+- visible tattoos, scars, birthmarks, and piercings.
 
-### Anima hybrid experimental — natural language only where useful
+Examples:
 
-The experimental path remains mostly Danbooru/Gelbooru-style tags. Short natural-
-language anchors are now injected only for cross-subject geometry in scenes with
-multiple subjects. Solo scenes stay tag-oriented unless explicit visible anatomy
-requires an ownership sentence.
+```text
+Sovi wears round glasses.
+Sovi, adult elf femboy, ...
+```
 
-The hybrid pipeline is:
+```text
+Wulfgar has tribal tattoo on left shoulder.
+Wulfgar, adult human man, ...
+```
 
-1. The parser extracts compact structured JSON.
-2. LumiDraw binds saved character/persona identities.
-3. Each subject receives a separate named tag block.
-4. Up to three short sentences bind multi-character orientation and contact.
-5. Setting, camera, lighting, and style remain tags.
+Solo prompts remain tag-only. The compiler still avoids turning the entire
+prompt into natural-language captions.
 
-## Conditional visible anatomy
+### Visibility-aware markings
 
-The profile editor now labels this field **Conditional visible anatomy**.
+Appearance markings are no longer treated as universally visible. Tattoos,
+torso scars, and navel piercings are omitted when the current outfit appears to
+cover them, unless the parsed outfit explicitly exposes the relevant area.
+This prevents a hidden tattoo from becoming a floating trait that Anima can
+attach to another subject.
 
-- Enter only concrete anatomy that can be hidden by clothing or framing, such as
-  `penis`.
-- Put identity and presentation tags such as `femboy`, `feminine male`,
-  `trans woman`, and `androgynous` under **Permanent appearance tags**.
-- Unsupported identity/presentation phrases in the anatomy field are ignored by
-  the Anima compiler instead of being converted into malformed exposure text.
-- Safe and sensitive scenes never receive an exposed-anatomy sentence, even when
-  a profile is set to Always include.
-- Relevant-mode anatomy still requires the story to explicitly name and visibly
-  depict that saved character's anatomy.
+### Named props / visual aliases
 
-Recognized conditional anatomy is normalized to concrete ownership-safe terms.
-This prevents output such as `Sovi's feminine male is visibly exposed.`
+Each identity profile now has an optional **Named props / visual aliases** field.
+Use one mapping per line:
 
-## Anima cleanup
+```text
+Aegis-fang = single massive warhammer
+```
 
-- Corrects `androgenous` to `androgynous` in compiled Anima tags.
-- Removes the placeholder tag `default outfit` from final prompts.
-- Cleans comma boundaries between saved quality tags, prompt prefixes, and the
-  compiled prompt without replacing the user's chosen quality tags.
-- Keeps the compiler identifier at `anima-hybrid-v3` for prompt/debug comparison.
+When the parser places that named prop in the character's outfit, pose, or
+action, LumiDraw keeps the proper name and injects the visual description. A
+non-bladed prop described as `sheathed` is normalized to `carried on back`.
+
+The alias is not injected into unrelated scenes, keeping prompts compact.
+
+### Recommended Wulfgar setup
+
+- Stable subject phrase: `adult human man`
+- Permanent appearance tags: keep the physical traits you want in every scene.
+- Named props / visual aliases:
+  `Aegis-fang = single massive warhammer`
+
+The compiler identifier is now `anima-hybrid-v4`.
 
 ## Parser reliability and diagnostics
 
@@ -86,11 +94,12 @@ This prevents output such as `Sovi's feminine male is visibly exposed.`
 
 ## Suggested testing
 
-1. Confirm the header and Terminal show **v0.18.3**.
+1. Confirm the header and Terminal show **v0.18.4**.
 2. Keep **Legacy instruction-only** available as the known-good baseline.
-3. In Sovi's Permanent appearance tags, keep `feminine male`, `femboy`, and
-   `androgynous`; keep only `penis` in Conditional visible anatomy.
-4. Run a safe solo Sovi scene and confirm no anatomy sentence is added.
-5. Run a multi-character scene and confirm only the short contact/orientation
-   lines use natural language.
-6. Compare the final prompt in the Story debug panel before judging the image.
+3. Set Wulfgar's Stable subject phrase to `adult human man`.
+4. Add `Aegis-fang = single massive warhammer` under his Named props / visual
+   aliases.
+5. Re-run the Sovi/Wulfgar scene. Confirm the final prompt says that Sovi wears
+   round glasses, omits Wulfgar's covered shoulder tattoo, and expands
+   Aegis-fang only when the parser includes it.
+6. Compare both returned images before deciding whether ownership improved.

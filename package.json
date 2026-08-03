@@ -1,8 +1,8 @@
 {
   "name": "lumidraw-studio",
-  "version": "0.18.3",
+  "version": "0.18.4",
   "private": true,
-  "description": "An Anima-optimized Draw Things Studio with a stable legacy parser and selective structured hybrid anchors.",
+  "description": "An Anima-optimized Draw Things Studio with selective ownership anchors and named prop aliases.",
   "license": "MIT",
   "dependencies": {}
 }
