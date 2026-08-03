@@ -1,34 +1,37 @@
-# LumiDraw Studio 0.17.0
+# LumiDraw Studio 0.17.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.17.0 — structured subject binding
+## 0.17.1 — parser safeguards, fast Inline restored
 
-Story illustration can now use a deterministic subject-binding compiler instead
-of asking the parser LLM to write the final natural-language image prompt.
+This update separates the two story paths again:
 
-- Parser and Inline modes can return compact structured scene JSON.
-- LumiDraw validates the JSON and rejects prose-like fields before any Draw
-  Things generation is started.
-- Saved character and persona identity profiles provide locked anchors, count
-  tags, stable subject phrases, permanent appearance, default outfits, and
-  visibility-dependent anatomy.
-- Pose, expression, action, interactions, and scene-specific outfits stay in the
-  current scene rather than contaminating permanent identity.
-- Single-subject scenes compile to compact Danbooru-style tags.
-- Multi-subject scenes compile to short, fixed subject clauses with explicit
-  left/right/foreground/background ownership.
-- Anatomy can be set to Always, Only when explicitly visible/relevant, or Never
-  include automatically. The parser only supplies an `anatomy_visible` flag;
-  it never rewrites the saved identity.
-- The Story screen shows the last parsed scene and the exact final prompt sent
-  to Draw Things.
-- The legacy tag-only parser remains available by disabling Subject binding.
+- **Inline mode** uses the simpler pre-0.17 comma-separated tag protocol. It
+  does not run a parser model, structured compiler, complexity score, or model
+  router. This keeps Inline fast and close to its previously reliable behavior.
+- **Parser mode** retains structured subject binding and adds interaction-first
+  compilation plus a hard anatomy firewall.
 
-The parser model does not need to write polished natural language. It only needs
-to choose the scene and fill terse schema fields. Values longer than the allowed
-short-phrase limits are rejected rather than muddied into an image prompt.
+Parser safeguards:
+
+- Shared physical interactions are placed before the independent character
+  descriptions so actor and target ownership is established early.
+- Multi-subject prompts request one unified image and guard against split
+  screens, panels, collages, and duplicate characters.
+- Saved character/persona names are recognized even when the parser returns a
+  first name or incorrectly labels one as an `other` subject.
+- Parser-provided anatomy terms are removed from known-character scene fields.
+- Conditional profile anatomy is included only when the parser marks it visible
+  **and** the source story explicitly names that saved anatomy.
+- Sexual context, nudity, lowered clothes, arousal, or post-sex context alone do
+  not activate conditional anatomy.
+- `Always include` still uses the saved profile; `Never include automatically`
+  still suppresses it.
+- Relation instructions require active actor-to-target wording.
+
+There is no automatic complexity scoring, model switching, or additional LLM
+pass. The selected mode and parser model are used exactly as configured.
 
 ## Retained behavior
 
@@ -38,24 +41,9 @@ short-phrase limits are rejected rather than muddied into an image prompt.
 - In-app viewer with safe-area sizing, zoom, pinch, pan, and history reuse.
 - Bridge-powered image-model, sampler, and LoRA catalogs.
 - Committed chat presets remain isolated from temporary Studio experiments.
-- Old-message rescanning and inline/parser story generation.
+- Old-message rescanning in Parser mode.
 - Draw Things `batch_count` is forced to `1` and only one image is accepted per
   requested illustration.
-
-## Profile setup
-
-Edit the active preset under Presets. For each main subject, keep these separate:
-
-- **Anchor/name:** repeated ownership anchor, such as `Mara`.
-- **Count tag:** model-facing count tag, such as `1girl` or `1boy`.
-- **Stable subject phrase:** short identity phrase, such as `adult woman`.
-- **Permanent appearance:** stable body, face, hair, eye, and presentation tags.
-- **Default outfit:** used only when the current scene does not specify clothing.
-- **Anatomy:** visibility-dependent traits, normally genital anatomy.
-
-Stable chest/body traits that should remain present in clothed scenes belong in
-Permanent appearance. Scene-specific pose, expression, action, and clothing do
-not belong in the profile.
 
 ## Requirements
 
@@ -65,12 +53,13 @@ not belong in the profile.
 
 ## Verify
 
-The header must show **v0.17.0**.
+The header must show **v0.17.1**.
 
-1. Open Presets and fill the character anchor, count tag, subject phrase, and
-   permanent appearance. Save the preset.
-2. Leave **Subject binding compiler** enabled in Story.
-3. Test one multi-subject Parser or Inline illustration.
-4. Check **Last subject compile** to confirm each identity remained in its own
-   clause and the final Draw Things prompt contains no parser prose.
+1. Test Inline once and confirm its `<dt-image>` body is ordinary comma-separated
+   tags rather than JSON.
+2. Test Parser with two interacting subjects.
+3. In **Last parser subject compile**, confirm `Shared interaction` appears before
+   the two identity blocks.
+4. Confirm conditional anatomy stays absent unless it is explicitly named in the
+   story passage.
 5. Sanity-check Studio, History, image zoom, and both desktop and mobile layouts.

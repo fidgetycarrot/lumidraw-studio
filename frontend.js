@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.17.0'
+const EXTENSION_VERSION = '0.17.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -455,7 +455,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.17.0" aria-label="LumiDraw Studio v0.17.0">
+    <button class="ld-launcher" title="LumiDraw Studio v0.17.1" aria-label="LumiDraw Studio v0.17.1">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -464,7 +464,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.17.0</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.17.1</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -607,8 +607,10 @@ function realSetup(ctx) {
             <div class="ld-mode-note ld-help">Inline is fastest. Parser gives you a separate prompt-conversion step and supports rescanning old messages.</div>
             <label style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px"><input type="checkbox" class="ld-autoscan" style="width:auto" /> Auto-scan after each story message when supported</label>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
-            <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-subject-binding" style="width:auto" /> Subject binding compiler — structured scene JSON, locked identities, compact final clauses</label>
-            <div class="ld-binding-note">The LLM does not write the final natural-language prompt. It returns short structured fields; LumiDraw rejects prose and compiles the final prompt with fixed templates. This reduces dependence on an unusually smart parser model.</div>
+            <div class="ld-parser-binding-controls">
+              <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-subject-binding" style="width:auto" /> Parser subject binding — structured JSON, locked identities, interaction-first prompt</label>
+              <div class="ld-binding-note">Parser only. Inline mode uses the simpler pre-0.17 tag path with no extra model call or compiler. Parser anatomy can never override saved profiles, and conditional anatomy requires an explicit mention in the story.</div>
+            </div>
             <div class="ld-row" style="margin-top:9px">
               <div><span class="ld-label">Minimum images (0 = model decides)</span><input class="ld-minimg" type="number" min="0" max="4" step="1" /></div>
               <div><span class="ld-label">Maximum images</span><input class="ld-maximg" type="number" min="1" max="4" step="1" /></div>
@@ -632,8 +634,8 @@ function realSetup(ctx) {
             <button class="ld-btn ld-compact" data-act="reset-protocol" style="margin-top:6px">Reset to default</button>
           </div>
           <div class="ld-card ld-story-debug">
-            <div class="ld-subtitle">Last subject compile</div>
-            <div class="ld-help">This shows exactly what LumiDraw sent to Draw Things after binding subjects. Invalid JSON or prose is rejected before generation.</div>
+            <div class="ld-subtitle">Last parser subject compile</div>
+            <div class="ld-help">This shows exactly what Parser mode sent to Draw Things after binding subjects. Inline mode remains on the legacy tag path.</div>
             <span class="ld-label" style="margin-top:8px">Final Draw Things prompt</span>
             <textarea class="ld-story-final-prompt" readonly placeholder="No structured story prompt has been compiled yet."></textarea>
             <details class="ld-profile-block">
@@ -681,7 +683,7 @@ function realSetup(ctx) {
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-chartags" style="min-height:58px" placeholder="feminine appearance, tall, curvy, long black hair, green eyes"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-char-outfit" style="min-height:48px" placeholder="black fitted jacket, dark trousers"></textarea></div>
                 <div><span class="ld-label">Anatomy / visibility-dependent traits</span><textarea class="ld-ed-char-anatomy" style="min-height:48px" placeholder="penis"></textarea></div>
-                <div><span class="ld-label">Automatic anatomy inclusion</span><select class="ld-ed-char-anatomy-mode"><option value="relevant">Only when explicitly visible or relevant</option><option value="always">Always include</option><option value="manual">Never include automatically</option></select></div>
+                <div><span class="ld-label">Automatic anatomy inclusion</span><select class="ld-ed-char-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Always include</option><option value="manual">Never include automatically</option></select></div>
                 <div class="ld-help">Keep stable body traits such as breasts in permanent appearance. Put visibility-dependent genital anatomy here. Keep pose, expression, actions, and scene-specific clothing out of the profile.</div>
               </div>
             </details>
@@ -696,7 +698,7 @@ function realSetup(ctx) {
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-personatags" style="min-height:58px"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-persona-outfit" style="min-height:48px"></textarea></div>
                 <div><span class="ld-label">Anatomy / visibility-dependent traits</span><textarea class="ld-ed-persona-anatomy" style="min-height:48px"></textarea></div>
-                <div><span class="ld-label">Automatic anatomy inclusion</span><select class="ld-ed-persona-anatomy-mode"><option value="relevant">Only when explicitly visible or relevant</option><option value="always">Always include</option><option value="manual">Never include automatically</option></select></div>
+                <div><span class="ld-label">Automatic anatomy inclusion</span><select class="ld-ed-persona-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Always include</option><option value="manual">Never include automatically</option></select></div>
               </div>
             </details>
             <span class="ld-label" style="margin-top:7px">Banned tags</span><input class="ld-ed-banned" />
@@ -2384,6 +2386,8 @@ ${entry.prompt || ''}`.trim()
         ? 'Choose any assistant message in the current chat and run Parser mode on it'
         : 'Old-message rescanning is available when Story illustrations is set to Parser'
     }
+    const bindingControls = $('.ld-parser-binding-controls')
+    if (bindingControls) bindingControls.style.display = mode === 'parser' ? '' : 'none' 
   }
 
   // All settings text fields auto-save as you type (debounced).
