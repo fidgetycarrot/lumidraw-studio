@@ -1440,6 +1440,10 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
   const method = useRawOverride ? generateApi.raw.bind(generateApi) : generateApi.quiet.bind(generateApi)
 
   const opts = {
+    // Operator-scoped extensions must pass the active user explicitly in the
+    // request object. Keeping the second-argument retry below preserves
+    // compatibility with older generation API shapes.
+    userId,
     messages,
     parameters: {
       temperature: 0.2,
@@ -2082,7 +2086,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.18.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.18.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -2838,4 +2842,4 @@ let lastAutoHandledMessageId = ''
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.1'))

@@ -1,15 +1,15 @@
-# LumiDraw Studio 0.18.0
+# LumiDraw Studio 0.18.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.18.0 — explicit Parser engines
+## 0.18.1 — explicit Parser engines
 
 Parser mode now has two clearly separated engines.
 
 ### Legacy instruction-only — version 0.13 behavior
 
-This is the default after upgrading to 0.18.0 and is intended as the dependable
+This is the default after upgrading to 0.18.1 and is intended as the dependable
 fallback while the Anima compiler is tuned.
 
 - Uses the same instruction-only parser flow as the known-good 0.13.1 build.
@@ -65,9 +65,14 @@ selected engine.
 
 ## Verify the fallback
 
-1. Confirm the header and Terminal show **v0.18.0**.
+1. Confirm the header and Terminal show **v0.18.1**.
 2. Open Story and select **Parser**.
 3. Select **Legacy instruction-only — version 0.13 behavior**.
 4. Confirm the Parser instruction contains the familiar tag-only instruction.
 5. Run **Scan latest** and look for `legacy parser request started` in Terminal.
 6. Confirm Draw Things receives the parser's direct tag prompt.
+
+
+## 0.18.1
+
+- Fixes immediate Parser failures on operator-scoped installs by passing the active `userId` in both structured and legacy generation requests.
