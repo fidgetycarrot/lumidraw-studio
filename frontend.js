@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.18.1'
+const EXTENSION_VERSION = '0.18.2'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -475,7 +475,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.18.1" aria-label="LumiDraw Studio v0.18.1">
+    <button class="ld-launcher" title="LumiDraw Studio v0.18.2" aria-label="LumiDraw Studio v0.18.2">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -484,7 +484,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.1</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.2</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -632,7 +632,7 @@ function realSetup(ctx) {
               <span class="ld-label">Parser engine</span>
               <select class="ld-parser-engine">
                 <option value="legacy">Legacy instruction-only — version 0.13 behavior</option>
-                <option value="anima">Anima structured — JSON identities and deterministic compiler</option>
+                <option value="anima">Anima hybrid experimental — structured anchors + legacy-style tags</option>
               </select>
               <div class="ld-binding-note ld-parser-engine-note">Legacy sends the story passage to the selected parser using only the instruction below, then sends its returned tag prompt directly to Draw Things.</div>
               <div class="ld-help ld-story-last-status">Auto illustrations idle.</div>
@@ -661,7 +661,7 @@ function realSetup(ctx) {
           </div>
           <div class="ld-card ld-story-debug">
             <div class="ld-subtitle ld-parser-debug-title">Last parser result</div>
-            <div class="ld-help">Legacy mode shows the parser's direct tag prompt. Anima structured mode shows the bound JSON scene and deterministic Anima prompt. Inline mode remains separate.</div>
+            <div class="ld-help">Legacy mode shows the parser's direct tag prompt. Anima hybrid mode shows the bound JSON scene plus a mostly tag-based prompt with a few controlled natural-language anchors. Inline mode remains separate.</div>
             <span class="ld-label" style="margin-top:8px">Final Draw Things prompt</span>
             <textarea class="ld-story-final-prompt" readonly placeholder="No parser prompt has been generated yet."></textarea>
             <details class="ld-profile-block">
@@ -2516,10 +2516,10 @@ ${entry.prompt || ''}`.trim()
     const label = $('.ld-parser-instruction-label')
     const title = $('.ld-parser-debug-title')
     if (note) note.textContent = engine === 'anima'
-      ? 'Experimental: the parser returns structured JSON; LumiDraw locks saved identities and compiles an Anima-specific hybrid prompt.'
+      ? 'Experimental: structured JSON locks identities and contact geometry, then LumiDraw keeps the final prompt mostly tags with only a few short ownership-safe sentences.'
       : 'Known-good fallback: version 0.13-style instruction-only parsing. The returned tag prompt goes directly to Draw Things without identity JSON or the Anima compiler.'
-    if (label) label.textContent = engine === 'anima' ? 'Anima parser scene-selection guidance' : 'Legacy parser instruction'
-    if (title) title.textContent = engine === 'anima' ? 'Last Anima parser compile' : 'Last legacy parser result'
+    if (label) label.textContent = engine === 'anima' ? 'Anima hybrid scene-extraction guidance' : 'Legacy parser instruction'
+    if (title) title.textContent = engine === 'anima' ? 'Last Anima hybrid compile' : 'Last legacy parser result'
   }
 
   function updateScanLabel() {
@@ -2531,7 +2531,7 @@ ${entry.prompt || ''}`.trim()
       btn.textContent = mode === 'off'
         ? 'Scan latest 📖 (mode: Off — set in Story)'
         : mode === 'parser'
-          ? `Scan latest 📖 (${engine === 'anima' ? 'Anima structured' : 'Legacy'})`
+          ? `Scan latest 📖 (${engine === 'anima' ? 'Anima hybrid' : 'Legacy'})`
           : `Scan latest 📖 (${mode})`
     }
     if (oldBtn) {

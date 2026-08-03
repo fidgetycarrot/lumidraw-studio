@@ -1,11 +1,11 @@
 {
-  "version": "0.18.1",
+  "version": "0.18.2",
   "name": "LumiDraw Studio",
   "identifier": "lumidraw_studio",
   "author": "fidgetycarrot",
   "github": "https://github.com/fidgetycarrot/lumidraw-studio",
   "homepage": "https://github.com/fidgetycarrot/lumidraw-studio",
-  "description": "An Anima-optimized Draw Things Studio and Story workspace with structured Parser subject binding and Bridge-powered catalogs.",
+  "description": "An Anima-optimized Draw Things Studio and Story workspace with legacy tag parsing plus experimental structured hybrid anchors.",
   "permissions": [
     "images",
     "image_gen",

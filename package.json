@@ -1,8 +1,8 @@
 {
   "name": "lumidraw-studio",
-  "version": "0.18.1",
+  "version": "0.18.2",
   "private": true,
-  "description": "An Anima-optimized Draw Things Studio and Story workspace with structured Parser subject binding and Bridge-powered catalogs.",
+  "description": "An Anima-optimized Draw Things Studio and Story workspace with legacy tag parsing plus experimental structured hybrid anchors.",
   "license": "MIT",
   "dependencies": {}
 }

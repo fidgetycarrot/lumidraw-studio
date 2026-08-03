@@ -52,7 +52,8 @@ const DEFAULT_PROTOCOL = LEGACY_DEFAULT_PROTOCOL
 
 const LEGACY_DEFAULT_PARSER_INSTRUCTION = `You convert a story passage into ONE image prompt of comma-separated danbooru-style tags (subject count, expression, outfit, pose, setting, lighting, composition). Choose the single most visual moment of the passage. Do not use character names; describe appearance instead. Respond with ONLY the tags. You may return up to {{max_images}} prompts for distinct visual moments, one per line, but prefer a single strong one. If the passage has no strong visual moment, respond with exactly: NONE`
 
-const DEFAULT_PARSER_INSTRUCTION = `Choose the strongest visual moment in the story passage. Prefer one image, but you may choose up to {{max_images}} distinct moments. Describe only scene state: which subjects are present, their current outfit, pose, expression, active-voice interaction, setting, camera, and lighting. Do not rewrite permanent character identity or invent anatomy. LumiDraw will append a strict JSON schema and compile the final image prompt itself.`
+const DEFAULT_PARSER_INSTRUCTION = `Choose the strongest visual moment in the story passage. Prefer one image, but you may choose up to {{max_images}} distinct moments. Extract a compact visual skeleton: subjects, current clothing, expressions, poses, support surfaces, the base body arrangement, direct contact points, setting, camera, and lighting. Do not rewrite permanent character identity or invent anatomy. LumiDraw will keep the final prompt mostly Danbooru/Gelbooru-style tags and inject only a few short ownership-safe natural-language anchors where tags are prone to character bleed or spatial ambiguity.`
+const V0181_ANIMA_PARSER_INSTRUCTION = `Choose the strongest visual moment in the story passage. Prefer one image, but you may choose up to {{max_images}} distinct moments. Describe only scene state: which subjects are present, their current outfit, pose, expression, active-voice interaction, setting, camera, and lighting. Do not rewrite permanent character identity or invent anatomy. LumiDraw will append a strict JSON schema and compile the final image prompt itself.`
 const HISTORY_LIMIT = 24
 
 // Keys we copy from a synced Draw Things config into a preset, and the only
@@ -86,14 +87,14 @@ async function getSettings() {
   }
   // 0.18 introduces an explicit engine selector. Existing installs enter the
   // known-good v0.13 instruction-only path until the user deliberately chooses
-  // the experimental Anima structured compiler.
+  // the experimental Anima hybrid compiler.
   if (!['legacy', 'anima'].includes(settings.parserEngine)) settings.parserEngine = 'legacy'
   if (!stored || !stored.parserEngine) settings.parserEngine = 'legacy'
   settings.subjectBinding = settings.parserEngine === 'anima' // backward-compatible debug/profile flag
-  if (settings.parserEngine === 'anima' && (!stored || !stored.parserInstruction || stored.parserInstruction === LEGACY_DEFAULT_PARSER_INSTRUCTION)) {
+  if (settings.parserEngine === 'anima' && (!stored || !stored.parserInstruction || stored.parserInstruction === LEGACY_DEFAULT_PARSER_INSTRUCTION || stored.parserInstruction === V0181_ANIMA_PARSER_INSTRUCTION)) {
     settings.parserInstruction = ''
   }
-  if (settings.parserEngine === 'legacy' && stored && stored.parserInstruction === DEFAULT_PARSER_INSTRUCTION) {
+  if (settings.parserEngine === 'legacy' && stored && (stored.parserInstruction === DEFAULT_PARSER_INSTRUCTION || stored.parserInstruction === V0181_ANIMA_PARSER_INSTRUCTION)) {
     settings.parserInstruction = ''
   }
   return settings
@@ -913,6 +914,9 @@ function normalizeScene(raw) {
     camera: shortList(source.camera || [], 'camera', { maxItems: 10, maxWords: 7, maxChars: 72 }),
     lighting: shortList(source.lighting || [], 'lighting', { maxItems: 10, maxWords: 7, maxChars: 72 }),
     style: shortList(source.style || [], 'style', { maxItems: 10, maxWords: 7, maxChars: 72 }),
+    safety: ['safe', 'sensitive', 'nsfw', 'explicit'].includes(String(source.safety || source.rating || '').trim().toLowerCase())
+      ? String(source.safety || source.rating || '').trim().toLowerCase()
+      : '',
     aspect: VALID_ASPECTS.has(aspectRaw) ? aspectRaw : '',
   }
 }
@@ -1051,6 +1055,8 @@ function normalizeVisualPhrase(value) {
   const text = String(value || '').trim()
   if (!text) return ''
   return text
+    .replace(/\bbracs\b/gi, 'braces')
+    .replace(/\btogue\b/gi, 'tongue')
     .replace(/\bhooks? the back of the knee of\b/gi, 'curls a bare heel behind the knee of')
     .replace(/\bone heel hooked behind (his|her|their) knee\b/gi, 'one bare heel curled behind $1 knee')
     .replace(/\bhooked behind (his|her|their) knee\b/gi, 'curled behind $1 knee')
@@ -1237,27 +1243,22 @@ function outfitCaptionSentences(anchor, outfit) {
   return sentences
 }
 
-function subjectCaptionSentences(item, scene, descriptors) {
+function subjectTagLine(item, scene, descriptors) {
   const anchor = sentenceName(item.anchor)
   const noun = animaTag(item.noun) || 'subject'
-  const sentences = []
-  let identity = `${anchor} is depicted as ${articleFor(noun)} ${noun}`
-  if (item.appearance.length) identity += ` with ${naturalList(item.appearance)}`
-  sentences.push(identity + '.')
-
-  if (item.outfit.length) sentences.push(...outfitCaptionSentences(anchor, item.outfit))
-
   const poses = poseWithSupport(item, scene).map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
   const actions = item.action
     .filter((part) => !actionDuplicatesRelation(part, item.subject.ref, scene.relations))
     .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
-  const poseActions = uniqueStrings([...poses, ...actions])
-  if (poseActions.length) sentences.push(`${anchor} is ${naturalList(poseActions)}.`)
-  if (item.expression.length) sentences.push(`${anchor}'s expression is ${naturalList(item.expression)}.`)
-
-  const anatomy = visibleAnatomySentence(item)
-  if (anatomy) sentences.push(anatomy)
-  return sentences
+  const tags = uniqueStrings([
+    noun,
+    ...item.appearance,
+    ...item.outfit,
+    ...poses,
+    ...item.expression,
+    ...actions,
+  ].map(animaTag).filter(Boolean))
+  return [anchor, ...tags].filter(Boolean).join(', ')
 }
 
 function relationSentence(relation, byRef) {
@@ -1269,7 +1270,7 @@ function relationSentence(relation, byRef) {
   if (!action) return ''
   let sentence = `${actorName} ${action}`
   if (targetName && !sentence.toLowerCase().includes(targetName.toLowerCase())) sentence += ` ${targetName}`
-  return sentence.replace(/\s+([,.])/g, '$1').trim() + '.'
+  return sentence.replace(/\s+([,.])/g, '$1').replace(/\s{2,}/g, ' ').trim() + '.'
 }
 
 function compileStructuredScene(scene, profiles, sourcePassage = '') {
@@ -1284,29 +1285,37 @@ function compileStructuredScene(scene, profiles, sourcePassage = '') {
   }))
 
   const sections = []
-  const countTags = aggregateCountTags(descriptors)
-  if (countTags.length) sections.push(countTags.join(', '))
+  const headerTags = []
+  if (scene.safety) headerTags.push(scene.safety)
+  headerTags.push(...aggregateCountTags(descriptors))
+  if (headerTags.length) sections.push(headerTags.join(', '))
 
-  if (descriptors.length > 1) {
-    const word = descriptors.length === 2 ? 'two' : String(descriptors.length)
-    sections.push(`The image shows exactly ${word} subjects together in one unified scene.`)
-  }
-
+  // Natural language is intentionally surgical: at most three short spatial /
+  // ownership anchors. Everything else remains tag-oriented for Anima.
   const byRef = new Map(descriptors.map((item) => [item.subject.ref, item]))
+  const relationAnchors = []
   for (const relation of scene.relations) {
     const sentence = relationSentence(relation, byRef)
-    if (sentence) sections.push(sentence)
+    if (sentence) relationAnchors.push(sentence)
+    if (relationAnchors.length >= 3) break
   }
+  if (relationAnchors.length) sections.push(relationAnchors.join(' '))
 
-  for (const item of descriptors) sections.push(...subjectCaptionSentences(item, scene, descriptors))
+  for (const item of descriptors) {
+    const line = subjectTagLine(item, scene, descriptors)
+    if (line) sections.push(line)
+    const anatomy = visibleAnatomySentence(item)
+    if (anatomy) sections.push(anatomy)
+  }
 
   const positionTags = []
   for (const item of descriptors) {
     const pos = animaTag(item.subject.position)
     if (/^(left|right)$/.test(pos)) positionTags.push(`${item.anchor} on ${pos}`.toLowerCase())
   }
-  const relationDetails = scene.relations.flatMap((relation) => relation.details || []).filter((detail) => !/^(?:pulling|pushing|holding|grabbing|biting|kissing|touching|lifting|carrying|dragging|pressing|pinning|wrapping|hooking)\b/i.test(String(detail || '').trim()))
+  const relationDetails = scene.relations.flatMap((relation) => relation.details || []).filter((detail) => !/^(?:pulling|pushing|holding|grabbing|biting|kissing|touching|lifting|carrying|dragging|pressing|pinning|wrapping|hooking|gripping|bracing|straddling)\b/i.test(String(detail || '').trim()))
   const generalTags = animaTagList([
+    ...(descriptors.length > 1 ? ['same frame'] : []),
     ...positionTags,
     ...relationDetails,
     ...scene.setting,
@@ -1333,10 +1342,13 @@ function profileSchemaHints(profiles) {
 function structuredParserSchema(maxImages, profiles) {
   return `\n\nSTRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
 Return ONLY one compact JSON object, no markdown and no prose:
-{"images":[{"anchor":"5-12 exact consecutive words copied from the passage","scene":{"subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","count_tag":"1girl|1boy|1other etc","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short visual phrases"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"active phrase that expects target name","target":"subject ref","details":["non-action visual modifiers only"]}],"setting":["short tags"],"camera":["short tags"],"lighting":["short tags"],"style":["short tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+{"images":[{"anchor":"5-12 exact consecutive words copied from the passage","scene":{"safety":"safe|sensitive|nsfw|explicit","subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","count_tag":"1girl|1boy|1other etc","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["non-action visual modifiers only"]}],"setting":["short tags"],"camera":["short tags"],"lighting":["short tags"],"style":["short tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
-This JSON is a visual skeleton for an Anima-specific deterministic compiler. Do not write the final image prompt yourself.
-Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields; put cross-subject positioning in relations with explicit actor and target refs. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles. For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". A relation actor performs its complete central action on the target; use active ownership-safe wording such as "bites the jaw of" or "pulls closer", never passive wording. Put secondary actions in the action phrase, not in relation details. Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Never place genital/anatomy terms in appearance, outfit, pose, support, expression, action, relation action, or details. LumiDraw alone controls saved anatomy.
+This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw will preserve a mostly Danbooru/Gelbooru-style tag prompt and create only a few short natural-language anchors for subject ownership and spatial contact. Do not write the final image prompt yourself.
+Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles.
+For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
+For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible.
+Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Never place genital/anatomy terms in appearance, outfit, pose, support, expression, action, relation action, or details. LumiDraw alone controls saved anatomy.
 Known subject refs:\n${profileSchemaHints(profiles)}`
 }
 
@@ -1356,10 +1368,10 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   const core = compileStructuredScene(scene, profiles, sourcePassage)
   const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
   // User-authored quality tags and prompt prefix remain verbatim. The Anima
-  // compiler owns the count → character captions → interaction → scene order.
+  // compiler owns safety/count → short interaction anchors → character tag blocks → scene tags.
   const customHeader = [preset.qualityTags, prefix].filter(Boolean).join(', ')
   const prompt = customHeader ? `${customHeader}, ${core}` : core
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v1' }
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v2' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -1747,7 +1759,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v1',
+          compiler: compiled.compiler || 'anima-hybrid-v2',
         })
         done++
       } catch (e) {
@@ -1834,7 +1846,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v1',
+          compiler: compiled.compiler || 'anima-hybrid-v2',
         })
       }
 
@@ -2086,7 +2098,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.18.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.18.2',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -2842,4 +2854,4 @@ let lastAutoHandledMessageId = ''
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.2'))
