@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.17.6'
+const EXTENSION_VERSION = '0.17.7'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -468,7 +468,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.17.6" aria-label="LumiDraw Studio v0.17.6">
+    <button class="ld-launcher" title="LumiDraw Studio v0.17.7" aria-label="LumiDraw Studio v0.17.7">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -477,7 +477,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.17.6</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.17.7</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -622,7 +622,7 @@ function realSetup(ctx) {
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
             <div class="ld-parser-binding-controls">
               <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-subject-binding" style="width:auto" /> Parser subject binding — structured JSON, locked identities, interaction-first prompt</label>
-              <div class="ld-binding-note">Parser only. Inline mode uses the simpler pre-0.17 tag path with no extra model call or compiler. Parser anatomy can never override saved profiles, and conditional anatomy requires an explicit mention in the story.</div>
+              <div class="ld-binding-note">Parser only. Inline mode uses the simpler pre-0.17 tag path with no extra model call or compiler. Parser anatomy can never override saved profiles. Structured JSON is compiled into an Anima-specific hybrid prompt with saved quality tags preserved verbatim.</div>
               <div class="ld-help ld-story-last-status">Auto illustrations idle.</div>
             </div>
             <div class="ld-row" style="margin-top:9px">
@@ -648,8 +648,8 @@ function realSetup(ctx) {
             <button class="ld-btn ld-compact" data-act="reset-protocol" style="margin-top:6px">Reset to default</button>
           </div>
           <div class="ld-card ld-story-debug">
-            <div class="ld-subtitle">Last parser subject compile</div>
-            <div class="ld-help">This shows exactly what Parser mode sent to Draw Things after binding subjects. Inline mode remains on the legacy tag path.</div>
+            <div class="ld-subtitle">Last Anima parser compile</div>
+            <div class="ld-help">Structured JSON is bound to saved identities, then compiled into Anima-optimized character captions, interaction sentences, and trailing scene tags. Inline mode remains on the legacy tag path.</div>
             <span class="ld-label" style="margin-top:8px">Final Draw Things prompt</span>
             <textarea class="ld-story-final-prompt" readonly placeholder="No structured story prompt has been compiled yet."></textarea>
             <details class="ld-profile-block">

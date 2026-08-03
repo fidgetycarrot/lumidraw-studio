@@ -863,6 +863,7 @@ function normalizeSceneSubject(raw, index) {
     pose: shortList(source.pose || [], `subject ${index + 1} pose`, { maxItems: 10, maxWords: 7, maxChars: 72 }),
     expression: shortList(source.expression || [], `subject ${index + 1} expression`, { maxItems: 8, maxWords: 7, maxChars: 72 }),
     action: shortList(source.action || [], `subject ${index + 1} action`, { maxItems: 10, maxWords: 8, maxChars: 80 }),
+    support: shortPhrase(source.support || source.support_surface || source.supportSurface || '', `subject ${index + 1} support surface`, 7, 72, true),
     anatomyVisible: source.anatomy_visible === true || source.anatomyVisible === true,
   }
 }
@@ -1036,115 +1037,272 @@ function normalizeVisualPhrase(value) {
   const text = String(value || '').trim()
   if (!text) return ''
   return text
-    .replace(/hooks? the back of the knee of/gi, 'curls a bare heel behind the knee of')
-    .replace(/one heel hooked behind (his|her|their) knee/gi, 'one bare heel curled behind $1 knee')
-    .replace(/hooked behind (his|her|their) knee/gi, 'curled behind $1 knee')
-    .replace(/hooking (his|her|their) knee/gi, 'curling a bare heel behind $1 knee')
-    .replace(/sitting on counter/gi, 'sitting on the clearly visible counter edge')
-    .replace(/seated on counter/gi, 'seated on the clearly visible counter edge')
+    .replace(/\bhooks? the back of the knee of\b/gi, 'curls a bare heel behind the knee of')
+    .replace(/\bone heel hooked behind (his|her|their) knee\b/gi, 'one bare heel curled behind $1 knee')
+    .replace(/\bhooked behind (his|her|their) knee\b/gi, 'curled behind $1 knee')
+    .replace(/\bhooking (his|her|their) knee\b/gi, 'curling a bare heel behind $1 knee')
+    .replace(/\bsitting on counter\b/gi, 'sitting on the clearly visible counter edge')
+    .replace(/\bseated on counter\b/gi, 'seated on the clearly visible counter edge')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
 }
 
 function normalizeVisualList(list) {
   return uniqueStrings((Array.isArray(list) ? list : []).map(normalizeVisualPhrase).filter(Boolean))
 }
 
+function animaTag(value) {
+  let tag = normalizeVisualPhrase(value).trim()
+  if (!tag) return ''
+  // Anima expects spaces rather than underscores, except for score_* tags.
+  if (!/^score_[1-9]$/i.test(tag)) tag = tag.replace(/_/g, ' ')
+  return tag.toLowerCase()
+}
+
+function animaTagList(list) {
+  return uniqueStrings((Array.isArray(list) ? list : []).map(animaTag).filter(Boolean))
+}
+
+function naturalList(items) {
+  const values = uniqueStrings(items || [])
+  if (!values.length) return ''
+  if (values.length === 1) return values[0]
+  if (values.length === 2) return values[0] + ' and ' + values[1]
+  return values.slice(0, -1).join(', ') + ', and ' + values[values.length - 1]
+}
+
+function sentenceName(value, fallback = 'The subject') {
+  const text = String(value || '').trim()
+  if (!text) return fallback
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+function articleFor(value) {
+  const text = String(value || '').trim().toLowerCase()
+  return /^[aeiou]/.test(text) ? 'an' : 'a'
+}
+
+function aggregateCountTags(descriptors) {
+  const sums = new Map()
+  const passthrough = []
+  for (const item of descriptors) {
+    const raw = animaTag(item.countTag)
+    if (!raw) continue
+    const match = /^(\d+)?\s*(girl|boy|other|woman|man|female|male)s?$/.exec(raw)
+    if (!match) { passthrough.push(raw); continue }
+    const count = Number(match[1] || 1)
+    const kind = match[2]
+    sums.set(kind, (sums.get(kind) || 0) + count)
+  }
+  const aggregated = []
+  for (const [kind, count] of sums.entries()) {
+    aggregated.push(`${count}${kind}${count === 1 ? '' : 's'}`)
+  }
+  return uniqueStrings([...aggregated, ...passthrough])
+}
+
 function findSupportSurface(setting) {
   const joined = (Array.isArray(setting) ? setting.join(', ') : String(setting || '')).toLowerCase()
   const surfaces = [
     ['countertop', /countertop/],
-    ['counter edge', /counter/],
-    ['bar stool', /bar stool|stool/],
-    ['chair', /chair/],
-    ['bed', /bed/],
-    ['couch', /couch|sofa/],
-    ['floor', /floor/],
-    ['wall', /wall/],
+    ['counter edge', /\bcounter\b/],
+    ['bar stool', /bar stool|\bstool\b/],
+    ['chair', /\bchair\b/],
+    ['bed', /\bbed\b/],
+    ['couch', /\bcouch\b|\bsofa\b/],
+    ['floor', /\bfloor\b/],
+    ['wall', /\bwall\b/],
+    ['table', /\btable\b/],
+    ['desk', /\bdesk\b/],
   ]
-  for (const [label, re] of surfaces) if (re.test(joined)) return label
+  for (const [label, pattern] of surfaces) if (pattern.test(joined)) return label
   return ''
 }
 
-function supportLead(item, scene) {
-  const poseText = normalizeVisualList(item.subject.pose).join(', ').toLowerCase()
-  if (!/(sitting|seated|perched|kneeling|leaning|lying)/.test(poseText)) return ''
-  const surface = findSupportSurface(scene.setting)
-  if (!surface) return ''
-  if (/(sitting|seated|perched)/.test(poseText)) return `${item.anchor} is supported by the clearly visible ${surface}.`
-  if (/(kneeling)/.test(poseText)) return `${item.anchor} is grounded against the clearly visible ${surface}.`
-  if (/(leaning)/.test(poseText)) return `${item.anchor} braces against the clearly visible ${surface}.`
-  if (/(lying)/.test(poseText)) return `${item.anchor} lies against the clearly visible ${surface}.`
-  return ''
+function supportForSubject(item, scene) {
+  if (item.subject.support) return animaTag(item.subject.support)
+  return findSupportSurface(scene.setting)
+}
+
+function poseWithSupport(item, scene) {
+  const poses = animaTagList(item.pose)
+  if (!poses.length) return poses
+  const support = supportForSubject(item, scene)
+  if (!support) return poses
+  const joined = poses.join(', ')
+  if (joined.includes(support) || /countertop|counter edge|bar stool|stool|chair|bed|couch|sofa|floor|wall|table|desk/.test(joined)) return poses
+  if (/(sitting|seated|perched)/.test(joined)) poses[0] = `${poses[0]} on the clearly visible ${support}`
+  else if (/leaning/.test(joined)) poses[0] = `${poses[0]} against the clearly visible ${support}`
+  else if (/lying/.test(joined)) poses[0] = `${poses[0]} on the clearly visible ${support}`
+  else if (/kneeling/.test(joined) && support === 'floor') poses[0] = `${poses[0]} on the clearly visible floor`
+  return uniqueStrings(poses)
+}
+
+function cleanAppearanceForNoun(items, noun) {
+  const nounText = animaTag(noun)
+  let values = animaTagList(items)
+  values = values.map((value) => {
+    if (/\b(?:man|male)\b/.test(nounText)) {
+      if (value === 'large man') return 'large'
+      if (value === 'tall male') return 'tall'
+    }
+    return value
+  })
+  if (/trans woman|trans female/.test(nounText)) {
+    values = values.filter((value) => !['trans female', 'trans woman', 'female', 'woman'].includes(value))
+  } else if (/\bwoman\b|\bfemale\b/.test(nounText)) {
+    values = values.filter((value) => !['female', 'woman'].includes(value))
+  }
+  if (/\bman\b|\bmale\b/.test(nounText)) {
+    values = values.filter((value) => !['male', 'man'].includes(value))
+  }
+  if (values.includes('extremely muscular')) values = values.filter((value) => value !== 'muscular')
+  return uniqueStrings(values)
+}
+
+function visibleAnatomySentence(item) {
+  if (!item.anatomy.length) return ''
+  const anchor = sentenceName(item.anchor)
+  const joined = item.anatomy.join(', ').toLowerCase()
+  if (/penis|cock|dick|phallus/.test(joined)) return `${anchor}'s penis is visibly exposed.`
+  if (/vagina|vulva|pussy/.test(joined)) return `${anchor}'s vulva is visibly exposed.`
+  if (/testicle|testes|scrotum|balls/.test(joined)) return `${anchor}'s testicles are visibly exposed.`
+  return `${anchor}'s ${naturalList(item.anatomy)} is visibly exposed.`
+}
+
+function comparableAction(value) {
+  return animaTag(value)
+    .replace(/\b(?:him|her|them|his|hers|their|theirs)\b/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+function actionDuplicatesRelation(action, subjectRef, relations) {
+  const actionText = comparableAction(action)
+  if (!actionText) return true
+  return (relations || []).some((relation) => {
+    if (relation.actor !== subjectRef) return false
+    const candidates = [relation.action, ...(relation.details || [])].map(comparableAction).filter(Boolean)
+    return candidates.some((relationText) => relationText.includes(actionText) || actionText.includes(relationText))
+  })
+}
+
+function resolveCrossSubjectPronouns(value, item, descriptors) {
+  let text = String(value || '')
+  if ((descriptors || []).length !== 2) return text
+  const other = descriptors.find((candidate) => candidate.subject.ref !== item.subject.ref)
+  if (!other || !other.anchor) return text
+  const name = sentenceName(other.anchor)
+  text = text
+    .replace(/\bher\s+(?=[a-z])/gi, `${name}'s `)
+    .replace(/\bhis\s+(?=[a-z])/gi, `${name}'s `)
+    .replace(/\btheir\s+(?=[a-z])/gi, `${name}'s `)
+    .replace(/\bhim\b/gi, name)
+    .replace(/\bher\b/gi, name)
+    .replace(/\bthem\b/gi, name)
+  return text
+}
+
+function outfitCaptionSentences(anchor, outfit) {
+  const clothes = []
+  const states = []
+  for (const value of outfit || []) {
+    const tag = animaTag(value)
+    if (/^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs)$/.test(tag)) states.push(tag)
+    else clothes.push(tag)
+  }
+  const sentences = []
+  if (clothes.length) sentences.push(`${anchor} wears ${naturalList(clothes)}.`)
+  for (const state of uniqueStrings(states)) {
+    if (state === 'nude' || state === 'naked') sentences.push(`${anchor} is nude.`)
+    else if (state === 'barefoot' || state === 'bare feet') sentences.push(`${anchor} is barefoot.`)
+    else if (state === 'bare legs') sentences.push(`${anchor}'s legs are bare.`)
+    else if (state === 'bare thighs') sentences.push(`${anchor}'s thighs are bare.`)
+    else sentences.push(`${anchor} is ${state}.`)
+  }
+  return sentences
+}
+
+function subjectCaptionSentences(item, scene, descriptors) {
+  const anchor = sentenceName(item.anchor)
+  const noun = animaTag(item.noun) || 'subject'
+  const sentences = []
+  let identity = `${anchor} is depicted as ${articleFor(noun)} ${noun}`
+  if (item.appearance.length) identity += ` with ${naturalList(item.appearance)}`
+  sentences.push(identity + '.')
+
+  if (item.outfit.length) sentences.push(...outfitCaptionSentences(anchor, item.outfit))
+
+  const poses = poseWithSupport(item, scene).map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
+  const actions = item.action
+    .filter((part) => !actionDuplicatesRelation(part, item.subject.ref, scene.relations))
+    .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
+  const poseActions = uniqueStrings([...poses, ...actions])
+  if (poseActions.length) sentences.push(`${anchor} is ${naturalList(poseActions)}.`)
+  if (item.expression.length) sentences.push(`${anchor}'s expression is ${naturalList(item.expression)}.`)
+
+  const anatomy = visibleAnatomySentence(item)
+  if (anatomy) sentences.push(anatomy)
+  return sentences
+}
+
+function relationSentence(relation, byRef) {
+  const actor = byRef.get(relation.actor)
+  const target = relation.target ? byRef.get(relation.target) : null
+  const actorName = sentenceName(actor ? actor.anchor : relation.actor)
+  const targetName = target ? sentenceName(target.anchor) : ''
+  const action = normalizeVisualPhrase(relation.action)
+  if (!action) return ''
+  let sentence = `${actorName} ${action}`
+  if (targetName && !sentence.toLowerCase().includes(targetName.toLowerCase())) sentence += ` ${targetName}`
+  return sentence.replace(/\s+([,.])/g, '$1').trim() + '.'
 }
 
 function compileStructuredScene(scene, profiles, sourcePassage = '') {
-  const descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, scene.subjects.length > 1)).map((item) => ({
+  const descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
     ...item,
-    appearance: normalizeVisualList(item.appearance),
-    outfit: normalizeVisualList(item.outfit),
-    anatomy: normalizeVisualList(item.anatomy),
-    pose: normalizeVisualList(item.subject.pose),
-    expression: normalizeVisualList(item.subject.expression),
-    action: normalizeVisualList(item.subject.action),
+    appearance: cleanAppearanceForNoun(item.appearance, item.noun),
+    outfit: animaTagList(item.outfit),
+    anatomy: animaTagList(item.anatomy),
+    pose: animaTagList(item.subject.pose),
+    expression: animaTagList(item.subject.expression),
+    action: animaTagList(item.subject.action),
   }))
-  const countTags = uniqueStrings(descriptors.map((item) => item.countTag).filter(Boolean))
-  const tailSetting = normalizeVisualList(scene.setting)
-  const tailCamera = normalizeVisualList(scene.camera)
-  const tailLighting = normalizeVisualList(scene.lighting)
-  const tailStyle = normalizeVisualList(scene.style)
 
-  if (descriptors.length === 1) {
-    const item = descriptors[0]
-    return uniqueStrings([
-      ...countTags, 'solo', item.noun, ...item.appearance, ...item.anatomy,
-      ...item.outfit, ...item.pose, ...item.expression,
-      ...item.action, ...tailSetting, ...tailCamera, ...tailLighting, ...tailStyle,
-    ]).filter(Boolean).join(', ')
-  }
+  const sections = []
+  const countTags = aggregateCountTags(descriptors)
+  if (countTags.length) sections.push(countTags.join(', '))
 
-  const lines = []
-  const heading = uniqueStrings([
-    ...countTags,
-    `exactly ${descriptors.length} subjects`,
-    'single image', 'unified composition', 'same frame',
-    'no split screen', 'no panels', 'no collage', 'no duplicate character', 'no extra characters',
-  ]).filter(Boolean).join(', ')
-  if (heading) lines.push(heading + '.')
-
-  for (const item of descriptors) {
-    const lead = supportLead(item, scene)
-    if (lead) lines.push(lead)
+  if (descriptors.length > 1) {
+    const word = descriptors.length === 2 ? 'two' : String(descriptors.length)
+    sections.push(`The image shows exactly ${word} subjects together in one unified scene.`)
   }
 
   const byRef = new Map(descriptors.map((item) => [item.subject.ref, item]))
   for (const relation of scene.relations) {
-    const actor = byRef.get(relation.actor)
-    const target = relation.target ? byRef.get(relation.target) : null
-    const actorName = actor ? actor.anchor : relation.actor
-    const targetName = target ? target.anchor : relation.target
-    let clause = `${actorName} ${normalizeVisualPhrase(relation.action)}`.trim()
-    if (targetName) clause += ` ${targetName}`
-    const detailBits = normalizeVisualList(relation.details)
-    if (detailBits.length) clause += `; ${detailBits.join(', ')}`
-    lines.push(`Shared interaction: ${clause}.`)
+    const sentence = relationSentence(relation, byRef)
+    if (sentence) sections.push(sentence)
   }
 
+  for (const item of descriptors) sections.push(...subjectCaptionSentences(item, scene, descriptors))
+
+  const positionTags = []
   for (const item of descriptors) {
-    const identity = uniqueStrings([item.anchor, item.noun]).filter(Boolean).join(', ')
-    const chunks = []
-    if (item.appearance.length) chunks.push(item.appearance.join(', '))
-    if (item.anatomy.length) chunks.push(`anatomy: ${item.anatomy.join(', ')}`)
-    if (item.outfit.length) chunks.push(`wearing: ${item.outfit.join(', ')}`)
-    if (item.pose.length) chunks.push(`pose: ${item.pose.join(', ')}`)
-    if (item.expression.length) chunks.push(`expression: ${item.expression.join(', ')}`)
-    const filteredActions = item.action.filter((part) => !scene.relations.some((relation) => relation.actor === item.subject.ref && normalizeVisualPhrase(relation.action).toLowerCase().includes(part.toLowerCase())))
-    if (filteredActions.length) chunks.push(`action: ${filteredActions.join(', ')}`)
-    lines.push(`${identity || 'Subject'}${chunks.length ? '; ' + chunks.join('; ') : ''}.`)
+    const pos = animaTag(item.subject.position)
+    if (/^(left|right)$/.test(pos)) positionTags.push(`${item.anchor} on ${pos}`.toLowerCase())
   }
-  if (tailSetting.length) lines.push(`Setting: ${tailSetting.join(', ')}.`)
-  if (tailCamera.length) lines.push(`Camera: ${tailCamera.join(', ')}.`)
-  if (tailLighting.length) lines.push(`Lighting: ${tailLighting.join(', ')}.`)
-  if (tailStyle.length) lines.push(`Style: ${tailStyle.join(', ')}.`)
-  return lines.join(' ')
+  const relationDetails = scene.relations.flatMap((relation) => relation.details || []).filter((detail) => !/^(?:pulling|pushing|holding|grabbing|biting|kissing|touching|lifting|carrying|dragging|pressing|pinning|wrapping|hooking)\b/i.test(String(detail || '').trim()))
+  const generalTags = animaTagList([
+    ...positionTags,
+    ...relationDetails,
+    ...scene.setting,
+    ...scene.camera,
+    ...scene.lighting,
+    ...scene.style,
+  ])
+  if (generalTags.length) sections.push(generalTags.join(', '))
+
+  return sections.join('\n')
 }
 
 function profileSchemaHints(profiles) {
@@ -1161,9 +1319,10 @@ function profileSchemaHints(profiles) {
 function structuredParserSchema(maxImages, profiles) {
   return `\n\nSTRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
 Return ONLY one compact JSON object, no markdown and no prose:
-{"images":[{"anchor":"5-12 exact consecutive words copied from the passage","scene":{"subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","count_tag":"1girl|1boy|1other etc","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short tags"],"pose":["short tags"],"expression":["short tags"],"action":["short tags"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short action phrase","target":"subject ref","details":["short tags"]}],"setting":["short tags"],"camera":["short tags"],"lighting":["short tags"],"style":["short tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+{"images":[{"anchor":"5-12 exact consecutive words copied from the passage","scene":{"subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","count_tag":"1girl|1boy|1other etc","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short visual phrases"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"active phrase that expects target name","target":"subject ref","details":["non-action visual modifiers only"]}],"setting":["short tags"],"camera":["short tags"],"lighting":["short tags"],"style":["short tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
-Every array value must be a terse image tag or phrase of at most 7 words. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles. A relation actor performs its action on the target; use active visual wording such as "bites the jaw of", never passive wording. Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Never place genital/anatomy terms in appearance, outfit, pose, expression, action, relation action, or details. LumiDraw alone controls saved anatomy.
+This JSON is a visual skeleton for an Anima-specific deterministic compiler. Do not write the final image prompt yourself.
+Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields; put cross-subject positioning in relations with explicit actor and target refs. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles. For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". A relation actor performs its complete central action on the target; use active ownership-safe wording such as "bites the jaw of" or "pulls closer", never passive wording. Put secondary actions in the action phrase, not in relation details. Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Never place genital/anatomy terms in appearance, outfit, pose, support, expression, action, relation action, or details. LumiDraw alone controls saved anatomy.
 Known subject refs:\n${profileSchemaHints(profiles)}`
 }
 
@@ -1182,8 +1341,11 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   scene = applyBannedToScene(scene, preset.bannedTags)
   const core = compileStructuredScene(scene, profiles, sourcePassage)
   const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
-  const prompt = [preset.qualityTags, prefix, core].filter(Boolean).join(', ')
-  return { prompt, core, scene, profiles, aspect: scene.aspect }
+  // User-authored quality tags and prompt prefix remain verbatim. The Anima
+  // compiler owns the count → character captions → interaction → scene order.
+  const customHeader = [preset.qualityTags, prefix].filter(Boolean).join(', ')
+  const prompt = customHeader ? `${customHeader}, ${core}` : core
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v1' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -1227,6 +1389,10 @@ async function quietLLM(system, user, settings, userId, structured = false) {
   if (settings.parserConnection) { opts.connection = settings.parserConnection; opts.connectionId = settings.parserConnection }
   if (settings.parserModel) opts.model = settings.parserModel
   const errs = []
+  const parserStarted = Date.now()
+  spindle.log.info('[lumidraw] parser request started' +
+    (settings.parserModel ? ' · model=' + settings.parserModel : '') +
+    (settings.parserConnection ? ' · connection=' + settings.parserConnection : ''))
   for (const [name, fn] of candidates) {
     try {
       let res
@@ -1239,7 +1405,7 @@ async function quietLLM(system, user, settings, userId, structured = false) {
         (res.choices && res.choices[0] && (res.choices[0].text || (res.choices[0].message && res.choices[0].message.content))))) ||
         (typeof res === 'string' ? res : null)
       if (text) {
-        spindle.log.info('[lumidraw] parser via ' + name + ' → raw reply: ' + text.trim().slice(0, 500))
+        spindle.log.info('[lumidraw] parser completed in ' + (Date.now() - parserStarted) + 'ms via ' + name + ' → raw reply: ' + text.trim().slice(0, 500))
         return text.trim()
       }
       errs.push(`${name}: unrecognized response shape (${res ? Object.keys(res).join(',') : res})`)
@@ -1343,6 +1509,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
+          compiler: compiled.compiler || 'anima-hybrid-v1',
         })
         done++
       } catch (e) {
@@ -1420,6 +1587,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
+          compiler: compiled.compiler || 'anima-hybrid-v1',
         })
       }
 
@@ -1659,7 +1827,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.17.3',
+          version: (spindle.manifest && spindle.manifest.version) || '0.17.7',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -2375,4 +2543,4 @@ let lastAutoHandledMessageId = ''
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.17.6'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.17.7'))

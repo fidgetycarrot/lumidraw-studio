@@ -1,49 +1,55 @@
-# LumiDraw Studio 0.17.6
+# LumiDraw Studio 0.17.7
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.17.6 — parser safeguards, fast Inline restored
+## 0.17.7 — Anima hybrid compiler
 
-This update separates the two story paths again:
+Parser mode still uses a dedicated LLM to extract a compact structured JSON
+scene. The parser chooses subjects, current clothing, pose, support surfaces,
+expressions, interactions, setting, camera, lighting, style, and aspect ratio.
+It does not write the final Draw Things prompt.
 
-- **Inline mode** uses the simpler pre-0.17 comma-separated tag protocol. It
-  does not run a parser model, structured compiler, complexity score, or model
-  router. This keeps Inline fast and close to its previously reliable behavior.
-- **Parser mode** retains structured subject binding and adds interaction-first
-  compilation plus a hard anatomy firewall.
+LumiDraw now compiles that JSON specifically for Anima:
 
-Parser safeguards:
+1. The preset's saved quality tags remain verbatim at the beginning.
+2. The preset's custom prompt prefix remains user-controlled.
+3. Anima subject-count tags follow.
+4. The central actor-to-target interaction is stated early and explicitly.
+5. Every subject receives a named natural-language appearance caption.
+6. Current clothing, pose, visible support surface, and expression follow.
+7. Setting, camera, lighting, style, and non-action visual modifiers are emitted
+   as lowercase Anima tags at the end.
 
-- Shared physical interactions are placed before the independent character
-  descriptions so actor and target ownership is established early.
-- Multi-subject prompts request one unified image and guard against split
-  screens, panels, collages, and duplicate characters.
-- Saved character/persona names are recognized even when the parser returns a
-  first name or incorrectly labels one as an `other` subject.
-- Parser-provided anatomy terms are removed from known-character scene fields.
-- Conditional profile anatomy is included only when the parser marks it visible
-  **and** the source story explicitly names that saved anatomy.
-- Sexual context, nudity, lowered clothes, arousal, or post-sex context alone do
-  not activate conditional anatomy.
-- `Always include` still uses the saved profile; `Never include automatically`
-  still suppresses it.
-- Relation instructions require active actor-to-target wording.
+Anima tag normalization uses lowercase and replaces underscores with spaces,
+except for `score_*` tags. Proper character names remain capitalized in caption
+sentences.
 
-There is no automatic complexity scoring, model switching, or additional LLM
-pass. The selected mode and parser model are used exactly as configured.
+## Identity and anatomy safeguards
+
+- Permanent appearance for saved character/persona profiles remains locked.
+- Parser-provided anatomy is stripped from known-character scene fields.
+- Conditional saved anatomy requires both `anatomy_visible: true` and an
+  explicit subject-owned mention in the source passage.
+- Nudity, lowered clothing, arousal, or sexual context alone do not activate
+  conditional anatomy.
+- When anatomy is included, it is written as an ownership sentence inside the
+  correct character caption rather than as a free-floating tag.
+- Cross-subject pronouns in two-character pose fragments are resolved back to
+  the other saved character's name.
 
 ## Retained behavior
 
+- Inline mode remains on the simpler pre-0.17 tag-only path.
+- Native Parser trigger interception and render-event fallback.
+- Parser scan locks and hard maximum-image enforcement.
+- Immediate History updates and manual History refresh.
+- Old-message rescanning with chat-message and story-message numbering.
 - Studio / Story / Presets / Settings redesign.
-- Desktop Tune, Create, History, LoRA Library, and Active Stack panes.
-- Mobile Create / Tune / LoRAs / Stack / History tabs.
-- In-app viewer with safe-area sizing, zoom, pinch, pan, and history reuse.
-- Bridge-powered image-model, sampler, and LoRA catalogs.
-- Committed chat presets remain isolated from temporary Studio experiments.
-- Old-message rescanning in Parser mode.
-- Draw Things `batch_count` is forced to `1` and only one image is accepted per
-  requested illustration.
+- In-app image viewer with zoom, pan, history prompt restoration, and reuse.
+- Bridge-powered model, sampler, and LoRA catalogs.
+- Draw Things `batch_count` is forced to `1`; only the first returned image is
+  accepted for each requested illustration.
 
 ## Requirements
 
@@ -53,13 +59,13 @@ pass. The selected mode and parser model are used exactly as configured.
 
 ## Verify
 
-The header must show **v0.17.6**.
+The header and Terminal should show **v0.17.7**.
 
-1. Test Inline once and confirm its `<dt-image>` body is ordinary comma-separated
-   tags rather than JSON.
-2. Test Parser with two interacting subjects.
-3. In **Last parser subject compile**, confirm `Shared interaction` appears before
-   the two identity blocks.
-4. Confirm conditional anatomy stays absent unless it is explicitly named in the
-   story passage.
-5. Sanity-check Studio, History, image zoom, and both desktop and mobile layouts.
+1. Run Parser mode on a two-character interaction.
+2. Open **Last Anima parser compile**.
+3. Confirm the final prompt begins with your saved quality tags, followed by
+   count tags, an early explicit interaction sentence, named character
+   captions, and lowercase scene tags at the end.
+4. Confirm the preset negative prompt remains unchanged.
+5. Confirm conditional anatomy stays absent unless the story explicitly names
+   it as belonging to that visible subject.
