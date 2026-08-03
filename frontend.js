@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.18.2'
+const EXTENSION_VERSION = '0.18.3'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -475,7 +475,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.18.2" aria-label="LumiDraw Studio v0.18.2">
+    <button class="ld-launcher" title="LumiDraw Studio v0.18.3" aria-label="LumiDraw Studio v0.18.3">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -484,7 +484,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.2</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.3</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -708,9 +708,9 @@ function realSetup(ctx) {
                 <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-char-subject" placeholder="adult woman" /></div>
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-chartags" style="min-height:58px" placeholder="feminine appearance, tall, curvy, long black hair, green eyes"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-char-outfit" style="min-height:48px" placeholder="black fitted jacket, dark trousers"></textarea></div>
-                <div><span class="ld-label">Anatomy / visibility-dependent traits</span><textarea class="ld-ed-char-anatomy" style="min-height:48px" placeholder="penis"></textarea></div>
-                <div><span class="ld-label">Automatic anatomy inclusion</span><select class="ld-ed-char-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Always include</option><option value="manual">Never include automatically</option></select></div>
-                <div class="ld-help">Keep stable body traits such as breasts in permanent appearance. Put visibility-dependent genital anatomy here. Keep pose, expression, actions, and scene-specific clothing out of the profile.</div>
+                <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-ed-char-anatomy" style="min-height:48px" placeholder="penis"></textarea></div>
+                <div><span class="ld-label">Conditional anatomy rule</span><select class="ld-ed-char-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Include in every NSFW/explicit scene</option><option value="manual">Never include automatically</option></select></div>
+                <div class="ld-help">Enter only concrete anatomy that may be hidden by clothing or framing, such as penis. Put identity and presentation tags—femboy, feminine male, trans woman, androgynous—and stable body traits under Permanent appearance. Unsupported phrases are ignored by the Anima compiler.</div>
               </div>
             </details>
             <details class="ld-profile-block">
@@ -723,8 +723,9 @@ function realSetup(ctx) {
                 <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-persona-subject" placeholder="adult man" /></div>
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-personatags" style="min-height:58px"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-persona-outfit" style="min-height:48px"></textarea></div>
-                <div><span class="ld-label">Anatomy / visibility-dependent traits</span><textarea class="ld-ed-persona-anatomy" style="min-height:48px"></textarea></div>
-                <div><span class="ld-label">Automatic anatomy inclusion</span><select class="ld-ed-persona-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Always include</option><option value="manual">Never include automatically</option></select></div>
+                <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-ed-persona-anatomy" style="min-height:48px"></textarea></div>
+                <div><span class="ld-label">Conditional anatomy rule</span><select class="ld-ed-persona-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Include in every NSFW/explicit scene</option><option value="manual">Never include automatically</option></select></div>
+                <div class="ld-help">Enter only concrete anatomy that may be hidden by clothing or framing, such as penis. Put identity and presentation tags—femboy, feminine male, trans woman, androgynous—and stable body traits under Permanent appearance. Unsupported phrases are ignored by the Anima compiler.</div>
               </div>
             </details>
             <span class="ld-label" style="margin-top:7px">Banned tags</span><input class="ld-ed-banned" />

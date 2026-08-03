@@ -1,55 +1,62 @@
-# LumiDraw Studio 0.18.2
+# LumiDraw Studio 0.18.3
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.18.2 — Anima hybrid experimental compiler
+## 0.18.3 — Selective Anima hybrid and anatomy controls
 
 Parser mode still has two clearly separated engines.
 
 ### Legacy instruction-only — version 0.13 behavior
 
-This remains the dependable daily-driver path.
+This remains the dependable daily-driver path and is unchanged in this build.
 
 - Uses the working instruction-only parser flow.
-- Sends the selected story passage using the older generation request shape.
 - Accepts the parser's comma-separated tag prompt directly.
 - Prepends the committed preset's quality tags, character tags, and prompt prefix.
 - Does not use structured identity JSON or the Anima compiler.
-- Existing custom legacy Parser instructions are preserved during upgrade.
+- Existing custom legacy Parser instructions remain preserved.
 
-### Anima hybrid experimental — structured anchors + legacy-style tags
+### Anima hybrid experimental — natural language only where useful
 
-The experimental path is now deliberately much closer to the successful legacy
-prompt style:
+The experimental path remains mostly Danbooru/Gelbooru-style tags. Short natural-
+language anchors are now injected only for cross-subject geometry in scenes with
+multiple subjects. Solo scenes stay tag-oriented unless explicit visible anatomy
+requires an ownership sentence.
+
+The hybrid pipeline is:
 
 1. The parser extracts compact structured JSON.
-2. LumiDraw binds saved character/persona identities and anatomy rules.
-3. The compiler keeps the final prompt mostly Danbooru/Gelbooru-style tags.
-4. It injects at most three short natural-language relationship anchors for
-   body arrangement, contact ownership, and multi-character scene adherence.
-5. The committed preset's quality tags and negative prompt remain unchanged.
+2. LumiDraw binds saved character/persona identities.
+3. Each subject receives a separate named tag block.
+4. Up to three short sentences bind multi-character orientation and contact.
+5. Setting, camera, lighting, and style remain tags.
 
-The hybrid compiler no longer writes full natural-language character paragraphs.
-Each subject gets a separate named tag block, while natural language is reserved
-for the areas where tag-only prompts are most prone to character bleed.
+## Conditional visible anatomy
 
-## Hybrid ordering
+The profile editor now labels this field **Conditional visible anatomy**.
 
-The experimental prompt is compiled as:
+- Enter only concrete anatomy that can be hidden by clothing or framing, such as
+  `penis`.
+- Put identity and presentation tags such as `femboy`, `feminine male`,
+  `trans woman`, and `androgynous` under **Permanent appearance tags**.
+- Unsupported identity/presentation phrases in the anatomy field are ignored by
+  the Anima compiler instead of being converted into malformed exposure text.
+- Safe and sensitive scenes never receive an exposed-anatomy sentence, even when
+  a profile is set to Always include.
+- Relevant-mode anatomy still requires the story to explicitly name and visibly
+  depict that saved character's anatomy.
 
-1. Saved quality tags and prompt prefix.
-2. Safety and subject-count tags.
-3. Up to three short spatial/contact sentences.
-4. One separate tag block per character.
-5. A subject-owned anatomy sentence only when explicitly visible and permitted.
-6. Setting, camera, lighting, and style tags.
+Recognized conditional anatomy is normalized to concrete ownership-safe terms.
+This prevents output such as `Sovi's feminine male is visibly exposed.`
 
-The structured contract now asks the parser to establish a visible base pose
-before motion or intensity. For multi-subject scenes, the first relation should
-state body arrangement or orientation, and later relations should state clear
-contact points. When lower-body contact matters, the parser is instructed to use
-framing wide enough to show it rather than defaulting to a close-up.
+## Anima cleanup
+
+- Corrects `androgenous` to `androgynous` in compiled Anima tags.
+- Removes the placeholder tag `default outfit` from final prompts.
+- Cleans comma boundaries between saved quality tags, prompt prefixes, and the
+  compiled prompt without replacing the user's chosen quality tags.
+- Keeps the compiler identifier at `anima-hybrid-v3` for prompt/debug comparison.
 
 ## Parser reliability and diagnostics
 
@@ -79,8 +86,11 @@ framing wide enough to show it rather than defaulting to a close-up.
 
 ## Suggested testing
 
-1. Confirm the header and Terminal show **v0.18.2**.
+1. Confirm the header and Terminal show **v0.18.3**.
 2. Keep **Legacy instruction-only** available as the known-good baseline.
-3. Select **Anima hybrid experimental** for structured tests.
-4. Run the same story message through each engine.
-5. Compare the final prompts in the Story debug panel before comparing images.
+3. In Sovi's Permanent appearance tags, keep `feminine male`, `femboy`, and
+   `androgynous`; keep only `penis` in Conditional visible anatomy.
+4. Run a safe solo Sovi scene and confirm no anatomy sentence is added.
+5. Run a multi-character scene and confirm only the short contact/orientation
+   lines use natural language.
+6. Compare the final prompt in the Story debug panel before judging the image.

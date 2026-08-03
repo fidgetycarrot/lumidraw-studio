@@ -707,6 +707,28 @@ const ANATOMY_ALIAS_GROUPS = [
   { profile: /\b(?:testicles?|testes|balls?|scrotum)\b/i, passage: /\b(?:testicles?|testes|balls?|scrotum)\b/i },
 ]
 
+// This profile field is deliberately narrow. Identity and presentation terms
+// such as "feminine male", "femboy", or "trans woman" belong in the
+// permanent appearance profile; only concrete anatomy may pass this boundary.
+const CONDITIONAL_ANATOMY_RULES = [
+  { canonical: 'penis', pattern: /\b(?:penis|penises|cock|cocks|dick|dicks|phallus|male genitals?)\b/i },
+  { canonical: 'vulva', pattern: /\b(?:vagina|vaginas|vulva|vulvas|pussy|pussies|female genitals?)\b/i },
+  { canonical: 'testicles', pattern: /\b(?:testicle|testicles|testes|balls?|scrotum)\b/i },
+  { canonical: 'clitoris', pattern: /\b(?:clitoris|clit)\b/i },
+  { canonical: 'anus', pattern: /\b(?:anus|anal opening)\b/i },
+]
+
+function normalizeConditionalAnatomy(items) {
+  const out = []
+  for (const item of items || []) {
+    const text = String(item || '').trim()
+    if (!text) continue
+    const match = CONDITIONAL_ANATOMY_RULES.find((rule) => rule.pattern.test(text))
+    if (match && !out.includes(match.canonical)) out.push(match.canonical)
+  }
+  return out
+}
+
 function normalizeIdentityText(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
@@ -811,7 +833,7 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
     subject: shortPhrase(source.subject || '', `${fallbackRef} subject phrase`, 8, 72, true),
     appearance: shortList(appearance, `${fallbackRef} appearance`, { maxItems: 32, maxWords: 7, maxChars: 72 }),
     defaultOutfit: shortList(source.defaultOutfitTags || '', `${fallbackRef} default outfit`, { maxItems: 12, maxWords: 7, maxChars: 72 }),
-    anatomy: shortList(source.anatomyTags || '', `${fallbackRef} anatomy`, { maxItems: 12, maxWords: 7, maxChars: 72 }),
+    anatomy: normalizeConditionalAnatomy(shortList(source.anatomyTags || '', `${fallbackRef} conditional anatomy`, { maxItems: 12, maxWords: 7, maxChars: 72 })),
     anatomyMode: normalizeAnatomyMode(source.anatomyMode),
   }
 }
@@ -833,7 +855,7 @@ async function resolveProfile(profile, userId, chatId) {
     subject: await resolveOne(profile.subject),
     appearance: await resolveMany(profile.appearance, `${profile.ref} appearance`),
     defaultOutfit: await resolveMany(profile.defaultOutfit, `${profile.ref} outfit`),
-    anatomy: await resolveMany(profile.anatomy, `${profile.ref} anatomy`),
+    anatomy: normalizeConditionalAnatomy(await resolveMany(profile.anatomy, `${profile.ref} conditional anatomy`)),
   }
 }
 
@@ -1057,6 +1079,7 @@ function normalizeVisualPhrase(value) {
   return text
     .replace(/\bbracs\b/gi, 'braces')
     .replace(/\btogue\b/gi, 'tongue')
+    .replace(/\bandrogenous\b/gi, 'androgynous')
     .replace(/\bhooks? the back of the knee of\b/gi, 'curls a bare heel behind the knee of')
     .replace(/\bone heel hooked behind (his|her|their) knee\b/gi, 'one bare heel curled behind $1 knee')
     .replace(/\bhooked behind (his|her|their) knee\b/gi, 'curled behind $1 knee')
@@ -1076,7 +1099,10 @@ function animaTag(value) {
   if (!tag) return ''
   // Anima expects spaces rather than underscores, except for score_* tags.
   if (!/^score_[1-9]$/i.test(tag)) tag = tag.replace(/_/g, ' ')
-  return tag.toLowerCase()
+  tag = tag.toLowerCase()
+  // "default outfit" is an editor placeholder, not a useful Anima tag.
+  if (tag === 'default outfit') return ''
+  return tag
 }
 
 function animaTagList(list) {
@@ -1180,14 +1206,19 @@ function cleanAppearanceForNoun(items, noun) {
   return uniqueStrings(values)
 }
 
-function visibleAnatomySentence(item) {
+function visibleAnatomySentence(item, scene) {
   if (!item.anatomy.length) return ''
+  // A safe/sensitive scene must never receive an exposed-anatomy sentence.
+  // This also prevents a profile override from contradicting the safety tag.
+  if (!scene || !['nsfw', 'explicit'].includes(scene.safety)) return ''
   const anchor = sentenceName(item.anchor)
-  const joined = item.anatomy.join(', ').toLowerCase()
-  if (/penis|cock|dick|phallus/.test(joined)) return `${anchor}'s penis is visibly exposed.`
-  if (/vagina|vulva|pussy/.test(joined)) return `${anchor}'s vulva is visibly exposed.`
-  if (/testicle|testes|scrotum|balls/.test(joined)) return `${anchor}'s testicles are visibly exposed.`
-  return `${anchor}'s ${naturalList(item.anatomy)} is visibly exposed.`
+  const anatomy = normalizeConditionalAnatomy(item.anatomy)
+  if (anatomy.includes('penis')) return `${anchor}'s penis is visibly exposed.`
+  if (anatomy.includes('vulva')) return `${anchor}'s vulva is visibly exposed.`
+  if (anatomy.includes('testicles')) return `${anchor}'s testicles are visibly exposed.`
+  if (anatomy.includes('clitoris')) return `${anchor}'s clitoris is visibly exposed.`
+  if (anatomy.includes('anus')) return `${anchor}'s anus is visibly exposed.`
+  return ''
 }
 
 function comparableAction(value) {
@@ -1294,17 +1325,22 @@ function compileStructuredScene(scene, profiles, sourcePassage = '') {
   // ownership anchors. Everything else remains tag-oriented for Anima.
   const byRef = new Map(descriptors.map((item) => [item.subject.ref, item]))
   const relationAnchors = []
-  for (const relation of scene.relations) {
-    const sentence = relationSentence(relation, byRef)
-    if (sentence) relationAnchors.push(sentence)
-    if (relationAnchors.length >= 3) break
+  if (descriptors.length > 1) {
+    for (const relation of scene.relations) {
+      // Natural language is reserved for cross-subject geometry. Solo scenes
+      // remain tag-only unless explicit anatomy ownership truly needs a line.
+      if (!relation.target || relation.target === relation.actor) continue
+      const sentence = relationSentence(relation, byRef)
+      if (sentence) relationAnchors.push(sentence)
+      if (relationAnchors.length >= 3) break
+    }
   }
   if (relationAnchors.length) sections.push(relationAnchors.join(' '))
 
   for (const item of descriptors) {
     const line = subjectTagLine(item, scene, descriptors)
     if (line) sections.push(line)
-    const anatomy = visibleAnatomySentence(item)
+    const anatomy = visibleAnatomySentence(item, scene)
     if (anatomy) sections.push(anatomy)
   }
 
@@ -1348,8 +1384,20 @@ This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw will prese
 Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
 For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible.
-Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Never place genital/anatomy terms in appearance, outfit, pose, support, expression, action, relation action, or details. LumiDraw alone controls saved anatomy.
+For a solo scene, do not invent a relation merely to create prose; keep the visual skeleton tag-oriented. Natural-language anchors are reserved for cross-subject geometry.
+Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Set anatomy_visible false for safe or sensitive scenes. Never place genital/anatomy terms in appearance, outfit, pose, support, expression, action, relation action, or details. LumiDraw alone controls saved anatomy.
 Known subject refs:\n${profileSchemaHints(profiles)}`
+}
+
+function joinPromptParts(parts) {
+  let output = ''
+  for (const part of parts || []) {
+    const value = String(part || '').trim()
+    if (!value) continue
+    if (!output) output = value
+    else output = `${output.replace(/[\s,]+$/g, '')}, ${value.replace(/^[\s,]+/g, '')}`
+  }
+  return output
 }
 
 async function compileSceneWithPreset(sceneInput, preset, settings, userId, chatId, sourcePassage = '') {
@@ -1369,9 +1417,9 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
   // User-authored quality tags and prompt prefix remain verbatim. The Anima
   // compiler owns safety/count → short interaction anchors → character tag blocks → scene tags.
-  const customHeader = [preset.qualityTags, prefix].filter(Boolean).join(', ')
-  const prompt = customHeader ? `${customHeader}, ${core}` : core
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v2' }
+  const customHeader = joinPromptParts([preset.qualityTags, prefix])
+  const prompt = joinPromptParts([customHeader, core])
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v3' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -1759,7 +1807,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v2',
+          compiler: compiled.compiler || 'anima-hybrid-v3',
         })
         done++
       } catch (e) {
@@ -1846,7 +1894,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v2',
+          compiler: compiled.compiler || 'anima-hybrid-v3',
         })
       }
 
@@ -2098,7 +2146,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.18.2',
+          version: (spindle.manifest && spindle.manifest.version) || '0.18.3',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -2854,4 +2902,4 @@ let lastAutoHandledMessageId = ''
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.2'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.3'))
