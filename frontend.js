@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.17.3'
+const EXTENSION_VERSION = '0.17.4'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -632,8 +632,8 @@ function realSetup(ctx) {
           <div class="ld-card">
             <div class="ld-subtitle">Parser connection</div>
             <div class="ld-row ld-mobile-stack">
-              <div><span class="ld-label">Connection</span><select class="ld-parser-conn"><option value="">— default connection —</option></select></div>
-              <div><span class="ld-label">Model override (optional)</span><input class="ld-parser-model" placeholder="e.g. your Kimi deployment" /></div>
+              <div><span class="ld-label">Connection</span><div style="display:flex;gap:6px;align-items:center"><select class="ld-parser-conn" style="flex:1"><option value="">— default connection —</option></select><button class="ld-btn ld-compact" data-act="refresh-parser-sources" title="Reload available parser connections">↻</button></div></div>
+              <div><span class="ld-label">Model override (optional)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="e.g. your Kimi deployment" /><button class="ld-btn ld-compact" data-act="use-conn-model" title="Copy the selected connection's current model into the override field">Use connection model</button></div></div>
             </div>
           </div>
           <div class="ld-card">
@@ -1378,7 +1378,7 @@ function realSetup(ctx) {
     const query = String(search && search.value || '').trim().toLowerCase()
     const filtered = storyMessages.filter((item) => {
       if (!query) return true
-      return String(item.preview || '').toLowerCase().includes(query) || String(item.turn || '').includes(query)
+      return String(item.preview || '').toLowerCase().includes(query) || String(item.turn || '').includes(query) || String(item.chatTurn || '').includes(query)
     })
 
     list.innerHTML = ''
@@ -1400,7 +1400,7 @@ function realSetup(ctx) {
       top.className = 'ld-story-item-top'
       const number = document.createElement('span')
       number.className = 'ld-story-number'
-      number.textContent = `Story message ${item.turn}`
+      number.textContent = `Chat message ${item.chatTurn || '?'} · story ${item.turn}`
       top.appendChild(number)
 
       if (item.isLatest) {
@@ -1426,7 +1426,7 @@ function realSetup(ctx) {
       preview.textContent = item.preview || '(No visible prose)'
       button.appendChild(top)
       button.appendChild(preview)
-      button.addEventListener('click', () => runStoryScan(item.id, `story message ${item.turn}`, true))
+      button.addEventListener('click', () => runStoryScan(item.id, `chat message ${item.chatTurn || item.turn}`, true))
       list.appendChild(button)
     }
   }
@@ -2419,6 +2419,34 @@ ${entry.prompt || ''}`.trim()
     if (bindingControls) bindingControls.style.display = mode === 'parser' ? '' : 'none' 
   }
 
+
+  async function reloadParserSources(preferSelected = true) {
+    const sel = $('.ld-parser-conn')
+    const modelInput = $('.ld-parser-model')
+    const previousId = preferSelected ? (sel ? sel.value : '') : ''
+    const previousModelValue = modelInput ? modelInput.value : ''
+    const previousOptionModel = sel && sel.selectedOptions && sel.selectedOptions[0] ? (sel.selectedOptions[0].dataset.model || '') : ''
+    const cres = await call('list_connections', {}, 10000)
+    const connections = Array.isArray(cres.connections) ? cres.connections : []
+    if (sel) {
+      sel.innerHTML = '<option value="">— default connection —</option>' +
+        connections.map((c) => {
+          const o = document.createElement('option')
+          o.value = c.id
+          o.textContent = c.name + (c.model ? ' — ' + c.model : '')
+          o.dataset.model = c.model || ''
+          return o.outerHTML
+        }).join('')
+      if (previousId && connections.some((c) => String(c.id) === String(previousId))) sel.value = previousId
+      else sel.value = settings.parserConnection || ''
+    }
+    const currentModel = sel && sel.selectedOptions && sel.selectedOptions[0] ? (sel.selectedOptions[0].dataset.model || '') : ''
+    if (modelInput && (!previousModelValue || previousModelValue === previousOptionModel)) {
+      modelInput.value = currentModel || settings.parserModel || ''
+    }
+    return connections
+  }
+
   // All settings text fields auto-save as you type (debounced).
   let settingsSaveTimer = null
   for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port']) {
@@ -2435,6 +2463,12 @@ ${entry.prompt || ''}`.trim()
   for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-subject-binding', '.ld-parser-conn']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
+      if (sel === '.ld-parser-conn') {
+        const conn = $('.ld-parser-conn')
+        const modelInput = $('.ld-parser-model')
+        const selectedModel = conn && conn.selectedOptions && conn.selectedOptions[0] ? (conn.selectedOptions[0].dataset.model || '') : ''
+        if (modelInput && (!modelInput.value || modelInput.value === settings.parserModel)) modelInput.value = selectedModel || modelInput.value
+      }
       pushSettings('Story settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
     })
   }
@@ -2470,15 +2504,28 @@ ${entry.prompt || ''}`.trim()
     }
   })
 
-  // Streaming tag interception: pre-generate the moment a <dt-image> tag
-  // completes mid-reply, so the image is ready when the message finishes.
+  // Streaming tag interception.
   ;(() => {
     const m = ctx.messages
     if (!m || typeof m.registerTagInterceptor !== 'function') {
       console.log('[LumiDraw] messages.registerTagInterceptor unavailable — inline images generate after the reply completes (compat mode)')
       return
     }
-    const onTag = (payload) => {
+
+    const registerTag = (tagName, handler, label) => {
+      const shapes = [
+        () => m.registerTagInterceptor(tagName, handler),
+        () => m.registerTagInterceptor({ tag: tagName, handler }),
+        () => m.registerTagInterceptor({ tagName, onComplete: handler }),
+      ]
+      for (const s of shapes) {
+        try { s(); console.log(`[LumiDraw] ${label} interceptor registered`); return true } catch { /* next shape */ }
+      }
+      console.log(`[LumiDraw] registerTagInterceptor exists but no call shape accepted for ${label}`)
+      return false
+    }
+
+    const onInlineTag = (payload) => {
       try {
         let body = ''
         let aspect = ''
@@ -2501,15 +2548,20 @@ ${entry.prompt || ''}`.trim()
         ctx.sendToBackend({ type: 'pregenerate', requestId: makeId(), body, aspect })
       } catch (e) { console.log('[LumiDraw] tag interceptor error:', e.message) }
     }
-    const shapes = [
-      () => m.registerTagInterceptor('dt-image', onTag),
-      () => m.registerTagInterceptor({ tag: 'dt-image', handler: onTag }),
-      () => m.registerTagInterceptor({ tagName: 'dt-image', onComplete: onTag }),
-    ]
-    for (const s of shapes) {
-      try { s(); console.log('[LumiDraw] streaming tag interceptor registered'); return } catch { /* next shape */ }
+
+    let lastParserTriggerAt = 0
+    const onParserTrigger = () => {
+      try {
+        const now = Date.now()
+        if (now - lastParserTriggerAt < 2500) return
+        lastParserTriggerAt = now
+        console.log('[LumiDraw] parser trigger received — requesting backend scan')
+        ctx.sendToBackend({ type: 'parser_trigger', requestId: makeId() })
+      } catch (e) { console.log('[LumiDraw] parser trigger error:', e.message) }
     }
-    console.log('[LumiDraw] registerTagInterceptor exists but no call shape accepted — compat mode')
+
+    registerTag('dt-image', onInlineTag, 'streaming dt-image')
+    registerTag('lumidraw-parse', onParserTrigger, 'parser trigger')
   })()
 
   // ------------------------------------------------------------------ boot
@@ -2531,15 +2583,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-chartags').checked = settings.autoCharTags !== false
       $('.ld-subject-binding').checked = settings.subjectBinding !== false
       try {
-        const cres = await call('list_connections', {}, 10000)
-        const sel = $('.ld-parser-conn')
-        sel.innerHTML = '<option value="">— default connection —</option>' +
-          (cres.connections || []).map((c) => {
-            const o = document.createElement('option')
-            o.value = c.id
-            o.textContent = c.name + (c.model ? ' — ' + c.model : '')
-            return o.outerHTML
-          }).join('')
+        await reloadParserSources(false)
       } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''

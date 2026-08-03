@@ -378,6 +378,8 @@ const pregenCache = new Map()   // fingerprint -> generated entry
 const pregenInflight = new Set()
 const tagFingerprint = (body) => String(body || '').trim().toLowerCase().replace(/\s+/g, ' ')
 const TAG_RE = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/g
+const PARSER_TRIGGER_TAG = '<lumidraw-parse request="generate"></lumidraw-parse>'
+const PARSER_TRIGGER_RE = /<lumidraw-parse\b[^>]*><\/lumidraw-parse>|<lumidraw-parse\b[^>]*>[\s\S]*?<\/lumidraw-parse>|<lumidraw-parse\b[^>]*\/>/gi
 
 function stripBannedTags(sceneTags, bannedCsv) {
   if (!bannedCsv || !sceneTags) return sceneTags
@@ -488,22 +490,28 @@ function storyPreview(content, maxLength = 260) {
   return clean.length > maxLength ? clean.slice(0, maxLength - 1).trimEnd() + '…' : clean
 }
 
+function stripParserTrigger(text) {
+  return String(text || '').replace(PARSER_TRIGGER_RE, '').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 async function listStoryMessages(userId, requestedLimit = 120) {
   const { messages, chatId } = await fetchMessages(userId)
   const limit = Math.max(1, Math.min(500, Number(requestedLimit) || 120))
   const processed = new Set(await spindle.storage.getJson(PROCESSED_FILE, { fallback: [] }))
   const eligible = []
 
-  for (const message of messages) {
+  for (let idx = 0; idx < messages.length; idx++) {
+    const message = messages[idx]
     const bits = messageBits(message)
     if (!bits.id || !bits.isAssistant || !bits.contentKey || typeof bits.content !== 'string') continue
-    eligible.push(bits)
+    eligible.push({ ...bits, chatTurn: idx + 1 })
   }
 
   const total = eligible.length
   const items = eligible.slice(-limit).reverse().map((bits, newestIndex) => ({
     id: String(bits.id),
     turn: total - newestIndex,
+    chatTurn: bits.chatTurn,
     preview: storyPreview(bits.content),
     createdAt: bits.createdAt,
     processed: processed.has(bits.id) || processed.has(String(bits.id)),
@@ -1290,7 +1298,7 @@ async function scanStoryCore(userId, options = {}) {
   if (!target) return { mode: settings.mode, note: 'No story message found.' }
 
   // ------------------------- inline: process <dt-image> tags ---------------
-  const visibleContent = stripThinking(target.content)
+  const visibleContent = stripParserTrigger(stripThinking(target.content))
   const tags = [...visibleContent.matchAll(TAG_RE)].slice(0, settings.maxImages || 2)
   if (tags.length) {
     let content = target.content
@@ -1353,7 +1361,7 @@ async function scanStoryCore(userId, options = {}) {
       return { mode: 'parser', note: 'This message was already illustrated — choose it again to force another parser run.' }
     }
     const usingCustom = !!(settings.parserInstruction && settings.parserInstruction.trim())
-    const passage = stripThinking(target.content).replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
+    const passage = stripParserTrigger(stripThinking(target.content)).replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
 
     if (settings.subjectBinding !== false) {
       const profiles = await getStoryProfiles(preset, settings, userId, chatId)
@@ -1375,6 +1383,7 @@ async function scanStoryCore(userId, options = {}) {
           entries: [],
           lastCompiledPrompt: '',
         })
+        if (PARSER_TRIGGER_RE.test(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
         return {
           mode: 'parser',
           note: `Parser returned invalid structured data — nothing generated (no cost). ${error.message} Raw start: ${out.slice(0, 140)}`,
@@ -1382,6 +1391,7 @@ async function scanStoryCore(userId, options = {}) {
         }
       }
       if (!parsed.length) {
+        if (PARSER_TRIGGER_RE.test(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
         if (target.id) await markProcessed(target.id)
         const storyDebug = await saveStoryDebug({ mode: 'parser', subjectBinding: true, rawReply: out, entries: [], lastCompiledPrompt: '' })
         return { mode: 'parser', note: `Parser (${instrLabel}) judged no visual moment.`, storyDebug }
@@ -1426,7 +1436,9 @@ async function scanStoryCore(userId, options = {}) {
         if (!placed) topMds.push(mds[i])
       }
       if (topMds.length) newContent = `${topMds.join('\n\n')}\n\n${newContent}`
-      await updateMessageContent(target.id, target.contentKey, newContent, userId, chatId)
+      newContent = stripParserTrigger(newContent)
+      newContent = stripParserTrigger(newContent)
+    await updateMessageContent(target.id, target.contentKey, newContent, userId, chatId)
       if (target.id) await markProcessed(target.id)
       const storyDebug = await saveStoryDebug({
         mode: 'parser',
@@ -1453,6 +1465,7 @@ async function scanStoryCore(userId, options = {}) {
     const instrLabel = usingCustom ? `custom instruction (${instruction.length} chars)` : 'legacy tag instruction'
     const out = await quietLLM(await resolveMacros(instruction, userId, chatId), passage, settings, userId, false)
     if (/^\s*NONE\s*$/i.test(out)) {
+      if (PARSER_TRIGGER_RE.test(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
       if (target.id) await markProcessed(target.id)
       return { mode: 'parser', note: `Parser (${instrLabel}) judged no visual moment (NONE).` }
     }
@@ -1469,6 +1482,7 @@ async function scanStoryCore(userId, options = {}) {
       return { anchor: '', tags: line }
     }).filter((item) => looksLikeTags(item.tags)).slice(0, settings.maxImages || 2)
     if (!parsed.length) {
+      if (PARSER_TRIGGER_RE.test(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
       return { mode: 'parser', note: `Parser (${instrLabel}) returned prose instead of tags — nothing generated (no cost). Raw start: ` + out.slice(0, 160) }
     }
     const lines = parsed.map((item) => stripBannedTags(item.tags, preset.bannedTags)).filter(Boolean)
@@ -1782,6 +1796,25 @@ spindle.onFrontendMessage(async (payload, userId) => {
           }
         } catch { /* leave empty */ }
         reply = ok(payload, requestId, { connections: out })
+        break
+      }
+
+
+      case 'parser_trigger': {
+        reply = ok(payload, requestId, { accepted: true })
+        setTimeout(async () => {
+          try {
+            const settings = await getSettings()
+            if (settings.mode !== 'parser' || settings.autoScan === false) return
+            setAutoStatus(userId, { mode: 'parser', status: 'running', note: 'Parser trigger received — scanning latest story message…' })
+            const r = await scanStory(userId, { force: false })
+            const status = r && r.processed ? 'generated' : (r && /already illustrated|no visual moment|No story message found|No <dt-image>/i.test(r.note || '') ? 'idle' : 'done')
+            setAutoStatus(userId, { mode: 'parser', status, note: (r && r.note) || '' })
+          } catch (e) {
+            spindle.log.warn('[lumidraw] parser trigger failed: ' + e.message)
+            setAutoStatus(userId, { mode: 'parser', status: 'error', note: e.message })
+          }
+        }, 1200)
         break
       }
 
@@ -2209,23 +2242,38 @@ if (typeof spindle.registerInterceptor === 'function') {
         return a
       }
       spindle.log.info(`[lumidraw] interceptor invoked (mode=${settings.mode}, msgs=${messages.length}, wrapped=${wrapped})`)
-      if (settings.mode !== 'inline') return a
-      let protocolText = (settings.protocol || DEFAULT_PROTOCOL)
-        .replaceAll('{{max_images}}', String(settings.maxImages || 2))
-        .replaceAll('{{min_images}}', String(settings.minImages || 0))
-      try {
-        const presets = await getPresets()
-        const ap = presets.find((p) => p.name === settings.activePreset)
-        if (ap && ap.personaTags) {
-          protocolText += '\nWhen the User/persona is visibly present in an illustrated moment, represent them with these tags (include only the parts actually visible; respect POV framing): ' + ap.personaTags
+      if (settings.mode !== 'inline' && settings.mode !== 'parser') return a
+      if (settings.mode === 'inline') {
+        let protocolText = (settings.protocol || DEFAULT_PROTOCOL)
+          .replaceAll('{{max_images}}', String(settings.maxImages || 2))
+          .replaceAll('{{min_images}}', String(settings.minImages || 0))
+        try {
+          const presets = await getPresets()
+          const ap = presets.find((p) => p.name === settings.activePreset)
+          if (ap && ap.personaTags) {
+            protocolText += '\nWhen the User/persona is visibly present in an illustrated moment, represent them with these tags (include only the parts actually visible; respect POV framing): ' + ap.personaTags
+          }
+        } catch (error) {
+          spindle.log.warn('[lumidraw] could not add persona hints to inline protocol: ' + error.message)
         }
-      } catch (error) {
-        spindle.log.warn('[lumidraw] could not add persona hints to inline protocol: ' + error.message)
+        const injected = { role: 'system', content: protocolText }
+        const out = [...messages, injected]
+        spindle.log.info('[lumidraw] inline protocol injected (' + injected.content.length + ' chars)')
+        return wrapped ? { ...a, messages: out } : out
       }
-      const injected = { role: 'system', content: protocolText }
-      const out = [...messages, injected]
-      spindle.log.info('[lumidraw] inline protocol injected (' + injected.content.length + ' chars)')
-      return wrapped ? { ...a, messages: out } : out
+      if (settings.mode === 'parser' && settings.autoScan !== false) {
+        const triggerText = [
+          'At the very end of the assistant reply, if there is any visually illustratable moment, append exactly one line containing this XML tag and nothing else on that line:',
+          PARSER_TRIGGER_TAG,
+          'Do not output Markdown image syntax. Do not describe the tag. Do not output more than one trigger tag.',
+          'If there is no clear illustratable moment, do not output the tag.',
+        ].join('\n')
+        const injected = { role: 'system', content: triggerText }
+        const out = [...messages, injected]
+        spindle.log.info('[lumidraw] parser trigger protocol injected (' + injected.content.length + ' chars)')
+        return wrapped ? { ...a, messages: out } : out
+      }
+      return a
     } catch (e) {
       spindle.log.warn('[lumidraw] interceptor error: ' + e.message)
       return a
@@ -2279,6 +2327,7 @@ let lastAutoHandledMessageId = ''
     try {
       const settings = await getSettings()
       if (settings.mode === 'off' || !settings.autoScan) return
+      if (settings.mode === 'parser') return
       const uid = (evt && (evt.userId || (evt.payload && evt.payload.userId))) || lastUserId
       if (!uid || scanInFlight) return
       scanInFlight = true
@@ -2302,4 +2351,4 @@ let lastAutoHandledMessageId = ''
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.17.3'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.17.4'))
