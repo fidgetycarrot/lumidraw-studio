@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.17.9'
+const EXTENSION_VERSION = '0.18.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -99,7 +99,7 @@ function realSetup(ctx) {
   let draftSourceLabel = ''
   let catalog = { models: [], samplers: [], loras: [], source: 'memory', bridge: null, currentRecipe: null }
   let busy = false
-  let defaults = { protocol: '', parserInstruction: '' }
+  let defaults = { protocol: '', parserInstruction: '', legacyParserInstruction: '', animaParserInstruction: '' }
   const pending = new Map() // requestId → {resolve, reject}
   let rescanInputAction = null
   let rescanInputActionUnsub = null
@@ -475,7 +475,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.17.9" aria-label="LumiDraw Studio v0.17.9">
+    <button class="ld-launcher" title="LumiDraw Studio v0.18.0" aria-label="LumiDraw Studio v0.18.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -484,7 +484,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.17.9</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.0</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -628,9 +628,13 @@ function realSetup(ctx) {
             <div class="ld-mode-note ld-help">Inline is fastest. Parser gives you a separate prompt-conversion step and supports rescanning old messages.</div>
             <label style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px"><input type="checkbox" class="ld-autoscan" style="width:auto" /> Auto-scan after each story message when supported</label>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
-            <div class="ld-parser-binding-controls">
-              <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-subject-binding" style="width:auto" /> Parser subject binding — structured JSON, locked identities, interaction-first prompt</label>
-              <div class="ld-binding-note">Parser only. Inline mode uses the simpler pre-0.17 tag path with no extra model call or compiler. Parser anatomy can never override saved profiles. Structured JSON is compiled into an Anima-specific hybrid prompt with saved quality tags preserved verbatim.</div>
+            <div class="ld-parser-binding-controls" style="margin-top:9px">
+              <span class="ld-label">Parser engine</span>
+              <select class="ld-parser-engine">
+                <option value="legacy">Legacy instruction-only — version 0.13 behavior</option>
+                <option value="anima">Anima structured — JSON identities and deterministic compiler</option>
+              </select>
+              <div class="ld-binding-note ld-parser-engine-note">Legacy sends the story passage to the selected parser using only the instruction below, then sends its returned tag prompt directly to Draw Things.</div>
               <div class="ld-help ld-story-last-status">Auto illustrations idle.</div>
             </div>
             <div class="ld-row" style="margin-top:9px">
@@ -646,7 +650,7 @@ function realSetup(ctx) {
             </div>
           </div>
           <div class="ld-card">
-            <span class="ld-label">Parser scene-selection guidance</span>
+            <span class="ld-label ld-parser-instruction-label">Legacy parser instruction</span>
             <textarea class="ld-parser-instr" style="min-height:110px"></textarea>
             <button class="ld-btn ld-compact" data-act="reset-parser" style="margin-top:6px">Reset to default</button>
           </div>
@@ -656,10 +660,10 @@ function realSetup(ctx) {
             <button class="ld-btn ld-compact" data-act="reset-protocol" style="margin-top:6px">Reset to default</button>
           </div>
           <div class="ld-card ld-story-debug">
-            <div class="ld-subtitle">Last Anima parser compile</div>
-            <div class="ld-help">Structured JSON is bound to saved identities, then compiled into Anima-optimized character captions, interaction sentences, and trailing scene tags. Inline mode remains on the legacy tag path.</div>
+            <div class="ld-subtitle ld-parser-debug-title">Last parser result</div>
+            <div class="ld-help">Legacy mode shows the parser's direct tag prompt. Anima structured mode shows the bound JSON scene and deterministic Anima prompt. Inline mode remains separate.</div>
             <span class="ld-label" style="margin-top:8px">Final Draw Things prompt</span>
-            <textarea class="ld-story-final-prompt" readonly placeholder="No structured story prompt has been compiled yet."></textarea>
+            <textarea class="ld-story-final-prompt" readonly placeholder="No parser prompt has been generated yet."></textarea>
             <details class="ld-profile-block">
               <summary>Parsed scene / parser reply</summary>
               <div class="ld-profile-fields"><textarea class="ld-story-parsed" readonly></textarea></div>
@@ -2436,7 +2440,9 @@ ${entry.prompt || ''}`.trim()
   })
 
   $('[data-act="reset-parser"]').addEventListener('click', () => {
-    $('.ld-parser-instr').value = defaults.parserInstruction || ''
+    const engine = $('.ld-parser-engine') ? $('.ld-parser-engine').value : 'legacy'
+    $('.ld-parser-instr').value = parserDefaultFor(engine)
+    pushSettings('Parser instruction reset for the selected engine.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
   })
   $('[data-act="reset-protocol"]').addEventListener('click', () => {
     $('.ld-protocol').value = defaults.protocol || ''
@@ -2483,6 +2489,7 @@ ${entry.prompt || ''}`.trim()
       bridgePort: $('.ld-bridge-port').value,
       mode: $('.ld-mode').value,
       autoScan: $('.ld-autoscan').checked,
+      parserEngine: $('.ld-parser-engine').value,
       parserConnection: $('.ld-parser-conn').value,
       parserModel: $('.ld-parser-model').value,
       parserInstruction: $('.ld-parser-instr').value,
@@ -2490,7 +2497,6 @@ ${entry.prompt || ''}`.trim()
       maxImages: $('.ld-maximg').value,
       minImages: $('.ld-minimg').value,
       autoCharTags: $('.ld-chartags').checked,
-      subjectBinding: $('.ld-subject-binding').checked,
     })
     settings = res.settings
     updateScanLabel()
@@ -2498,23 +2504,45 @@ ${entry.prompt || ''}`.trim()
     return res
   }
 
+  function parserDefaultFor(engine) {
+    return engine === 'anima'
+      ? (defaults.animaParserInstruction || '')
+      : (defaults.legacyParserInstruction || defaults.parserInstruction || '')
+  }
+
+  function updateParserEngineUI() {
+    const engine = $('.ld-parser-engine') ? $('.ld-parser-engine').value : (settings.parserEngine || 'legacy')
+    const note = $('.ld-parser-engine-note')
+    const label = $('.ld-parser-instruction-label')
+    const title = $('.ld-parser-debug-title')
+    if (note) note.textContent = engine === 'anima'
+      ? 'Experimental: the parser returns structured JSON; LumiDraw locks saved identities and compiles an Anima-specific hybrid prompt.'
+      : 'Known-good fallback: version 0.13-style instruction-only parsing. The returned tag prompt goes directly to Draw Things without identity JSON or the Anima compiler.'
+    if (label) label.textContent = engine === 'anima' ? 'Anima parser scene-selection guidance' : 'Legacy parser instruction'
+    if (title) title.textContent = engine === 'anima' ? 'Last Anima parser compile' : 'Last legacy parser result'
+  }
+
   function updateScanLabel() {
     const btn = $('[data-act="scan"]')
     const oldBtn = $('[data-act="scan-old"]')
     const mode = $('.ld-mode') ? $('.ld-mode').value : 'off'
+    const engine = $('.ld-parser-engine') ? $('.ld-parser-engine').value : 'legacy'
     if (btn) {
       btn.textContent = mode === 'off'
         ? 'Scan latest 📖 (mode: Off — set in Story)'
-        : `Scan latest 📖 (${mode})`
+        : mode === 'parser'
+          ? `Scan latest 📖 (${engine === 'anima' ? 'Anima structured' : 'Legacy'})`
+          : `Scan latest 📖 (${mode})`
     }
     if (oldBtn) {
       oldBtn.disabled = mode !== 'parser'
       oldBtn.title = mode === 'parser'
-        ? 'Choose any assistant message in the current chat and run Parser mode on it'
+        ? 'Choose any assistant message in the current chat and run the selected Parser engine on it'
         : 'Old-message rescanning is available when Story illustrations is set to Parser'
     }
     const bindingControls = $('.ld-parser-binding-controls')
-    if (bindingControls) bindingControls.style.display = mode === 'parser' ? '' : 'none' 
+    if (bindingControls) bindingControls.style.display = mode === 'parser' ? '' : 'none'
+    updateParserEngineUI()
   }
 
 
@@ -2558,7 +2586,7 @@ ${entry.prompt || ''}`.trim()
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-subject-binding', '.ld-parser-conn']) {
+  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-parser-engine', '.ld-parser-conn']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-parser-conn') {
@@ -2566,6 +2594,15 @@ ${entry.prompt || ''}`.trim()
         const modelInput = $('.ld-parser-model')
         const selectedModel = conn && conn.selectedOptions && conn.selectedOptions[0] ? (conn.selectedOptions[0].dataset.model || '') : ''
         if (modelInput && (!modelInput.value || modelInput.value === settings.parserModel)) modelInput.value = selectedModel || modelInput.value
+      }
+      if (sel === '.ld-parser-engine') {
+        const previousEngine = settings.parserEngine || 'legacy'
+        const currentText = $('.ld-parser-instr').value.trim()
+        const previousDefault = parserDefaultFor(previousEngine).trim()
+        const nextEngine = $('.ld-parser-engine').value
+        if (!currentText || currentText === previousDefault) $('.ld-parser-instr').value = parserDefaultFor(nextEngine)
+        updateParserEngineUI()
+        updateScanLabel()
       }
       pushSettings('Story settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
     })
@@ -2707,13 +2744,13 @@ ${entry.prompt || ''}`.trim()
       $('.ld-maximg').value = settings.maxImages || 2
       $('.ld-minimg').value = settings.minImages || 0
       $('.ld-chartags').checked = settings.autoCharTags !== false
-      $('.ld-subject-binding').checked = settings.subjectBinding !== false
+      $('.ld-parser-engine').value = settings.parserEngine || 'legacy'
       try {
         await reloadParserSources(false)
       } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
-      $('.ld-parser-instr').value = settings.parserInstruction || defaults.parserInstruction || ''
+      $('.ld-parser-instr').value = settings.parserInstruction || parserDefaultFor(settings.parserEngine || 'legacy')
       $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
       await loadCatalog()
       if (settings.activePreset) { activePreset = settings.activePreset }

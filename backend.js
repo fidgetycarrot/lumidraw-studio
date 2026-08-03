@@ -26,11 +26,12 @@ const DEFAULT_SETTINGS = {
   activePreset: '',       // preset used for story-driven generations
   parserConnection: '',   // optional connection name/id for the parser LLM
   parserModel: '',        // optional model override for the parser LLM
-  parserInstruction: '',  // scene-selection guidance (blank = built-in default)
+  parserInstruction: '',  // selected engine instruction (blank = that engine's built-in default)
+  parserEngine: 'legacy',  // 'legacy' (v0.13 instruction-only) | 'anima' (structured JSON compiler)
   maxImages: 2,           // max illustrations per story message
   minImages: 0,           // required illustrations per reply (0 = model's discretion)
   autoCharTags: true,     // use active character image tags as a profile fallback
-  subjectBinding: true,   // Parser-only structured scene JSON -> deterministic prompt
+  subjectBinding: false,  // legacy compatibility mirror of parserEngine === 'anima'
   dtModelsPath: '',       // retained for compatibility with older settings
   bridgeHost: '127.0.0.1', // native LumiDraw Bridge runs on the Lumiverse Mac
   bridgePort: 7863,
@@ -83,7 +84,16 @@ async function getSettings() {
   if (!stored || !stored.protocol || stored.protocol === LEGACY_DEFAULT_PROTOCOL || stored.protocol === V017_STRUCTURED_PROTOCOL) {
     settings.protocol = ''
   }
-  if (settings.subjectBinding !== false && (!stored || !stored.parserInstruction || stored.parserInstruction === LEGACY_DEFAULT_PARSER_INSTRUCTION)) {
+  // 0.18 introduces an explicit engine selector. Existing installs enter the
+  // known-good v0.13 instruction-only path until the user deliberately chooses
+  // the experimental Anima structured compiler.
+  if (!['legacy', 'anima'].includes(settings.parserEngine)) settings.parserEngine = 'legacy'
+  if (!stored || !stored.parserEngine) settings.parserEngine = 'legacy'
+  settings.subjectBinding = settings.parserEngine === 'anima' // backward-compatible debug/profile flag
+  if (settings.parserEngine === 'anima' && (!stored || !stored.parserInstruction || stored.parserInstruction === LEGACY_DEFAULT_PARSER_INSTRUCTION)) {
+    settings.parserInstruction = ''
+  }
+  if (settings.parserEngine === 'legacy' && stored && stored.parserInstruction === DEFAULT_PARSER_INSTRUCTION) {
     settings.parserInstruction = ''
   }
   return settings
@@ -1512,6 +1522,101 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
   }
 }
 
+
+async function quietLLMLegacy(system, user, settings, userId, scan = null) {
+  // Deliberately preserves the v0.13 request shape. This is a compatibility
+  // engine, not an alias for the newer documented structured transport.
+  const candidates = []
+  const g = spindle.generation || spindle.llm || spindle.generate
+  if (g) {
+    if (typeof g.quiet === 'function') candidates.push(['generation.quiet', (o) => g.quiet(o)])
+    if (typeof g.generate === 'function') candidates.push(['generation.generate', (o) => g.generate(o)])
+    if (typeof g.raw === 'function') candidates.push(['generation.raw', (o) => g.raw(o)])
+    if (typeof g === 'function') candidates.push(['generate()', (o) => g(o)])
+  }
+  if (typeof spindle.quietGenerate === 'function') candidates.push(['quietGenerate', (o) => spindle.quietGenerate(o)])
+  if (!candidates.length) {
+    throw new Error('No legacy LLM generation API found. spindle surface: ' + Object.keys(spindle).join(', '))
+  }
+
+  const combined = system +
+    '\n\n----- STORY PASSAGE -----\n' + user +
+    '\n----- END PASSAGE -----\n\nNow respond with ONLY the output the instruction above requires, formatted as one line per image:\n<short verbatim anchor quote of 5-12 words copied exactly from the passage> ||| <comma-separated tag prompt>\nThe anchor marks where in the passage the image belongs. No prose, no explanations, nothing else.'
+
+  const controller = new AbortController()
+  if (scan) scan.abortController = controller
+  const opts = {
+    userId,
+    prompt: combined,
+    system,
+    messages: [{ role: 'user', content: combined }],
+    signal: controller.signal,
+  }
+  if (settings.parserConnection) {
+    opts.connection = settings.parserConnection
+    opts.connectionId = settings.parserConnection
+  }
+  if (settings.parserModel) opts.model = settings.parserModel
+
+  const started = Date.now()
+  spindle.log.info('[lumidraw] legacy parser request started' +
+    (settings.parserConnection ? ' · connection=' + settings.parserConnection : '') +
+    (settings.parserModel ? ' · model=' + settings.parserModel : '') +
+    ' · transport=v0.13')
+
+  let timer
+  try {
+    assertStoryScanActive(scan)
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        try { controller.abort() } catch { /* ignore */ }
+        const error = new Error(`Legacy parser request timed out after ${Math.round(PARSER_TIMEOUT_MS / 1000)} seconds.`)
+        error.name = 'ParserTimeoutError'
+        reject(error)
+      }, PARSER_TIMEOUT_MS)
+    })
+
+    const runCandidates = async () => {
+      const errs = []
+      for (const [name, fn] of candidates) {
+        try {
+          let res
+          try { res = await fn(opts) }
+          catch (e1) {
+            if (/userId/i.test(e1 && e1.message || '')) res = await fn(opts, userId)
+            else throw e1
+          }
+          const responseText = (res && (res.text || res.content ||
+            (res.choices && res.choices[0] && (res.choices[0].text || (res.choices[0].message && res.choices[0].message.content))))) ||
+            (typeof res === 'string' ? res : null)
+          if (responseText) return { name, text: responseText.trim() }
+          errs.push(`${name}: unrecognized response shape (${res ? Object.keys(res).join(',') : res})`)
+        } catch (error) {
+          if (error && error.name === 'AbortError') throw error
+          errs.push(`${name}: ${error && error.message ? error.message : error}`)
+        }
+      }
+      throw new Error('Legacy parser LLM call failed: ' + errs.join(' | '))
+    }
+
+    const result = await Promise.race([runCandidates(), timeoutPromise])
+    assertStoryScanActive(scan)
+    spindle.log.info('[lumidraw] legacy parser completed in ' + (Date.now() - started) + 'ms via ' + result.name + ' → raw reply: ' + result.text.slice(0, 500))
+    return result.text
+  } catch (error) {
+    if (error && error.name === 'AbortError') {
+      if (scan && scan.cancelled) throw new StoryScanCancelledError()
+      const timeout = new Error(`Legacy parser request timed out after ${Math.round(PARSER_TIMEOUT_MS / 1000)} seconds.`)
+      timeout.name = 'ParserTimeoutError'
+      throw timeout
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+    if (scan) scan.abortController = null
+  }
+}
+
 let activeStoryScan = null
 let storyScanSequence = 0
 const pendingParserTriggerIds = new Set()
@@ -1665,7 +1770,7 @@ async function scanStoryCore(userId, options = {}) {
     const usingCustom = !!(settings.parserInstruction && settings.parserInstruction.trim())
     const passage = stripParserTrigger(stripThinking(target.content)).replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
 
-    if (settings.subjectBinding !== false) {
+    if (settings.parserEngine === 'anima') {
       const profiles = await getStoryProfiles(preset, settings, userId, chatId)
       const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
         .replaceAll('{{max_images}}', String(settings.maxImages || 2))
@@ -1682,6 +1787,7 @@ async function scanStoryCore(userId, options = {}) {
       } catch (error) {
         const storyDebug = await saveStoryDebug({
           mode: 'parser',
+          parserEngine: 'anima',
           subjectBinding: true,
           rawReply: out,
           error: error.message,
@@ -1698,7 +1804,7 @@ async function scanStoryCore(userId, options = {}) {
       if (!parsed.length) {
         if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
         if (target.id) await markProcessed(target.id)
-        const storyDebug = await saveStoryDebug({ mode: 'parser', subjectBinding: true, rawReply: out, entries: [], lastCompiledPrompt: '' })
+        const storyDebug = await saveStoryDebug({ mode: 'parser', parserEngine: 'anima', subjectBinding: true, rawReply: out, entries: [], lastCompiledPrompt: '' })
         return { mode: 'parser', note: `Parser (${instrLabel}) judged no visual moment.`, storyDebug }
       }
 
@@ -1755,6 +1861,7 @@ async function scanStoryCore(userId, options = {}) {
       if (target.id) await markProcessed(target.id)
       const storyDebug = await saveStoryDebug({
         mode: 'parser',
+        parserEngine: 'anima',
         subjectBinding: true,
         rawReply: out,
         entries: debugEntries,
@@ -1776,8 +1883,8 @@ async function scanStoryCore(userId, options = {}) {
       instruction += '\n\nUser/persona visual tags — use ONLY when the User is visibly present in the chosen moment, and only the visible parts (respect POV): ' + preset.personaTags
     }
     const instrLabel = usingCustom ? `custom instruction (${instruction.length} chars)` : 'legacy tag instruction'
-    setStoryScanStage(scan, 'parsing', 'Waiting for the selected parser model.')
-    const out = await quietLLM(await resolveMacros(instruction, userId, chatId), passage, settings, userId, false, scan)
+    setStoryScanStage(scan, 'parsing', 'Running the v0.13 instruction-only parser.')
+    const out = await quietLLMLegacy(await resolveMacros(instruction, userId, chatId), passage, settings, userId, scan)
     assertStoryScanActive(scan)
     setStoryScanStage(scan, 'compiling', 'Parser returned tags; preparing the final prompt.')
     if (/^\s*NONE\s*$/i.test(out)) {
@@ -1845,7 +1952,7 @@ async function scanStoryCore(userId, options = {}) {
     await updateMessageContent(target.id, target.contentKey, newContent, userId, chatId)
     if (target.id) await markProcessed(target.id)
     const storyDebug = await saveStoryDebug({
-      mode: 'parser', subjectBinding: false, rawReply: out,
+      mode: 'parser', parserEngine: 'legacy', subjectBinding: false, rawReply: out,
       entries: parsed.map((item, index) => ({ anchor: item.anchor, compiledPrompt: [lead, prefix, lines[index]].filter(Boolean).join(', ') })),
       lastCompiledPrompt: [lead, prefix, lines[0]].filter(Boolean).join(', '),
     })
@@ -1975,8 +2082,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.17.9',
-          defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: DEFAULT_PARSER_INSTRUCTION },
+          version: (spindle.manifest && spindle.manifest.version) || '0.18.0',
+          defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
       }
@@ -1988,13 +2095,14 @@ spindle.onFrontendMessage(async (payload, userId) => {
           host: String(payload.host || prev.host || DEFAULT_SETTINGS.host).trim(),
           port: Number(payload.port) || prev.port || DEFAULT_SETTINGS.port,
         }
-        for (const k of ['mode', 'parserConnection', 'parserModel', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost']) {
+        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost']) {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
         if (payload.bridgePort !== undefined) settings.bridgePort = Number(payload.bridgePort) || DEFAULT_SETTINGS.bridgePort
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
-        if (payload.subjectBinding !== undefined) settings.subjectBinding = !!payload.subjectBinding
+        if (!['legacy', 'anima'].includes(settings.parserEngine)) settings.parserEngine = 'legacy'
+        settings.subjectBinding = settings.parserEngine === 'anima'
         if (payload.maxImages !== undefined) {
           settings.maxImages = Math.max(1, Math.min(4, Number(payload.maxImages) || 2))
         }
@@ -2730,4 +2838,4 @@ let lastAutoHandledMessageId = ''
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.17.9'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.0'))

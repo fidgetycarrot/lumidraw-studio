@@ -1,70 +1,58 @@
-# LumiDraw Studio 0.17.9
+# LumiDraw Studio 0.18.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.17.9 — documented parser transport
+## 0.18.0 — explicit Parser engines
 
-Parser requests now use Lumiverse’s documented generation request shape:
+Parser mode now has two clearly separated engines.
 
-- separate system and user messages;
-- `connection_id` for the selected parser connection;
-- `parameters` with a compact output cap and low temperature;
-- `reasoning: { source: "off" }` so scene extraction does not inherit extended thinking;
-- the existing abort signal and four-minute timeout.
+### Legacy instruction-only — version 0.13 behavior
 
-Terminal logs now identify the actual connection provider/model when Lumiverse
-exposes them, the generation method used, reasoning state, output cap, duration,
-finish reason, and token usage when returned.
+This is the default after upgrading to 0.18.0 and is intended as the dependable
+fallback while the Anima compiler is tuned.
 
-If the optional model override differs from the selected connection model,
-LumiDraw uses the documented raw route with that connection’s provider. When no
-override is needed, it uses `generate.quiet()` and the connection’s current model.
+- Uses the same instruction-only parser flow as the known-good 0.13.1 build.
+- Sends the selected story passage using the older request shape that previously
+  worked reliably in Lumiverse.
+- Uses only the Parser instruction shown in the Story tab, plus the old anchor
+  output contract needed to place an image near the selected passage.
+- Accepts comma-separated image tags directly from the parser.
+- Prepends the committed preset's saved quality tags, character tags, and prompt
+  prefix, then sends the result directly to Draw Things.
+- Does not use structured identity JSON or the Anima deterministic compiler.
 
-## Anima hybrid compiler
+### Anima structured — experimental
 
-Parser mode still uses a dedicated LLM to extract a compact structured JSON
-scene. The parser chooses subjects, current clothing, pose, support surfaces,
-expressions, interactions, setting, camera, lighting, style, and aspect ratio.
-It does not write the final Draw Things prompt.
+This retains the newer pipeline for continued testing:
 
-LumiDraw now compiles that JSON specifically for Anima:
+1. The parser extracts compact structured JSON.
+2. LumiDraw binds saved character/persona identities and anatomy rules.
+3. The deterministic Anima compiler writes the final hybrid prompt.
+4. The committed preset's quality tags and negative prompt remain unchanged.
 
-1. The preset's saved quality tags remain verbatim at the beginning.
-2. The preset's custom prompt prefix remains user-controlled.
-3. Anima subject-count tags follow.
-4. The central actor-to-target interaction is stated early and explicitly.
-5. Every subject receives a named natural-language appearance caption.
-6. Current clothing, pose, visible support surface, and expression follow.
-7. Setting, camera, lighting, style, and non-action visual modifiers are emitted
-   as lowercase Anima tags at the end.
+Switching engines does not delete presets, profiles, History, or Story settings.
+The Parser instruction Reset button loads the built-in default for the currently
+selected engine.
 
-Anima tag normalization uses lowercase and replaces underscores with spaces,
-except for `score_*` tags. Proper character names remain capitalized in caption
-sentences.
+## Parser reliability and diagnostics
 
-## Identity and anatomy safeguards
-
-- Permanent appearance for saved character/persona profiles remains locked.
-- Parser-provided anatomy is stripped from known-character scene fields.
-- Conditional saved anatomy requires both `anatomy_visible: true` and an
-  explicit subject-owned mention in the source passage.
-- Nudity, lowered clothing, arousal, or sexual context alone do not activate
-  conditional anatomy.
-- When anatomy is included, it is written as an ownership sentence inside the
-  correct character caption rather than as a free-floating tag.
-- Cross-subject pronouns in two-character pose fragments are resolved back to
-  the other saved character's name.
+- Both engines retain the scan lock, duplicate-trigger protection, live stages,
+  elapsed timer, Cancel Parser button, and four-minute timeout.
+- Legacy Terminal logs begin with `legacy parser request started` and identify
+  the v0.13 transport.
+- Anima structured Terminal logs begin with `parser request started` and use the
+  newer structured transport.
+- Auto Parser and old-message rescanning use whichever Parser engine is selected.
+- Maximum images is enforced before Draw Things generation.
 
 ## Retained behavior
 
 - Inline mode remains on the simpler pre-0.17 tag-only path.
-- Native Parser trigger interception and render-event fallback.
-- Parser scan locks and hard maximum-image enforcement.
 - Immediate History updates and manual History refresh.
 - Old-message rescanning with chat-message and story-message numbering.
 - Studio / Story / Presets / Settings redesign.
-- In-app image viewer with zoom, pan, history prompt restoration, and reuse.
+- In-app image viewer with zoom, pan, prompt restoration, and reuse.
 - Bridge-powered model, sampler, and LoRA catalogs.
 - Draw Things `batch_count` is forced to `1`; only the first returned image is
   accepted for each requested illustration.
@@ -75,22 +63,11 @@ sentences.
 2. LumiDraw Bridge 0.2.0 or newer running at `127.0.0.1:7863`.
 3. Install the flat ZIP with `spindle.json` at the archive root.
 
-## Verify
+## Verify the fallback
 
-The header and Terminal should show **v0.17.9**.
-
-1. Run Parser mode on a two-character interaction.
-2. Open **Last Anima parser compile**.
-3. Confirm the final prompt begins with your saved quality tags, followed by
-   count tags, an early explicit interaction sentence, named character
-   captions, and lowercase scene tags at the end.
-4. Confirm the preset negative prompt remains unchanged.
-5. Confirm conditional anatomy stays absent unless the story explicitly names
-   it as belonging to that visible subject.
-
-
-## Retained from 0.17.8
-
-- Live Parser stages, elapsed time, cancellation, and four-minute timeout.
-- Safe late-result discard and cancellation guards around Draw Things and insertion.
-- Parser-trigger deduplication and hard maximum-image enforcement.
+1. Confirm the header and Terminal show **v0.18.0**.
+2. Open Story and select **Parser**.
+3. Select **Legacy instruction-only — version 0.13 behavior**.
+4. Confirm the Parser instruction contains the familiar tag-only instruction.
+5. Run **Scan latest** and look for `legacy parser request started` in Terminal.
+6. Confirm Draw Things receives the parser's direct tag prompt.
