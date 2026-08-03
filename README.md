@@ -1,42 +1,46 @@
-# LumiDraw Studio 0.16.3
+# LumiDraw Studio 0.16.4
 
-Desktop interaction and in-app image-viewer hotfix. This release keeps the
-0.16 Studio / Story design and the proven 0.15 generation backend.
+A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
+sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## What changed
+## 0.16.4 — history reuse and zoomable viewer
 
-- Replaces the desktop CSS Grid workspace with two ordinary nested flex rows.
-  The visible Tune / Create / History and LoRA Library / Active Stack layout is
-  retained, but Safari no longer has independently scrolling image panes inside
-  a fixed-position grid.
-- Reserves pane scrollbar space to prevent one-pixel layout oscillation.
-- Replaces raw clickable `<img>` elements with stable button hitboxes. The image
-  pixels ignore pointer events, so desktop clicks land on one consistent target.
-- Adds a unified in-app image viewer for desktop and mobile.
-- Removes all `window.open()` image behavior; images no longer launch separate
-  browser windows or tabs.
-- The viewer supports previous/next navigation, Escape to close, arrow-key
-  navigation, backdrop close, and Insert into chat.
-- Uses a uniform cursor inside the desktop LumiDraw surface as a WebKit cursor-
-  flicker workaround. Controls remain fully clickable.
+- Clicking a History thumbnail now loads that image into the center Create stage
+  instead of immediately opening the viewer.
+- The image's saved positive prompt, negative prompt, and seed are restored into
+  the Create fields. History created before 0.16.4 may not contain a saved
+  negative prompt; LumiDraw leaves the current negative prompt intact in that
+  case.
+- On phones, selecting a History image automatically returns to the Create tab.
+- Tapping/clicking the centered image opens the in-app viewer.
+- The viewer is constrained to the real iPhone safe-area viewport and no longer
+  relies on `100dvh` for its mobile dialog height.
+- Zoom controls are visible on both desktop and mobile.
+- Supports pinch-to-zoom, double-tap/double-click zoom, wheel zoom, and drag-to-pan.
+- Zoom range is 100%–600%; the percentage button resets to fit.
+- Newly generated history entries now retain their negative prompt for exact reuse.
 
-## Functionality retained
+## Retained behavior
 
+- Studio / Story / Presets / Settings redesign.
+- Desktop Tune, Create, History, LoRA Library, and Active Stack panes.
+- Mobile Create / Tune / LoRAs / Stack / History tabs.
 - Bridge-powered image-model, sampler, and LoRA catalogs.
-- Standalone Studio workspace and committed Story presets.
-- Inline and Parser story illustration modes.
-- Old-message rescanning and exact insertion.
-- Draw Things `batch_count: 1` safety guard.
-- Fullscreen mode, expanded text editors, history actions, and preset editing.
+- Committed chat presets remain isolated from temporary Studio experiments.
+- Old-message rescanning and inline/parser story generation.
+- Draw Things `batch_count` is forced to `1` and only one image is accepted per
+  requested illustration.
 
 ## Requirements
 
 1. Draw Things HTTP API enabled, normally at `127.0.0.1:7862`.
-2. LumiDraw Bridge 0.2.0 or newer at `127.0.0.1:7863`.
-3. Install the ZIP with all five files at the archive root.
+2. LumiDraw Bridge 0.2.0 or newer running at `127.0.0.1:7863`.
+3. Install the flat ZIP with `spindle.json` at the archive root.
 
 ## Verify
 
-The header must show **v0.16.3**. On desktop, hover should no longer produce a
-rapidly changing cursor. Clicking the central output or any History thumbnail
-must open the image inside LumiDraw. The same in-app viewer is used on mobile.
+The header must show **v0.16.4**. Test both desktop and mobile:
+
+1. Select a History thumbnail; it should move to Create and restore prompt/seed.
+2. Tap the centered image; the viewer should stay inside the screen.
+3. Pinch or use +/− to zoom, drag to pan, and tap the percentage to reset.

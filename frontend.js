@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.16.3'
+const EXTENSION_VERSION = '0.16.4'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -359,10 +359,15 @@ function realSetup(ctx) {
     .ld-lightbox-head { border-bottom:1px solid var(--lumiverse-border, #3d4050); }
     .ld-lightbox-foot { border-top:1px solid var(--lumiverse-border, #3d4050); }
     .ld-lightbox-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:650; }
-    .ld-lightbox-stage { flex:1; min-height:0; display:flex; align-items:center; gap:10px; padding:10px; background:#08090c; }
-    .ld-lightbox-image-wrap { flex:1; min-width:0; min-height:0; height:100%; display:flex; align-items:center; justify-content:center; }
-    .ld-lightbox-image { max-width:100%; max-height:100%; object-fit:contain; display:block; -webkit-user-drag:none; user-select:none; }
-    .ld-lightbox-nav { flex:0 0 42px; width:42px; height:62px; border-radius:9px; font-size:30px; line-height:1; }
+    .ld-lightbox-stage { flex:1; min-height:0; position:relative; display:flex; align-items:center; padding:10px; background:#08090c; overflow:hidden; }
+    .ld-lightbox-image-wrap { flex:1; min-width:0; min-height:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden; position:relative; touch-action:none; overscroll-behavior:contain; }
+    .ld-lightbox-image { max-width:100%; max-height:100%; object-fit:contain; display:block; -webkit-user-drag:none; user-select:none; transform-origin:center center; will-change:transform; }
+    .ld-lightbox-nav { position:absolute; top:50%; z-index:4; width:42px; height:62px; border-radius:9px; font-size:30px; line-height:1; transform:translateY(-50%); }
+    .ld-lightbox-prev { left:10px; }
+    .ld-lightbox-next { right:10px; }
+    .ld-lightbox-zoom-tools { position:absolute; z-index:5; left:50%; bottom:12px; transform:translateX(-50%); display:flex; align-items:center; gap:5px; padding:5px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:10px; background:#1b1c23; box-shadow:0 5px 20px rgba(0,0,0,.45); }
+    .ld-lightbox-zoom-tools .ld-btn { min-width:36px; height:34px; padding:0 9px; }
+    .ld-lightbox-zoom-level { min-width:60px !important; font-variant-numeric:tabular-nums; }
     .ld-lightbox-meta { flex:1; min-width:0; font-size:11px; line-height:1.35; color:var(--lumiverse-text-muted, #a2a5b4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .ld-lightbox-actions { display:flex; gap:7px; flex:0 0 auto; }
 
@@ -415,11 +420,14 @@ function realSetup(ctx) {
       .ld-text-editor { padding:0; }
       .ld-text-editor-dialog { width:100%; height:100dvh; border-radius:0; border:none; }
       .ld-text-editor-area { margin:10px; width:calc(100% - 20px) !important; }
-      .ld-lightbox { padding:0; }
-      .ld-lightbox-dialog { width:100%; height:100dvh; border:0; border-radius:0; }
-      .ld-lightbox-stage { padding:5px; gap:4px; }
-      .ld-lightbox-nav { flex-basis:34px; width:34px; height:54px; padding:0; }
-      .ld-lightbox-foot { align-items:flex-start; flex-direction:column; }
+      .ld-lightbox { align-items:stretch; justify-content:stretch; box-sizing:border-box; overflow:hidden; padding:env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+      .ld-lightbox-dialog { width:100%; height:100%; max-height:100%; min-height:0; border:0; border-radius:0; }
+      .ld-lightbox-stage { padding:4px; }
+      .ld-lightbox-nav { width:36px; height:54px; padding:0; }
+      .ld-lightbox-prev { left:5px; }
+      .ld-lightbox-next { right:5px; }
+      .ld-lightbox-zoom-tools { bottom:8px; }
+      .ld-lightbox-foot { align-items:flex-start; flex-direction:column; max-height:34%; overflow-y:auto; }
       .ld-lightbox-actions { width:100%; }
       .ld-lightbox-actions .ld-btn { flex:1; }
     }
@@ -439,7 +447,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.16.3" aria-label="LumiDraw Studio v0.16.3">
+    <button class="ld-launcher" title="LumiDraw Studio v0.16.4" aria-label="LumiDraw Studio v0.16.4">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -448,7 +456,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.16.3</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.16.4</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -693,6 +701,11 @@ function realSetup(ctx) {
           <button class="ld-btn ld-lightbox-nav ld-lightbox-prev" title="Previous image" aria-label="Previous image">‹</button>
           <div class="ld-lightbox-image-wrap"><img class="ld-lightbox-image" alt="Generated image" draggable="false" /></div>
           <button class="ld-btn ld-lightbox-nav ld-lightbox-next" title="Next image" aria-label="Next image">›</button>
+          <div class="ld-lightbox-zoom-tools" aria-label="Image zoom controls">
+            <button class="ld-btn ld-lightbox-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
+            <button class="ld-btn ld-lightbox-zoom-level" title="Reset zoom" aria-label="Reset zoom">100%</button>
+            <button class="ld-btn ld-lightbox-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+          </div>
         </div>
         <div class="ld-lightbox-foot">
           <div class="ld-lightbox-meta"></div>
@@ -729,14 +742,26 @@ function realSetup(ctx) {
   const textEditorTitle = $('.ld-text-editor-title')
   const lightbox = $('.ld-lightbox')
   const lightboxImage = $('.ld-lightbox-image')
+  const lightboxImageWrap = $('.ld-lightbox-image-wrap')
   const lightboxTitle = $('.ld-lightbox-title')
   const lightboxMeta = $('.ld-lightbox-meta')
+  const lightboxZoomLevel = $('.ld-lightbox-zoom-level')
   const liveInstance = { panel, launcher }
   window[INSTANCE_KEY] = liveInstance
   const FULLSCREEN_KEY = 'lumidraw_panel_fullscreen_v1'
   let expandedTextarea = null
   let lightboxIndex = 0
   let lightboxItems = []
+  let selectedOutputUrl = null
+  let lightboxScale = 1
+  let lightboxPanX = 0
+  let lightboxPanY = 0
+  let lightboxGestureMoved = false
+  let lightboxLastTapAt = 0
+  let lightboxLastPointerType = ''
+  const lightboxPointers = new Map()
+  let lightboxPanStart = null
+  let lightboxPinchStart = null
 
   // ------------------------------------------------------------------ helpers
   function setStatus(sel, msg, kind) {
@@ -759,10 +784,80 @@ function realSetup(ctx) {
     return out
   }
 
+  function findHistoryImage(imageUrl) {
+    if (!imageUrl) return null
+    return flattenHistoryImages().find(({ image }) => image.url === imageUrl) || null
+  }
+
+  function currentOutputItem() {
+    const selected = findHistoryImage(selectedOutputUrl)
+    if (selected) return selected
+    const first = flattenHistoryImages()[0] || null
+    selectedOutputUrl = first ? first.image.url : null
+    return first
+  }
+
+  function clampNumber(value, minimum, maximum) {
+    return Math.min(maximum, Math.max(minimum, value))
+  }
+
+  function clampLightboxPan() {
+    if (lightboxScale <= 1 || !lightboxImageWrap || !lightboxImage) {
+      lightboxPanX = 0
+      lightboxPanY = 0
+      return
+    }
+    const maxX = Math.max(0, ((lightboxImage.clientWidth || 0) * lightboxScale - lightboxImageWrap.clientWidth) / 2)
+    const maxY = Math.max(0, ((lightboxImage.clientHeight || 0) * lightboxScale - lightboxImageWrap.clientHeight) / 2)
+    lightboxPanX = clampNumber(lightboxPanX, -maxX, maxX)
+    lightboxPanY = clampNumber(lightboxPanY, -maxY, maxY)
+  }
+
+  function applyLightboxTransform() {
+    clampLightboxPan()
+    lightboxImage.style.transform = `translate3d(${lightboxPanX}px, ${lightboxPanY}px, 0) scale(${lightboxScale})`
+    if (lightboxZoomLevel) lightboxZoomLevel.textContent = `${Math.round(lightboxScale * 100)}%`
+  }
+
+  function resetLightboxZoom() {
+    lightboxScale = 1
+    lightboxPanX = 0
+    lightboxPanY = 0
+    lightboxPointers.clear()
+    lightboxPanStart = null
+    lightboxPinchStart = null
+    applyLightboxTransform()
+  }
+
+  function setLightboxZoom(nextScale, focalClientX = null, focalClientY = null) {
+    const previousScale = lightboxScale
+    const clamped = clampNumber(Number(nextScale) || 1, 1, 6)
+    if (clamped === previousScale) return
+    if (focalClientX !== null && focalClientY !== null && previousScale > 0) {
+      const rect = lightboxImageWrap.getBoundingClientRect()
+      const focalX = focalClientX - (rect.left + rect.width / 2)
+      const focalY = focalClientY - (rect.top + rect.height / 2)
+      lightboxPanX = focalX - ((focalX - lightboxPanX) / previousScale) * clamped
+      lightboxPanY = focalY - ((focalY - lightboxPanY) / previousScale) * clamped
+    }
+    lightboxScale = clamped
+    if (lightboxScale === 1) {
+      lightboxPanX = 0
+      lightboxPanY = 0
+    }
+    applyLightboxTransform()
+  }
+
+  function toggleLightboxZoom(clientX, clientY) {
+    if (lightboxScale > 1.05) resetLightboxZoom()
+    else setLightboxZoom(2, clientX, clientY)
+  }
+
   function renderLightbox() {
     const item = lightboxItems[lightboxIndex]
     if (!item) { closeLightbox(); return }
     const { image, entry } = item
+    resetLightboxZoom()
     lightboxImage.src = image.url
     lightboxImage.alt = (entry.prompt || 'Generated image').slice(0, 180)
     lightboxTitle.textContent = `Image ${lightboxIndex + 1} of ${lightboxItems.length}`
@@ -788,6 +883,7 @@ function realSetup(ctx) {
     lightbox.classList.remove('ld-open')
     lightbox.setAttribute('aria-hidden', 'true')
     lightboxImage.removeAttribute('src')
+    resetLightboxZoom()
     if (!panel.classList.contains('ld-fullscreen')) document.body.classList.remove('ld-fullscreen-lock')
   }
 
@@ -1416,12 +1512,30 @@ function realSetup(ctx) {
     }
   }
 
+  function loadHistoryImage(entry, image) {
+    if (!entry || !image) return
+    selectedOutputUrl = image.url
+    $('.ld-prompt').value = entry.prompt || ''
+    const hasSavedNegative = Object.prototype.hasOwnProperty.call(entry, 'negativePrompt')
+    if (hasSavedNegative) {
+      $('.ld-negative').value = entry.negativePrompt || ''
+      onDraftControlChange()
+    }
+    $('.ld-seed').value = (entry.seed !== undefined && entry.seed !== null && entry.seed !== 'random') ? entry.seed : ''
+    renderCurrentOutput()
+    if (window.matchMedia && window.matchMedia('(max-width: 840px)').matches) setMobileTab('create')
+    setStatus('.ld-gen-status', hasSavedNegative
+      ? 'Loaded this history image, prompt, negative prompt, and seed into Create.'
+      : 'Loaded this history image, prompt, and seed into Create. This older history item did not save its negative prompt.', 'good')
+  }
+
   function renderCurrentOutput() {
     const stage = $('.ld-current-output')
     if (!stage) return
     stage.innerHTML = ''
-    const entry = history[0]
-    const image = entry && Array.isArray(entry.images) ? entry.images[0] : null
+    const item = currentOutputItem()
+    const entry = item && item.entry
+    const image = item && item.image
     if (!entry || !image) {
       const empty = document.createElement('div')
       empty.className = 'ld-output-empty'
@@ -1472,12 +1586,12 @@ ${entry.prompt || ''}`.trim()
         hit.title = `${entry.model}
 seed ${entry.seed}
 ${entry.prompt || ''}`.trim()
-        hit.setAttribute('aria-label', 'Open generated image viewer')
+        hit.setAttribute('aria-label', 'Load generated image into Create')
         const im = document.createElement('img')
         im.src = img.url
         im.alt = (entry.prompt || 'Generated image').slice(0, 160)
         im.draggable = false
-        hit.addEventListener('click', () => openLightbox(img.url))
+        hit.addEventListener('click', () => loadHistoryImage(entry, img))
         hit.appendChild(im)
         const row = document.createElement('div')
         row.className = 'ld-thumb-row'
@@ -1600,6 +1714,7 @@ ${entry.prompt || ''}`.trim()
         extra: bundle.extra,
       })
       history = res.history
+      selectedOutputUrl = res.entry && res.entry.images && res.entry.images[0] ? res.entry.images[0].url : null
       renderHistory()
       const secs = (res.entry.durationMs / 1000).toFixed(1)
       setStatus('.ld-gen-status', `Done in ${secs}s · ${res.entry.model} · seed ${res.entry.seed}. Saved to your image library.`, 'good')
@@ -1706,6 +1821,81 @@ ${entry.prompt || ''}`.trim()
   $('.ld-lightbox-done').addEventListener('click', closeLightbox)
   $('.ld-lightbox-prev').addEventListener('click', () => moveLightbox(-1))
   $('.ld-lightbox-next').addEventListener('click', () => moveLightbox(1))
+  $('.ld-lightbox-zoom-out').addEventListener('click', () => setLightboxZoom(lightboxScale / 1.25))
+  $('.ld-lightbox-zoom-in').addEventListener('click', () => setLightboxZoom(lightboxScale * 1.25))
+  $('.ld-lightbox-zoom-level').addEventListener('click', resetLightboxZoom)
+  lightboxImage.addEventListener('load', resetLightboxZoom)
+  lightboxImageWrap.addEventListener('wheel', (event) => {
+    event.preventDefault()
+    setLightboxZoom(lightboxScale * (event.deltaY < 0 ? 1.15 : (1 / 1.15)), event.clientX, event.clientY)
+  }, { passive: false })
+  lightboxImageWrap.addEventListener('pointerdown', (event) => {
+    event.preventDefault()
+    lightboxLastPointerType = event.pointerType || ''
+    lightboxGestureMoved = false
+    try { lightboxImageWrap.setPointerCapture(event.pointerId) } catch { /* best effort */ }
+    lightboxPointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    if (lightboxPointers.size === 1) {
+      lightboxPanStart = { x: event.clientX, y: event.clientY, panX: lightboxPanX, panY: lightboxPanY }
+      lightboxPinchStart = null
+    } else if (lightboxPointers.size === 2) {
+      const points = [...lightboxPointers.values()]
+      lightboxPinchStart = {
+        distance: Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y) || 1,
+        scale: lightboxScale,
+      }
+      lightboxPanStart = null
+    }
+  })
+  lightboxImageWrap.addEventListener('pointermove', (event) => {
+    if (!lightboxPointers.has(event.pointerId)) return
+    const previous = lightboxPointers.get(event.pointerId)
+    lightboxPointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    if (Math.hypot(event.clientX - previous.x, event.clientY - previous.y) > 2) lightboxGestureMoved = true
+    if (lightboxPointers.size >= 2 && lightboxPinchStart) {
+      const points = [...lightboxPointers.values()].slice(0, 2)
+      const distance = Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y) || 1
+      const midpointX = (points[0].x + points[1].x) / 2
+      const midpointY = (points[0].y + points[1].y) / 2
+      setLightboxZoom(lightboxPinchStart.scale * (distance / lightboxPinchStart.distance), midpointX, midpointY)
+      return
+    }
+    if (lightboxPointers.size === 1 && lightboxPanStart && lightboxScale > 1) {
+      lightboxPanX = lightboxPanStart.panX + (event.clientX - lightboxPanStart.x)
+      lightboxPanY = lightboxPanStart.panY + (event.clientY - lightboxPanStart.y)
+      applyLightboxTransform()
+    }
+  })
+  const endLightboxPointer = (event) => {
+    const wasTouch = event.pointerType === 'touch'
+    const wasSingle = lightboxPointers.size === 1
+    lightboxPointers.delete(event.pointerId)
+    try { lightboxImageWrap.releasePointerCapture(event.pointerId) } catch { /* best effort */ }
+    if (wasTouch && wasSingle && !lightboxGestureMoved) {
+      const now = Date.now()
+      if (now - lightboxLastTapAt < 320) {
+        toggleLightboxZoom(event.clientX, event.clientY)
+        lightboxLastTapAt = 0
+      } else {
+        lightboxLastTapAt = now
+      }
+    }
+    if (lightboxPointers.size === 1) {
+      const remaining = [...lightboxPointers.values()][0]
+      lightboxPanStart = { x: remaining.x, y: remaining.y, panX: lightboxPanX, panY: lightboxPanY }
+      lightboxPinchStart = null
+    } else if (!lightboxPointers.size) {
+      lightboxPanStart = null
+      lightboxPinchStart = null
+    }
+  }
+  lightboxImageWrap.addEventListener('pointerup', endLightboxPointer)
+  lightboxImageWrap.addEventListener('pointercancel', endLightboxPointer)
+  lightboxImageWrap.addEventListener('dblclick', (event) => {
+    if (lightboxLastPointerType === 'touch') return
+    event.preventDefault()
+    toggleLightboxZoom(event.clientX, event.clientY)
+  })
   $('.ld-lightbox-insert').addEventListener('click', () => {
     const item = lightboxItems[lightboxIndex]
     if (item) appendToChat(item.image, item.entry)

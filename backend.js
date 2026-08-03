@@ -524,6 +524,7 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims }
     durationMs: Date.now() - started,
     model: payloadOut.model,
     prompt: payloadOut.prompt,
+    negativePrompt: payloadOut.negative_prompt || '',
     seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
     images: uploads,
   }
@@ -1254,6 +1255,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           durationMs: Date.now() - started,
           model: payloadOut.model,
           prompt: payloadOut.prompt,
+          negativePrompt: payloadOut.negative_prompt || '',
           seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
           images: uploads,
         }
