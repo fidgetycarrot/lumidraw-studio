@@ -1,7 +1,27 @@
-# LumiDraw Studio 0.18.4
+# LumiDraw Studio 0.18.5
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.18.5 — Structured reply recovery
+
+This build fixes structured Parser replies that begin with valid JSON but are
+cut off before the model closes the root object. That was the cause of errors
+like `parser reply did not contain a JSON object` even though the raw reply
+visibly started with `{"images": ...}`.
+
+- The structured parser output allowance now scales with the selected image
+  count: 1 image uses 1,800 tokens, 2 use 2,600, 3 use 3,400, and 4 use 4,200.
+- The schema now asks Sonnet for smaller arrays and fewer nonessential details.
+- If a response is truncated after completing one or more image objects,
+  LumiDraw preserves those complete images and discards only the unfinished one.
+- Responses missing only final closing brackets are repaired locally when safe.
+- JSON returned as an encoded string is unwrapped automatically.
+- Terminal logging now includes response character count and detects nested
+  `finish_reason` values, including output-limit finishes.
+
+Legacy instruction-only mode and the Anima prompt compiler are otherwise
+unchanged.
 
 ## 0.18.4 — Signature ownership and named prop aliases
 
@@ -94,7 +114,7 @@ The compiler identifier is now `anima-hybrid-v4`.
 
 ## Suggested testing
 
-1. Confirm the header and Terminal show **v0.18.4**.
+1. Confirm the header and Terminal show **v0.18.5**.
 2. Keep **Legacy instruction-only** available as the known-good baseline.
 3. Set Wulfgar's Stable subject phrase to `adult human man`.
 4. Add `Aegis-fang = single massive warhammer` under his Named props / visual

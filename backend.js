@@ -909,18 +909,121 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
   }
 }
 
-function parseJsonObject(text, label = 'structured scene') {
-  let raw = String(text || '').trim()
-  raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
-  const first = raw.indexOf('{')
-  const last = raw.lastIndexOf('}')
-  if (first < 0 || last <= first) throw new Error(`${label} did not contain a JSON object.`)
-  raw = raw.slice(first, last + 1)
+function sanitizeJsonText(value) {
+  return String(value || '')
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
     .replace(/,\s*([}\]])/g, '$1')
-  try { return JSON.parse(raw) }
-  catch (error) { throw new Error(`${label} JSON could not be parsed: ${error.message}`) }
+}
+
+function extractCompleteObjectsFromArray(raw, key = 'images') {
+  const match = new RegExp(`"${key}"\\s*:\\s*\\[`, 'i').exec(raw)
+  if (!match) return []
+  const start = match.index + match[0].length
+  const objects = []
+  let objectStart = -1
+  let depth = 0
+  let inString = false
+  let escaped = false
+
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') { inString = true; continue }
+    if (ch === '{') {
+      if (depth === 0) objectStart = i
+      depth++
+      continue
+    }
+    if (ch === '}' && depth > 0) {
+      depth--
+      if (depth === 0 && objectStart >= 0) {
+        const candidate = sanitizeJsonText(raw.slice(objectStart, i + 1))
+        try { objects.push(JSON.parse(candidate)) }
+        catch { /* Ignore an invalid candidate and continue looking. */ }
+        objectStart = -1
+      }
+    }
+  }
+  return objects
+}
+
+function tryCloseTruncatedJson(raw) {
+  let candidate = String(raw || '').trim().replace(/,\s*$/, '')
+  const stack = []
+  let inString = false
+  let escaped = false
+
+  for (const ch of candidate) {
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') { inString = true; continue }
+    if (ch === '{') stack.push('}')
+    else if (ch === '[') stack.push(']')
+    else if (ch === '}' || ch === ']') {
+      if (!stack.length || stack[stack.length - 1] !== ch) return null
+      stack.pop()
+    }
+  }
+
+  // A response cut off in the middle of a quoted value cannot be repaired
+  // safely. A response that merely omitted closing brackets often can.
+  if (inString || !stack.length) return null
+  candidate += stack.reverse().join('')
+  candidate = sanitizeJsonText(candidate)
+  try { return JSON.parse(candidate) }
+  catch { return null }
+}
+
+function parseJsonObject(text, label = 'structured scene') {
+  if (text && typeof text === 'object' && !Array.isArray(text)) return text
+  let raw = String(text || '').trim()
+  raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+
+  // Some providers return the JSON as a JSON-encoded string. Unwrap it once
+  // before looking for the actual object.
+  if (raw.startsWith('"') && raw.endsWith('"')) {
+    try {
+      const decoded = JSON.parse(raw)
+      if (decoded && typeof decoded === 'object' && !Array.isArray(decoded)) return decoded
+      if (typeof decoded === 'string') raw = decoded.trim()
+    } catch { /* Continue with the original text. */ }
+  }
+
+  const first = raw.indexOf('{')
+  if (first < 0) throw new Error(`${label} did not contain a JSON object.`)
+  const candidateSource = sanitizeJsonText(raw.slice(first))
+  const last = candidateSource.lastIndexOf('}')
+  if (last > 0) {
+    const candidate = candidateSource.slice(0, last + 1)
+    try { return JSON.parse(candidate) }
+    catch { /* Try truncated-response recovery below. */ }
+  }
+
+  // Sonnet occasionally reaches its completion limit after finishing one
+  // image object but before closing the images array/root object. Preserve the
+  // complete image(s) rather than discarding the whole generation.
+  const recoveredImages = extractCompleteObjectsFromArray(candidateSource, 'images')
+  if (recoveredImages.length) {
+    return { images: recoveredImages, _lumidrawRecovered: 'complete_images_from_truncated_reply' }
+  }
+
+  const repaired = tryCloseTruncatedJson(candidateSource)
+  if (repaired && typeof repaired === 'object' && !Array.isArray(repaired)) {
+    repaired._lumidrawRecovered = 'appended_missing_closers'
+    return repaired
+  }
+
+  throw new Error(`${label} began as JSON but was cut off before a complete object was returned.`)
 }
 
 function normalizeSceneSubject(raw, index) {
@@ -988,6 +1091,9 @@ function parseInlineScene(body) {
 
 function parseParserScenes(text, maxImages) {
   const root = parseJsonObject(text, 'parser reply')
+  if (root && root._lumidrawRecovered) {
+    spindle.log.warn('[lumidraw] recovered structured parser data from a truncated reply · mode=' + root._lumidrawRecovered + ' · complete_images=' + (Array.isArray(root.images) ? root.images.length : 0))
+  }
   if (/^\s*NONE\s*$/i.test(String(root && root.result || ''))) return []
   const items = Array.isArray(root.images) ? root.images : (root.scene ? [root] : [])
   if (!items.length) throw new Error('Parser JSON must contain an images array.')
@@ -1568,7 +1674,7 @@ Return ONLY one compact JSON object, no markdown and no prose:
 {"images":[{"anchor":"5-12 exact consecutive words copied from the passage","scene":{"safety":"safe|sensitive|nsfw|explicit","subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","count_tag":"1girl|1boy|1other etc","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["non-action visual modifiers only"]}],"setting":["short tags"],"camera":["short tags"],"lighting":["short tags"],"style":["short tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw will preserve a mostly Danbooru/Gelbooru-style tag prompt and create only a few short natural-language anchors for subject ownership and spatial contact. Do not write the final image prompt yourself.
-Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles.
+Keep each image object compact: no more than 5 outfit items, 4 pose items, 3 expression items, 3 action items, 6 setting items, 4 camera items, 4 lighting items, and 4 style items. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
 For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible.
 For a solo scene, do not invent a relation merely to create prose; keep the visual skeleton tag-oriented. Natural-language anchors are reserved for cross-subject geometry.
@@ -1690,6 +1796,10 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
   const methodName = useRawOverride ? 'generate.raw' : 'generate.quiet'
   const method = useRawOverride ? generateApi.raw.bind(generateApi) : generateApi.quiet.bind(generateApi)
 
+  const structuredImageCount = Math.max(1, Math.min(4, Number(settings.maxImages) || 2))
+  const parserTokenLimit = structured
+    ? Math.min(4200, 1800 + ((structuredImageCount - 1) * 800))
+    : 1200
   const opts = {
     // Operator-scoped extensions must pass the active user explicitly in the
     // request object. Keeping the second-argument retry below preserves
@@ -1698,7 +1808,7 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
     messages,
     parameters: {
       temperature: 0.2,
-      max_tokens: structured ? 1800 : 1200,
+      max_tokens: parserTokenLimit,
     },
     reasoning: { source: 'off' },
     signal: parserController.signal,
@@ -1760,8 +1870,13 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
     const usageText = usage
       ? ' · tokens=' + [usage.prompt_tokens ?? '?', usage.completion_tokens ?? '?', usage.total_tokens ?? '?'].join('/')
       : ''
-    const finishText = res && res.finish_reason ? ' · finish=' + res.finish_reason : ''
-    spindle.log.info('[lumidraw] parser completed in ' + elapsed + 'ms via ' + methodName + usageText + finishText + ' → raw reply: ' + responseText.trim().slice(0, 500))
+    const finishReason = res && (res.finish_reason || (res.choices && res.choices[0] && res.choices[0].finish_reason))
+    const finishText = finishReason ? ' · finish=' + finishReason : ''
+    const cleanResponse = responseText.trim()
+    if (finishReason === 'length' || finishReason === 'max_tokens') {
+      spindle.log.warn('[lumidraw] parser response reached its output limit; LumiDraw will attempt to preserve any complete image objects.')
+    }
+    spindle.log.info('[lumidraw] parser completed in ' + elapsed + 'ms via ' + methodName + usageText + finishText + ' · chars=' + cleanResponse.length + ' → raw reply: ' + cleanResponse.slice(0, 500))
     return responseText.trim()
   } catch (error) {
     if (error && error.name === 'AbortError') {
@@ -2337,7 +2452,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.18.4',
+          version: (spindle.manifest && spindle.manifest.version) || '0.18.5',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -3093,4 +3208,4 @@ let lastAutoHandledMessageId = ''
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.4'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.5'))
