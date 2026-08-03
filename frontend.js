@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.16.0'
+const EXTENSION_VERSION = '0.16.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -31,6 +31,15 @@ export function setup(ctx) {
 export default setup
 
 function realSetup(ctx) {
+  // Lumiverse can occasionally re-run an extension setup while the previous
+  // DOM is still mounted. Two pixel-identical panels stacked together cause
+  // unstable hover/click hit-testing, especially in Safari. Keep one live UI.
+  const INSTANCE_KEY = '__lumidrawStudioLiveInstance'
+  const priorInstance = window[INSTANCE_KEY]
+  if (priorInstance && priorInstance.panel && priorInstance.panel.isConnected) {
+    console.warn('[LumiDraw] duplicate setup ignored; existing UI is still mounted')
+    return () => {}
+  }
   // --- resilient DOM layer: prefer host helpers, fall back to document ---
   const injected = []
   const dom = {
@@ -147,7 +156,7 @@ function realSetup(ctx) {
       flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
       min-height: 50px; padding: max(8px, env(safe-area-inset-top)) 12px 8px;
       border-bottom: 1px solid var(--lumiverse-border, #3d4050);
-      background: rgba(18,19,24,.72); backdrop-filter: blur(14px);
+      background: rgb(18,19,24);
     }
     .ld-head-title { font-weight: 700; margin-right: 6px; white-space: nowrap; }
     .ld-main-nav { display:flex; align-items:center; gap:4px; flex:1; }
@@ -183,7 +192,7 @@ function realSetup(ctx) {
       border-bottom:1px solid var(--lumiverse-border, #3d4050);
       background:rgba(18,19,24,.42);
     }
-    .ld-global-status:has(.ld-gen-status:empty) { display:none; }
+    .ld-global-status { display:none; }
     .ld-view { flex:1 1 auto; min-height:0; overflow:hidden; display:none; }
     .ld-view.ld-active { display:flex; }
 
@@ -207,7 +216,7 @@ function realSetup(ctx) {
     .ld-pane {
       min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden;
       border:1px solid var(--lumiverse-border, #3d4050); border-radius:10px;
-      background:rgba(27,28,35,.88);
+      background:rgba(27,28,35,.96); contain:layout paint; isolation:isolate;
     }
     .ld-pane-head {
       flex:0 0 auto; display:flex; align-items:center; gap:8px; min-height:38px; padding:8px 10px;
@@ -262,19 +271,19 @@ function realSetup(ctx) {
       overflow:hidden; border:1px dashed var(--lumiverse-border, #3d4050); border-radius:10px;
       background:rgba(12,13,17,.62); position:relative;
     }
-    .ld-output-stage img { width:100%; height:100%; object-fit:contain; display:block; cursor:zoom-in; }
+    .ld-output-stage img { width:100%; height:100%; object-fit:contain; display:block; cursor:zoom-in; -webkit-user-drag:none; user-select:none; }
     .ld-output-empty { text-align:center; padding:24px; color:var(--lumiverse-text-muted, #a2a5b4); font-size:12px; }
     .ld-output-meta {
       position:absolute; left:8px; right:8px; bottom:8px; padding:6px 8px; border-radius:8px;
-      background:rgba(10,11,15,.76); backdrop-filter:blur(8px); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+      background:rgba(10,11,15,.92); pointer-events:none; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
     }
     .ld-prompt-zone { display:flex; flex-direction:column; gap:8px; }
-    .ld-generate-bar { position:sticky; bottom:0; display:flex; gap:7px; padding-top:2px; background:linear-gradient(transparent, rgba(27,28,35,.96) 28%); }
+    .ld-generate-bar { flex:0 0 auto; display:flex; gap:7px; padding-top:2px; background:rgba(27,28,35,.96); }
     .ld-generate-bar [data-act="generate"] { flex:1; min-height:42px; }
 
     .ld-history { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:9px; }
     .ld-history .ld-thumb { display:flex; flex-direction:column; gap:4px; min-width:0; }
-    .ld-history img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:8px; border:1px solid var(--lumiverse-border, #3d4050); cursor:pointer; display:block; }
+    .ld-history img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:8px; border:1px solid var(--lumiverse-border, #3d4050); cursor:pointer; display:block; -webkit-user-drag:none; user-select:none; }
     .ld-thumb .ld-append { width:100%; padding:5px 4px; font-size:11px; line-height:1.1; background:var(--lumiverse-fill, #262833); border:1px solid var(--lumiverse-border, #3d4050); border-radius:7px; color:var(--lumiverse-text, #eceef4); cursor:pointer; }
     .ld-thumb-row { display:flex; gap:4px; }
     .ld-thumb-row .ld-append { flex:1; padding:4px 2px; font-size:10px; }
@@ -372,7 +381,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.16.0" aria-label="LumiDraw Studio v0.16.0">
+    <button class="ld-launcher" title="LumiDraw Studio v0.16.1" aria-label="LumiDraw Studio v0.16.1">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -381,7 +390,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.16.0</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.16.1</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -635,6 +644,8 @@ function realSetup(ctx) {
   const textEditor = $('.ld-text-editor')
   const textEditorArea = $('.ld-text-editor-area')
   const textEditorTitle = $('.ld-text-editor-title')
+  const liveInstance = { panel, launcher }
+  window[INSTANCE_KEY] = liveInstance
   const FULLSCREEN_KEY = 'lumidraw_panel_fullscreen_v1'
   let expandedTextarea = null
 
@@ -645,6 +656,10 @@ function realSetup(ctx) {
     el.textContent = msg || ''
     el.classList.remove('ld-err', 'ld-good')
     if (kind) el.classList.add(kind === 'err' ? 'ld-err' : 'ld-good')
+    if (el.classList.contains('ld-gen-status')) {
+      const bar = el.closest('.ld-global-status')
+      if (bar) bar.style.display = msg ? 'block' : 'none'
+    }
   }
 
   const MAIN_VIEW_KEY = 'lumidraw_main_view_v2'
@@ -2071,6 +2086,7 @@ ${entry.prompt || ''}`.trim()
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
     window.removeEventListener('keydown', onStoryPickerKeyDown)
     document.body.classList.remove('ld-fullscreen-lock')
+    if (window[INSTANCE_KEY] === liveInstance) delete window[INSTANCE_KEY]
     unsub()
     removeStyle()
     dom.cleanup()

@@ -1,13 +1,13 @@
 # LumiDraw Studio
 
-**Current build: v0.16.0**
+**Current build: v0.16.1**
 
 A Spindle extension that turns Draw Things into a responsive image-generation
 workspace inside Lumiverse. LumiDraw keeps automatic story illustration separate
 from temporary Studio experiments and uses LumiDraw Bridge for installed image
 models, LoRAs, and sampler choices.
 
-## v0.16.0 — Studio / Story redesign
+## v0.16.1 — Studio / Story redesign
 
 This release changes the interface shell while keeping the proven v0.15.0
 Bridge and generation backend intact.
@@ -75,7 +75,16 @@ The header continuously shows:
 
 ## Verify the update
 
-The header must show **v0.16.0**. On desktop, Studio should display five panes.
+The header must show **v0.16.1**. On desktop, Studio should display five panes.
 On a phone, Studio should display the Create / Tune / LoRAs / Stack / History
 tab rail. Models, samplers, and LoRAs should populate exactly as they did in
 v0.15.0.
+
+
+## 0.16.1 Safari hit-testing hotfix
+
+- Prevents duplicate LumiDraw UI mounts from stacking over each other.
+- Removes backdrop-filter and sticky-layer combinations from the main workspace.
+- Replaces the dynamic `:has()` status selector with explicit visibility updates.
+- Makes noninteractive output metadata ignore pointer hit-testing.
+- Keeps the 0.16.0 layout and the 0.15.0 generation backend unchanged.
