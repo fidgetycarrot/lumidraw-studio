@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.17.1'
+const EXTENSION_VERSION = '0.17.3'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -89,6 +89,7 @@ function realSetup(ctx) {
   let presets = []
   let history = []
   let storyDebug = null
+  let autoStatus = null
   let activePreset = null   // name of selected preset
   let syncedConfig = null   // last synced/loaded config powering the form
   let draftConfig = null    // temporary workspace config for manual generation
@@ -116,7 +117,18 @@ function realSetup(ctx) {
   }
 
   const unsub = ctx.onBackendMessage((payload) => {
-    if (!payload || !payload.requestId || !pending.has(payload.requestId)) return
+    if (!payload) return
+    if (payload.type === 'history_updated') {
+      history = Array.isArray(payload.history) ? payload.history : history
+      renderHistory()
+      return
+    }
+    if (payload.type === 'auto_status') {
+      autoStatus = payload.status || autoStatus
+      renderStoryStatus()
+      return
+    }
+    if (!payload.requestId || !pending.has(payload.requestId)) return
     const { resolve, reject } = pending.get(payload.requestId)
     pending.delete(payload.requestId)
     if (payload.ok) resolve(payload)
@@ -556,7 +568,7 @@ function realSetup(ctx) {
             </section>
 
             <section class="ld-pane ld-history-pane" data-mobile-panel="history">
-              <div class="ld-pane-head"><span class="ld-pane-title">History</span><button class="ld-x ld-clearall" title="Delete ALL recent images from the library and this list">Clear all</button></div>
+              <div class="ld-pane-head"><span class="ld-pane-title">History</span><div style="display:flex;align-items:center;gap:6px"><button class="ld-btn ld-compact" data-act="refresh-history" title="Reload recent images">Refresh ⟳</button><button class="ld-x ld-clearall" title="Delete ALL recent images from the library and this list">Clear all</button></div></div>
               <div class="ld-pane-body"><div class="ld-history"></div></div>
             </section>
             </div>
@@ -610,6 +622,7 @@ function realSetup(ctx) {
             <div class="ld-parser-binding-controls">
               <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-subject-binding" style="width:auto" /> Parser subject binding — structured JSON, locked identities, interaction-first prompt</label>
               <div class="ld-binding-note">Parser only. Inline mode uses the simpler pre-0.17 tag path with no extra model call or compiler. Parser anatomy can never override saved profiles, and conditional anatomy requires an explicit mention in the story.</div>
+              <div class="ld-help ld-story-last-status">Auto illustrations idle.</div>
             </div>
             <div class="ld-row" style="margin-top:9px">
               <div><span class="ld-label">Minimum images (0 = model decides)</span><input class="ld-minimg" type="number" min="0" max="4" step="1" /></div>
@@ -1302,6 +1315,21 @@ function realSetup(ctx) {
     $(`.ld-ed-${prefix}-anatomy-mode`).value = value.anatomyMode || 'relevant'
   }
 
+
+  function renderStoryStatus() {
+    const el = $('.ld-story-last-status')
+    if (!el) return
+    if (!autoStatus || !autoStatus.at) {
+      el.textContent = 'Auto illustrations idle.'
+      return
+    }
+    const mode = autoStatus.mode ? String(autoStatus.mode) : 'auto'
+    const status = autoStatus.status ? String(autoStatus.status) : 'idle'
+    const note = autoStatus.note ? String(autoStatus.note) : ''
+    const when = new Date(autoStatus.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    el.textContent = `Last auto illustration • ${mode} • ${status} • ${when}${note ? ' — ' + note : ''}`
+  }
+
   function renderStoryDebug() {
     const prompt = $('.ld-story-final-prompt')
     const parsed = $('.ld-story-parsed')
@@ -1398,7 +1426,7 @@ function realSetup(ctx) {
       preview.textContent = item.preview || '(No visible prose)'
       button.appendChild(top)
       button.appendChild(preview)
-      button.addEventListener('click', () => runStoryScan(item.id, `story message ${item.turn}`))
+      button.addEventListener('click', () => runStoryScan(item.id, `story message ${item.turn}`, true))
       list.appendChild(button)
     }
   }
@@ -1432,18 +1460,19 @@ function realSetup(ctx) {
     }
   }
 
-  async function runStoryScan(messageId, label = 'latest story message') {
+  async function runStoryScan(messageId, label = 'latest story message', force = false) {
     closeStoryPicker()
     setStatus('.ld-gen-status', `Scanning ${label}…`)
     try {
-      const payload = { force: true }
+      const payload = { force: !!force }
       if (messageId !== undefined && messageId !== null && messageId !== '') payload.messageId = messageId
       const res = await call('scan_story', payload)
       const refreshed = await call('init', {}, 15000)
       history = refreshed.history
       storyDebug = res.storyDebug || refreshed.storyDebug || storyDebug
+      autoStatus = refreshed.lastAutoStatus || autoStatus
       renderHistory()
-      renderStoryDebug()
+      renderStoryDebug(); renderStoryStatus()
       setStatus('.ld-gen-status', res.note || `Done (${res.mode}).`, res.processed ? 'good' : undefined)
     } catch (e) { setStatus('.ld-gen-status', e.message, 'err') }
   }
@@ -2251,7 +2280,7 @@ ${entry.prompt || ''}`.trim()
 
   $('[data-act="generate"]').addEventListener('click', doGenerate)
 
-  $('[data-act="scan"]').addEventListener('click', () => runStoryScan(null, 'the latest story message'))
+  $('[data-act="scan"]').addEventListener('click', () => runStoryScan(null, 'the latest story message', false))
   $('[data-act="scan-old"]').addEventListener('click', openStoryPicker)
 
   // Also expose the picker through Lumiverse's native chat-input Extras menu.
@@ -2489,7 +2518,7 @@ ${entry.prompt || ''}`.trim()
     if (initialized) return true
     try {
       const res = await call('init', {}, 8000)
-      settings = res.settings; presets = res.presets; history = res.history; storyDebug = res.storyDebug || null
+      settings = res.settings; presets = res.presets; history = res.history; storyDebug = res.storyDebug || null; autoStatus = res.lastAutoStatus || null
       defaults = res.defaults || defaults
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
@@ -2540,7 +2569,7 @@ ${entry.prompt || ''}`.trim()
           }, { force: true })
         }
       }
-      renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug()
+      renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
       updateScanLabel()
       initialized = true
       console.log(`[LumiDraw] backend connected — UI v${EXTENSION_VERSION}`)

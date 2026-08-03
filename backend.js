@@ -561,8 +561,33 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims }
     seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
     images: uploads,
   }
-  await pushHistory(entry)
+  const history = await pushHistory(entry)
+  notifyFrontend(userId, 'history_updated', { history, entry })
   return entry
+}
+
+
+function notifyFrontend(userId, type, data = {}) {
+  try { spindle.sendToFrontend({ type, ...data }, userId) } catch (e) {
+    spindle.log.warn('[lumidraw] notifyFrontend failed for ' + type + ': ' + e.message)
+  }
+}
+
+let lastAutoStatus = {
+  at: 0,
+  mode: '',
+  status: 'idle',
+  note: '',
+  messageId: '',
+}
+
+function setAutoStatus(userId, patch = {}) {
+  lastAutoStatus = {
+    ...lastAutoStatus,
+    ...patch,
+    at: Date.now(),
+  }
+  notifyFrontend(userId, 'auto_status', { status: lastAutoStatus })
 }
 
 async function resolveMacros(text, userId, chatId) {
@@ -992,17 +1017,73 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   return { subject, profile, anchor, noun, appearance, outfit, anatomy, countTag }
 }
 
+
+function normalizeVisualPhrase(value) {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  return text
+    .replace(/hooks? the back of the knee of/gi, 'curls a bare heel behind the knee of')
+    .replace(/one heel hooked behind (his|her|their) knee/gi, 'one bare heel curled behind $1 knee')
+    .replace(/hooked behind (his|her|their) knee/gi, 'curled behind $1 knee')
+    .replace(/hooking (his|her|their) knee/gi, 'curling a bare heel behind $1 knee')
+    .replace(/sitting on counter/gi, 'sitting on the clearly visible counter edge')
+    .replace(/seated on counter/gi, 'seated on the clearly visible counter edge')
+}
+
+function normalizeVisualList(list) {
+  return uniqueStrings((Array.isArray(list) ? list : []).map(normalizeVisualPhrase).filter(Boolean))
+}
+
+function findSupportSurface(setting) {
+  const joined = (Array.isArray(setting) ? setting.join(', ') : String(setting || '')).toLowerCase()
+  const surfaces = [
+    ['countertop', /countertop/],
+    ['counter edge', /counter/],
+    ['bar stool', /bar stool|stool/],
+    ['chair', /chair/],
+    ['bed', /bed/],
+    ['couch', /couch|sofa/],
+    ['floor', /floor/],
+    ['wall', /wall/],
+  ]
+  for (const [label, re] of surfaces) if (re.test(joined)) return label
+  return ''
+}
+
+function supportLead(item, scene) {
+  const poseText = normalizeVisualList(item.subject.pose).join(', ').toLowerCase()
+  if (!/(sitting|seated|perched|kneeling|leaning|lying)/.test(poseText)) return ''
+  const surface = findSupportSurface(scene.setting)
+  if (!surface) return ''
+  if (/(sitting|seated|perched)/.test(poseText)) return `${item.anchor} is supported by the clearly visible ${surface}.`
+  if (/(kneeling)/.test(poseText)) return `${item.anchor} is grounded against the clearly visible ${surface}.`
+  if (/(leaning)/.test(poseText)) return `${item.anchor} braces against the clearly visible ${surface}.`
+  if (/(lying)/.test(poseText)) return `${item.anchor} lies against the clearly visible ${surface}.`
+  return ''
+}
+
 function compileStructuredScene(scene, profiles, sourcePassage = '') {
-  const descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, scene.subjects.length > 1))
+  const descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, scene.subjects.length > 1)).map((item) => ({
+    ...item,
+    appearance: normalizeVisualList(item.appearance),
+    outfit: normalizeVisualList(item.outfit),
+    anatomy: normalizeVisualList(item.anatomy),
+    pose: normalizeVisualList(item.subject.pose),
+    expression: normalizeVisualList(item.subject.expression),
+    action: normalizeVisualList(item.subject.action),
+  }))
   const countTags = uniqueStrings(descriptors.map((item) => item.countTag).filter(Boolean))
-  const tail = [...scene.setting, ...scene.camera, ...scene.lighting, ...scene.style]
+  const tailSetting = normalizeVisualList(scene.setting)
+  const tailCamera = normalizeVisualList(scene.camera)
+  const tailLighting = normalizeVisualList(scene.lighting)
+  const tailStyle = normalizeVisualList(scene.style)
 
   if (descriptors.length === 1) {
     const item = descriptors[0]
     return uniqueStrings([
       ...countTags, 'solo', item.noun, ...item.appearance, ...item.anatomy,
-      ...item.outfit, ...item.subject.pose, ...item.subject.expression,
-      ...item.subject.action, ...tail,
+      ...item.outfit, ...item.pose, ...item.expression,
+      ...item.action, ...tailSetting, ...tailCamera, ...tailLighting, ...tailStyle,
     ]).filter(Boolean).join(', ')
   }
 
@@ -1011,39 +1092,44 @@ function compileStructuredScene(scene, profiles, sourcePassage = '') {
     ...countTags,
     `exactly ${descriptors.length} subjects`,
     'single image', 'unified composition', 'same frame',
-    'no split screen', 'no panels', 'no collage', 'no duplicate character',
+    'no split screen', 'no panels', 'no collage', 'no duplicate character', 'no extra characters',
   ]).filter(Boolean).join(', ')
   if (heading) lines.push(heading + '.')
 
-  // Establish ownership before independent body descriptions.
+  for (const item of descriptors) {
+    const lead = supportLead(item, scene)
+    if (lead) lines.push(lead)
+  }
+
   const byRef = new Map(descriptors.map((item) => [item.subject.ref, item]))
   for (const relation of scene.relations) {
     const actor = byRef.get(relation.actor)
     const target = relation.target ? byRef.get(relation.target) : null
     const actorName = actor ? actor.anchor : relation.actor
     const targetName = target ? target.anchor : relation.target
-    let clause = `${actorName} ${relation.action}`.trim()
+    let clause = `${actorName} ${normalizeVisualPhrase(relation.action)}`.trim()
     if (targetName) clause += ` ${targetName}`
-    if (relation.details.length) clause += `; ${relation.details.join(', ')}`
+    const detailBits = normalizeVisualList(relation.details)
+    if (detailBits.length) clause += `; ${detailBits.join(', ')}`
     lines.push(`Shared interaction: ${clause}.`)
   }
 
   for (const item of descriptors) {
     const identity = uniqueStrings([item.anchor, item.noun]).filter(Boolean).join(', ')
     const chunks = []
-    if (item.subject.position) chunks.push(`position: ${item.subject.position}`)
     if (item.appearance.length) chunks.push(item.appearance.join(', '))
     if (item.anatomy.length) chunks.push(`anatomy: ${item.anatomy.join(', ')}`)
     if (item.outfit.length) chunks.push(`wearing: ${item.outfit.join(', ')}`)
-    if (item.subject.pose.length) chunks.push(`pose: ${item.subject.pose.join(', ')}`)
-    if (item.subject.expression.length) chunks.push(`expression: ${item.subject.expression.join(', ')}`)
-    if (item.subject.action.length) chunks.push(`action: ${item.subject.action.join(', ')}`)
+    if (item.pose.length) chunks.push(`pose: ${item.pose.join(', ')}`)
+    if (item.expression.length) chunks.push(`expression: ${item.expression.join(', ')}`)
+    const filteredActions = item.action.filter((part) => !scene.relations.some((relation) => relation.actor === item.subject.ref && normalizeVisualPhrase(relation.action).toLowerCase().includes(part.toLowerCase())))
+    if (filteredActions.length) chunks.push(`action: ${filteredActions.join(', ')}`)
     lines.push(`${identity || 'Subject'}${chunks.length ? '; ' + chunks.join('; ') : ''}.`)
   }
-  if (scene.setting.length) lines.push(`Setting: ${scene.setting.join(', ')}.`)
-  if (scene.camera.length) lines.push(`Camera: ${scene.camera.join(', ')}.`)
-  if (scene.lighting.length) lines.push(`Lighting: ${scene.lighting.join(', ')}.`)
-  if (scene.style.length) lines.push(`Style: ${scene.style.join(', ')}.`)
+  if (tailSetting.length) lines.push(`Setting: ${tailSetting.join(', ')}.`)
+  if (tailCamera.length) lines.push(`Camera: ${tailCamera.join(', ')}.`)
+  if (tailLighting.length) lines.push(`Lighting: ${tailLighting.join(', ')}.`)
+  if (tailStyle.length) lines.push(`Style: ${tailStyle.join(', ')}.`)
   return lines.join(' ')
 }
 
@@ -1148,7 +1234,26 @@ async function quietLLM(system, user, settings, userId, structured = false) {
   throw new Error('Parser LLM call failed: ' + errs.join(' | '))
 }
 
+let storyScanInFlight = false
+
 async function scanStory(userId, options = {}) {
+  if (storyScanInFlight) {
+    return {
+      mode: 'busy',
+      processed: 0,
+      skipped: true,
+      note: 'A story scan is already running. LumiDraw skipped this duplicate request.',
+    }
+  }
+  storyScanInFlight = true
+  try {
+    return await scanStoryCore(userId, options)
+  } finally {
+    storyScanInFlight = false
+  }
+}
+
+async function scanStoryCore(userId, options = {}) {
   // Keep compatibility with older internal callers that passed a boolean.
   if (typeof options === 'boolean') options = { force: options }
   const force = !!options.force
@@ -1284,7 +1389,7 @@ async function scanStory(userId, options = {}) {
 
       const mds = []
       const debugEntries = []
-      for (const item of parsed) {
+      for (const item of parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2)))) {
         const compiled = await compileSceneWithPreset(item.scene, preset, settings, userId, chatId, passage)
         const dims = aspectDims(preset.config, compiled.aspect)
         const entry = await generateAndUpload({
@@ -1304,8 +1409,9 @@ async function scanStory(userId, options = {}) {
 
       let newContent = target.content
       const topMds = []
+      const generatedParsed = parsed.slice(0, mds.length)
       for (let i = 0; i < mds.length; i++) {
-        const anchor = parsed[i] ? parsed[i].anchor : ''
+        const anchor = generatedParsed[i] ? generatedParsed[i].anchor : ''
         let placed = false
         if (anchor && anchor.length >= 5) {
           let idx = newContent.indexOf(anchor)
@@ -1532,8 +1638,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           getSettings(), getPresets(), getHistory(), getStoryDebug(),
         ])
         reply = ok(payload, requestId, {
-          settings, presets, history, storyDebug,
-          version: (spindle.manifest && spindle.manifest.version) || '0.17.1',
+          settings, presets, history, storyDebug, lastAutoStatus,
+          version: (spindle.manifest && spindle.manifest.version) || '0.17.3',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -2048,6 +2154,13 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+
+      case 'get_history': {
+        const history = await getHistory()
+        reply = ok(payload, requestId, { history })
+        break
+      }
+
       case 'clear_history': {
         if (payload.deleteImages) {
           const history = await getHistory()
@@ -2125,43 +2238,68 @@ if (typeof spindle.registerInterceptor === 'function') {
 
 // Auto-scan after story generations, if an events surface exists.
 let scanInFlight = false
+let lastAutoHandledMessageId = ''
 ;(() => {
   const toastSafe = (msg) => {
     try { if (typeof spindle.toast === 'function') spindle.toast(msg) } catch { /* signature mismatch */ }
     try { if (spindle.toast && typeof spindle.toast.show === 'function') spindle.toast.show(msg) } catch { /* ok */ }
+  }
+  const latestAssistantBits = async (uid) => {
+    const { messages } = await fetchMessages(uid)
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const bits = messageBits(messages[i])
+      if (bits.isAssistant && bits.contentKey && typeof bits.content === 'string') return bits
+    }
+    return null
+  }
+  const runAutoScan = async (uid, attempt = 0) => {
+    try {
+      const latest = await latestAssistantBits(uid)
+      if (!latest) {
+        if (attempt < 6) return setTimeout(() => runAutoScan(uid, attempt + 1), 2000)
+        setAutoStatus(uid, { mode: 'auto', status: 'idle', note: 'No assistant story message was available yet.' })
+        return
+      }
+      if (latest.id && latest.id === lastAutoHandledMessageId) return
+      setAutoStatus(uid, { mode: 'auto', status: 'running', messageId: latest.id || '', note: 'Scanning the newest story message…' })
+      const r = await scanStory(uid, { messageId: latest.id })
+      spindle.log.info('[lumidraw] auto-scan: ' + JSON.stringify(r))
+      if (latest.id) lastAutoHandledMessageId = latest.id
+      const status = r && r.processed ? 'generated' : (r && /nothing generated|no visual moment|already illustrated|No <dt-image>|No story message found/i.test(r.note || '') ? 'idle' : 'done')
+      setAutoStatus(uid, { mode: r && r.mode ? r.mode : 'auto', status, messageId: latest.id || '', note: (r && r.note) || '' })
+      if (r && r.processed) toastSafe(`LumiDraw: illustrated ${r.processed} moment(s)`)
+    } catch (e) {
+      spindle.log.warn('[lumidraw] auto-scan failed: ' + e.message)
+      setAutoStatus(uid, { mode: 'auto', status: 'error', note: e.message })
+    } finally {
+      scanInFlight = false
+    }
   }
   const handler = async (evt) => {
     try {
       const settings = await getSettings()
       if (settings.mode === 'off' || !settings.autoScan) return
       const uid = (evt && (evt.userId || (evt.payload && evt.payload.userId))) || lastUserId
-      if (scanInFlight) return
+      if (!uid || scanInFlight) return
       scanInFlight = true
-      setTimeout(() => {
-        scanStory(uid)
-          .then((r) => {
-            spindle.log.info('[lumidraw] auto-scan: ' + JSON.stringify(r))
-            if (r && r.processed) toastSafe(`LumiDraw: illustrated ${r.processed} moment(s)`)
-          })
-          .catch((e) => spindle.log.warn('[lumidraw] auto-scan failed: ' + e.message))
-          .finally(() => { scanInFlight = false })
-      }, 1500)
-    } catch { scanInFlight = false }
+      setTimeout(() => runAutoScan(uid, 0), 1800)
+    } catch (e) {
+      scanInFlight = false
+      setAutoStatus(lastUserId, { mode: 'auto', status: 'error', note: e.message })
+    }
   }
   let registered = false
   const on = (typeof spindle.on === 'function') ? spindle.on.bind(spindle)
     : (spindle.events && typeof spindle.events.on === 'function') ? spindle.events.on.bind(spindle.events)
     : null
   if (on) {
-    // GENERATION_ENDED only: scanning on MESSAGE_SENT races the streaming
-    // reply and can pick tags out of a half-written (or thinking) draft.
-    try { on('GENERATION_ENDED', handler); registered = true } catch (e) {
-      spindle.log.warn('[lumidraw] GENERATION_ENDED registration failed: ' + e.message)
+    for (const ev of ['GENERATION_ENDED', 'MESSAGE_ADDED', 'CHAT_MESSAGE_ADDED', 'MESSAGE_CREATED']) {
+      try { on(ev, handler); registered = true } catch (e) { spindle.log.warn('[lumidraw] ' + ev + ' registration failed: ' + e.message) }
     }
   }
-  if (registered) spindle.log.info('[lumidraw] auto-scan registered on GENERATION_ENDED')
+  if (registered) spindle.log.info('[lumidraw] auto-scan registered on available story events')
   else spindle.log.warn('[lumidraw] auto-scan unavailable — use the "Scan story now" button.')
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.17.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.17.3'))
