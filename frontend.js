@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.17.5'
+const EXTENSION_VERSION = '0.17.6'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -276,6 +276,7 @@ function realSetup(ctx) {
       background:var(--lumiverse-fill, #262833); color:var(--lumiverse-text, #eceef4); cursor:pointer; font-size:13px;
     }
     .ld-btn:hover:not(:disabled) { background:var(--lumiverse-fill-subtle, #1a1b22); }
+    .ld-btn:active:not(:disabled), .ld-btn.ld-pressed:not(:disabled) { background:#111218; box-shadow:inset 0 2px 5px rgba(0,0,0,.55); transform:translateY(1px); }
     .ld-btn:disabled { opacity:.5; cursor:default; }
     .ld-btn.ld-primary { font-weight:700; background:#3f4458; }
     .ld-btn.ld-wide { width:100%; }
@@ -467,7 +468,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.17.5" aria-label="LumiDraw Studio v0.17.5">
+    <button class="ld-launcher" title="LumiDraw Studio v0.17.6" aria-label="LumiDraw Studio v0.17.6">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -476,7 +477,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.17.5</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.17.6</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -2164,6 +2165,30 @@ ${entry.prompt || ''}`.trim()
       }
     })
   }
+
+  const refreshHistoryButton = $('[data-act="refresh-history"]')
+  if (refreshHistoryButton) {
+    refreshHistoryButton.addEventListener('click', async () => {
+      const originalText = refreshHistoryButton.textContent
+      refreshHistoryButton.classList.add('ld-pressed')
+      refreshHistoryButton.disabled = true
+      refreshHistoryButton.textContent = 'Refreshing…'
+      setStatus('.ld-gen-status', 'Reloading image history…')
+      try {
+        const res = await call('get_history', {}, 20000)
+        history = Array.isArray(res.history) ? res.history : []
+        renderHistory()
+        currentOutputItem()
+        setStatus('.ld-gen-status', `History refreshed · ${flattenHistoryImages().length} image(s).`, 'good')
+      } catch (error) {
+        setStatus('.ld-gen-status', error.message, 'err')
+      } finally {
+        refreshHistoryButton.disabled = false
+        refreshHistoryButton.textContent = originalText || 'Refresh ⟳'
+        setTimeout(() => refreshHistoryButton.classList.remove('ld-pressed'), 120)
+      }
+    })
+  }
   const loraSearch = $('.ld-lora-search')
   if (loraSearch) loraSearch.addEventListener('input', renderLoraLibrary)
 
@@ -2504,64 +2529,92 @@ ${entry.prompt || ''}`.trim()
     }
   })
 
-  // Streaming tag interception.
+  // Native message-tag interception. Lumiverse requires the exact
+  // registerTagInterceptor(options, handler) signature.
   ;(() => {
     const m = ctx.messages
-    if (!m || typeof m.registerTagInterceptor !== 'function') {
-      console.log('[LumiDraw] messages.registerTagInterceptor unavailable — inline images generate after the reply completes (compat mode)')
-      return
-    }
+    let inlineReady = false
+    let parserReady = false
 
-    const registerTag = (tagName, handler, label) => {
-      const shapes = [
-        () => m.registerTagInterceptor(tagName, handler),
-        () => m.registerTagInterceptor({ tag: tagName, handler }),
-        () => m.registerTagInterceptor({ tagName, onComplete: handler }),
-      ]
-      for (const s of shapes) {
-        try { s(); console.log(`[LumiDraw] ${label} interceptor registered`); return true } catch { /* next shape */ }
-      }
-      console.log(`[LumiDraw] registerTagInterceptor exists but no call shape accepted for ${label}`)
-      return false
+    if (!m || typeof m.registerTagInterceptor !== 'function') {
+      console.log('[LumiDraw] messages.registerTagInterceptor unavailable')
+      ctx.sendToBackend({
+        type: 'frontend_status', requestId: makeId(),
+        version: EXTENSION_VERSION, historyRefresh: !!refreshHistoryButton,
+        inlineInterceptor: false, parserInterceptor: false,
+        note: 'messages.registerTagInterceptor unavailable',
+      })
+      return
     }
 
     const onInlineTag = (payload) => {
       try {
-        let body = ''
-        let aspect = ''
-        if (typeof payload === 'string') {
-          const mm = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/.exec(payload)
-          if (mm) { body = mm[2]; aspect = (/aspect\s*=\s*"([^"]+)"/.exec(mm[1] || '') || [])[1] || '' }
-          else body = payload
-        } else if (payload && typeof payload === 'object') {
-          body = payload.body || payload.content || payload.inner || payload.text || ''
-          const attrs = payload.attributes || payload.attrs || {}
-          aspect = attrs.aspect || ''
-          if (!body && payload.raw) {
-            const mm = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/.exec(payload.raw)
-            if (mm) { body = mm[2]; aspect = aspect || (/aspect\s*=\s*"([^"]+)"/.exec(mm[1] || '') || [])[1] || '' }
+        // Inline pregeneration is useful during streaming, once the complete
+        // closing tag has been recognized by Lumiverse.
+        let body = String(payload && payload.content || '').trim()
+        const attrs = payload && payload.attrs || {}
+        let aspect = String(attrs.aspect || '')
+        if (!body && payload && payload.fullMatch) {
+          const mm = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/.exec(payload.fullMatch)
+          if (mm) {
+            body = String(mm[2] || '').trim()
+            aspect = aspect || ((/aspect\s*=\s*"([^"]+)"/.exec(mm[1] || '') || [])[1] || '')
           }
         }
-        body = String(body || '').trim()
-        if (!body) { console.log('[LumiDraw] streaming tag payload unrecognized:', typeof payload, payload && Object.keys(payload)); return }
-        console.log('[LumiDraw] streaming tag complete — pregenerating')
+        if (!body) return
         ctx.sendToBackend({ type: 'pregenerate', requestId: makeId(), body, aspect })
-      } catch (e) { console.log('[LumiDraw] tag interceptor error:', e.message) }
+      } catch (e) {
+        console.log('[LumiDraw] dt-image interceptor error:', e.message)
+      }
     }
 
-    let lastParserTriggerAt = 0
-    const onParserTrigger = () => {
+    let lastParserKey = ''
+    const onParserTrigger = (payload) => {
       try {
-        const now = Date.now()
-        if (now - lastParserTriggerAt < 2500) return
-        lastParserTriggerAt = now
-        console.log('[LumiDraw] parser trigger received — requesting backend scan')
-        ctx.sendToBackend({ type: 'parser_trigger', requestId: makeId() })
-      } catch (e) { console.log('[LumiDraw] parser trigger error:', e.message) }
+        // The tag interceptor may fire during streaming and again after the
+        // message commits. Parser must run only at the committed boundary.
+        if (payload && payload.isStreaming === true) return
+        const messageId = String(payload && payload.messageId || '')
+        const chatId = String(payload && payload.chatId || '')
+        const key = `${chatId}:${messageId}:${String(payload && payload.fullMatch || '')}`
+        if (key && key === lastParserKey) return
+        lastParserKey = key
+        console.log('[LumiDraw] committed parser trigger received')
+        ctx.sendToBackend({
+          type: 'parser_trigger', requestId: makeId(),
+          messageId, chatId,
+        })
+      } catch (e) {
+        console.log('[LumiDraw] parser trigger error:', e.message)
+      }
     }
 
-    registerTag('dt-image', onInlineTag, 'streaming dt-image')
-    registerTag('lumidraw-parse', onParserTrigger, 'parser trigger')
+    try {
+      m.registerTagInterceptor(
+        { tagName: 'dt-image', removeFromMessage: false },
+        onInlineTag,
+      )
+      inlineReady = true
+    } catch (e) {
+      console.log('[LumiDraw] dt-image interceptor registration failed:', e.message)
+    }
+
+    try {
+      m.registerTagInterceptor(
+        { tagName: 'lumidraw-parse', attrs: { request: 'generate' }, removeFromMessage: true },
+        onParserTrigger,
+      )
+      parserReady = true
+    } catch (e) {
+      console.log('[LumiDraw] parser interceptor registration failed:', e.message)
+    }
+
+    ctx.sendToBackend({
+      type: 'frontend_status', requestId: makeId(),
+      version: EXTENSION_VERSION, historyRefresh: !!refreshHistoryButton,
+      inlineInterceptor: inlineReady, parserInterceptor: parserReady,
+      note: parserReady ? 'Native parser trigger listener ready' : 'Parser trigger listener unavailable',
+    })
   })()
 
   // ------------------------------------------------------------------ boot

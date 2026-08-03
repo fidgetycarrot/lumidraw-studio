@@ -1,9 +1,9 @@
-# LumiDraw Studio 0.17.5
+# LumiDraw Studio 0.17.6
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.17.5 — parser safeguards, fast Inline restored
+## 0.17.6 — parser safeguards, fast Inline restored
 
 This update separates the two story paths again:
 
@@ -53,7 +53,7 @@ pass. The selected mode and parser model are used exactly as configured.
 
 ## Verify
 
-The header must show **v0.17.5**.
+The header must show **v0.17.6**.
 
 1. Test Inline once and confirm its `<dt-image>` body is ordinary comma-separated
    tags rather than JSON.

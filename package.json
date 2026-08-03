@@ -1,6 +1,6 @@
 {
   "name": "lumidraw-studio",
-  "version": "0.17.5",
+  "version": "0.17.6",
   "private": true,
   "description": "A redesigned Studio and Story workspace for Draw Things with Parser-only subject binding and Bridge-powered catalogs.",
   "license": "MIT",

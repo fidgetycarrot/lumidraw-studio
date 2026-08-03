@@ -490,7 +490,13 @@ function storyPreview(content, maxLength = 260) {
   return clean.length > maxLength ? clean.slice(0, maxLength - 1).trimEnd() + '…' : clean
 }
 
+function hasParserTrigger(text) {
+  PARSER_TRIGGER_RE.lastIndex = 0
+  return PARSER_TRIGGER_RE.test(String(text || ''))
+}
+
 function stripParserTrigger(text) {
+  PARSER_TRIGGER_RE.lastIndex = 0
   return String(text || '').replace(PARSER_TRIGGER_RE, '').replace(/\n{3,}/g, '\n\n').trim()
 }
 
@@ -1383,7 +1389,7 @@ async function scanStoryCore(userId, options = {}) {
           entries: [],
           lastCompiledPrompt: '',
         })
-        if (PARSER_TRIGGER_RE.test(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
+        if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
         return {
           mode: 'parser',
           note: `Parser returned invalid structured data — nothing generated (no cost). ${error.message} Raw start: ${out.slice(0, 140)}`,
@@ -1391,7 +1397,7 @@ async function scanStoryCore(userId, options = {}) {
         }
       }
       if (!parsed.length) {
-        if (PARSER_TRIGGER_RE.test(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
+        if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
         if (target.id) await markProcessed(target.id)
         const storyDebug = await saveStoryDebug({ mode: 'parser', subjectBinding: true, rawReply: out, entries: [], lastCompiledPrompt: '' })
         return { mode: 'parser', note: `Parser (${instrLabel}) judged no visual moment.`, storyDebug }
@@ -1465,7 +1471,7 @@ async function scanStoryCore(userId, options = {}) {
     const instrLabel = usingCustom ? `custom instruction (${instruction.length} chars)` : 'legacy tag instruction'
     const out = await quietLLM(await resolveMacros(instruction, userId, chatId), passage, settings, userId, false)
     if (/^\s*NONE\s*$/i.test(out)) {
-      if (PARSER_TRIGGER_RE.test(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
+      if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
       if (target.id) await markProcessed(target.id)
       return { mode: 'parser', note: `Parser (${instrLabel}) judged no visual moment (NONE).` }
     }
@@ -1482,7 +1488,7 @@ async function scanStoryCore(userId, options = {}) {
       return { anchor: '', tags: line }
     }).filter((item) => looksLikeTags(item.tags)).slice(0, settings.maxImages || 2)
     if (!parsed.length) {
-      if (PARSER_TRIGGER_RE.test(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
+      if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
       return { mode: 'parser', note: `Parser (${instrLabel}) returned prose instead of tags — nothing generated (no cost). Raw start: ` + out.slice(0, 160) }
     }
     const lines = parsed.map((item) => stripBannedTags(item.tags, preset.bannedTags)).filter(Boolean)
@@ -1800,21 +1806,44 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }
 
 
+      case 'frontend_status': {
+        spindle.log.info('[lumidraw] frontend status: v' + String(payload.version || '?') +
+          ' · history-refresh=' + (payload.historyRefresh ? 'ready' : 'missing') +
+          ' · inline-tag=' + (payload.inlineInterceptor ? 'ready' : 'missing') +
+          ' · parser-tag=' + (payload.parserInterceptor ? 'ready' : 'missing') +
+          (payload.note ? ' · ' + String(payload.note) : ''))
+        reply = ok(payload, requestId, { received: true })
+        break
+      }
+
       case 'parser_trigger': {
-        reply = ok(payload, requestId, { accepted: true })
+        const triggerMessageId = payload.messageId ? String(payload.messageId) : ''
+        spindle.log.info('[lumidraw] parser trigger received' + (triggerMessageId ? ' for message ' + triggerMessageId : ' for latest message'))
+        reply = ok(payload, requestId, { accepted: true, messageId: triggerMessageId })
         setTimeout(async () => {
           try {
             const settings = await getSettings()
-            if (settings.mode !== 'parser' || settings.autoScan === false) return
-            setAutoStatus(userId, { mode: 'parser', status: 'running', note: 'Parser trigger received — scanning latest story message…' })
-            const r = await scanStory(userId, { force: false })
-            const status = r && r.processed ? 'generated' : (r && /already illustrated|no visual moment|No story message found|No <dt-image>/i.test(r.note || '') ? 'idle' : 'done')
-            setAutoStatus(userId, { mode: 'parser', status, note: (r && r.note) || '' })
+            if (settings.mode !== 'parser' || settings.autoScan === false) {
+              spindle.log.info('[lumidraw] parser trigger ignored because Parser auto-scan is disabled')
+              return
+            }
+            setAutoStatus(userId, {
+              mode: 'parser', status: 'running', messageId: triggerMessageId,
+              note: 'Committed Parser trigger received — scanning story message…',
+            })
+            const r = await scanStory(userId, { force: false, messageId: triggerMessageId })
+            spindle.log.info('[lumidraw] parser trigger result: ' + JSON.stringify(r))
+            const status = r && r.processed ? 'generated' :
+              (r && /already illustrated|no visual moment|No story message found|No <dt-image>|busy/i.test(r.note || '') ? 'idle' : 'done')
+            setAutoStatus(userId, {
+              mode: 'parser', status, messageId: triggerMessageId,
+              note: (r && r.note) || '',
+            })
           } catch (e) {
             spindle.log.warn('[lumidraw] parser trigger failed: ' + e.message)
-            setAutoStatus(userId, { mode: 'parser', status: 'error', note: e.message })
+            setAutoStatus(userId, { mode: 'parser', status: 'error', messageId: triggerMessageId, note: e.message })
           }
-        }, 1200)
+        }, 500)
         break
       }
 
@@ -2263,10 +2292,10 @@ if (typeof spindle.registerInterceptor === 'function') {
       }
       if (settings.mode === 'parser' && settings.autoScan !== false) {
         const triggerText = [
-          'At the very end of the assistant reply, if there is any visually illustratable moment, append exactly one line containing this XML tag and nothing else on that line:',
+          'At the very end of every assistant reply, always append exactly one line containing this XML tag and nothing else on that line:',
           PARSER_TRIGGER_TAG,
+          'This tag is only a private completion signal for LumiDraw; LumiDraw decides whether the scene warrants an image.',
           'Do not output Markdown image syntax. Do not describe the tag. Do not output more than one trigger tag.',
-          'If there is no clear illustratable moment, do not output the tag.',
         ].join('\n')
         const injected = { role: 'system', content: triggerText }
         const out = [...messages, injected]
@@ -2279,76 +2308,71 @@ if (typeof spindle.registerInterceptor === 'function') {
       return a
     }
   })
-  spindle.log.info('[lumidraw] inline protocol interceptor registered')
+  spindle.log.info('[lumidraw] story protocol interceptor registered')
 } else {
-  spindle.log.warn('[lumidraw] registerInterceptor not available — inline protocol injection disabled')
+  spindle.log.warn('[lumidraw] registerInterceptor not available — story protocol injection disabled')
 }
 
-// Auto-scan after story generations, if an events surface exists.
+// Documented render-event fallback. The native parser tag interceptor is the
+// primary trigger; CHARACTER_MESSAGE_RENDERED catches models that omit the tag.
 let scanInFlight = false
 let lastAutoHandledMessageId = ''
 ;(() => {
-  const toastSafe = (msg) => {
-    try { if (typeof spindle.toast === 'function') spindle.toast(msg) } catch { /* signature mismatch */ }
-    try { if (spindle.toast && typeof spindle.toast.show === 'function') spindle.toast.show(msg) } catch { /* ok */ }
-  }
-  const latestAssistantBits = async (uid) => {
-    const { messages } = await fetchMessages(uid)
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const bits = messageBits(messages[i])
-      if (bits.isAssistant && bits.contentKey && typeof bits.content === 'string') return bits
-    }
-    return null
-  }
-  const runAutoScan = async (uid, attempt = 0) => {
-    try {
-      const latest = await latestAssistantBits(uid)
-      if (!latest) {
-        if (attempt < 6) return setTimeout(() => runAutoScan(uid, attempt + 1), 2000)
-        setAutoStatus(uid, { mode: 'auto', status: 'idle', note: 'No assistant story message was available yet.' })
-        return
-      }
-      if (latest.id && latest.id === lastAutoHandledMessageId) return
-      setAutoStatus(uid, { mode: 'auto', status: 'running', messageId: latest.id || '', note: 'Scanning the newest story message…' })
-      const r = await scanStory(uid, { messageId: latest.id })
-      spindle.log.info('[lumidraw] auto-scan: ' + JSON.stringify(r))
-      if (latest.id) lastAutoHandledMessageId = latest.id
-      const status = r && r.processed ? 'generated' : (r && /nothing generated|no visual moment|already illustrated|No <dt-image>|No story message found/i.test(r.note || '') ? 'idle' : 'done')
-      setAutoStatus(uid, { mode: r && r.mode ? r.mode : 'auto', status, messageId: latest.id || '', note: (r && r.note) || '' })
-      if (r && r.processed) toastSafe(`LumiDraw: illustrated ${r.processed} moment(s)`)
-    } catch (e) {
-      spindle.log.warn('[lumidraw] auto-scan failed: ' + e.message)
-      setAutoStatus(uid, { mode: 'auto', status: 'error', note: e.message })
-    } finally {
-      scanInFlight = false
-    }
-  }
-  const handler = async (evt) => {
-    try {
-      const settings = await getSettings()
-      if (settings.mode === 'off' || !settings.autoScan) return
-      if (settings.mode === 'parser') return
-      const uid = (evt && (evt.userId || (evt.payload && evt.payload.userId))) || lastUserId
-      if (!uid || scanInFlight) return
-      scanInFlight = true
-      setTimeout(() => runAutoScan(uid, 0), 1800)
-    } catch (e) {
-      scanInFlight = false
-      setAutoStatus(lastUserId, { mode: 'auto', status: 'error', note: e.message })
-    }
-  }
-  let registered = false
   const on = (typeof spindle.on === 'function') ? spindle.on.bind(spindle)
     : (spindle.events && typeof spindle.events.on === 'function') ? spindle.events.on.bind(spindle.events)
     : null
-  if (on) {
-    for (const ev of ['GENERATION_ENDED', 'MESSAGE_ADDED', 'CHAT_MESSAGE_ADDED', 'MESSAGE_CREATED']) {
-      try { on(ev, handler); registered = true } catch (e) { spindle.log.warn('[lumidraw] ' + ev + ' registration failed: ' + e.message) }
+  if (!on) {
+    spindle.log.warn('[lumidraw] lifecycle events unavailable — native tag trigger and manual scan remain available')
+    return
+  }
+
+  const handler = async (evt) => {
+    try {
+      const settings = await getSettings()
+      if (settings.mode === 'off' || settings.autoScan === false) return
+      const eventPayload = evt && evt.payload ? evt.payload : evt || {}
+      const messageId = String(eventPayload.messageId || (eventPayload.message && (eventPayload.message.id || eventPayload.message.messageId)) || '')
+      const uid = eventPayload.userId || lastUserId
+      if (!uid || !messageId || scanInFlight || messageId === lastAutoHandledMessageId) return
+
+      const { messages } = await fetchMessages(uid)
+      let latest = null
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const bits = messageBits(messages[i])
+        if (bits.isAssistant && bits.contentKey && typeof bits.content === 'string') { latest = bits; break }
+      }
+      if (!latest || String(latest.id) !== messageId) return
+
+      scanInFlight = true
+      spindle.log.info('[lumidraw] CHARACTER_MESSAGE_RENDERED fallback received for latest message ' + messageId)
+      setTimeout(async () => {
+        try {
+          const r = await scanStory(uid, { messageId, force: false })
+          spindle.log.info('[lumidraw] render-event auto-scan result: ' + JSON.stringify(r))
+          if (!r || !r.skipped) lastAutoHandledMessageId = messageId
+          const status = r && r.processed ? 'generated' :
+            (r && /nothing generated|no visual moment|already illustrated|No <dt-image>|busy/i.test(r.note || '') ? 'idle' : 'done')
+          setAutoStatus(uid, { mode: r && r.mode ? r.mode : settings.mode, status, messageId, note: (r && r.note) || '' })
+        } catch (e) {
+          spindle.log.warn('[lumidraw] render-event auto-scan failed: ' + e.message)
+          setAutoStatus(uid, { mode: settings.mode, status: 'error', messageId, note: e.message })
+        } finally {
+          scanInFlight = false
+        }
+      }, 700)
+    } catch (e) {
+      scanInFlight = false
+      spindle.log.warn('[lumidraw] CHARACTER_MESSAGE_RENDERED handler failed: ' + e.message)
     }
   }
-  if (registered) spindle.log.info('[lumidraw] auto-scan registered on available story events')
-  else spindle.log.warn('[lumidraw] auto-scan unavailable — use the "Scan story now" button.')
+
+  try {
+    on('CHARACTER_MESSAGE_RENDERED', handler)
+    spindle.log.info('[lumidraw] documented CHARACTER_MESSAGE_RENDERED fallback registered')
+  } catch (e) {
+    spindle.log.warn('[lumidraw] CHARACTER_MESSAGE_RENDERED registration failed: ' + e.message)
+  }
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.17.5'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.17.6'))
