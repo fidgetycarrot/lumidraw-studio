@@ -1,6 +1,14 @@
 # LumiDraw Studio
 
-**Current build: v0.14.2**
+## v0.14.3 safety hotfix
+
+- Forces Draw Things `batch_count` to `1` for every LumiDraw generation.
+- Keeps only the first returned image if Draw Things returns an unexpected batch.
+- Prevents hidden legacy `extra` values from overriding the model, LoRAs, sampler, steps, CFG, size, clip skip, or shift shown in the preset editor.
+- Logs a compact payload summary to the Lumiverse server log for diagnosis.
+
+
+**Current build: v0.14.3**
 
 A Spindle extension that bridges **Draw Things** and **Lumiverse**. Sync models
 and settings straight from the Draw Things API, pin them as named presets, and
@@ -79,12 +87,12 @@ UI. Tinker freely; story gens stay pinned.
 ## Verifying an update
 
 The panel header displays the loaded frontend version. For this release it must
-show **v0.14.2**. If an older version remains visible after replacing files,
+show **v0.14.3**. If an older version remains visible after replacing files,
 disable and re-enable the extension, then reload Lumiverse from origin so the
 browser fetches the new frontend bundle.
 
 
-## v0.14.2 fullscreen workspace
+## v0.14.3 fullscreen workspace
 
 The Generate tab now separates the **committed chat preset** from a temporary
 **Workspace / draft settings** area. Manual generations use the workspace.

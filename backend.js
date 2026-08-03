@@ -131,27 +131,58 @@ function extractDtError(res) {
 
 function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   const payload = {}
+
+  // Power-user extras are allowed only for keys that are not controlled by
+  // the visible preset editor. Older presets may contain stale hidden copies
+  // of model / LoRA / sampler values; those must never override what the UI
+  // currently shows.
+  const protectedKeys = new Set([
+    ...PRESET_KEYS,
+    'prompt',
+    'negative_prompt',
+    'seed',
+    'batch_count',
+  ])
+  if (extra && typeof extra === 'object') {
+    for (const [k, v] of Object.entries(extra)) {
+      if (!protectedKeys.has(k) && v !== undefined && v !== null && v !== '') {
+        payload[k] = v
+      }
+    }
+  }
+
+  // The visible preset is authoritative.
   for (const key of PRESET_KEYS) {
     const value = config ? config[key] : undefined
     if (value !== undefined && value !== null && value !== '') {
       payload[key] = value
     }
   }
-  // Optional power-user overrides — any DT-native keys. Applied after the
-  // whitelist so they can also override whitelisted values.
-  if (extra && typeof extra === 'object') {
-    for (const [k, v] of Object.entries(extra)) {
-      if (v !== undefined && v !== null && v !== '') payload[k] = v
-    }
-  }
+
   payload.prompt = prompt || ''
   if (negativePrompt) payload.negative_prompt = negativePrompt
   const parsedSeed = Number(seed)
   if (Number.isFinite(parsedSeed) && parsedSeed >= 0) payload.seed = parsedSeed
+
+  // Story and manual actions in LumiDraw are one-image operations. Draw Things
+  // otherwise may reuse the batch count currently selected in its own UI.
+  payload.batch_count = 1
   return payload
 }
 
 async function dtGenerate(settings, payload) {
+  spindle.log.info('[lumidraw] Draw Things payload: ' + JSON.stringify({
+    model: payload.model,
+    sampler: payload.sampler,
+    steps: payload.steps,
+    guidance_scale: payload.guidance_scale,
+    width: payload.width,
+    height: payload.height,
+    loras: payload.loras,
+    clip_skip: payload.clip_skip,
+    shift: payload.shift,
+    batch_count: payload.batch_count,
+  }))
   const res = await dtFetch(settings, '/sdapi/v1/txt2img', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -160,7 +191,10 @@ async function dtGenerate(settings, payload) {
   if (!res.ok || !res.json || !Array.isArray(res.json.images) || res.json.images.length === 0) {
     throw new Error(`Draw Things rejected the generation: ${extractDtError(res)}`)
   }
-  return res.json.images
+  if (res.json.images.length > 1) {
+    spindle.log.warn(`[lumidraw] Draw Things returned ${res.json.images.length} images despite batch_count=1; keeping only the first.`)
+  }
+  return [res.json.images[0]]
 }
 
 
