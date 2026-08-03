@@ -1,68 +1,81 @@
 # LumiDraw Studio
 
-**Current build: v0.15.0**
+**Current build: v0.16.0**
 
-A Spindle extension that bridges **Draw Things**, **LumiDraw Bridge**, and
-**Lumiverse**. It keeps stable per-chat image presets while providing a separate
-workspace for experiments and complete native dropdowns for installed image
-models and LoRAs.
+A Spindle extension that turns Draw Things into a responsive image-generation
+workspace inside Lumiverse. LumiDraw keeps automatic story illustration separate
+from temporary Studio experiments and uses LumiDraw Bridge for installed image
+models, LoRAs, and sampler choices.
 
-## v0.15.0 — Bridge catalog integration
+## v0.16.0 — Studio / Story redesign
 
-- Connects from the Lumiverse backend to LumiDraw Bridge at `127.0.0.1:7863`.
-  This works while Lumiverse is being used remotely on a phone because the
-  browser never needs to reach localhost itself.
-- Loads installed Draw Things image-model candidates and LoRAs from the native
-  Bridge catalog.
-- Filters obvious support weights such as VAEs, CLIP/text encoders, Qwen 3
-  language weights, and LTX/Wan video weights out of the image-model dropdown.
-- Converts model, sampler, and LoRA selection to real `<select>` dropdowns in
-  both the temporary workspace and preset editor.
-- Adds **Rescan catalog ⟳** to the Generate tab.
-- Adds Bridge host/port, connection testing, and catalog status to Settings.
-- Falls back to the remembered catalog and all saved preset values if Bridge is
-  unavailable.
-- Sampler choices combine the current Draw Things recipe, sampler values found
-  in `/sdapi/v1/options`, previously saved samplers, and a conservative built-in
-  compatibility list.
+This release changes the interface shell while keeping the proven v0.15.0
+Bridge and generation backend intact.
+
+### Studio
+
+- Desktop workspace with dedicated **Tune**, **Create**, **History**, **LoRA
+  Library**, and **Active Stack** panes.
+- Mobile Studio tabs for **Create**, **Tune**, **LoRAs**, **Stack**, and
+  **History** so the phone view no longer becomes one long settings form.
+- The newest generated image is displayed on a proper Create stage.
+- Prompt, negative prompt, seed, and Generate stay together in the Create pane.
+- Installed LoRAs are searchable and can be added directly to the temporary
+  active stack.
+- Model, sampler, steps, CFG, dimensions, Sync, and workspace actions live in
+  Tune.
+- Main section and mobile Studio tab choices are remembered locally.
+
+### Story
+
+- Story illustration controls now have their own focused section.
+- Inline / Parser / Off, image limits, parser connection, parser instruction,
+  inline protocol, latest-message scan, and old-message rescanning are grouped
+  together.
+- The committed chat preset is shown clearly, with an explicit reminder that
+  temporary Studio changes do not affect story generation until saved.
+
+### Persistent state header
+
+The header continuously shows:
+
+- committed chat preset;
+- workspace state and model;
+- Bridge connection, image-model count, and LoRA count.
+
+### Presets and Settings
+
+- Preset management remains separate from generation.
+- Draw Things and Bridge connection controls remain under Settings.
+- Fullscreen mode and expanded text editors are retained.
+
+## Generation behavior retained from v0.15.0
+
+- Bridge-powered image-model, LoRA, and sampler catalogs.
+- Backend-local Bridge access, including when Lumiverse is used from a phone.
+- Offline fallback to remembered catalog entries and saved preset values.
+- Committed chat presets for Parser and Inline story images.
+- Temporary workspace for standalone/manual generations.
+- Exact old-message rescanning and insertion.
 
 ## Safety retained from v0.14.3
 
-- Forces Draw Things `batch_count` to `1` for each requested illustration.
-- Keeps only the first returned image if Draw Things unexpectedly returns a
-  batch anyway.
+- Draw Things `batch_count` is forced to `1` for every requested illustration.
+- Only the first returned image is accepted if Draw Things unexpectedly returns
+  a batch.
 - Visible preset values override hidden legacy `extra` values.
-- Logs the effective Draw Things payload in the Lumiverse server log.
-
-## Core workflow
-
-- **Chat preset** — committed recipe used by Parser and Inline story images.
-- **Workspace / draft settings** — temporary model, sampler, steps, CFG, size,
-  LoRA, and negative-prompt changes for experimentation.
-- **Update active preset** — commits the workspace to the selected chat preset.
-- **Save as new preset** — preserves the experiment as a separate preset.
-- **Rescan old message 📚** — runs Parser mode on a selected earlier assistant
-  message and inserts the image back into that exact message.
-- **Fullscreen and expanded text editors** — designed for phone use.
+- The effective Draw Things payload is logged in the Lumiverse server log.
 
 ## Requirements
 
 1. Draw Things HTTP API enabled, normally at `127.0.0.1:7862`.
-2. LumiDraw Bridge 0.2.0 or newer running at `127.0.0.1:7863` with the Draw
+2. LumiDraw Bridge 0.2.0 or newer running at `127.0.0.1:7863`, with the Draw
    Things Models folder authorized.
-3. Install this extension by replacing its root files or importing the flat ZIP
-   where `spindle.json` is at the archive root.
+3. Install the flat ZIP with `spindle.json` at the archive root.
 
 ## Verify the update
 
-The panel header must show **v0.15.0**. In the Generate tab, the catalog line
-should report a connected Bridge and counts for image models, LoRAs, and
-samplers. Use **Rescan catalog ⟳** after installing or removing Draw Things
-models.
-
-## Draw Things API notes
-
-Draw Things' HTTP API reports the current recipe and accepts complete generation
-configurations, but does not implement the usual A1111 listing endpoints for
-models and LoRAs. LumiDraw Bridge supplies the missing filesystem-backed
-catalog, while LumiDraw continues to send generation requests to Draw Things.
+The header must show **v0.16.0**. On desktop, Studio should display five panes.
+On a phone, Studio should display the Create / Tune / LoRAs / Stack / History
+tab rail. Models, samplers, and LoRAs should populate exactly as they did in
+v0.15.0.

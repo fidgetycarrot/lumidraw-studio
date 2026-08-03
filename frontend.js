@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.15.0'
+const EXTENSION_VERSION = '0.16.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -126,210 +126,253 @@ function realSetup(ctx) {
     .ld-launcher:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
     .ld-panel {
       position: fixed; right: 16px; bottom: 140px; z-index: 9001;
-      width: 384px; max-width: calc(100vw - 24px);
-      max-height: min(78vh, 720px); display: none; flex-direction: column;
-      background: rgba(23, 24, 30, 0.97);
+      width: min(1180px, calc(100vw - 24px)); max-width: calc(100vw - 24px);
+      height: min(82vh, 820px); max-height: calc(100dvh - 24px);
+      display: none; flex-direction: column; overflow: hidden;
+      background: rgba(23, 24, 30, 0.985);
       border: 1px solid var(--lumiverse-border, #3d4050);
-      border-radius: var(--lumiverse-radius, 8px);
-      box-shadow: 0 8px 30px rgba(0,0,0,.4);
+      border-radius: 12px;
+      box-shadow: 0 14px 48px rgba(0,0,0,.48);
       color: var(--lumiverse-text, #eceef4); font-size: 14px;
     }
     .ld-panel.ld-open { display: flex; }
     .ld-panel.ld-fullscreen {
       inset: 0 !important; width: 100vw !important; max-width: none !important;
       height: 100dvh !important; max-height: none !important;
-      border-radius: 0; border-left: none; border-right: none;
-    }
-    .ld-panel.ld-fullscreen .ld-body {
-      width: min(100%, 1100px); margin: 0 auto; box-sizing: border-box;
-      padding-left: max(14px, env(safe-area-inset-left));
-      padding-right: max(14px, env(safe-area-inset-right));
-      padding-bottom: max(18px, env(safe-area-inset-bottom));
-    }
-    .ld-panel.ld-fullscreen .ld-history {
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      border-radius: 0; border: none;
     }
     body.ld-fullscreen-lock { overflow: hidden !important; }
-    .ld-story-picker {
-      position: fixed; inset: 0; z-index: 9200; display: none;
-      align-items: center; justify-content: center; padding: 14px;
-      background: var(--lumiverse-modal-backdrop, rgba(0,0,0,.62));
-    }
-    .ld-story-picker.ld-open { display: flex; }
-    .ld-story-dialog {
-      width: min(680px, 100%); max-height: min(84vh, 820px);
-      display: flex; flex-direction: column; overflow: hidden;
-      background: rgba(23, 24, 30, 0.99);
-      border: 1px solid var(--lumiverse-border, #3d4050);
-      border-radius: var(--lumiverse-radius-lg, 12px);
-      box-shadow: 0 18px 60px rgba(0,0,0,.55);
-      color: var(--lumiverse-text, #eceef4);
-    }
-    .ld-story-head {
-      display: flex; align-items: center; gap: 10px; padding: 12px 14px;
-      border-bottom: 1px solid var(--lumiverse-border, #3d4050);
-    }
-    .ld-story-title { flex: 1; font-weight: 650; }
-    .ld-story-tools { padding: 10px 12px; border-bottom: 1px solid var(--lumiverse-border, #3d4050); }
-    .ld-story-search {
-      width: 100%; box-sizing: border-box; padding: 9px 11px; font-size: 14px;
-      background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
-      border-radius: var(--lumiverse-radius, 8px); color: var(--lumiverse-text, #eceef4);
-    }
-    .ld-story-help { margin-top: 7px; font-size: 11px; color: var(--lumiverse-text-muted, #a2a5b4); }
-    .ld-story-list { overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-    .ld-story-item {
-      width: 100%; padding: 10px 11px; text-align: left; cursor: pointer;
-      background: var(--lumiverse-fill, #262833); color: var(--lumiverse-text, #eceef4);
-      border: 1px solid var(--lumiverse-border, #3d4050); border-radius: var(--lumiverse-radius, 8px);
-    }
-    .ld-story-item:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
-    .ld-story-item-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
-    .ld-story-number { font-size: 12px; font-weight: 650; }
-    .ld-story-badge {
-      padding: 2px 6px; border-radius: 999px; font-size: 10px;
-      color: var(--lumiverse-text-muted, #a2a5b4); border: 1px solid var(--lumiverse-border, #3d4050);
-    }
-    .ld-story-preview {
-      font-size: 12px; line-height: 1.4; color: var(--lumiverse-text-muted, #a2a5b4);
-      display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
-    }
-    .ld-story-empty { padding: 24px 12px; text-align: center; color: var(--lumiverse-text-muted, #a2a5b4); }
-    @media (max-width: 520px) {
-      .ld-story-picker { align-items: flex-end; padding: 0; }
-      .ld-story-dialog { width: 100%; max-height: 90vh; border-radius: 14px 14px 0 0; }
-    }
+
     .ld-head {
-      display: flex; align-items: center; gap: 8px;
-      padding: 10px 12px; border-bottom: 1px solid var(--lumiverse-border, #3d4050);
+      flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+      min-height: 50px; padding: max(8px, env(safe-area-inset-top)) 12px 8px;
+      border-bottom: 1px solid var(--lumiverse-border, #3d4050);
+      background: rgba(18,19,24,.72); backdrop-filter: blur(14px);
     }
-    .ld-head-title { font-weight: 600; flex: 1; }
-    .ld-tabbtn {
+    .ld-head-title { font-weight: 700; margin-right: 6px; white-space: nowrap; }
+    .ld-main-nav { display:flex; align-items:center; gap:4px; flex:1; }
+    .ld-main-tab {
       background: none; border: none; color: var(--lumiverse-text-muted, #a2a5b4);
-      cursor: pointer; padding: 4px 6px; border-radius: var(--lumiverse-radius, 8px);
-      font-size: 12px;
+      cursor: pointer; padding: 7px 10px; border-radius: 8px; font-size: 12px;
     }
-    .ld-tabbtn.ld-active { color: var(--lumiverse-text, #eceef4); background: var(--lumiverse-fill, #262833); }
-    .ld-body { overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-    .ld-row { display: flex; gap: 8px; align-items: center; }
-    .ld-row > * { flex: 1; min-width: 0; }
-    .ld-label { font-size: 11px; color: var(--lumiverse-text-muted, #a2a5b4); margin-bottom: 3px; display: block; }
-    .ld-panel input, .ld-panel select, .ld-panel textarea {
-      width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 14px !important;
-      background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
-      border-radius: var(--lumiverse-radius, 8px); color: var(--lumiverse-text, #eceef4);
-      font-size: 13px;
-    }
-    .ld-panel textarea { resize: vertical; min-height: 54px; }
-    .ld-btn {
-      padding: 7px 10px; border-radius: var(--lumiverse-radius, 8px);
-      border: 1px solid var(--lumiverse-border, #3d4050); background: var(--lumiverse-fill, #262833);
-      color: var(--lumiverse-text, #eceef4); cursor: pointer; font-size: 13px;
-    }
-    .ld-btn:hover:not(:disabled) { background: var(--lumiverse-fill-subtle, #1a1b22); }
-    .ld-btn:disabled { opacity: .5; cursor: default; }
-    .ld-btn.ld-primary { font-weight: 600; }
-    .ld-status { font-size: 12px; color: var(--lumiverse-text-muted, #a2a5b4); white-space: pre-wrap; word-break: break-word; }
-    .ld-status.ld-err { color: #e5737f; }
-    .ld-status.ld-good { color: #7fbf8e; }
-    .ld-chip {
-      display: inline-block; padding: 2px 6px; margin: 0 4px 4px 0;
-      background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
-      border-radius: 999px; font-size: 11px; color: var(--lumiverse-text-muted, #a2a5b4);
-      max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      vertical-align: bottom;
-    }
-    .ld-history { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-    .ld-history .ld-thumb { display: flex; flex-direction: column; gap: 4px; }
-    .ld-history img {
-      width: 100%; aspect-ratio: 1; object-fit: cover;
-      border-radius: var(--lumiverse-radius, 8px); border: 1px solid var(--lumiverse-border, #3d4050);
-      cursor: pointer; display: block;
-    }
-    .ld-thumb .ld-append {
-      width: 100%; padding: 5px 4px; font-size: 12px; line-height: 1.1;
-      background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
-      border-radius: var(--lumiverse-radius, 8px); color: var(--lumiverse-text, #eceef4);
-      cursor: pointer;
-    }
-    .ld-thumb .ld-append:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
-    .ld-thumb-row { display: flex; gap: 4px; }
-    .ld-thumb-row .ld-append { flex: 1; padding: 4px 2px; font-size: 11px; }
-    .ld-remove:hover { color: #e5737f; }
-    .ld-preset-item {
-      display: flex; align-items: center; gap: 6px; padding: 6px 8px;
-      border: 1px solid var(--lumiverse-border, #3d4050); border-radius: var(--lumiverse-radius, 8px);
-      background: var(--lumiverse-fill, #262833);
-    }
-    .ld-preset-item.ld-active { outline: 1px solid var(--lumiverse-text-muted, #a2a5b4); }
-    .ld-preset-name { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .ld-preset-model { font-size: 10px; color: var(--lumiverse-text-muted, #a2a5b4); display: block; overflow: hidden; text-overflow: ellipsis; }
+    .ld-main-tab:hover { color: var(--lumiverse-text, #eceef4); }
+    .ld-main-tab.ld-active { color: var(--lumiverse-text, #eceef4); background: var(--lumiverse-fill, #262833); }
     .ld-x { background: none; border: none; color: var(--lumiverse-text-muted, #a2a5b4); cursor: pointer; font-size: 14px; padding: 2px 4px; }
+    .ld-x:hover { color: #e5737f; }
     .ld-min { font-size: 20px; line-height: 1; padding: 2px 8px; }
     .ld-fullscreen-toggle { font-size: 18px; line-height: 1; padding: 3px 7px; }
-    .ld-textarea-wrap { position: relative; }
-    .ld-textarea-wrap textarea { padding-right: 42px !important; }
-    .ld-textarea-expand {
-      position: absolute; top: 5px; right: 5px; z-index: 2;
-      min-width: 30px; height: 28px; padding: 0 6px;
-      border: 1px solid var(--lumiverse-border, #3d4050);
-      border-radius: 7px; background: rgba(23,24,30,.88);
-      color: var(--lumiverse-text-muted, #a2a5b4); cursor: pointer;
-      font-size: 15px; line-height: 1;
+
+    .ld-statebar {
+      flex: 0 0 auto; display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:8px;
+      padding: 8px 12px; border-bottom:1px solid var(--lumiverse-border, #3d4050);
+      background: rgba(31,32,40,.72);
     }
-    .ld-textarea-expand:hover { color: var(--lumiverse-text, #eceef4); }
-    .ld-text-editor {
-      position: fixed; inset: 0; z-index: 9400; display: none;
-      align-items: center; justify-content: center; padding: 14px;
-      background: var(--lumiverse-modal-backdrop, rgba(0,0,0,.68));
+    .ld-state-pill {
+      display:flex; align-items:center; gap:7px; min-width:0; padding:7px 9px;
+      border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px;
+      background:rgba(38,40,51,.65); font-size:11px;
     }
-    .ld-text-editor.ld-open { display: flex; }
-    .ld-text-editor-dialog {
-      width: min(960px, 100%); height: min(88dvh, 920px);
-      display: flex; flex-direction: column; overflow: hidden;
-      background: rgba(23,24,30,.995);
-      border: 1px solid var(--lumiverse-border, #3d4050);
-      border-radius: var(--lumiverse-radius-lg, 12px);
-      box-shadow: 0 18px 60px rgba(0,0,0,.58);
+    .ld-state-key { color:var(--lumiverse-text-muted, #a2a5b4); flex:0 0 auto; }
+    .ld-state-value { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+    .ld-dot { width:7px; height:7px; border-radius:50%; background:#777; flex:0 0 auto; }
+    .ld-dot.ld-online { background:#7fbf8e; box-shadow:0 0 0 3px rgba(127,191,142,.12); }
+    .ld-dot.ld-offline { background:#e5737f; box-shadow:0 0 0 3px rgba(229,115,127,.10); }
+
+    .ld-global-status {
+      flex:0 0 auto; min-height:18px; padding:6px 12px;
+      border-bottom:1px solid var(--lumiverse-border, #3d4050);
+      background:rgba(18,19,24,.42);
     }
-    .ld-text-editor-head, .ld-text-editor-actions {
-      display: flex; align-items: center; gap: 8px; padding: 11px 13px;
-      border-bottom: 1px solid var(--lumiverse-border, #3d4050);
+    .ld-global-status:has(.ld-gen-status:empty) { display:none; }
+    .ld-view { flex:1 1 auto; min-height:0; overflow:hidden; display:none; }
+    .ld-view.ld-active { display:flex; }
+
+    .ld-mobile-tabs { display:none; flex:0 0 auto; gap:4px; overflow-x:auto; padding:7px 8px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
+    .ld-mobile-tab {
+      flex:0 0 auto; border:1px solid transparent; border-radius:8px; padding:7px 10px;
+      background:none; color:var(--lumiverse-text-muted, #a2a5b4); font-size:12px; cursor:pointer;
     }
-    .ld-text-editor-actions { border-top: 1px solid var(--lumiverse-border, #3d4050); border-bottom: none; justify-content: flex-end; }
-    .ld-text-editor-title { flex: 1; font-weight: 650; }
-    .ld-text-editor-area {
-      flex: 1; min-height: 0 !important; resize: none !important;
-      margin: 12px; width: calc(100% - 24px) !important; box-sizing: border-box;
-      padding: 14px; font-size: 16px !important; line-height: 1.45;
-      background: var(--lumiverse-fill, #262833);
-      border: 1px solid var(--lumiverse-border, #3d4050);
-      border-radius: var(--lumiverse-radius, 8px);
-      color: var(--lumiverse-text, #eceef4);
+    .ld-mobile-tab.ld-active { background:var(--lumiverse-fill, #262833); border-color:var(--lumiverse-border, #3d4050); color:var(--lumiverse-text, #eceef4); }
+
+    .ld-studio-shell { min-height:0; flex:1; display:flex; flex-direction:column; }
+    .ld-studio-workspace {
+      flex:1; min-height:0; display:grid; gap:8px; padding:8px;
+      grid-template-columns:minmax(225px,.82fr) minmax(360px,1.65fr) minmax(245px,.95fr);
+      grid-template-rows:minmax(0,1fr) minmax(176px,.46fr);
+      grid-template-areas:
+        "tune create history"
+        "library library stack";
+      background:rgba(11,12,16,.35);
     }
-    .ld-x:hover { color: #e5737f; }
-    .ld-spin { animation: ld-rot 1s linear infinite; display: inline-block; }
-    .ld-subsection { border: 1px solid var(--lumiverse-border, #3d4050); border-radius: var(--lumiverse-radius, 8px); padding: 10px; }
-    .ld-subtitle { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
-    .ld-help { font-size: 11px; color: var(--lumiverse-text-muted, #a2a5b4); }
-    .ld-compact { font-size: 12px; padding: 4px 8px; }
+    .ld-pane {
+      min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden;
+      border:1px solid var(--lumiverse-border, #3d4050); border-radius:10px;
+      background:rgba(27,28,35,.88);
+    }
+    .ld-pane-head {
+      flex:0 0 auto; display:flex; align-items:center; gap:8px; min-height:38px; padding:8px 10px;
+      border-bottom:1px solid var(--lumiverse-border, #3d4050); font-weight:650; font-size:12px;
+      background:rgba(37,39,49,.55);
+    }
+    .ld-pane-title { flex:1; }
+    .ld-pane-body { flex:1; min-height:0; overflow-y:auto; padding:10px; }
+    .ld-pane-body.ld-stack-body { display:flex; flex-direction:column; gap:7px; }
+    .ld-tune-pane { grid-area:tune; }
+    .ld-create-pane { grid-area:create; }
+    .ld-history-pane { grid-area:history; }
+    .ld-library-pane { grid-area:library; }
+    .ld-stack-pane { grid-area:stack; }
+
+    .ld-card { border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px; padding:9px; background:rgba(38,40,51,.42); }
+    .ld-card + .ld-card { margin-top:8px; }
+    .ld-subtitle { font-size:12px; font-weight:650; margin-bottom:7px; }
+    .ld-help { font-size:11px; line-height:1.4; color:var(--lumiverse-text-muted, #a2a5b4); }
+    .ld-label { font-size:11px; color:var(--lumiverse-text-muted, #a2a5b4); margin-bottom:3px; display:block; }
+    .ld-row { display:flex; gap:8px; align-items:center; }
+    .ld-row > * { flex:1; min-width:0; }
+    .ld-panel input, .ld-panel select, .ld-panel textarea {
+      width:100%; box-sizing:border-box; padding:8px 10px; font-size:14px !important;
+      background:var(--lumiverse-fill, #262833); border:1px solid var(--lumiverse-border, #3d4050);
+      border-radius:8px; color:var(--lumiverse-text, #eceef4);
+    }
+    .ld-panel textarea { resize:vertical; min-height:54px; }
+    .ld-btn {
+      padding:7px 10px; border-radius:8px; border:1px solid var(--lumiverse-border, #3d4050);
+      background:var(--lumiverse-fill, #262833); color:var(--lumiverse-text, #eceef4); cursor:pointer; font-size:13px;
+    }
+    .ld-btn:hover:not(:disabled) { background:var(--lumiverse-fill-subtle, #1a1b22); }
+    .ld-btn:disabled { opacity:.5; cursor:default; }
+    .ld-btn.ld-primary { font-weight:700; background:rgba(63,68,88,.72); }
+    .ld-btn.ld-wide { width:100%; }
+    .ld-compact { font-size:12px; padding:4px 8px; }
     .ld-section-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
-    @media (max-width: 620px) {
-      .ld-head { flex-wrap: wrap; padding-top: max(8px, env(safe-area-inset-top)); }
-      .ld-head-title { flex: 1 1 calc(100% - 84px); }
-      .ld-tabbtn { flex: 1 1 30%; order: 3; text-align: center; padding: 7px 4px; }
-      .ld-fullscreen-toggle, .ld-min { order: 2; }
-      .ld-panel.ld-fullscreen .ld-body { width: 100%; }
-      .ld-text-editor { padding: 0; }
-      .ld-text-editor-dialog { width: 100%; height: 100dvh; border-radius: 0; border-left: none; border-right: none; }
-      .ld-text-editor-area { margin: 10px; width: calc(100% - 20px) !important; }
+    .ld-status { font-size:12px; color:var(--lumiverse-text-muted, #a2a5b4); white-space:pre-wrap; word-break:break-word; }
+    .ld-status.ld-err { color:#e5737f; }
+    .ld-status.ld-good { color:#7fbf8e; }
+    .ld-chip {
+      display:inline-block; padding:2px 6px; margin:0 4px 4px 0;
+      background:var(--lumiverse-fill, #262833); border:1px solid var(--lumiverse-border, #3d4050);
+      border-radius:999px; font-size:11px; color:var(--lumiverse-text-muted, #a2a5b4);
+      max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom;
     }
-    @keyframes ld-rot { to { transform: rotate(360deg); } }
+
+    .ld-create-body { display:flex; flex-direction:column; gap:10px; }
+    .ld-output-stage {
+      flex:1 1 42%; min-height:180px; display:flex; align-items:center; justify-content:center;
+      overflow:hidden; border:1px dashed var(--lumiverse-border, #3d4050); border-radius:10px;
+      background:rgba(12,13,17,.62); position:relative;
+    }
+    .ld-output-stage img { width:100%; height:100%; object-fit:contain; display:block; cursor:zoom-in; }
+    .ld-output-empty { text-align:center; padding:24px; color:var(--lumiverse-text-muted, #a2a5b4); font-size:12px; }
+    .ld-output-meta {
+      position:absolute; left:8px; right:8px; bottom:8px; padding:6px 8px; border-radius:8px;
+      background:rgba(10,11,15,.76); backdrop-filter:blur(8px); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    }
+    .ld-prompt-zone { display:flex; flex-direction:column; gap:8px; }
+    .ld-generate-bar { position:sticky; bottom:0; display:flex; gap:7px; padding-top:2px; background:linear-gradient(transparent, rgba(27,28,35,.96) 28%); }
+    .ld-generate-bar [data-act="generate"] { flex:1; min-height:42px; }
+
+    .ld-history { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:9px; }
+    .ld-history .ld-thumb { display:flex; flex-direction:column; gap:4px; min-width:0; }
+    .ld-history img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:8px; border:1px solid var(--lumiverse-border, #3d4050); cursor:pointer; display:block; }
+    .ld-thumb .ld-append { width:100%; padding:5px 4px; font-size:11px; line-height:1.1; background:var(--lumiverse-fill, #262833); border:1px solid var(--lumiverse-border, #3d4050); border-radius:7px; color:var(--lumiverse-text, #eceef4); cursor:pointer; }
+    .ld-thumb-row { display:flex; gap:4px; }
+    .ld-thumb-row .ld-append { flex:1; padding:4px 2px; font-size:10px; }
+    .ld-remove:hover { color:#e5737f; }
+
+    .ld-lora-tools { display:flex; gap:7px; align-items:center; margin-bottom:8px; }
+    .ld-lora-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px,1fr)); gap:7px; }
+    .ld-lora-card {
+      display:flex; align-items:center; gap:8px; min-width:0; padding:8px;
+      border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px; background:rgba(38,40,51,.42);
+    }
+    .ld-lora-card-main { flex:1; min-width:0; }
+    .ld-lora-card-name { font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .ld-lora-card-path { font-size:10px; color:var(--lumiverse-text-muted, #a2a5b4); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .ld-lora-empty { padding:18px; text-align:center; color:var(--lumiverse-text-muted, #a2a5b4); font-size:12px; }
+
+    .ld-preset-item { display:flex; align-items:center; gap:6px; padding:8px 9px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:8px; background:var(--lumiverse-fill, #262833); }
+    .ld-preset-item.ld-active { outline:1px solid var(--lumiverse-text-muted, #a2a5b4); }
+    .ld-preset-name { flex:1; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .ld-preset-model { font-size:10px; color:var(--lumiverse-text-muted, #a2a5b4); display:block; overflow:hidden; text-overflow:ellipsis; }
+
+    .ld-form-view { width:min(920px, 100%); margin:0 auto; padding:12px; box-sizing:border-box; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
+    .ld-story-hero { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; }
+    .ld-mode-segment { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; }
+    .ld-mode-note { margin-top:5px; }
+    .ld-subsection { border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px; padding:10px; }
+
+    .ld-textarea-wrap { position:relative; }
+    .ld-textarea-wrap textarea { padding-right:42px !important; }
+    .ld-textarea-expand { position:absolute; top:5px; right:5px; z-index:2; min-width:30px; height:28px; padding:0 6px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:7px; background:rgba(23,24,30,.88); color:var(--lumiverse-text-muted, #a2a5b4); cursor:pointer; font-size:15px; line-height:1; }
+    .ld-textarea-expand:hover { color:var(--lumiverse-text, #eceef4); }
+
+    .ld-story-picker { position:fixed; inset:0; z-index:9200; display:none; align-items:center; justify-content:center; padding:14px; background:var(--lumiverse-modal-backdrop, rgba(0,0,0,.62)); }
+    .ld-story-picker.ld-open { display:flex; }
+    .ld-story-dialog { width:min(680px,100%); max-height:min(84vh,820px); display:flex; flex-direction:column; overflow:hidden; background:rgba(23,24,30,.99); border:1px solid var(--lumiverse-border, #3d4050); border-radius:12px; box-shadow:0 18px 60px rgba(0,0,0,.55); color:var(--lumiverse-text, #eceef4); }
+    .ld-story-head { display:flex; align-items:center; gap:10px; padding:12px 14px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
+    .ld-story-title { flex:1; font-weight:650; }
+    .ld-story-tools { padding:10px 12px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
+    .ld-story-search { width:100%; box-sizing:border-box; padding:9px 11px; font-size:14px; background:var(--lumiverse-fill, #262833); border:1px solid var(--lumiverse-border, #3d4050); border-radius:8px; color:var(--lumiverse-text, #eceef4); }
+    .ld-story-help { margin-top:7px; font-size:11px; color:var(--lumiverse-text-muted, #a2a5b4); }
+    .ld-story-list { overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:8px; }
+    .ld-story-item { width:100%; padding:10px 11px; text-align:left; cursor:pointer; background:var(--lumiverse-fill, #262833); color:var(--lumiverse-text, #eceef4); border:1px solid var(--lumiverse-border, #3d4050); border-radius:8px; }
+    .ld-story-item:hover { background:var(--lumiverse-fill-subtle, #1a1b22); }
+    .ld-story-item-top { display:flex; align-items:center; gap:6px; margin-bottom:5px; }
+    .ld-story-number { font-size:12px; font-weight:650; }
+    .ld-story-badge { padding:2px 6px; border-radius:999px; font-size:10px; color:var(--lumiverse-text-muted, #a2a5b4); border:1px solid var(--lumiverse-border, #3d4050); }
+    .ld-story-preview { font-size:12px; line-height:1.4; color:var(--lumiverse-text-muted, #a2a5b4); display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
+    .ld-story-empty { padding:24px 12px; text-align:center; color:var(--lumiverse-text-muted, #a2a5b4); }
+
+    .ld-text-editor { position:fixed; inset:0; z-index:9400; display:none; align-items:center; justify-content:center; padding:14px; background:var(--lumiverse-modal-backdrop, rgba(0,0,0,.68)); }
+    .ld-text-editor.ld-open { display:flex; }
+    .ld-text-editor-dialog { width:min(960px,100%); height:min(88dvh,920px); display:flex; flex-direction:column; overflow:hidden; background:rgba(23,24,30,.995); border:1px solid var(--lumiverse-border, #3d4050); border-radius:12px; box-shadow:0 18px 60px rgba(0,0,0,.58); }
+    .ld-text-editor-head, .ld-text-editor-actions { display:flex; align-items:center; gap:8px; padding:11px 13px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
+    .ld-text-editor-actions { border-top:1px solid var(--lumiverse-border, #3d4050); border-bottom:none; justify-content:flex-end; }
+    .ld-text-editor-title { flex:1; font-weight:650; }
+    .ld-text-editor-area { flex:1; min-height:0 !important; resize:none !important; margin:12px; width:calc(100% - 24px) !important; box-sizing:border-box; padding:14px; font-size:16px !important; line-height:1.45; background:var(--lumiverse-fill, #262833); border:1px solid var(--lumiverse-border, #3d4050); border-radius:8px; color:var(--lumiverse-text, #eceef4); }
+    .ld-spin { animation:ld-rot 1s linear infinite; display:inline-block; }
+
+    @media (max-width: 840px) {
+      .ld-panel { width:calc(100vw - 12px); max-width:none; height:min(92dvh, 900px); max-height:calc(100dvh - 12px); }
+      .ld-head { flex-wrap:wrap; }
+      .ld-head-title { flex:1 1 calc(100% - 84px); }
+      .ld-main-nav { order:3; flex:1 1 100%; overflow-x:auto; }
+      .ld-main-tab { flex:1 0 auto; text-align:center; }
+      .ld-statebar { grid-template-columns:1fr; gap:5px; padding:6px 8px; }
+      .ld-state-pill { padding:5px 8px; }
+      .ld-mobile-tabs { display:flex; }
+      .ld-studio-workspace { display:block; padding:7px; overflow:hidden; }
+      .ld-studio-workspace > [data-mobile-panel] { display:none !important; height:100%; }
+      .ld-studio-workspace > [data-mobile-panel].ld-mobile-active { display:flex !important; }
+      .ld-pane { border-radius:9px; }
+      .ld-pane-body { padding:9px; }
+      .ld-output-stage { min-height:220px; }
+      .ld-history { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .ld-lora-grid { grid-template-columns:1fr; }
+      .ld-form-view { padding:8px; }
+      .ld-story-hero { grid-template-columns:1fr; }
+      .ld-text-editor { padding:0; }
+      .ld-text-editor-dialog { width:100%; height:100dvh; border-radius:0; border:none; }
+      .ld-text-editor-area { margin:10px; width:calc(100% - 20px) !important; }
+    }
+    @media (max-width: 520px) {
+      .ld-panel { inset:6px !important; width:auto !important; height:auto !important; max-height:none !important; border-radius:12px; }
+      .ld-panel.ld-fullscreen { inset:0 !important; }
+      .ld-head { padding-left:max(8px,env(safe-area-inset-left)); padding-right:max(8px,env(safe-area-inset-right)); }
+      .ld-main-tab { padding:7px 8px; }
+      .ld-statebar { display:flex; overflow-x:auto; }
+      .ld-state-pill { flex:0 0 auto; max-width:82vw; }
+      .ld-row.ld-mobile-stack { flex-direction:column; align-items:stretch; }
+      .ld-story-picker { align-items:flex-end; padding:0; }
+      .ld-story-dialog { width:100%; max-height:90vh; border-radius:14px 14px 0 0; }
+    }
+    @keyframes ld-rot { to { transform:rotate(360deg); } }
   `)
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.15.0" aria-label="LumiDraw Studio v0.15.0">
+    <button class="ld-launcher" title="LumiDraw Studio v0.16.0" aria-label="LumiDraw Studio v0.16.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -338,224 +381,249 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw Studio <small style="font-weight:400;opacity:.65">v0.15.0</small></span>
-        <button class="ld-tabbtn ld-active" data-tab="generate">Generate</button>
-        <button class="ld-tabbtn" data-tab="presets">Presets</button>
-        <button class="ld-tabbtn" data-tab="settings">Settings</button>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.16.0</small></span>
+        <nav class="ld-main-nav" aria-label="LumiDraw sections">
+          <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
+          <button class="ld-main-tab" data-tab="story">Story</button>
+          <button class="ld-main-tab" data-tab="presets">Presets</button>
+          <button class="ld-main-tab" data-tab="settings">Settings</button>
+        </nav>
         <button class="ld-x ld-fullscreen-toggle" title="Open fullscreen" aria-label="Open fullscreen" aria-pressed="false">⛶</button>
         <button class="ld-x ld-min" title="Minimize back to the icon">&#8211;</button>
       </div>
-      <div class="ld-body" data-view="generate">
-        <div>
-          <span class="ld-label">Chat preset</span>
-          <div class="ld-row">
-            <select class="ld-preset-select"><option value="">— none (synced state) —</option></select>
-            <button class="ld-btn" style="flex:0 0 auto" data-act="sync" title="Capture the recipe currently shown in Draw Things">Sync ⟳</button>
-          </div>
-          <div class="ld-help" style="margin-top:6px">The chat preset stays committed for parser and inline story images. The workspace below is only for experimentation until you save it.</div>
-        </div>
-        <div class="ld-subsection">
-          <div class="ld-subtitle">Workspace / draft settings</div>
-          <div class="ld-config-chips" style="margin-top:2px"></div>
-          <div class="ld-status ld-draft-status" style="margin-top:6px"></div>
-          <div style="margin-top:8px">
-            <span class="ld-label">Model</span>
-            <select class="ld-draft-model"><option value="">— choose model —</option></select>
-          </div>
-          <div class="ld-row" style="margin-top:6px">
-            <div><span class="ld-label">Sampler</span><select class="ld-draft-sampler"><option value="">— choose sampler —</option></select></div>
-            <div style="flex:0 0 70px"><span class="ld-label">Steps</span><input class="ld-draft-steps" type="number" min="1" max="150" /></div>
-            <div style="flex:0 0 70px"><span class="ld-label">CFG</span><input class="ld-draft-cfg" type="number" step="0.5" min="0" /></div>
-          </div>
-          <div class="ld-row" style="margin-top:6px">
-            <div><span class="ld-label">Width</span><input class="ld-draft-w" type="number" step="64" min="256" /></div>
-            <div><span class="ld-label">Height</span><input class="ld-draft-h" type="number" step="64" min="256" /></div>
-          </div>
-          <span class="ld-label" style="margin-top:8px">LoRAs</span>
-          <div class="ld-draft-loras" style="display:flex;flex-direction:column;gap:4px"></div>
-          <button class="ld-btn ld-compact" data-act="draft-addlora" style="margin-top:4px">＋ LoRA</button>
-          <div class="ld-row" style="margin-top:7px;align-items:center">
-            <div class="ld-status ld-catalog-status">Checking LumiDraw Bridge…</div>
-            <button class="ld-btn ld-compact" style="flex:0 0 auto" data-act="refresh-catalog">Rescan catalog ⟳</button>
-          </div>
-          <div class="ld-help" style="margin-top:6px">Image models and LoRAs come from the native Bridge catalog. Saved presets remain available if the Bridge is offline.</div>
-          <div style="margin-top:8px">
-            <span class="ld-label">Negative prompt</span>
-            <textarea class="ld-negative" style="min-height:36px"></textarea>
-          </div>
-          <div class="ld-section-actions">
-            <button class="ld-btn" data-act="draft-reset">Reset workspace</button>
-            <button class="ld-btn" data-act="draft-save-new">Save as new preset</button>
-            <button class="ld-btn" data-act="draft-save-active">Update active preset</button>
-          </div>
-        </div>
-        <div>
-          <span class="ld-label">Prompt</span>
-          <textarea class="ld-prompt" placeholder="portrait of..."></textarea>
-        </div>
-        <div class="ld-row">
-          <div>
-            <span class="ld-label">Seed (blank = random)</span>
-            <input class="ld-seed" type="number" min="0" placeholder="random" />
-          </div>
-          <div style="flex:0 0 auto; align-self: flex-end;">
-            <button class="ld-btn" data-act="reuse-seed" title="Copy the seed from the last generation">↩ last</button>
-          </div>
-        </div>
-        <button class="ld-btn ld-primary" data-act="generate">Generate with workspace</button>
-        <button class="ld-btn" data-act="scan" title="Process the latest story message using the committed chat preset">Scan story now 📖</button>
-        <button class="ld-btn ld-primary" data-act="scan-old" title="Choose any assistant message in the current chat and run Parser mode on it using the committed chat preset">Rescan old message 📚</button>
-        <button class="ld-btn" data-act="append-last" style="display:none">Add to chat 💬</button>
-        <div class="ld-status ld-gen-status"></div>
-        <div>
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <span class="ld-label" style="margin-bottom:0">Recent</span>
-            <button class="ld-x ld-clearall" title="Delete ALL recent images from the library and this list">Clear all</button>
-          </div>
-          <div class="ld-history"></div>
-        </div>
+
+      <div class="ld-statebar">
+        <div class="ld-state-pill"><span class="ld-state-key">Preset</span><span class="ld-state-value ld-header-preset">None</span></div>
+        <div class="ld-state-pill"><span class="ld-state-key">Workspace</span><span class="ld-state-value ld-header-workspace">Not loaded</span></div>
+        <div class="ld-state-pill"><span class="ld-dot ld-header-bridge-dot"></span><span class="ld-state-key">Bridge</span><span class="ld-state-value ld-header-bridge">Checking…</span></div>
       </div>
-      <div class="ld-body" data-view="presets" style="display:none">
-        <div class="ld-status">A preset is a complete pinned recipe: model, sampler, LoRAs, sizes, and identity tags. Edit any of it here; the Generate tab just runs whichever preset is selected.</div>
-        <button class="ld-btn" data-act="new-preset">＋ New preset from synced state</button>
-        <div class="ld-status ld-preset-status"></div>
-        <div class="ld-preset-list" style="display:flex;flex-direction:column;gap:6px"></div>
-        <div class="ld-editor" style="display:none;border:1px solid var(--lumiverse-border, #3d4050);border-radius:var(--lumiverse-radius, 8px);padding:10px;margin-top:4px">
-          <span class="ld-label">Name</span>
-          <input class="ld-ed-name" />
-          <span class="ld-label" style="margin-top:6px">Model</span>
-          <select class="ld-ed-model"></select>
-          <div class="ld-row" style="margin-top:6px">
-            <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
-            <div style="flex:0 0 70px"><span class="ld-label">Steps</span><input class="ld-ed-steps" type="number" min="1" max="150" /></div>
-            <div style="flex:0 0 70px"><span class="ld-label">CFG</span><input class="ld-ed-cfg" type="number" step="0.5" min="0" /></div>
+      <div class="ld-global-status"><div class="ld-status ld-gen-status"></div></div>
+
+      <section class="ld-view ld-active" data-view="studio">
+        <div class="ld-studio-shell">
+          <div class="ld-mobile-tabs" aria-label="Studio panels">
+            <button class="ld-mobile-tab ld-active" data-mobile-tab="create">Create</button>
+            <button class="ld-mobile-tab" data-mobile-tab="tune">Tune</button>
+            <button class="ld-mobile-tab" data-mobile-tab="library">LoRAs</button>
+            <button class="ld-mobile-tab" data-mobile-tab="stack">Stack</button>
+            <button class="ld-mobile-tab" data-mobile-tab="history">History</button>
           </div>
-          <div class="ld-row" style="margin-top:6px">
-            <div><span class="ld-label">Width</span><input class="ld-ed-w" type="number" step="64" min="256" /></div>
-            <div><span class="ld-label">Height</span><input class="ld-ed-h" type="number" step="64" min="256" /></div>
+          <div class="ld-studio-workspace">
+            <section class="ld-pane ld-tune-pane" data-mobile-panel="tune">
+              <div class="ld-pane-head"><span class="ld-pane-title">Tune</span><button class="ld-btn ld-compact" data-act="sync" title="Capture the recipe currently shown in Draw Things">Sync ⟳</button></div>
+              <div class="ld-pane-body">
+                <div class="ld-card">
+                  <span class="ld-label">Committed chat preset</span>
+                  <select class="ld-preset-select"><option value="">— none (synced state) —</option></select>
+                  <div class="ld-help" style="margin-top:6px">Story images use this preset. Studio uses the temporary workspace below.</div>
+                </div>
+                <div class="ld-card">
+                  <div class="ld-subtitle">Core generation</div>
+                  <span class="ld-label">Model</span>
+                  <select class="ld-draft-model"><option value="">— choose model —</option></select>
+                  <div class="ld-row" style="margin-top:7px">
+                    <div><span class="ld-label">Sampler</span><select class="ld-draft-sampler"><option value="">— choose sampler —</option></select></div>
+                  </div>
+                  <div class="ld-row" style="margin-top:7px">
+                    <div><span class="ld-label">Steps</span><input class="ld-draft-steps" type="number" min="1" max="150" /></div>
+                    <div><span class="ld-label">CFG</span><input class="ld-draft-cfg" type="number" step="0.5" min="0" /></div>
+                  </div>
+                  <div class="ld-row" style="margin-top:7px">
+                    <div><span class="ld-label">Width</span><input class="ld-draft-w" type="number" step="64" min="256" /></div>
+                    <div><span class="ld-label">Height</span><input class="ld-draft-h" type="number" step="64" min="256" /></div>
+                  </div>
+                </div>
+                <div class="ld-card">
+                  <div class="ld-subtitle">Workspace</div>
+                  <div class="ld-config-chips"></div>
+                  <div class="ld-status ld-draft-status" style="margin-top:5px"></div>
+                  <div class="ld-section-actions">
+                    <button class="ld-btn ld-compact" data-act="draft-reset">Reset to preset</button>
+                    <button class="ld-btn ld-compact" data-act="draft-save-new">Save new</button>
+                    <button class="ld-btn ld-compact" data-act="draft-save-active">Update preset</button>
+                  </div>
+                </div>
+                <div class="ld-card">
+                  <div class="ld-row" style="align-items:center">
+                    <div class="ld-status ld-catalog-status">Checking LumiDraw Bridge…</div>
+                    <button class="ld-btn ld-compact" style="flex:0 0 auto" data-act="refresh-catalog">Rescan ⟳</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="ld-pane ld-create-pane ld-mobile-active" data-mobile-panel="create">
+              <div class="ld-pane-head"><span class="ld-pane-title">Create</span><span class="ld-help">Standalone workspace generation</span></div>
+              <div class="ld-pane-body ld-create-body">
+                <div class="ld-output-stage ld-current-output"><div class="ld-output-empty">Your newest image will appear here.</div></div>
+                <div class="ld-prompt-zone">
+                  <div><span class="ld-label">Prompt</span><textarea class="ld-prompt" placeholder="portrait of..."></textarea></div>
+                  <div><span class="ld-label">Negative prompt</span><textarea class="ld-negative" style="min-height:42px"></textarea></div>
+                  <div class="ld-row">
+                    <div><span class="ld-label">Seed (blank = random)</span><input class="ld-seed" type="number" min="0" placeholder="random" /></div>
+                    <div style="flex:0 0 auto;align-self:flex-end"><button class="ld-btn" data-act="reuse-seed" title="Copy the seed from the last generation">↩ Last seed</button></div>
+                  </div>
+                </div>
+                <div class="ld-generate-bar">
+                  <button class="ld-btn ld-primary" data-act="generate">Generate with workspace</button>
+                  <button class="ld-btn" data-act="append-last" style="display:none">Add to chat 💬</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="ld-pane ld-history-pane" data-mobile-panel="history">
+              <div class="ld-pane-head"><span class="ld-pane-title">History</span><button class="ld-x ld-clearall" title="Delete ALL recent images from the library and this list">Clear all</button></div>
+              <div class="ld-pane-body"><div class="ld-history"></div></div>
+            </section>
+
+            <section class="ld-pane ld-library-pane" data-mobile-panel="library">
+              <div class="ld-pane-head"><span class="ld-pane-title">LoRA Library</span><span class="ld-help ld-lora-count"></span></div>
+              <div class="ld-pane-body">
+                <div class="ld-lora-tools">
+                  <input class="ld-lora-search" type="search" placeholder="Search installed LoRAs…" />
+                  <button class="ld-btn ld-compact" data-act="refresh-catalog">Rescan ⟳</button>
+                </div>
+                <div class="ld-lora-grid"></div>
+              </div>
+            </section>
+
+            <section class="ld-pane ld-stack-pane" data-mobile-panel="stack">
+              <div class="ld-pane-head"><span class="ld-pane-title">Active Stack</span><button class="ld-btn ld-compact" data-act="draft-addlora">＋ LoRA</button></div>
+              <div class="ld-pane-body ld-stack-body">
+                <div class="ld-draft-loras" style="display:flex;flex-direction:column;gap:6px"></div>
+                <div class="ld-help">LoRAs here are temporary Studio settings until you update or save a preset.</div>
+              </div>
+            </section>
           </div>
-          <span class="ld-label" style="margin-top:8px">LoRAs</span>
-          <div class="ld-ed-loras" style="display:flex;flex-direction:column;gap:4px"></div>
-          <button class="ld-btn" data-act="ed-addlora" style="margin-top:4px;font-size:12px;padding:4px 8px">＋ LoRA</button>
-          <div class="ld-status" style="margin-top:2px">Add as many as you like. The dropdown is loaded from LumiDraw Bridge and preserves any LoRA already saved in a preset.</div>
-          <span class="ld-label" style="margin-top:8px">Quality tags (always first)</span>
-          <input class="ld-ed-quality" />
-          <span class="ld-label" style="margin-top:6px">Character tags</span>
-          <textarea class="ld-ed-chartags" style="min-height:40px"></textarea>
-          <span class="ld-label" style="margin-top:6px">Persona tags (only when the User is in frame)</span>
-          <textarea class="ld-ed-personatags" style="min-height:40px"></textarea>
-          <span class="ld-label" style="margin-top:6px">Banned tags (stripped from model scene output)</span>
-          <input class="ld-ed-banned" />
-          <span class="ld-label" style="margin-top:6px">Prompt prefix</span>
-          <textarea class="ld-ed-prefix" style="min-height:40px"></textarea>
-          <span class="ld-label" style="margin-top:6px">Negative prompt</span>
-          <textarea class="ld-ed-negative" style="min-height:40px"></textarea>
-          <div class="ld-row" style="margin-top:10px">
-            <button class="ld-btn ld-primary" data-act="ed-save">Save preset</button>
-            <button class="ld-btn" data-act="ed-cancel">Cancel</button>
-          </div>
-          <div class="ld-status ld-ed-status" style="margin-top:6px"></div>
         </div>
-      </div>
-      <div class="ld-body" data-view="settings" style="display:none">
-        <div>
-          <span class="ld-label">Draw Things host</span>
-          <input class="ld-host" />
-        </div>
-        <div>
-          <span class="ld-label">Port (Draw Things → Settings → API Server, HTTP)</span>
-          <input class="ld-port" type="number" />
-        </div>
-        <div class="ld-row">
-          <button class="ld-btn" data-act="save-settings">Save</button>
-          <button class="ld-btn" data-act="test">Test connection</button>
-        </div>
-        <div class="ld-status ld-settings-status"></div>
-        <div class="ld-subsection">
-          <div class="ld-subtitle">LumiDraw Bridge catalog</div>
-          <div class="ld-row">
-            <div><span class="ld-label">Bridge host</span><input class="ld-bridge-host" value="127.0.0.1" /></div>
-            <div style="flex:0 0 92px"><span class="ld-label">Port</span><input class="ld-bridge-port" type="number" value="7863" /></div>
-          </div>
-          <button class="ld-btn" data-act="test-bridge" style="margin-top:7px">Test Bridge and reload catalog</button>
-          <div class="ld-status ld-bridge-status" style="margin-top:6px"></div>
-          <div class="ld-help" style="margin-top:5px">The extension backend connects locally on your Mac, so these dropdowns still work while Lumiverse is open on your phone.</div>
-        </div>
-        <div style="border-top:1px solid var(--lumiverse-border, #3d4050); padding-top:10px">
-          <span class="ld-label">Story illustrations</span>
-          <select class="ld-mode">
-            <option value="off">Off — manual only</option>
-            <option value="inline">Inline — story model writes &lt;dt-image&gt; tags</option>
-            <option value="parser">Parser — separate model derives the prompt afterward</option>
-          </select>
-          <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px">
-            <input type="checkbox" class="ld-autoscan" style="width:auto" /> Auto-scan after each story message (if supported — otherwise use Scan story now)
-          </label>
-          <div class="ld-row" style="margin-top:6px">
+      </section>
+
+      <section class="ld-view" data-view="story">
+        <div class="ld-form-view">
+          <div class="ld-card ld-story-hero">
             <div>
-              <span class="ld-label">Min images per reply (0 = model decides)</span>
-              <input class="ld-minimg" type="number" min="0" max="4" step="1" />
+              <div class="ld-subtitle">Story illustration control</div>
+              <div class="ld-help">Committed preset: <strong class="ld-story-preset-name">None</strong>. Temporary Studio changes never affect automatic story images until saved.</div>
             </div>
-            <div>
-              <span class="ld-label">Max images</span>
-              <input class="ld-maximg" type="number" min="1" max="4" step="1" />
+            <div class="ld-row" style="min-width:250px">
+              <button class="ld-btn" data-act="scan">Scan latest 📖</button>
+              <button class="ld-btn ld-primary" data-act="scan-old">Choose old message 📚</button>
             </div>
           </div>
-          <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px">
-            <input type="checkbox" class="ld-chartags" style="width:auto" /> Auto-include the active character's image tags in story prompts
-          </label>
+          <div class="ld-card">
+            <div class="ld-subtitle">Illustration mode</div>
+            <select class="ld-mode">
+              <option value="off">Off — manual only</option>
+              <option value="inline">Inline — story model writes &lt;dt-image&gt; tags</option>
+              <option value="parser">Parser — separate model derives the prompt afterward</option>
+            </select>
+            <div class="ld-mode-note ld-help">Inline is fastest. Parser gives you a separate prompt-conversion step and supports rescanning old messages.</div>
+            <label style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px"><input type="checkbox" class="ld-autoscan" style="width:auto" /> Auto-scan after each story message when supported</label>
+            <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Include active character image tags</label>
+            <div class="ld-row" style="margin-top:9px">
+              <div><span class="ld-label">Minimum images (0 = model decides)</span><input class="ld-minimg" type="number" min="0" max="4" step="1" /></div>
+              <div><span class="ld-label">Maximum images</span><input class="ld-maximg" type="number" min="1" max="4" step="1" /></div>
+            </div>
+          </div>
+          <div class="ld-card">
+            <div class="ld-subtitle">Parser connection</div>
+            <div class="ld-row ld-mobile-stack">
+              <div><span class="ld-label">Connection</span><select class="ld-parser-conn"><option value="">— default connection —</option></select></div>
+              <div><span class="ld-label">Model override (optional)</span><input class="ld-parser-model" placeholder="e.g. your Kimi deployment" /></div>
+            </div>
+          </div>
+          <div class="ld-card">
+            <span class="ld-label">Parser instruction</span>
+            <textarea class="ld-parser-instr" style="min-height:110px"></textarea>
+            <button class="ld-btn ld-compact" data-act="reset-parser" style="margin-top:6px">Reset to default</button>
+          </div>
+          <div class="ld-card">
+            <span class="ld-label">Inline instruction</span>
+            <textarea class="ld-protocol" style="min-height:110px"></textarea>
+            <button class="ld-btn ld-compact" data-act="reset-protocol" style="margin-top:6px">Reset to default</button>
+          </div>
         </div>
-        <div>
-          <span class="ld-label">Parser connection (pick a cheap model — persists)</span>
-          <select class="ld-parser-conn"><option value="">— default connection —</option></select>
+      </section>
+
+      <section class="ld-view" data-view="presets">
+        <div class="ld-form-view">
+          <div class="ld-card">
+            <div class="ld-subtitle">Preset manager</div>
+            <div class="ld-help">Presets pin the complete story recipe. Studio experiments remain separate until you explicitly save them.</div>
+            <button class="ld-btn" data-act="new-preset" style="margin-top:8px">＋ New preset from synced state</button>
+            <div class="ld-status ld-preset-status" style="margin-top:6px"></div>
+          </div>
+          <div class="ld-preset-list" style="display:flex;flex-direction:column;gap:6px"></div>
+          <div class="ld-editor ld-card" style="display:none">
+            <div class="ld-subtitle">Preset editor</div>
+            <span class="ld-label">Name</span><input class="ld-ed-name" />
+            <span class="ld-label" style="margin-top:7px">Model</span><select class="ld-ed-model"></select>
+            <div class="ld-row" style="margin-top:7px">
+              <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
+              <div style="flex:0 0 82px"><span class="ld-label">Steps</span><input class="ld-ed-steps" type="number" min="1" max="150" /></div>
+              <div style="flex:0 0 82px"><span class="ld-label">CFG</span><input class="ld-ed-cfg" type="number" step="0.5" min="0" /></div>
+            </div>
+            <div class="ld-row" style="margin-top:7px">
+              <div><span class="ld-label">Width</span><input class="ld-ed-w" type="number" step="64" min="256" /></div>
+              <div><span class="ld-label">Height</span><input class="ld-ed-h" type="number" step="64" min="256" /></div>
+            </div>
+            <span class="ld-label" style="margin-top:9px">LoRAs</span>
+            <div class="ld-ed-loras" style="display:flex;flex-direction:column;gap:5px"></div>
+            <button class="ld-btn ld-compact" data-act="ed-addlora" style="margin-top:5px">＋ LoRA</button>
+            <span class="ld-label" style="margin-top:9px">Quality tags (always first)</span><input class="ld-ed-quality" />
+            <span class="ld-label" style="margin-top:7px">Character tags</span><textarea class="ld-ed-chartags" style="min-height:58px"></textarea>
+            <span class="ld-label" style="margin-top:7px">Persona tags</span><textarea class="ld-ed-personatags" style="min-height:58px"></textarea>
+            <span class="ld-label" style="margin-top:7px">Banned tags</span><input class="ld-ed-banned" />
+            <span class="ld-label" style="margin-top:7px">Prompt prefix</span><textarea class="ld-ed-prefix" style="min-height:58px"></textarea>
+            <span class="ld-label" style="margin-top:7px">Negative prompt</span><textarea class="ld-ed-negative" style="min-height:58px"></textarea>
+            <div class="ld-row" style="margin-top:10px"><button class="ld-btn ld-primary" data-act="ed-save">Save preset</button><button class="ld-btn" data-act="ed-cancel">Cancel</button></div>
+            <div class="ld-status ld-ed-status" style="margin-top:6px"></div>
+          </div>
         </div>
-        <div>
-          <span class="ld-label">Parser model (optional, persists)</span>
-          <input class="ld-parser-model" placeholder="e.g. your Kimi deployment" />
+      </section>
+
+      <section class="ld-view" data-view="settings">
+        <div class="ld-form-view">
+          <div class="ld-card">
+            <div class="ld-subtitle">Draw Things API</div>
+            <div class="ld-row ld-mobile-stack">
+              <div><span class="ld-label">Host</span><input class="ld-host" /></div>
+              <div style="flex:0 0 120px"><span class="ld-label">Port</span><input class="ld-port" type="number" /></div>
+            </div>
+            <div class="ld-section-actions"><button class="ld-btn" data-act="save-settings">Save connections</button><button class="ld-btn" data-act="test">Test Draw Things</button></div>
+          </div>
+          <div class="ld-card">
+            <div class="ld-subtitle">LumiDraw Bridge catalog</div>
+            <div class="ld-row ld-mobile-stack">
+              <div><span class="ld-label">Host</span><input class="ld-bridge-host" value="127.0.0.1" /></div>
+              <div style="flex:0 0 120px"><span class="ld-label">Port</span><input class="ld-bridge-port" type="number" value="7863" /></div>
+            </div>
+            <button class="ld-btn" data-act="test-bridge" style="margin-top:7px">Test Bridge and reload catalog</button>
+            <div class="ld-status ld-bridge-status" style="margin-top:6px"></div>
+            <div class="ld-help" style="margin-top:5px">The extension backend connects locally on your Mac, so catalog dropdowns still work while Lumiverse is open on your phone.</div>
+          </div>
+          <div class="ld-card">
+            <div class="ld-subtitle">Diagnostics</div>
+            <button class="ld-btn" data-act="diagnose">Run diagnostics 🔍</button>
+            <textarea class="ld-diag" readonly style="min-height:150px;display:none;margin-top:7px;font-family:monospace;font-size:11px"></textarea>
+          </div>
+          <div class="ld-status ld-settings-status"></div>
         </div>
-        <div>
-          <span class="ld-label">Parser instruction — sent to the parser model with the story passage (Parser mode). Edit freely; paste your own converter prompt here.</span>
-          <textarea class="ld-parser-instr" style="min-height:80px"></textarea>
-          <button class="ld-btn" data-act="reset-parser" style="margin-top:4px">Reset to default</button>
-        </div>
-        <div>
-          <span class="ld-label">Inline instruction — added to your story model's prompt (Inline mode) to teach it the &lt;dt-image&gt; tag. This is how it knows what to do. Edit freely.</span>
-          <textarea class="ld-protocol" style="min-height:80px"></textarea>
-          <button class="ld-btn" data-act="reset-protocol" style="margin-top:4px">Reset to default</button>
-        </div>
-        <div>
-          <button class="ld-btn" data-act="diagnose">Run diagnostics 🔍</button>
-          <textarea class="ld-diag" readonly style="min-height:120px;display:none;margin-top:6px;font-family:monospace;font-size:11px"></textarea>
-        </div>
-        <div class="ld-status">Story generations use the preset selected in the Generate tab (its prompt prefix becomes the character identity). Settings persist on the server across restarts.</div>
-        <div class="ld-status">Tip: Draw Things shows the recipe of whatever image is selected — so select any image you love, hit Sync, and you've captured its exact settings.</div>
-      </div>
+      </section>
     </div>
+
     <div class="ld-story-picker" aria-hidden="true">
       <div class="ld-story-dialog" role="dialog" aria-modal="true" aria-label="Choose a story message">
-        <div class="ld-story-head">
-          <span class="ld-story-title">Choose a story message</span>
-          <button class="ld-x ld-story-close" title="Close">✕</button>
-        </div>
-        <div class="ld-story-tools">
-          <input class="ld-story-search" type="search" placeholder="Search message text…" />
-          <div class="ld-story-help">Newest first. Selecting a message runs Parser mode again and adds the new image without deleting existing images.</div>
-        </div>
+        <div class="ld-story-head"><span class="ld-story-title">Choose a story message</span><button class="ld-x ld-story-close" title="Close">✕</button></div>
+        <div class="ld-story-tools"><input class="ld-story-search" type="search" placeholder="Search message text…" /><div class="ld-story-help">Newest first. Selecting a message runs Parser mode again and adds the new image without deleting existing images.</div></div>
         <div class="ld-story-list"><div class="ld-story-empty">Loading messages…</div></div>
       </div>
     </div>
     <div class="ld-text-editor" aria-hidden="true">
       <div class="ld-text-editor-dialog" role="dialog" aria-modal="true" aria-label="Expanded text editor">
-        <div class="ld-text-editor-head">
-          <span class="ld-text-editor-title">Edit text</span>
-          <button class="ld-x ld-text-editor-close" title="Cancel and close">✕</button>
-        </div>
+        <div class="ld-text-editor-head"><span class="ld-text-editor-title">Edit text</span><button class="ld-x ld-text-editor-close" title="Cancel and close">✕</button></div>
         <textarea class="ld-text-editor-area" spellcheck="true"></textarea>
-        <div class="ld-text-editor-actions">
-          <span class="ld-help" style="margin-right:auto">Escape cancels · ⌘/Ctrl+Enter applies</span>
-          <button class="ld-btn ld-text-editor-cancel">Cancel</button>
-          <button class="ld-btn ld-primary ld-text-editor-apply">Apply</button>
-        </div>
+        <div class="ld-text-editor-actions"><span class="ld-help" style="margin-right:auto">Escape cancels · ⌘/Ctrl+Enter applies</span><button class="ld-btn ld-text-editor-cancel">Cancel</button><button class="ld-btn ld-primary ld-text-editor-apply">Apply</button></div>
       </div>
     </div>
   `)
@@ -577,6 +645,67 @@ function realSetup(ctx) {
     el.textContent = msg || ''
     el.classList.remove('ld-err', 'ld-good')
     if (kind) el.classList.add(kind === 'err' ? 'ld-err' : 'ld-good')
+  }
+
+  const MAIN_VIEW_KEY = 'lumidraw_main_view_v2'
+  const MOBILE_TAB_KEY = 'lumidraw_mobile_studio_tab_v2'
+
+  function setMainView(name, persist = true) {
+    const allowed = new Set(['studio', 'story', 'presets', 'settings'])
+    const next = allowed.has(name) ? name : 'studio'
+    for (const tab of dom.queryAll('.ld-main-tab')) {
+      tab.classList.toggle('ld-active', tab.getAttribute('data-tab') === next)
+    }
+    for (const view of dom.queryAll('.ld-view')) {
+      view.classList.toggle('ld-active', view.getAttribute('data-view') === next)
+    }
+    if (persist) {
+      try { localStorage.setItem(MAIN_VIEW_KEY, next) } catch { /* best effort */ }
+    }
+  }
+
+  function setMobileTab(name, persist = true) {
+    const allowed = new Set(['create', 'tune', 'library', 'stack', 'history'])
+    const next = allowed.has(name) ? name : 'create'
+    for (const tab of dom.queryAll('.ld-mobile-tab')) {
+      tab.classList.toggle('ld-active', tab.getAttribute('data-mobile-tab') === next)
+    }
+    for (const pane of dom.queryAll('[data-mobile-panel]')) {
+      pane.classList.toggle('ld-mobile-active', pane.getAttribute('data-mobile-panel') === next)
+    }
+    if (persist) {
+      try { localStorage.setItem(MOBILE_TAB_KEY, next) } catch { /* best effort */ }
+    }
+  }
+
+  function renderHeaderState() {
+    const presetEl = $('.ld-header-preset')
+    const workspaceEl = $('.ld-header-workspace')
+    const bridgeEl = $('.ld-header-bridge')
+    const bridgeDot = $('.ld-header-bridge-dot')
+    const storyPreset = $('.ld-story-preset-name')
+    const presetName = activePreset || 'None'
+    if (presetEl) presetEl.textContent = presetName
+    if (storyPreset) storyPreset.textContent = presetName
+
+    if (workspaceEl) {
+      if (!draftConfig) workspaceEl.textContent = 'Not loaded'
+      else {
+        const model = String(draftConfig.model || '').replace(/\.ckpt$/i, '')
+        workspaceEl.textContent = `${draftDirty ? 'Modified' : 'Ready'}${model ? ' · ' + model : ''}`
+      }
+    }
+
+    const bridge = catalog.bridge || {}
+    if (bridgeEl) {
+      bridgeEl.textContent = bridge.connected
+        ? `${bridge.version || 'Connected'} · ${catalog.models.length} models · ${catalog.loras.length} LoRAs`
+        : 'Offline · remembered catalog'
+    }
+    if (bridgeDot) {
+      bridgeDot.classList.toggle('ld-online', !!bridge.connected)
+      bridgeDot.classList.toggle('ld-offline', !bridge.connected)
+    }
   }
 
   const DRAFT_KEY = 'lumidraw_generate_draft_v1'
@@ -662,6 +791,8 @@ function realSetup(ctx) {
     }
     setStatus('.ld-catalog-status', message, kind)
     setStatus('.ld-bridge-status', message, kind)
+    renderHeaderState()
+    renderLoraLibrary()
   }
 
   function ensureDraftModelOption(value) {
@@ -698,6 +829,71 @@ function realSetup(ctx) {
     row.appendChild(weightInput)
     row.appendChild(remove)
     return row
+  }
+
+  function addLoraToDraft(file) {
+    const value = String(file || '').trim()
+    if (!value) return
+    const box = $('.ld-draft-loras')
+    if (!box) return
+    const selects = [...box.querySelectorAll('.ld-lora-file')]
+    const existing = selects.find((select) => select.value === value)
+    if (existing) {
+      existing.focus()
+      setMobileTab('stack')
+      setStatus('.ld-draft-status', `“${value}” is already in the active stack.`)
+      return
+    }
+    const blank = selects.find((select) => !select.value)
+    if (blank) {
+      blank.value = value
+      blank.dispatchEvent(new Event('input', { bubbles: true }))
+    } else {
+      box.appendChild(draftLoraRow(value, 1))
+    }
+    onDraftControlChange()
+    setMobileTab('stack')
+    setStatus('.ld-draft-status', `Added “${value}” to the temporary Studio stack.`, 'good')
+  }
+
+  function renderLoraLibrary() {
+    const grid = $('.ld-lora-grid')
+    const count = $('.ld-lora-count')
+    if (!grid) return
+    const query = String(($('.ld-lora-search') && $('.ld-lora-search').value) || '').trim().toLowerCase()
+    const items = (catalog.loras || []).filter((file) => !query || String(file).toLowerCase().includes(query))
+    if (count) count.textContent = `${items.length}${query ? ' matching' : ' installed'}`
+    grid.innerHTML = ''
+    if (!items.length) {
+      const empty = document.createElement('div')
+      empty.className = 'ld-lora-empty'
+      empty.textContent = query ? 'No installed LoRAs match that search.' : 'No LoRAs are available from the Bridge catalog.'
+      grid.appendChild(empty)
+      return
+    }
+    for (const file of items) {
+      const card = document.createElement('div')
+      card.className = 'ld-lora-card'
+      const main = document.createElement('div')
+      main.className = 'ld-lora-card-main'
+      const name = document.createElement('div')
+      name.className = 'ld-lora-card-name'
+      name.textContent = String(file).split('/').pop().replace(/_lora_f16\.ckpt$/i, '').replace(/\.ckpt$/i, '').replace(/_/g, ' ')
+      name.title = file
+      const path = document.createElement('div')
+      path.className = 'ld-lora-card-path'
+      path.textContent = file
+      main.appendChild(name)
+      main.appendChild(path)
+      const add = document.createElement('button')
+      add.className = 'ld-btn ld-compact'
+      add.textContent = 'Add'
+      add.title = `Add ${file} to the active Studio stack`
+      add.addEventListener('click', () => addLoraToDraft(file))
+      card.appendChild(main)
+      card.appendChild(add)
+      grid.appendChild(card)
+    }
   }
 
   function readDraftConfigFromControls() {
@@ -855,7 +1051,7 @@ function realSetup(ctx) {
   async function openStoryPicker() {
     const mode = $('.ld-mode') ? $('.ld-mode').value : settings.mode
     if (mode !== 'parser') {
-      setStatus('.ld-gen-status', 'Choose Parser mode in Settings before rescanning an old message.', 'err')
+      setStatus('.ld-gen-status', 'Choose Parser mode in the Story tab before rescanning an old message.', 'err')
       return
     }
     const picker = $('.ld-story-picker')
@@ -974,6 +1170,7 @@ function realSetup(ctx) {
     if (!el) return
     if (!draftConfig) {
       el.innerHTML = '<span class="ld-status">No workspace loaded yet — choose a preset or press Sync.</span>'
+      renderHeaderState()
       return
     }
     const c = draftConfig
@@ -991,6 +1188,7 @@ function realSetup(ctx) {
       span.title = b
       return span.outerHTML
     }).join('')
+    renderHeaderState()
   }
 
   function renderPresetSelect() {
@@ -1005,6 +1203,7 @@ function realSetup(ctx) {
         return o.outerHTML
       }).join('')
     sel.value = current
+    renderHeaderState()
   }
 
   function renderPresetList() {
@@ -1067,10 +1266,46 @@ function realSetup(ctx) {
     }
   }
 
+  function renderCurrentOutput() {
+    const stage = $('.ld-current-output')
+    if (!stage) return
+    stage.innerHTML = ''
+    const entry = history[0]
+    const image = entry && Array.isArray(entry.images) ? entry.images[0] : null
+    if (!entry || !image) {
+      const empty = document.createElement('div')
+      empty.className = 'ld-output-empty'
+      empty.textContent = 'Your newest image will appear here.'
+      stage.appendChild(empty)
+      return
+    }
+    const img = document.createElement('img')
+    img.src = image.url
+    img.alt = (entry.prompt || 'Generated image').slice(0, 160)
+    img.title = 'Open full size'
+    img.addEventListener('click', () => window.open(image.url, '_blank'))
+    const meta = document.createElement('div')
+    meta.className = 'ld-output-meta'
+    const parts = [entry.model, entry.seed !== undefined ? `seed ${entry.seed}` : '', entry.durationMs ? `${(entry.durationMs / 1000).toFixed(1)}s` : ''].filter(Boolean)
+    meta.textContent = parts.join(' · ')
+    meta.title = `${parts.join(' · ')}
+${entry.prompt || ''}`.trim()
+    stage.appendChild(img)
+    stage.appendChild(meta)
+  }
+
   function renderHistory() {
+    renderCurrentOutput()
     const el = $('.ld-history')
     if (!el) return
     el.innerHTML = ''
+    if (!history.length) {
+      const empty = document.createElement('div')
+      empty.className = 'ld-lora-empty'
+      empty.textContent = 'No recent images yet.'
+      el.appendChild(empty)
+      return
+    }
     for (const entry of history) {
       for (const img of entry.images || []) {
         const wrap = document.createElement('div')
@@ -1240,9 +1475,9 @@ function realSetup(ctx) {
     const spaceBelow = vh - r.bottom - 16
     // Open on whichever side has more room, and never let the panel exceed it.
     const openAbove = spaceAbove >= spaceBelow
-    const maxH = Math.min(720, Math.max(240, (openAbove ? spaceAbove : spaceBelow) - 4))
+    const maxH = Math.min(820, Math.max(320, (openAbove ? spaceAbove : spaceBelow) - 4))
     panel.style.maxHeight = maxH + 'px'
-    const pw = panel.offsetWidth || 384
+    const pw = panel.offsetWidth || 1180
     const ph = Math.min(panel.offsetHeight || 500, maxH)
     const left = clamp(r.right - pw, 8, vw - pw - 8)
     const top = openAbove
@@ -1288,14 +1523,14 @@ function realSetup(ctx) {
     drag = null
   })
 
-  for (const tab of dom.queryAll('.ld-tabbtn')) {
-    tab.addEventListener('click', () => {
-      for (const t of dom.queryAll('.ld-tabbtn')) t.classList.toggle('ld-active', t === tab)
-      for (const v of dom.queryAll('.ld-body')) {
-        v.style.display = v.getAttribute('data-view') === tab.getAttribute('data-tab') ? 'flex' : 'none'
-      }
-    })
+  for (const tab of dom.queryAll('.ld-main-tab')) {
+    tab.addEventListener('click', () => setMainView(tab.getAttribute('data-tab')))
   }
+  for (const tab of dom.queryAll('.ld-mobile-tab')) {
+    tab.addEventListener('click', () => setMobileTab(tab.getAttribute('data-mobile-tab')))
+  }
+  try { setMainView(localStorage.getItem(MAIN_VIEW_KEY) || 'studio', false) } catch { setMainView('studio', false) }
+  try { setMobileTab(localStorage.getItem(MOBILE_TAB_KEY) || 'create', false) } catch { setMobileTab('create', false) }
 
   fullscreenToggle.addEventListener('click', () => setFullscreen(!panel.classList.contains('ld-fullscreen')))
   $('.ld-min').addEventListener('click', () => {
@@ -1408,18 +1643,22 @@ function realSetup(ctx) {
     $('.ld-ed-banned').value = p ? (p.bannedTags || '') : (seed ? (seed.bannedTags || '') : '')
     $('.ld-ed-prefix').value = p ? (p.promptPrefix || '') : (seed ? (seed.promptPrefix || '') : '')
     $('.ld-ed-negative').value = p ? (p.negativePrompt || '') : (seed ? (seed.negativePrompt || '') : '')
-    setStatus('.ld-ed-status', p ? '' : (seed ? 'Starting from the current workspace.' : (syncedConfig ? 'Starting from the last synced recipe.' : 'No synced recipe yet — Sync on the Generate tab first for model/sampler defaults.')))
+    setStatus('.ld-ed-status', p ? '' : (seed ? 'Starting from the current workspace.' : (syncedConfig ? 'Starting from the last synced recipe.' : 'No synced recipe yet — Sync in Studio first for model/sampler defaults.')))
     if (box.scrollIntoView) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
 
-  $('[data-act="refresh-catalog"]').addEventListener('click', async () => {
-    try {
-      await loadCatalog(true)
-      setStatus('.ld-gen-status', 'Bridge catalog refreshed.', 'good')
-    } catch (error) {
-      setStatus('.ld-gen-status', error.message, 'err')
-    }
-  })
+  for (const refreshButton of dom.queryAll('[data-act="refresh-catalog"]')) {
+    refreshButton.addEventListener('click', async () => {
+      try {
+        await loadCatalog(true)
+        setStatus('.ld-gen-status', 'Bridge catalog refreshed.', 'good')
+      } catch (error) {
+        setStatus('.ld-gen-status', error.message, 'err')
+      }
+    })
+  }
+  const loraSearch = $('.ld-lora-search')
+  if (loraSearch) loraSearch.addEventListener('input', renderLoraLibrary)
 
   $('[data-act="new-preset"]').addEventListener('click', () => openEditor(null))
   $('[data-act="ed-cancel"]').addEventListener('click', () => { $('.ld-editor').style.display = 'none' })
@@ -1647,8 +1886,8 @@ function realSetup(ctx) {
     const mode = $('.ld-mode') ? $('.ld-mode').value : 'off'
     if (btn) {
       btn.textContent = mode === 'off'
-        ? 'Scan story now 📖 (mode: Off — set in Settings)'
-        : `Scan story now 📖 (${mode})`
+        ? 'Scan latest 📖 (mode: Off — set in Story)'
+        : `Scan latest 📖 (${mode})`
     }
     if (oldBtn) {
       oldBtn.disabled = mode !== 'parser'

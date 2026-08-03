@@ -1,8 +1,8 @@
 {
   "name": "lumidraw-studio",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "private": true,
-  "description": "Bridge Draw Things and Lumiverse with native Bridge-powered model and LoRA catalogs, chat presets, and a temporary generation workspace.",
+  "description": "A redesigned Studio and Story workspace for Draw Things with Bridge-powered model, sampler, and LoRA catalogs.",
   "license": "MIT",
   "dependencies": {}
 }
