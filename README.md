@@ -1,110 +1,131 @@
-# LumiDraw Studio 0.18.6
+# LumiDraw Studio 0.18.7
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.18.6 — Context and Loom continuity
+## 0.18.7 — Reliable automatic Anima scans
 
-This build changes only the experimental **Anima hybrid** Parser engine. Legacy
-instruction-only mode remains current-message-only and otherwise unchanged.
+This release addresses the case where the full experimental Anima pipeline works
+from **Manual Parser** but a completed roleplay response produces no automatic
+images. Manual Anima parsing, Legacy instruction-only parsing, context windows,
+and Loom ledger continuity remain available.
 
-### Reference context
+### Saved-message auto-trigger fan-in
 
-Anima hybrid can now receive up to four immediately preceding chat messages as
-reference context. The default is **2 previous chat messages**.
+Automatic Parser mode no longer depends on a single XML callback. LumiDraw now
+accepts the completed assistant message from several compatible lifecycle paths:
 
-Reference context may resolve:
+- the saved-message `GENERATION_ENDED` event;
+- `CHARACTER_MESSAGE_RENDERED` as a fallback;
+- the existing `<lumidraw-parse>` tag interceptor;
+- frontend forwarding of the same saved-message events when backend event scope
+  is unavailable.
 
-- pronouns and subject identity;
-- carried or renamed props;
-- clothing and accessory continuity;
-- location and ongoing physical state.
+All sources enter one deduplicating queue. A tag callback that arrives first can
+be enriched by a later saved-message event carrying the exact chat ID, message
+ID, and final content. Only one parser job may be created for that message.
 
-The context is separated from the current passage with strict labels. The parser
-is instructed that only the **CURRENT PASSAGE** may provide the illustrated
-moment, action, pose, and exact anchor quote. Current-message facts always
-supersede older context.
+### Exact message targeting and delayed-save recovery
 
-### Loom ledger continuity
+Automatic jobs now:
 
-When enabled, LumiDraw searches the current and recent messages for the newest
-`<loomledger>...</loomledger>` block. It converts the HTML ledger into compact
-reference text and sends it to the structured parser as continuity evidence.
-The ledger itself is removed from the passage that may be illustrated.
+- fetch the event's explicit chat rather than relying only on the current chat;
+- target the exact assistant message ID;
+- retry while a newly saved message becomes queryable;
+- use final message content as a last-resort identity check;
+- allow a later lifecycle event to retry when lookup—not parsing—was the only
+  failure.
 
-This works with ledgers that track attire, accessories, location, state, props,
-and per-character visual reminders. It does not require another LLM call and it
-does not alter the roleplay message.
+If another scan already owns the parser/Draw Things lane, an automatic job waits
+rather than being silently discarded as `busy`.
 
-The Story tab now includes:
+### Visible automatic-job diagnostics
 
-- **Reference context:** current message only through four previous messages;
-- **Use latest `<loomledger>` as continuity reference:** on by default.
-
-The last-parser debug panel reports whether a ledger was found and shows capped
-previews of the context actually supplied.
-
-### Stronger generic ownership anchoring
-
-In multi-subject images, a selected signature trait now uses an exclusive
-ownership sentence:
+The Story panel and Terminal now expose automatic stages including queued,
+waiting, parsing, compiling, generating, inserting, generated, skipped, and
+error. Expected Terminal lines include:
 
 ```text
-Sovi is the only subject wearing round glasses.
+[lumidraw] documented GENERATION_ENDED auto trigger registered
+[lumidraw] auto trigger queued · source=...
+[lumidraw] auto trigger deduplicated/enriched · source=...
+[lumidraw] story scan stage · parsing ...
+[lumidraw] auto scan result · source=...
 ```
 
-This logic is character-agnostic and also applies to other eyewear, pointed
-ears, horns, wings, tails, visible markings, and piercings. Only one selected
-signature trait per subject is lifted into natural language; the remainder of
-the prompt stays compact and tag-oriented.
+The original event sources are retained in the result log, which makes it clear
+whether the tag, frontend event, backend event, or a combination started the
+job.
 
-### Generic signature-prop recovery
+## Anima hybrid refinements
 
-Named prop aliases can now activate when the parser uses only the generic object
-class. For a profile mapping such as:
+The compiler remains compact and tag-first. Its identifier is now
+`anima-hybrid-v6`.
+
+### Generic signature ownership
+
+For multi-subject scenes, one distinctive trait may be moved to the beginning of
+its owner's tag block and reinforced with a short generic ownership anchor, for
+example:
+
+```text
+The elf Sovi is the only subject wearing round glasses.
+```
+
+The behavior is profile-driven rather than character-specific. It applies to
+traits such as eyewear, pointed ears, horns, wings, tails, visible markings, and
+piercings.
+
+### Generic named-prop expansion
+
+A profile mapping such as:
 
 ```text
 Aegis-fang = single massive warhammer
 ```
 
-an extracted phrase such as `holds hammer one-handed` can compile to:
+may expand a generic extracted action such as `holds hammer one-handed` into a
+more visually useful named-prop sentence and tag phrase. The inference is used
+only when one profile alias unambiguously matches the generic object class.
 
-```text
-Wulfgar holds Aegis-fang, a single massive warhammer.
-```
+### POV gating
 
-The matching is based on generic object classes and profile data. No character
-or item names are hardcoded into the compiler.
+Bare `pov` / `first person view` tags are removed unless a visible persona is
+actually represented from the viewer's body or eye position. Normal two-subject
+camera compositions retain their other framing tags.
 
-The compiler identifier is now `anima-hybrid-v5`.
+## Parser continuity retained
 
-## Parser reliability retained
-
-- Structured JSON truncation recovery and per-image token allowances.
-- Scan lock and duplicate-trigger protection.
-- Live stage updates, elapsed timer, Cancel Parser, and four-minute timeout.
-- Maximum-image hard cap before Draw Things generation.
-- Legacy instruction-only mode as the known-good fallback.
+- Up to four previous messages as reference context; default is two.
+- Optional latest `<loomledger>` as attire, accessory, location, state, and prop
+  continuity reference.
+- Current passage remains the only allowed source of the illustrated action and
+  anchor quote.
+- Structured JSON truncation repair and per-image output allowances.
+- Conditional visible anatomy remains subject-owned and safety-gated.
+- Legacy instruction-only Parser remains the known-good fallback.
+- Live elapsed timer, Cancel Parser, and four-minute parser timeout.
 
 ## Other retained behavior
 
 - User quality tags and negative prompts remain untouched.
-- Inline mode remains on the simpler pre-0.17 tag-only path.
+- Inline mode remains on the simpler tag-only path.
 - Immediate History updates and manual History refresh.
 - Old-message rescanning with chat-message and story-message numbering.
 - In-app image viewer with zoom, pan, prompt restoration, and reuse.
 - Bridge-powered model, sampler, and LoRA catalogs.
 - Draw Things `batch_count` is forced to `1`; only the first returned image is
   accepted for each requested illustration.
+- Maximum-image limits are enforced before generation.
 
 ## Suggested test
 
-1. Confirm the header and Terminal show **v0.18.6**.
-2. Select **Anima hybrid experimental**.
-3. Leave Reference context at **2 previous chat messages** and Loom ledger on.
-4. Run a scene whose current reply uses a pronoun, generic prop name, or carried
-   clothing/accessory established just before it.
-5. In Last Anima hybrid compile, verify `contextMessageCount`, `ledgerFound`, and
-   the capped context previews.
-6. Check whether signature accessories stay on their owning subject and whether
-   generic props expand through the preset's visual alias mapping.
+1. Confirm the header and Terminal show **v0.18.7**.
+2. Select **Parser**, **Anima hybrid experimental**, and enable automatic scans.
+3. Leave reference context at **2 previous messages** and Loom ledger on.
+4. Complete one new roleplay response without pressing Manual Parser.
+5. Confirm Terminal shows an auto trigger, a parser stage, and a final auto scan
+   result.
+6. If no image is warranted, the Story panel should show that decision rather
+   than remaining silent.
+7. Run Manual Parser once afterward to compare the same Anima pipeline directly.

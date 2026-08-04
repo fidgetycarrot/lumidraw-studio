@@ -1,8 +1,8 @@
 {
   "name": "lumidraw-studio",
-  "version": "0.18.6",
+  "version": "0.18.7",
   "private": true,
-  "description": "An Anima-optimized Draw Things Studio with reference context, Loom ledger continuity, and compact Anima hybrid prompts.",
+  "description": "An Anima-optimized Draw Things Studio with reliable saved-message auto triggers, context continuity, and compact hybrid prompts.",
   "license": "MIT",
   "dependencies": {}
 }

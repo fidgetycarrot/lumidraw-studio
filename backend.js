@@ -540,20 +540,17 @@ async function resolveActiveChatId(userId) {
   return null
 }
 
-async function fetchMessages(userId) {
+async function fetchMessages(userId, explicitChatId = '') {
   const chatApi = spindle.chat || spindle.chats
   if (!chatApi || typeof chatApi.getMessages !== 'function') {
     throw new Error('Chat read API unavailable (chats permission granted?).')
   }
-  const chatId = await resolveActiveChatId(userId)
-  const shapes = [
-    [chatId, userId],
-    [{ chatId, userId }],
-    [chatId],
-    [undefined, userId],
-    [{ userId }],
-    [],
-  ]
+  const chatId = String(explicitChatId || '').trim() || await resolveActiveChatId(userId)
+  const shapes = []
+  // Current documented Chat Mutation shape. Explicit event chat IDs matter for
+  // automatic scans because the user may switch chats before the parser starts.
+  if (chatId) shapes.push([chatId], [chatId, userId], [{ chatId, userId }])
+  shapes.push([undefined, userId], [{ userId }], [])
   const errs = []
   for (const args of shapes) {
     if (args.length && args[0] === null) continue
@@ -607,6 +604,102 @@ function hasParserTrigger(text) {
 function stripParserTrigger(text) {
   PARSER_TRIGGER_RE.lastIndex = 0
   return String(text || '').replace(PARSER_TRIGGER_RE, '').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function comparableMessageText(value) {
+  return cleanParserMessageText(value)
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+async function locateStoryMessage(userId, options = {}) {
+  const requestedMessageId = String(options.messageId || '')
+  const requestedChatId = String(options.chatId || '')
+  const expected = comparableMessageText(options.expectedContent || '')
+  const isAuto = !!options.auto
+  const attempts = isAuto ? 10 : 1
+  let lastResult = null
+  let lastError = null
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) await wait(Math.min(1500, 250 + (attempt * 175)))
+    try {
+      const result = await fetchMessages(userId, requestedChatId)
+      lastResult = result
+      const messages = result.messages
+      let target = null
+      let targetIndex = -1
+
+      if (requestedMessageId) {
+        for (let i = 0; i < messages.length; i++) {
+          const bits = messageBits(messages[i])
+          if (String(bits.id) === requestedMessageId && bits.isAssistant && bits.contentKey && typeof bits.content === 'string') {
+            target = bits
+            targetIndex = i
+            break
+          }
+        }
+      }
+
+      // Some frontend tag callbacks arrive before messageId is available. The
+      // saved trigger is a safer candidate than blindly illustrating the prior
+      // assistant message. GENERATION_ENDED normally supplies the exact ID.
+      if (!target && !requestedMessageId) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const bits = messageBits(messages[i])
+          if (!bits.isAssistant || !bits.contentKey || typeof bits.content !== 'string') continue
+          if (hasParserTrigger(bits.content)) {
+            target = bits
+            targetIndex = i
+            break
+          }
+        }
+      }
+
+      // Content matching is a final recovery path for host builds whose event
+      // message ID is delayed or normalized differently from chat mutation.
+      if (!target && expected) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const bits = messageBits(messages[i])
+          if (!bits.isAssistant || !bits.contentKey || typeof bits.content !== 'string') continue
+          const candidate = comparableMessageText(bits.content)
+          if (!candidate) continue
+          const sample = expected.slice(0, Math.min(220, expected.length))
+          if ((sample && candidate.includes(sample)) || (candidate.length > 80 && expected.includes(candidate.slice(0, 180)))) {
+            target = bits
+            targetIndex = i
+            break
+          }
+        }
+      }
+
+      if (!target && !isAuto && !requestedMessageId) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const bits = messageBits(messages[i])
+          if (bits.isAssistant && bits.contentKey && typeof bits.content === 'string') {
+            target = bits
+            targetIndex = i
+            break
+          }
+        }
+      }
+
+      if (target) return { ...result, target, targetIndex, attempts: attempt + 1 }
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  return {
+    ...(lastResult || { messages: [], chatId: requestedChatId || null }),
+    target: null,
+    targetIndex: -1,
+    attempts,
+    error: lastError,
+  }
 }
 
 async function listStoryMessages(userId, requestedLimit = 120) {
@@ -1554,10 +1647,26 @@ function signaturePriority(tag) {
   return 99
 }
 
-function signatureOwnershipSentence(tag, anchor, exclusive = false) {
+function subjectSpeciesCue(item) {
+  const text = animaTagList([item && item.noun, ...((item && item.appearance) || [])]).join(', ')
+  const species = [
+    'human', 'half-elf', 'elf', 'dwarf', 'orc', 'goblin', 'halfling', 'gnome', 'tiefling',
+    'aasimar', 'dragonborn', 'drow', 'vampire', 'werewolf', 'demon', 'devil', 'angel', 'fairy',
+    'mermaid', 'centaur', 'minotaur', 'kobold', 'lizardfolk', 'catboy', 'catgirl', 'android', 'robot',
+  ]
+  return species.find((value) => new RegExp(`\\b${escapeRegExp(value)}\\b`, 'i').test(text)) || ''
+}
+
+function signatureOwnerName(item) {
+  const name = sentenceName(item && item.anchor)
+  const species = subjectSpeciesCue(item)
+  return species ? `The ${species} ${name}` : name
+}
+
+function signatureOwnershipSentence(tag, item, exclusive = false) {
   const value = animaTag(tag)
   if (!value || signaturePriority(value) >= 99) return ''
-  const name = sentenceName(anchor)
+  const name = signatureOwnerName(item)
   if (/\b(?:glasses|eyewear|goggles|monocle|eyepatch)\b/.test(value)) {
     return exclusive ? `${name} is the only subject wearing ${value}.` : `${name} wears ${value}.`
   }
@@ -1623,6 +1732,30 @@ function aliasDescriptionMatchesScene(text, alias) {
   return candidates.some((noun) => new RegExp(`\\b${noun}\\b`, 'i').test(haystack))
 }
 
+function expandGenericAliasTag(tag, alias) {
+  let value = normalizeVisualPhrase(tag)
+  if (!value || !alias || aliasMentioned(value, alias) || !aliasDescriptionMatchesScene(value, alias)) return value
+  const description = String(alias.description || '').trim()
+  if (!description) return value
+  if (normalizeIdentityText(value).includes(normalizeIdentityText(description))) return value
+  const replacements = [
+    ['warhammer', /\bwarhammer\b/i], ['hammer', /\bhammer\b/i],
+    ['greatsword', /\bgreatsword\b/i], ['longsword', /\blongsword\b/i], ['shortsword', /\bshortsword\b/i], ['sword', /\bsword\b/i],
+    ['battleaxe', /\bbattleaxe\b/i], ['greataxe', /\bgreataxe\b/i], ['axe', /\baxe\b/i],
+    ['rapier', /\brapier\b/i], ['dagger', /\bdagger\b/i], ['knife', /\bknife\b/i],
+    ['staff', /\bstaff\b/i], ['wand', /\bwand\b/i], ['spear', /\bspear\b/i], ['lance', /\blance\b/i],
+    ['bow', /\bbow\b/i], ['crossbow', /\bcrossbow\b/i], ['shield', /\bshield\b/i],
+    ['revolver', /\brevolver\b/i], ['pistol', /\bpistol\b/i], ['rifle', /\brifle\b/i], ['shotgun', /\bshotgun\b/i], ['gun', /\bgun\b/i],
+    ['tome', /\btome\b/i], ['book', /\bbook\b/i], ['orb', /\borb\b/i], ['lantern', /\blantern\b/i],
+    ['necklace', /\bnecklace\b/i], ['amulet', /\bamulet\b/i],
+  ]
+  for (const [noun, pattern] of replacements) {
+    if (!description.toLowerCase().includes(noun)) continue
+    if (pattern.test(value)) return value.replace(pattern, description)
+  }
+  return value
+}
+
 function activeAliasesForSubject(item, scene) {
   const aliases = item.profile && Array.isArray(item.profile.visualAliases) ? item.profile.visualAliases : []
   const text = subjectSceneText(item, scene)
@@ -1656,7 +1789,7 @@ function subjectOwnershipAnchors(item, scene, exclusive = false) {
     .sort((a, b) => signaturePriority(a) - signaturePriority(b))
     .find((tag) => signaturePriority(tag) < 99)
   if (signature) {
-    const sentence = signatureOwnershipSentence(signature, item.anchor, exclusive)
+    const sentence = signatureOwnershipSentence(signature, item, exclusive)
     if (sentence) anchors.push(sentence)
   }
   for (const alias of activeAliasesForSubject(item, scene)) {
@@ -1677,18 +1810,29 @@ function subjectTagLine(item, scene, descriptors) {
   const aliases = activeAliasesForSubject(item, scene)
   const normalizeWithAliases = (part) => {
     let value = part
-    for (const alias of aliases) value = normalizeAliasTag(value, alias)
+    for (const alias of aliases) {
+      value = normalizeAliasTag(value, alias)
+      value = expandGenericAliasTag(value, alias)
+    }
     return animaTag(value)
   }
   // In multi-subject scenes the ownership sentence already carries the proper
   // name, so repeat only the visual descriptor in the tag block. Solo scenes
   // retain both name and descriptor because they do not receive prose anchors.
+  // Multi-subject prompts already receive a named ownership sentence and an
+  // expanded action tag; avoid repeating the descriptor as a floating prop.
   const aliasTags = aliases.flatMap((alias) => descriptors.length > 1
-    ? [alias.description]
+    ? []
     : [alias.name, alias.description])
+  const visibleAppearance = filterAppearanceByVisibility(item.appearance, item.outfit)
+  const signatureAppearance = visibleAppearance
+    .filter((tag) => signaturePriority(tag) < 99)
+    .sort((a, b) => signaturePriority(a) - signaturePriority(b))
+  const ordinaryAppearance = visibleAppearance.filter((tag) => signaturePriority(tag) >= 99)
   const tags = uniqueStrings([
     noun,
-    ...filterAppearanceByVisibility(item.appearance, item.outfit),
+    ...signatureAppearance,
+    ...ordinaryAppearance,
     ...item.outfit,
     ...poses,
     ...item.expression,
@@ -1763,12 +1907,27 @@ function compileStructuredScene(scene, profiles, sourcePassage = '') {
     if (/^(left|right)$/.test(pos)) positionTags.push(`${item.anchor} on ${pos}`.toLowerCase())
   }
   const relationDetails = scene.relations.flatMap((relation) => relation.details || []).filter((detail) => !/^(?:pulling|pushing|holding|grabbing|biting|kissing|touching|lifting|carrying|dragging|pressing|pinning|wrapping|hooking|gripping|bracing|straddling)\b/i.test(String(detail || '').trim()))
+  const personaPovVisible = descriptors.some((item) => {
+    if (!item.subject || item.subject.ref !== 'persona') return false
+    const cueText = [
+      item.subject.position,
+      ...(item.subject.pose || []),
+      ...(item.subject.action || []),
+      ...(item.subject.appearance || []),
+      ...(item.subject.outfit || []),
+    ].join(' ').toLowerCase()
+    return /\b(?:viewer|first[- ]person|pov body|body only|face out of frame|faceless|hands? in foreground|visible hands?|visible arms?|forearms? only|lower body only)\b/.test(cueText)
+  })
+  const cameraTags = animaTagList(scene.camera).filter((tag) => {
+    if (/^(?:pov|first person view|first-person view)$/.test(tag) && !personaPovVisible) return false
+    return true
+  })
   const generalTags = animaTagList([
     ...(descriptors.length > 1 ? ['same frame'] : []),
     ...positionTags,
     ...relationDetails,
     ...scene.setting,
-    ...scene.camera,
+    ...cameraTags,
     ...scene.lighting,
     ...scene.style,
   ])
@@ -1798,7 +1957,7 @@ The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are re
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw will preserve a mostly Danbooru/Gelbooru-style tag prompt and create only a few short natural-language anchors for subject ownership and spatial contact. Do not write the final image prompt yourself.
 Keep each image object compact: no more than 5 outfit items, 4 pose items, 3 expression items, 3 action items, 6 setting items, 4 camera items, 4 lighting items, and 4 style items. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
-For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible.
+For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible. Use the camera tag "pov" only when ref "persona" is visibly represented from the viewer's body/eye position. In that persona subject's pose or action, include a concrete cue such as "viewer hands visible", "hands in foreground", or "face out of frame". Never use "pov" merely because two characters are interacting.
 For a solo scene, do not invent a relation merely to create prose; keep the visual skeleton tag-oriented. Natural-language anchors are reserved for cross-subject geometry.
 Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Set anatomy_visible false for safe or sensitive scenes. Never place genital/anatomy terms in appearance, outfit, pose, support, expression, action, relation action, or details. LumiDraw alone controls saved anatomy.
 Known subject refs:\n${profileSchemaHints(profiles)}`
@@ -1838,7 +1997,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   // compiler owns safety/count → short interaction anchors → character tag blocks → scene tags.
   const customHeader = joinPromptParts([preset.qualityTags, prefix])
   const prompt = joinPromptParts([customHeader, core])
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v5' }
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v6' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -1881,6 +2040,16 @@ function setStoryScanStage(scan, stage, note = '') {
       cancellable: !['done', 'cancelled', 'error'].includes(stage),
     },
   })
+  if (scan.auto) {
+    setAutoStatus(scan.userId, {
+      mode: 'parser',
+      status: stage,
+      messageId: scan.messageId || '',
+      chatId: scan.chatId || '',
+      source: scan.source || 'auto',
+      note,
+    })
+  }
 }
 
 async function quietLLM(system, user, settings, userId, structured = false, scan = null) {
@@ -2112,7 +2281,139 @@ async function quietLLMLegacy(system, user, settings, userId, scan = null) {
 
 let activeStoryScan = null
 let storyScanSequence = 0
-const pendingParserTriggerIds = new Set()
+const autoScanJobs = new Map()
+const recentAutoScans = new Map()
+
+function autoScanKey(userId, chatId, messageId) {
+  // message IDs are globally stable enough for deduplication. Ignoring chatId
+  // when one is present lets a tag callback with a missing chatId be enriched
+  // by the later GENERATION_ENDED event instead of starting a competing job.
+  return messageId
+    ? [String(userId || ''), 'message', String(messageId)].join(':')
+    : [String(userId || ''), 'chat', String(chatId || ''), '__latest__'].join(':')
+}
+
+function autoResultStatus(result) {
+  if (result && result.processed) return 'generated'
+  const note = String(result && result.note || '')
+  if (/already illustrated|no visual moment|nothing generated|No story message|could not be found|not visible after|disabled/i.test(note)) return 'idle'
+  if (result && result.skipped) return 'skipped'
+  return 'done'
+}
+
+function pruneRecentAutoScans() {
+  const cutoff = Date.now() - (10 * 60 * 1000)
+  for (const [key, at] of recentAutoScans) if (at < cutoff) recentAutoScans.delete(key)
+}
+
+function scheduleAutoStoryScan(userId, request = {}) {
+  const chatId = String(request.chatId || '')
+  const messageId = String(request.messageId || '')
+  const source = String(request.source || 'auto-event')
+  if (!userId) return { accepted: false, note: 'Automatic scan has no userId.' }
+  if (!chatId && !messageId) return { accepted: false, note: 'Automatic scan has neither chatId nor messageId.' }
+
+  pruneRecentAutoScans()
+  const key = autoScanKey(userId, chatId, messageId)
+  if (autoScanJobs.has(key)) {
+    const existing = autoScanJobs.get(key)
+    if (existing) {
+      if (!existing.chatId && chatId) existing.chatId = chatId
+      if (!existing.messageId && messageId) existing.messageId = messageId
+      if (!existing.expectedContent && request.content) existing.expectedContent = String(request.content).slice(-7000)
+      existing.sources = uniqueStrings([...(existing.sources || [existing.source]), source])
+    }
+    spindle.log.info('[lumidraw] auto trigger deduplicated/enriched · source=' + source + (messageId ? ' · message=' + messageId : ''))
+    return { accepted: false, duplicate: true, enriched: true, messageId, chatId, source }
+  }
+  if (recentAutoScans.has(key)) {
+    spindle.log.info('[lumidraw] recent auto trigger ignored · source=' + source + (messageId ? ' · message=' + messageId : ''))
+    return { accepted: false, duplicate: true, recent: true, messageId, chatId, source }
+  }
+
+  const job = {
+    key, userId, chatId, messageId, source, sources: [source],
+    expectedContent: String(request.content || '').slice(-7000),
+    queuedAt: Date.now(),
+  }
+  setAutoStatus(userId, {
+    mode: 'parser', status: 'queued', messageId, chatId, source,
+    note: 'Automatic illustration queued from ' + source + '.',
+  })
+  spindle.log.info('[lumidraw] auto trigger queued · source=' + source + (chatId ? ' · chat=' + chatId : '') + (messageId ? ' · message=' + messageId : ''))
+
+  const promise = (async () => {
+    try {
+      await wait(Math.max(250, Number(request.delayMs) || 650))
+      const settings = await getSettings()
+      if (settings.mode !== 'parser' || settings.autoScan === false) {
+        const result = { mode: settings.mode, processed: 0, skipped: true, note: 'Parser auto-scan is disabled.' }
+        setAutoStatus(userId, { mode: settings.mode, status: 'idle', messageId, chatId, source, note: result.note })
+        return result
+      }
+
+      // Do not lose an automatic message just because another manual/automatic
+      // scan owns the single Draw Things/parser lane. Wait for the lane instead.
+      const slotStarted = Date.now()
+      while (activeStoryScan) {
+        if (job.messageId && activeStoryScan.messageId === job.messageId) {
+          const result = { mode: 'parser', processed: 0, skipped: true, note: 'This message is already being scanned.' }
+          recentAutoScans.set(key, Date.now())
+          setAutoStatus(userId, {
+            mode: 'parser', status: 'joined', messageId: job.messageId, chatId: job.chatId, source,
+            note: result.note,
+          })
+          return result
+        }
+        if (Date.now() - slotStarted > PARSER_TIMEOUT_MS + 90000) {
+          throw new Error('Automatic scan waited too long for the current story scan to finish.')
+        }
+        setAutoStatus(userId, {
+          mode: 'parser', status: 'waiting', messageId: job.messageId, chatId: job.chatId, source,
+          note: 'Waiting for the current story scan to finish.',
+        })
+        await wait(750)
+      }
+
+      const effectiveSource = uniqueStrings(job.sources || [job.source]).join('+') || source
+      const result = await scanStory(userId, {
+        force: false,
+        auto: true,
+        source: effectiveSource,
+        messageId: job.messageId,
+        chatId: job.chatId,
+        expectedContent: job.expectedContent,
+      })
+      const resultNote = String(result && result.note || '')
+      // A saved message can become queryable a little later on some host builds.
+      // Do not suppress a later lifecycle event for ten minutes when lookup was
+      // the only failure; allow the later event to retry the same message.
+      if (!/not visible after|No story message found/i.test(resultNote)) {
+        recentAutoScans.set(key, Date.now())
+      }
+      setAutoStatus(userId, {
+        mode: result && result.mode ? result.mode : 'parser',
+        status: autoResultStatus(result),
+        messageId: (result && result.messageId) || job.messageId,
+        chatId: job.chatId,
+        source: effectiveSource,
+        note: resultNote,
+      })
+      spindle.log.info('[lumidraw] auto scan result · source=' + effectiveSource + ' · ' + JSON.stringify(result))
+      return result
+    } catch (error) {
+      recentAutoScans.set(key, Date.now())
+      spindle.log.warn('[lumidraw] auto scan failed · source=' + source + ' · ' + error.message)
+      setAutoStatus(userId, { mode: 'parser', status: 'error', messageId: job.messageId, chatId: job.chatId, source, note: error.message })
+      return { mode: 'parser', processed: 0, error: error.message, note: error.message }
+    } finally {
+      autoScanJobs.delete(key)
+    }
+  })()
+  job.promise = promise
+  autoScanJobs.set(key, job)
+  return { accepted: true, messageId, chatId, source }
+}
 
 async function scanStory(userId, options = {}) {
   const requestedMessageId = options && options.messageId ? String(options.messageId) : ''
@@ -2130,6 +2431,9 @@ async function scanStory(userId, options = {}) {
     id: 'scan-' + Date.now() + '-' + (++storyScanSequence),
     userId,
     messageId: requestedMessageId,
+    chatId: String(options.chatId || ''),
+    auto: !!options.auto,
+    source: String(options.source || (options.auto ? 'auto' : 'manual')),
     startedAt: Date.now(),
     stage: 'starting',
     note: '',
@@ -2173,29 +2477,24 @@ async function scanStoryCore(userId, options = {}) {
     return { mode: settings.mode, note: 'No active preset selected — pick one in the Generate tab first.' }
   }
 
-  const { messages, chatId } = await fetchMessages(userId)
-  let target = null
-  let targetIndex = -1
-  if (requestedMessageId) {
-    for (let i = 0; i < messages.length; i++) {
-      const bits = messageBits(messages[i])
-      if (String(bits.id) === requestedMessageId && bits.isAssistant && bits.contentKey && typeof bits.content === 'string') {
-        target = bits
-        targetIndex = i
-        break
-      }
-    }
-    if (!target) {
-      return { mode: settings.mode, note: 'That story message could not be found. Reopen the message picker and try again.' }
-    }
-  } else {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const bits = messageBits(messages[i])
-      if (bits.isAssistant && bits.contentKey && typeof bits.content === 'string') { target = bits; targetIndex = i; break }
-    }
+  const located = await locateStoryMessage(userId, {
+    messageId: requestedMessageId,
+    chatId: options.chatId,
+    expectedContent: options.expectedContent,
+    auto: !!options.auto,
+  })
+  const { messages, chatId, target, targetIndex } = located
+  if (!target) {
+    const note = requestedMessageId
+      ? `Story message ${requestedMessageId} was not visible after ${located.attempts || 1} lookup attempt(s).`
+      : 'No story message found.'
+    spindle.log.warn('[lumidraw] story target lookup failed' + (options.source ? ' · source=' + options.source : '') + (chatId ? ' · chat=' + chatId : '') + ' · ' + note)
+    return { mode: settings.mode, processed: 0, skipped: true, note }
   }
-  if (!target) return { mode: settings.mode, note: 'No story message found.' }
-  if (scan) scan.messageId = String(target.id || requestedMessageId || '')
+  if (scan) {
+    scan.messageId = String(target.id || requestedMessageId || '')
+    scan.chatId = String(chatId || options.chatId || '')
+  }
   assertStoryScanActive(scan)
 
   // ------------------------- inline: process <dt-image> tags ---------------
@@ -2238,7 +2537,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v5',
+          compiler: compiled.compiler || 'anima-hybrid-v6',
         })
         done++
       } catch (e) {
@@ -2306,7 +2605,7 @@ async function scanStoryCore(userId, options = {}) {
         if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
         if (target.id) await markProcessed(target.id)
         const storyDebug = await saveStoryDebug({ mode: 'parser', parserEngine: 'anima', subjectBinding: true, rawReply: out, entries: [], lastCompiledPrompt: '', contextPreview: parserInput.contextPreview, ledgerPreview: parserInput.ledgerPreview, contextMessageCount: parserInput.contextMessageCount, ledgerFound: parserInput.ledgerFound })
-        return { mode: 'parser', note: `Parser (${instrLabel}) judged no visual moment.`, storyDebug }
+        return { mode: 'parser', messageId: String(target.id || ''), note: `Parser (${instrLabel}) judged no visual moment.`, storyDebug }
       }
 
       const mds = []
@@ -2331,7 +2630,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v5',
+          compiler: compiled.compiler || 'anima-hybrid-v6',
         })
       }
 
@@ -2374,6 +2673,7 @@ async function scanStoryCore(userId, options = {}) {
       })
       return {
         mode: 'parser',
+        messageId: String(target.id || ''),
         processed: mds.length,
         note: `Illustrated ${mds.length} moment(s) via ${instrLabel}. First compiled prompt: ${(debugEntries[0]?.compiledPrompt || '').slice(0, 120)}`,
         storyDebug,
@@ -2461,7 +2761,7 @@ async function scanStoryCore(userId, options = {}) {
       entries: parsed.map((item, index) => ({ anchor: item.anchor, compiledPrompt: [lead, prefix, lines[index]].filter(Boolean).join(', ') })),
       lastCompiledPrompt: [lead, prefix, lines[0]].filter(Boolean).join(', '),
     })
-    return { mode: 'parser', processed: mds.length, note: `Illustrated ${mds.length} moment(s) via ${instrLabel}. First prompt: ` + firstPrompt.slice(0, 120), storyDebug }
+    return { mode: 'parser', messageId: String(target.id || ''), processed: mds.length, note: `Illustrated ${mds.length} moment(s) via ${instrLabel}. First prompt: ` + firstPrompt.slice(0, 120), storyDebug }
   }
 
   return { mode: settings.mode, note: 'No <dt-image> tags in the selected story message.' }
@@ -2587,7 +2887,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.18.6',
+          version: (spindle.manifest && spindle.manifest.version) || '0.18.7',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -2742,6 +3042,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           ' · history-refresh=' + (payload.historyRefresh ? 'ready' : 'missing') +
           ' · inline-tag=' + (payload.inlineInterceptor ? 'ready' : 'missing') +
           ' · parser-tag=' + (payload.parserInterceptor ? 'ready' : 'missing') +
+          ' · generation-ended=' + (payload.generationEndedListener ? 'ready' : 'missing') +
+          ' · rendered-event=' + (payload.renderedEventListener ? 'ready' : 'missing') +
           (payload.note ? ' · ' + String(payload.note) : ''))
         reply = ok(payload, requestId, { received: true })
         break
@@ -2776,42 +3078,36 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }
 
       case 'parser_trigger': {
-        const triggerMessageId = payload.messageId ? String(payload.messageId) : ''
-        const triggerKey = triggerMessageId || '__latest__'
-        if (pendingParserTriggerIds.has(triggerKey) || (activeStoryScan && (!triggerMessageId || !activeStoryScan.messageId || activeStoryScan.messageId === triggerMessageId))) {
-          spindle.log.info('[lumidraw] duplicate parser trigger ignored' + (triggerMessageId ? ' for message ' + triggerMessageId : ''))
-          reply = ok(payload, requestId, { accepted: false, duplicate: true, messageId: triggerMessageId, stage: activeStoryScan ? activeStoryScan.stage : 'queued' })
-          break
-        }
-        pendingParserTriggerIds.add(triggerKey)
-        spindle.log.info('[lumidraw] parser trigger received' + (triggerMessageId ? ' for message ' + triggerMessageId : ' for latest message'))
-        reply = ok(payload, requestId, { accepted: true, messageId: triggerMessageId })
-        setTimeout(async () => {
-          try {
-            const settings = await getSettings()
-            if (settings.mode !== 'parser' || settings.autoScan === false) {
-              spindle.log.info('[lumidraw] parser trigger ignored because Parser auto-scan is disabled')
-              return
-            }
-            setAutoStatus(userId, {
-              mode: 'parser', status: 'running', messageId: triggerMessageId,
-              note: 'Committed Parser trigger received — scanning story message…',
-            })
-            const r = await scanStory(userId, { force: false, messageId: triggerMessageId })
-            spindle.log.info('[lumidraw] parser trigger result: ' + JSON.stringify(r))
-            const status = r && r.processed ? 'generated' :
-              (r && /already illustrated|no visual moment|No story message found|No <dt-image>|busy/i.test(r.note || '') ? 'idle' : 'done')
-            setAutoStatus(userId, {
-              mode: 'parser', status, messageId: triggerMessageId,
-              note: (r && r.note) || '',
-            })
-          } catch (e) {
-            spindle.log.warn('[lumidraw] parser trigger failed: ' + e.message)
-            setAutoStatus(userId, { mode: 'parser', status: 'error', messageId: triggerMessageId, note: e.message })
-          } finally {
-            pendingParserTriggerIds.delete(triggerKey)
-          }
-        }, 500)
+        const scheduled = scheduleAutoStoryScan(userId, {
+          messageId: payload.messageId,
+          chatId: payload.chatId,
+          source: 'parser-tag',
+          delayMs: 650,
+        })
+        reply = ok(payload, requestId, scheduled)
+        break
+      }
+
+      case 'generation_ended': {
+        const scheduled = scheduleAutoStoryScan(userId, {
+          messageId: payload.messageId,
+          chatId: payload.chatId,
+          content: payload.content,
+          source: 'frontend-generation-ended',
+          delayMs: 350,
+        })
+        reply = ok(payload, requestId, scheduled)
+        break
+      }
+
+      case 'character_message_rendered': {
+        const scheduled = scheduleAutoStoryScan(userId, {
+          messageId: payload.messageId,
+          chatId: payload.chatId,
+          source: 'frontend-character-rendered',
+          delayMs: 500,
+        })
+        reply = ok(payload, requestId, scheduled)
         break
       }
 
@@ -2876,6 +3172,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const result = await scanStory(userId, {
           force: !!payload.force,
           messageId: payload.messageId,
+          chatId: payload.chatId,
         })
         reply = ok(payload, requestId, result)
         break
@@ -3283,66 +3580,72 @@ if (typeof spindle.registerInterceptor === 'function') {
   spindle.log.warn('[lumidraw] registerInterceptor not available — story protocol injection disabled')
 }
 
-// Documented render-event fallback. The native parser tag interceptor is the
-// primary trigger; CHARACTER_MESSAGE_RENDERED catches models that omit the tag.
-let scanInFlight = false
-let lastAutoHandledMessageId = ''
+// Automatic illustration event fan-in. GENERATION_ENDED is authoritative
+// because it fires after the assistant message has been saved and carries the
+// exact chat/message IDs. CHARACTER_MESSAGE_RENDERED and the frontend XML tag
+// listener remain compatibility fallbacks; scheduleAutoStoryScan deduplicates
+// all three sources before any parser cost is incurred.
 ;(() => {
   const on = (typeof spindle.on === 'function') ? spindle.on.bind(spindle)
     : (spindle.events && typeof spindle.events.on === 'function') ? spindle.events.on.bind(spindle.events)
     : null
   if (!on) {
-    spindle.log.warn('[lumidraw] lifecycle events unavailable — native tag trigger and manual scan remain available')
+    spindle.log.warn('[lumidraw] lifecycle events unavailable — frontend events, parser tag, and manual scan remain available')
     return
   }
 
-  const handler = async (evt) => {
-    try {
-      const settings = await getSettings()
-      if (settings.mode === 'off' || settings.autoScan === false) return
-      const eventPayload = evt && evt.payload ? evt.payload : evt || {}
-      const messageId = String(eventPayload.messageId || (eventPayload.message && (eventPayload.message.id || eventPayload.message.messageId)) || '')
-      const uid = eventPayload.userId || lastUserId
-      if (!uid || !messageId || scanInFlight || messageId === lastAutoHandledMessageId) return
+  const normalizedPayload = (evt) => evt && evt.payload ? evt.payload : evt || {}
 
-      const { messages } = await fetchMessages(uid)
-      let latest = null
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const bits = messageBits(messages[i])
-        if (bits.isAssistant && bits.contentKey && typeof bits.content === 'string') { latest = bits; break }
+  try {
+    on('GENERATION_ENDED', (evt) => {
+      try {
+        const payload = normalizedPayload(evt)
+        if (payload.error) return
+        const eventMessage = payload.message && typeof payload.message === 'object' ? payload.message : {}
+        const messageId = String(payload.messageId || eventMessage.messageId || eventMessage.id || '')
+        const chatId = String(payload.chatId || eventMessage.chatId || (payload.chat && payload.chat.id) || '')
+        const uid = payload.userId || eventMessage.userId || lastUserId
+        if (!uid || !messageId || !chatId) return
+        scheduleAutoStoryScan(uid, {
+          messageId,
+          chatId,
+          content: payload.content || eventMessage.content || eventMessage.text || '',
+          source: 'backend-generation-ended',
+          delayMs: 300,
+        })
+      } catch (error) {
+        spindle.log.warn('[lumidraw] GENERATION_ENDED handler failed: ' + error.message)
       }
-      if (!latest || String(latest.id) !== messageId) return
-
-      scanInFlight = true
-      spindle.log.info('[lumidraw] CHARACTER_MESSAGE_RENDERED fallback received for latest message ' + messageId)
-      setTimeout(async () => {
-        try {
-          const r = await scanStory(uid, { messageId, force: false })
-          spindle.log.info('[lumidraw] render-event auto-scan result: ' + JSON.stringify(r))
-          if (!r || !r.skipped) lastAutoHandledMessageId = messageId
-          const status = r && r.processed ? 'generated' :
-            (r && /nothing generated|no visual moment|already illustrated|No <dt-image>|busy/i.test(r.note || '') ? 'idle' : 'done')
-          setAutoStatus(uid, { mode: r && r.mode ? r.mode : settings.mode, status, messageId, note: (r && r.note) || '' })
-        } catch (e) {
-          spindle.log.warn('[lumidraw] render-event auto-scan failed: ' + e.message)
-          setAutoStatus(uid, { mode: settings.mode, status: 'error', messageId, note: e.message })
-        } finally {
-          scanInFlight = false
-        }
-      }, 700)
-    } catch (e) {
-      scanInFlight = false
-      spindle.log.warn('[lumidraw] CHARACTER_MESSAGE_RENDERED handler failed: ' + e.message)
-    }
+    })
+    spindle.log.info('[lumidraw] documented GENERATION_ENDED auto trigger registered')
+  } catch (error) {
+    spindle.log.warn('[lumidraw] GENERATION_ENDED registration failed: ' + error.message)
   }
 
   try {
-    on('CHARACTER_MESSAGE_RENDERED', handler)
+    on('CHARACTER_MESSAGE_RENDERED', (evt) => {
+      try {
+        const payload = normalizedPayload(evt)
+        const eventMessage = payload.message && typeof payload.message === 'object' ? payload.message : {}
+        const messageId = String(payload.messageId || eventMessage.messageId || eventMessage.id || '')
+        const chatId = String(payload.chatId || eventMessage.chatId || (payload.chat && payload.chat.id) || '')
+        const uid = payload.userId || eventMessage.userId || lastUserId
+        if (!uid || !messageId || !chatId) return
+        scheduleAutoStoryScan(uid, {
+          messageId,
+          chatId,
+          source: 'backend-character-rendered',
+          delayMs: 500,
+        })
+      } catch (error) {
+        spindle.log.warn('[lumidraw] CHARACTER_MESSAGE_RENDERED handler failed: ' + error.message)
+      }
+    })
     spindle.log.info('[lumidraw] documented CHARACTER_MESSAGE_RENDERED fallback registered')
-  } catch (e) {
-    spindle.log.warn('[lumidraw] CHARACTER_MESSAGE_RENDERED registration failed: ' + e.message)
+  } catch (error) {
+    spindle.log.warn('[lumidraw] CHARACTER_MESSAGE_RENDERED registration failed: ' + error.message)
   }
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.6'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.7'))

@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.18.6'
+const EXTENSION_VERSION = '0.18.7'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -475,7 +475,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.18.6" aria-label="LumiDraw Studio v0.18.6">
+    <button class="ld-launcher" title="LumiDraw Studio v0.18.7" aria-label="LumiDraw Studio v0.18.7">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -484,7 +484,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.6</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.7</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -1309,6 +1309,15 @@ function realSetup(ctx) {
     setStatus('.ld-draft-status', 'Workspace modified. Manual Generate uses these temporary settings.' + source)
   }
 
+  function visualAliasesToText(value) {
+    if (Array.isArray(value)) {
+      return value.map((item) => item && typeof item === 'object'
+        ? `${item.name || ''} = ${item.description || ''}`.trim()
+        : String(item || '').trim()).filter((line) => line && line !== '=').join('\n')
+    }
+    return String(value || '')
+  }
+
   function profileFromPreset(preset, kind) {
     const p = preset || {}
     const profile = (kind === 'character' ? p.characterProfile : p.personaProfile) || {}
@@ -1319,7 +1328,7 @@ function realSetup(ctx) {
       subject: profile.subject || '',
       appearanceTags: profile.appearanceTags || legacyTags || '',
       defaultOutfitTags: profile.defaultOutfitTags || '',
-      visualAliases: profile.visualAliases || '',
+      visualAliases: visualAliasesToText(profile.visualAliases),
       anatomyTags: profile.anatomyTags || '',
       anatomyMode: profile.anatomyMode || 'relevant',
     }
@@ -1349,7 +1358,7 @@ function realSetup(ctx) {
     $(`.ld-ed-${prefix}-subject`).value = value.subject || ''
     $(appearanceSelector).value = value.appearanceTags || ''
     $(`.ld-ed-${prefix}-outfit`).value = value.defaultOutfitTags || ''
-    $(`.ld-ed-${prefix}-aliases`).value = value.visualAliases || ''
+    $(`.ld-ed-${prefix}-aliases`).value = visualAliasesToText(value.visualAliases)
     $(`.ld-ed-${prefix}-anatomy`).value = value.anatomyTags || ''
     $(`.ld-ed-${prefix}-anatomy-mode`).value = value.anatomyMode || 'relevant'
   }
@@ -2675,10 +2684,10 @@ ${entry.prompt || ''}`.trim()
 
   // Native message-tag interception. Lumiverse requires the exact
   // registerTagInterceptor(options, handler) signature.
+  let inlineInterceptorReady = false
+  let parserInterceptorReady = false
   ;(() => {
     const m = ctx.messages
-    let inlineReady = false
-    let parserReady = false
 
     if (!m || typeof m.registerTagInterceptor !== 'function') {
       console.log('[LumiDraw] messages.registerTagInterceptor unavailable')
@@ -2686,6 +2695,7 @@ ${entry.prompt || ''}`.trim()
         type: 'frontend_status', requestId: makeId(),
         version: EXTENSION_VERSION, historyRefresh: !!refreshHistoryButton,
         inlineInterceptor: false, parserInterceptor: false,
+        generationEndedListener: false, renderedEventListener: false,
         note: 'messages.registerTagInterceptor unavailable',
       })
       return
@@ -2738,7 +2748,7 @@ ${entry.prompt || ''}`.trim()
         { tagName: 'dt-image', removeFromMessage: false },
         onInlineTag,
       )
-      inlineReady = true
+      inlineInterceptorReady = true
     } catch (e) {
       console.log('[LumiDraw] dt-image interceptor registration failed:', e.message)
     }
@@ -2748,7 +2758,7 @@ ${entry.prompt || ''}`.trim()
         { tagName: 'lumidraw-parse', attrs: { request: 'generate' }, removeFromMessage: true },
         onParserTrigger,
       )
-      parserReady = true
+      parserInterceptorReady = true
     } catch (e) {
       console.log('[LumiDraw] parser interceptor registration failed:', e.message)
     }
@@ -2756,8 +2766,71 @@ ${entry.prompt || ''}`.trim()
     ctx.sendToBackend({
       type: 'frontend_status', requestId: makeId(),
       version: EXTENSION_VERSION, historyRefresh: !!refreshHistoryButton,
-      inlineInterceptor: inlineReady, parserInterceptor: parserReady,
-      note: parserReady ? 'Native parser trigger listener ready' : 'Parser trigger listener unavailable',
+      inlineInterceptor: inlineInterceptorReady, parserInterceptor: parserInterceptorReady,
+      generationEndedListener: false, renderedEventListener: false,
+      note: parserInterceptorReady ? 'Native parser trigger listener ready' : 'Parser trigger listener unavailable',
+    })
+  })()
+
+  // Saved-message lifecycle events are more reliable than asking the story
+  // model to emit a private XML tag. They also preserve the browser's operator
+  // user scope when forwarded to the backend. The backend deduplicates these
+  // against its own events and the tag interceptor.
+  ;(() => {
+    let generationEndedReady = false
+    let renderedReady = false
+    if (ctx.events && typeof ctx.events.on === 'function') {
+      try {
+        ctx.events.on('GENERATION_ENDED', (payload) => {
+          try {
+            if (!payload || payload.error) return
+            const eventMessage = payload.message && typeof payload.message === 'object' ? payload.message : {}
+            const messageId = payload.messageId || eventMessage.messageId || eventMessage.id
+            const chatId = payload.chatId || eventMessage.chatId || (payload.chat && payload.chat.id)
+            if (!messageId || !chatId) return
+            ctx.sendToBackend({
+              type: 'generation_ended', requestId: makeId(),
+              messageId: String(messageId),
+              chatId: String(chatId),
+              content: String(payload.content || eventMessage.content || eventMessage.text || ''),
+            })
+          } catch (error) {
+            console.log('[LumiDraw] GENERATION_ENDED forwarding failed:', error.message)
+          }
+        })
+        generationEndedReady = true
+      } catch (error) {
+        console.log('[LumiDraw] GENERATION_ENDED listener unavailable:', error.message)
+      }
+      try {
+        ctx.events.on('CHARACTER_MESSAGE_RENDERED', (payload) => {
+          try {
+            if (!payload) return
+            const eventMessage = payload.message && typeof payload.message === 'object' ? payload.message : {}
+            const messageId = payload.messageId || eventMessage.messageId || eventMessage.id
+            const chatId = payload.chatId || eventMessage.chatId || (payload.chat && payload.chat.id)
+            if (!messageId || !chatId) return
+            ctx.sendToBackend({
+              type: 'character_message_rendered', requestId: makeId(),
+              messageId: String(messageId),
+              chatId: String(chatId),
+            })
+          } catch (error) {
+            console.log('[LumiDraw] CHARACTER_MESSAGE_RENDERED forwarding failed:', error.message)
+          }
+        })
+        renderedReady = true
+      } catch (error) {
+        console.log('[LumiDraw] CHARACTER_MESSAGE_RENDERED listener unavailable:', error.message)
+      }
+    }
+    ctx.sendToBackend({
+      type: 'frontend_status', requestId: makeId(),
+      version: EXTENSION_VERSION, historyRefresh: !!refreshHistoryButton,
+      inlineInterceptor: inlineInterceptorReady, parserInterceptor: parserInterceptorReady,
+      generationEndedListener: generationEndedReady,
+      renderedEventListener: renderedReady,
+      note: `Auto event fan-in: generation-ended=${generationEndedReady ? 'ready' : 'missing'}, rendered=${renderedReady ? 'ready' : 'missing'}`,
     })
   })()
 
