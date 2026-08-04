@@ -28,6 +28,8 @@ const DEFAULT_SETTINGS = {
   parserModel: '',        // optional model override for the parser LLM
   parserInstruction: '',  // selected engine instruction (blank = that engine's built-in default)
   parserEngine: 'legacy',  // 'legacy' (v0.13 instruction-only) | 'anima' (structured JSON compiler)
+  parserContextMessages: 2, // Anima only: number of immediately preceding chat messages used as reference context
+  useLoomLedger: true,     // Anima only: extract the latest <loomledger> block as continuity reference
   maxImages: 2,           // max illustrations per story message
   minImages: 0,           // required illustrations per reply (0 = model's discretion)
   autoCharTags: true,     // use active character image tags as a profile fallback
@@ -91,6 +93,8 @@ async function getSettings() {
   if (!['legacy', 'anima'].includes(settings.parserEngine)) settings.parserEngine = 'legacy'
   if (!stored || !stored.parserEngine) settings.parserEngine = 'legacy'
   settings.subjectBinding = settings.parserEngine === 'anima' // backward-compatible debug/profile flag
+  settings.parserContextMessages = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
+  settings.useLoomLedger = settings.useLoomLedger !== false
   if (settings.parserEngine === 'anima' && (!stored || !stored.parserInstruction || stored.parserInstruction === LEGACY_DEFAULT_PARSER_INSTRUCTION || stored.parserInstruction === V0181_ANIMA_PARSER_INSTRUCTION)) {
     settings.parserInstruction = ''
   }
@@ -391,6 +395,7 @@ const tagFingerprint = (body) => String(body || '').trim().toLowerCase().replace
 const TAG_RE = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/g
 const PARSER_TRIGGER_TAG = '<lumidraw-parse request="generate"></lumidraw-parse>'
 const PARSER_TRIGGER_RE = /<lumidraw-parse\b[^>]*><\/lumidraw-parse>|<lumidraw-parse\b[^>]*>[\s\S]*?<\/lumidraw-parse>|<lumidraw-parse\b[^>]*\/>/gi
+const LOOM_LEDGER_RE = /<loomledger\b[^>]*>[\s\S]*?<\/loomledger>/gi
 
 function stripBannedTags(sceneTags, bannedCsv) {
   if (!bannedCsv || !sceneTags) return sceneTags
@@ -406,6 +411,95 @@ function stripThinking(text) {
     .replace(/<think(?:ing)?[^>]*>[\s\S]*?<\/think(?:ing)?>/gi, '')
     .replace(/<reasoning[^>]*>[\s\S]*?<\/reasoning>/gi, '')
     .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
+}
+
+function extractLoomLedgers(text) {
+  LOOM_LEDGER_RE.lastIndex = 0
+  return [...String(text || '').matchAll(LOOM_LEDGER_RE)].map((match) => match[0]).filter(Boolean)
+}
+
+function stripLoomLedgers(text) {
+  LOOM_LEDGER_RE.lastIndex = 0
+  return String(text || '').replace(LOOM_LEDGER_RE, '').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function decodeBasicHtmlEntities(text) {
+  return String(text || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+}
+
+function loomLedgerToText(html) {
+  return decodeBasicHtmlEntities(String(html || '')
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\s*\/\s*(?:li|h[1-6]|p|summary|div)\s*>/gi, '\n')
+    .replace(/<\s*li\b[^>]*>/gi, '- ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim())
+}
+
+function cleanParserMessageText(text, { keepLedger = false } = {}) {
+  let value = stripParserTrigger(stripThinking(text))
+  if (!keepLedger) value = stripLoomLedgers(value)
+  return value
+    .replace(TAG_RE, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function buildAnimaParserInput(messages, targetIndex, target, settings) {
+  const currentPassage = cleanParserMessageText(target.content).slice(-6000)
+  const contextCount = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
+  const previous = []
+  if (contextCount > 0 && Number.isInteger(targetIndex) && targetIndex > 0) {
+    const start = Math.max(0, targetIndex - contextCount)
+    for (let i = start; i < targetIndex; i++) {
+      const bits = messageBits(messages[i])
+      if (!bits.contentKey || typeof bits.content !== 'string') continue
+      const clean = cleanParserMessageText(bits.content).slice(-1600)
+      if (!clean) continue
+      const label = bits.isAssistant ? 'Previous assistant message' : bits.isUser ? 'Previous user message' : 'Previous chat message'
+      previous.push(`[${label}]\n${clean}`)
+    }
+  }
+
+  let ledgerText = ''
+  if (settings.useLoomLedger !== false && Number.isInteger(targetIndex)) {
+    for (let i = targetIndex; i >= Math.max(0, targetIndex - 12); i--) {
+      const bits = messageBits(messages[i])
+      if (!bits.contentKey || typeof bits.content !== 'string') continue
+      const ledgers = extractLoomLedgers(bits.content)
+      if (!ledgers.length) continue
+      ledgerText = loomLedgerToText(ledgers[ledgers.length - 1]).slice(-3200)
+      if (ledgerText) break
+    }
+  }
+
+  const sections = []
+  if (previous.length) {
+    sections.push('----- PRIOR CONTEXT — REFERENCE ONLY -----\nUse only to resolve identity, pronouns, carried props, clothing continuity, accessories, location, and circumstances. Do not choose an image moment or anchor from this section. Current passage details override it.\n\n' + previous.join('\n\n'))
+  }
+  if (ledgerText) {
+    sections.push('----- LATEST LOOM LEDGER — CONTINUITY REFERENCE ONLY -----\nTreat this as state/continuity evidence for attire, accessories, location, and status. Do not illustrate the ledger itself. Do not copy an older action from it. Current passage details override it.\n\n' + ledgerText)
+  }
+  sections.push('----- CURRENT PASSAGE — ILLUSTRATE ONLY THIS SECTION -----\nAll image anchors and depicted actions must come from this section.\n\n' + currentPassage)
+
+  return {
+    input: sections.join('\n\n'),
+    currentPassage,
+    contextPreview: previous.join('\n\n').slice(0, 1800),
+    ledgerPreview: ledgerText.slice(0, 1800),
+    contextMessageCount: previous.length,
+    ledgerFound: !!ledgerText,
+  }
 }
 
 async function wasProcessed(messageId) {
@@ -480,17 +574,21 @@ async function fetchMessages(userId) {
 function messageBits(m) {
   const contentKey = ('content' in m) ? 'content' : ('text' in m) ? 'text' : ('message' in m) ? 'message' : null
   const role = (m.role || m.sender || '').toString().toLowerCase()
+  const isAssistant = role.includes('assistant') || role.includes('char') || role === 'ai'
+  const isUser = role.includes('user') || role.includes('persona') || role === 'human'
   return {
     id: m.id || m.messageId,
     contentKey,
     content: contentKey ? m[contentKey] : null,
     createdAt: m.createdAt || m.created_at || m.timestamp || null,
-    isAssistant: role.includes('assistant') || role.includes('char') || role === 'ai',
+    role,
+    isAssistant,
+    isUser,
   }
 }
 
 function storyPreview(content, maxLength = 260) {
-  const clean = stripThinking(content)
+  const clean = stripLoomLedgers(stripThinking(content))
     .replace(TAG_RE, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
     .replace(/<[^>]+>/g, ' ')
@@ -1456,12 +1554,14 @@ function signaturePriority(tag) {
   return 99
 }
 
-function signatureOwnershipSentence(tag, anchor) {
+function signatureOwnershipSentence(tag, anchor, exclusive = false) {
   const value = animaTag(tag)
   if (!value || signaturePriority(value) >= 99) return ''
   const name = sentenceName(anchor)
-  if (/\b(?:glasses|eyewear|goggles|monocle|eyepatch)\b/.test(value)) return `${name} wears ${value}.`
-  return `${name} has ${value}.`
+  if (/\b(?:glasses|eyewear|goggles|monocle|eyepatch)\b/.test(value)) {
+    return exclusive ? `${name} is the only subject wearing ${value}.` : `${name} wears ${value}.`
+  }
+  return exclusive ? `${name} is the only subject with ${value}.` : `${name} has ${value}.`
 }
 
 function aliasMentioned(text, alias) {
@@ -1507,10 +1607,31 @@ function normalizeAliasTag(tag, alias) {
   return value
 }
 
+function aliasDescriptionMatchesScene(text, alias) {
+  const haystack = normalizeIdentityText(text)
+  const description = normalizeIdentityText(alias && alias.description)
+  if (!haystack || !description) return false
+  const nouns = [
+    'warhammer', 'hammer', 'greatsword', 'longsword', 'shortsword', 'sword', 'rapier', 'dagger', 'knife',
+    'battleaxe', 'greataxe', 'axe', 'staff', 'wand', 'spear', 'lance', 'bow', 'crossbow', 'shield',
+    'pistol', 'revolver', 'rifle', 'shotgun', 'gun', 'book', 'tome', 'orb', 'lantern', 'necklace', 'amulet',
+  ]
+  const candidates = nouns.filter((noun) => description.includes(noun))
+  if (description.includes('warhammer') && !candidates.includes('hammer')) candidates.push('hammer')
+  if (description.includes('greatsword') && !candidates.includes('sword')) candidates.push('sword')
+  if (description.includes('battleaxe') && !candidates.includes('axe')) candidates.push('axe')
+  return candidates.some((noun) => new RegExp(`\\b${noun}\\b`, 'i').test(haystack))
+}
+
 function activeAliasesForSubject(item, scene) {
   const aliases = item.profile && Array.isArray(item.profile.visualAliases) ? item.profile.visualAliases : []
   const text = subjectSceneText(item, scene)
-  return aliases.filter((alias) => aliasMentioned(text, alias)).slice(0, 2)
+  const exact = aliases.filter((alias) => aliasMentioned(text, alias))
+  if (exact.length) return exact.slice(0, 2)
+  // A generic object such as "hammer" may recover a single signature alias,
+  // but do not guess when the profile defines multiple matching props.
+  const generic = aliases.filter((alias) => aliasDescriptionMatchesScene(text, alias))
+  return generic.length === 1 ? generic : []
 }
 
 function aliasOwnershipSentence(alias, item, scene) {
@@ -1528,14 +1649,14 @@ function aliasOwnershipSentence(alias, item, scene) {
   return `${prop} is ${name}'s ${String(alias.description || '').trim()}.`
 }
 
-function subjectOwnershipAnchors(item, scene) {
+function subjectOwnershipAnchors(item, scene, exclusive = false) {
   const anchors = []
   const signature = [...(item.appearance || [])]
     .filter((tag) => appearanceTraitVisible(tag, item.outfit))
     .sort((a, b) => signaturePriority(a) - signaturePriority(b))
     .find((tag) => signaturePriority(tag) < 99)
   if (signature) {
-    const sentence = signatureOwnershipSentence(signature, item.anchor)
+    const sentence = signatureOwnershipSentence(signature, item.anchor, exclusive)
     if (sentence) anchors.push(sentence)
   }
   for (const alias of activeAliasesForSubject(item, scene)) {
@@ -1627,7 +1748,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '') {
     // glasses, markings, species features, and named props are most likely to
     // bleed onto the wrong subject. Keep solo prompts tag-only and compact.
     if (descriptors.length > 1) {
-      const ownership = subjectOwnershipAnchors(item, scene)
+      const ownership = subjectOwnershipAnchors(item, scene, true)
       if (ownership.length) sections.push(ownership.join(' '))
     }
     const line = subjectTagLine(item, scene, descriptors)
@@ -1671,8 +1792,9 @@ function profileSchemaHints(profiles) {
 function structuredParserSchema(maxImages, profiles) {
   return `\n\nSTRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
 Return ONLY one compact JSON object, no markdown and no prose:
-{"images":[{"anchor":"5-12 exact consecutive words copied from the passage","scene":{"safety":"safe|sensitive|nsfw|explicit","subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","count_tag":"1girl|1boy|1other etc","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["non-action visual modifiers only"]}],"setting":["short tags"],"camera":["short tags"],"lighting":["short tags"],"style":["short tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","count_tag":"1girl|1boy|1other etc","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["non-action visual modifiers only"]}],"setting":["short tags"],"camera":["short tags"],"lighting":["short tags"],"style":["short tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
+The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw will preserve a mostly Danbooru/Gelbooru-style tag prompt and create only a few short natural-language anchors for subject ownership and spatial contact. Do not write the final image prompt yourself.
 Keep each image object compact: no more than 5 outfit items, 4 pose items, 3 expression items, 3 action items, 6 setting items, 4 camera items, 4 lighting items, and 4 style items. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
@@ -1716,7 +1838,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   // compiler owns safety/count → short interaction anchors → character tag blocks → scene tags.
   const customHeader = joinPromptParts([preset.qualityTags, prefix])
   const prompt = joinPromptParts([customHeader, core])
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v4' }
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v5' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -1767,13 +1889,14 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
     throw new Error('Lumiverse generation API unavailable. Expected spindle.generate.quiet(). Surface: ' + Object.keys(spindle).join(', '))
   }
 
+  const inputLabel = structured ? 'PARSER INPUT' : 'STORY PASSAGE'
   const finalReminder = structured
-    ? '\n----- END PASSAGE -----\n\nReturn only the compact JSON object required by the system instruction. No prose, no markdown fences, no explanations.'
+    ? '\n----- END PARSER INPUT -----\n\nReturn only the compact JSON object required by the system instruction. No prose, no markdown fences, no explanations.'
     : '\n----- END PASSAGE -----\n\nRespond only with one line per image in this format:\n<5-12 exact consecutive words copied from the passage> ||| <comma-separated image tags>\nNo prose or explanations.'
 
   const messages = [
     { role: 'system', content: system },
-    { role: 'user', content: '----- STORY PASSAGE -----\n' + user + finalReminder },
+    { role: 'user', content: `----- ${inputLabel} -----\n` + user + finalReminder },
   ]
 
   const parserController = new AbortController()
@@ -2052,11 +2175,13 @@ async function scanStoryCore(userId, options = {}) {
 
   const { messages, chatId } = await fetchMessages(userId)
   let target = null
+  let targetIndex = -1
   if (requestedMessageId) {
-    for (const message of messages) {
-      const bits = messageBits(message)
+    for (let i = 0; i < messages.length; i++) {
+      const bits = messageBits(messages[i])
       if (String(bits.id) === requestedMessageId && bits.isAssistant && bits.contentKey && typeof bits.content === 'string') {
         target = bits
+        targetIndex = i
         break
       }
     }
@@ -2066,7 +2191,7 @@ async function scanStoryCore(userId, options = {}) {
   } else {
     for (let i = messages.length - 1; i >= 0; i--) {
       const bits = messageBits(messages[i])
-      if (bits.isAssistant && bits.contentKey && typeof bits.content === 'string') { target = bits; break }
+      if (bits.isAssistant && bits.contentKey && typeof bits.content === 'string') { target = bits; targetIndex = i; break }
     }
   }
   if (!target) return { mode: settings.mode, note: 'No story message found.' }
@@ -2113,7 +2238,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v4',
+          compiler: compiled.compiler || 'anima-hybrid-v5',
         })
         done++
       } catch (e) {
@@ -2138,9 +2263,10 @@ async function scanStoryCore(userId, options = {}) {
       return { mode: 'parser', note: 'This message was already illustrated — choose it again to force another parser run.' }
     }
     const usingCustom = !!(settings.parserInstruction && settings.parserInstruction.trim())
-    const passage = stripParserTrigger(stripThinking(target.content)).replace(/!\[[^\]]*\]\([^)]*\)/g, '').slice(-6000)
+    const passage = cleanParserMessageText(target.content).slice(-6000)
 
     if (settings.parserEngine === 'anima') {
+      const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings)
       const profiles = await getStoryProfiles(preset, settings, userId, chatId)
       const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
         .replaceAll('{{max_images}}', String(settings.maxImages || 2))
@@ -2148,7 +2274,8 @@ async function scanStoryCore(userId, options = {}) {
       const instruction = resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles)
       const instrLabel = usingCustom ? `custom guidance + structured compiler (${instruction.length} chars)` : 'structured subject compiler'
       setStoryScanStage(scan, 'parsing', 'Waiting for the selected parser model.')
-      const out = await quietLLM(instruction, passage, settings, userId, true, scan)
+      spindle.log.info('[lumidraw] Anima parser context · previous_messages=' + parserInput.contextMessageCount + ' · loom_ledger=' + (parserInput.ledgerFound ? 'found' : 'none'))
+      const out = await quietLLM(instruction, parserInput.input, settings, userId, true, scan)
       assertStoryScanActive(scan)
       setStoryScanStage(scan, 'compiling', 'Parser returned structured JSON; compiling the Anima prompt.')
       let parsed
@@ -2163,6 +2290,10 @@ async function scanStoryCore(userId, options = {}) {
           error: error.message,
           entries: [],
           lastCompiledPrompt: '',
+          contextPreview: parserInput.contextPreview,
+          ledgerPreview: parserInput.ledgerPreview,
+          contextMessageCount: parserInput.contextMessageCount,
+          ledgerFound: parserInput.ledgerFound,
         })
         if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
         return {
@@ -2174,7 +2305,7 @@ async function scanStoryCore(userId, options = {}) {
       if (!parsed.length) {
         if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
         if (target.id) await markProcessed(target.id)
-        const storyDebug = await saveStoryDebug({ mode: 'parser', parserEngine: 'anima', subjectBinding: true, rawReply: out, entries: [], lastCompiledPrompt: '' })
+        const storyDebug = await saveStoryDebug({ mode: 'parser', parserEngine: 'anima', subjectBinding: true, rawReply: out, entries: [], lastCompiledPrompt: '', contextPreview: parserInput.contextPreview, ledgerPreview: parserInput.ledgerPreview, contextMessageCount: parserInput.contextMessageCount, ledgerFound: parserInput.ledgerFound })
         return { mode: 'parser', note: `Parser (${instrLabel}) judged no visual moment.`, storyDebug }
       }
 
@@ -2200,7 +2331,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v4',
+          compiler: compiled.compiler || 'anima-hybrid-v5',
         })
       }
 
@@ -2236,6 +2367,10 @@ async function scanStoryCore(userId, options = {}) {
         rawReply: out,
         entries: debugEntries,
         lastCompiledPrompt: debugEntries[0]?.compiledPrompt || '',
+        contextPreview: parserInput.contextPreview,
+        ledgerPreview: parserInput.ledgerPreview,
+        contextMessageCount: parserInput.contextMessageCount,
+        ledgerFound: parserInput.ledgerFound,
       })
       return {
         mode: 'parser',
@@ -2452,7 +2587,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.18.5',
+          version: (spindle.manifest && spindle.manifest.version) || '0.18.6',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -2471,6 +2606,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.bridgePort !== undefined) settings.bridgePort = Number(payload.bridgePort) || DEFAULT_SETTINGS.bridgePort
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
+        if (payload.useLoomLedger !== undefined) settings.useLoomLedger = !!payload.useLoomLedger
+        if (payload.parserContextMessages !== undefined) settings.parserContextMessages = Math.max(0, Math.min(4, Number(payload.parserContextMessages) || 0))
         if (!['legacy', 'anima'].includes(settings.parserEngine)) settings.parserEngine = 'legacy'
         settings.subjectBinding = settings.parserEngine === 'anima'
         if (payload.maxImages !== undefined) {
@@ -3208,4 +3345,4 @@ let lastAutoHandledMessageId = ''
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.5'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.6'))

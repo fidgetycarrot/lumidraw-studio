@@ -1,125 +1,110 @@
-# LumiDraw Studio 0.18.5
+# LumiDraw Studio 0.18.6
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.18.5 — Structured reply recovery
+## 0.18.6 — Context and Loom continuity
 
-This build fixes structured Parser replies that begin with valid JSON but are
-cut off before the model closes the root object. That was the cause of errors
-like `parser reply did not contain a JSON object` even though the raw reply
-visibly started with `{"images": ...}`.
+This build changes only the experimental **Anima hybrid** Parser engine. Legacy
+instruction-only mode remains current-message-only and otherwise unchanged.
 
-- The structured parser output allowance now scales with the selected image
-  count: 1 image uses 1,800 tokens, 2 use 2,600, 3 use 3,400, and 4 use 4,200.
-- The schema now asks Sonnet for smaller arrays and fewer nonessential details.
-- If a response is truncated after completing one or more image objects,
-  LumiDraw preserves those complete images and discards only the unfinished one.
-- Responses missing only final closing brackets are repaired locally when safe.
-- JSON returned as an encoded string is unwrapped automatically.
-- Terminal logging now includes response character count and detects nested
-  `finish_reason` values, including output-limit finishes.
+### Reference context
 
-Legacy instruction-only mode and the Anima prompt compiler are otherwise
-unchanged.
+Anima hybrid can now receive up to four immediately preceding chat messages as
+reference context. The default is **2 previous chat messages**.
 
-## 0.18.4 — Signature ownership and named prop aliases
+Reference context may resolve:
 
-Parser mode still has two clearly separated engines. **Legacy instruction-only**
-remains unchanged and dependable. This build changes only the experimental Anima
-hybrid compiler.
+- pronouns and subject identity;
+- carried or renamed props;
+- clothing and accessory continuity;
+- location and ongoing physical state.
 
-### Signature ownership anchors
+The context is separated from the current passage with strict labels. The parser
+is instructed that only the **CURRENT PASSAGE** may provide the illustrated
+moment, action, pose, and exact anchor quote. Current-message facts always
+supersede older context.
 
-Multi-character prompts now lift at most one distinctive visible trait per
-subject into a short ownership sentence immediately beside that subject's tag
-block. This is deliberately narrow and prioritizes details that commonly bleed:
+### Loom ledger continuity
 
-- glasses and other eyewear;
-- pointed ears, horns, wings, or a tail;
-- visible tattoos, scars, birthmarks, and piercings.
+When enabled, LumiDraw searches the current and recent messages for the newest
+`<loomledger>...</loomledger>` block. It converts the HTML ledger into compact
+reference text and sends it to the structured parser as continuity evidence.
+The ledger itself is removed from the passage that may be illustrated.
 
-Examples:
+This works with ledgers that track attire, accessories, location, state, props,
+and per-character visual reminders. It does not require another LLM call and it
+does not alter the roleplay message.
+
+The Story tab now includes:
+
+- **Reference context:** current message only through four previous messages;
+- **Use latest `<loomledger>` as continuity reference:** on by default.
+
+The last-parser debug panel reports whether a ledger was found and shows capped
+previews of the context actually supplied.
+
+### Stronger generic ownership anchoring
+
+In multi-subject images, a selected signature trait now uses an exclusive
+ownership sentence:
 
 ```text
-Sovi wears round glasses.
-Sovi, adult elf femboy, ...
+Sovi is the only subject wearing round glasses.
 ```
 
-```text
-Wulfgar has tribal tattoo on left shoulder.
-Wulfgar, adult human man, ...
-```
+This logic is character-agnostic and also applies to other eyewear, pointed
+ears, horns, wings, tails, visible markings, and piercings. Only one selected
+signature trait per subject is lifted into natural language; the remainder of
+the prompt stays compact and tag-oriented.
 
-Solo prompts remain tag-only. The compiler still avoids turning the entire
-prompt into natural-language captions.
+### Generic signature-prop recovery
 
-### Visibility-aware markings
-
-Appearance markings are no longer treated as universally visible. Tattoos,
-torso scars, and navel piercings are omitted when the current outfit appears to
-cover them, unless the parsed outfit explicitly exposes the relevant area.
-This prevents a hidden tattoo from becoming a floating trait that Anima can
-attach to another subject.
-
-### Named props / visual aliases
-
-Each identity profile now has an optional **Named props / visual aliases** field.
-Use one mapping per line:
+Named prop aliases can now activate when the parser uses only the generic object
+class. For a profile mapping such as:
 
 ```text
 Aegis-fang = single massive warhammer
 ```
 
-When the parser places that named prop in the character's outfit, pose, or
-action, LumiDraw keeps the proper name and injects the visual description. A
-non-bladed prop described as `sheathed` is normalized to `carried on back`.
+an extracted phrase such as `holds hammer one-handed` can compile to:
 
-The alias is not injected into unrelated scenes, keeping prompts compact.
+```text
+Wulfgar holds Aegis-fang, a single massive warhammer.
+```
 
-### Recommended Wulfgar setup
+The matching is based on generic object classes and profile data. No character
+or item names are hardcoded into the compiler.
 
-- Stable subject phrase: `adult human man`
-- Permanent appearance tags: keep the physical traits you want in every scene.
-- Named props / visual aliases:
-  `Aegis-fang = single massive warhammer`
+The compiler identifier is now `anima-hybrid-v5`.
 
-The compiler identifier is now `anima-hybrid-v4`.
+## Parser reliability retained
 
-## Parser reliability and diagnostics
+- Structured JSON truncation recovery and per-image token allowances.
+- Scan lock and duplicate-trigger protection.
+- Live stage updates, elapsed timer, Cancel Parser, and four-minute timeout.
+- Maximum-image hard cap before Draw Things generation.
+- Legacy instruction-only mode as the known-good fallback.
 
-- Both engines retain the scan lock, duplicate-trigger protection, live stages,
-  elapsed timer, Cancel Parser button, and four-minute timeout.
-- Legacy Terminal logs begin with `legacy parser request started`.
-- Anima hybrid Terminal logs begin with `parser request started`.
-- Auto Parser and old-message rescanning use the selected Parser engine.
-- Maximum images is enforced before Draw Things generation.
+## Other retained behavior
 
-## Retained behavior
-
+- User quality tags and negative prompts remain untouched.
 - Inline mode remains on the simpler pre-0.17 tag-only path.
 - Immediate History updates and manual History refresh.
 - Old-message rescanning with chat-message and story-message numbering.
-- Studio / Story / Presets / Settings redesign.
 - In-app image viewer with zoom, pan, prompt restoration, and reuse.
 - Bridge-powered model, sampler, and LoRA catalogs.
 - Draw Things `batch_count` is forced to `1`; only the first returned image is
   accepted for each requested illustration.
 
-## Requirements
+## Suggested test
 
-1. Draw Things HTTP API enabled, normally at `127.0.0.1:7862`.
-2. LumiDraw Bridge 0.2.0 or newer running at `127.0.0.1:7863`.
-3. Install the flat ZIP with `spindle.json` at the archive root.
-
-## Suggested testing
-
-1. Confirm the header and Terminal show **v0.18.5**.
-2. Keep **Legacy instruction-only** available as the known-good baseline.
-3. Set Wulfgar's Stable subject phrase to `adult human man`.
-4. Add `Aegis-fang = single massive warhammer` under his Named props / visual
-   aliases.
-5. Re-run the Sovi/Wulfgar scene. Confirm the final prompt says that Sovi wears
-   round glasses, omits Wulfgar's covered shoulder tattoo, and expands
-   Aegis-fang only when the parser includes it.
-6. Compare both returned images before deciding whether ownership improved.
+1. Confirm the header and Terminal show **v0.18.6**.
+2. Select **Anima hybrid experimental**.
+3. Leave Reference context at **2 previous chat messages** and Loom ledger on.
+4. Run a scene whose current reply uses a pronoun, generic prop name, or carried
+   clothing/accessory established just before it.
+5. In Last Anima hybrid compile, verify `contextMessageCount`, `ledgerFound`, and
+   the capped context previews.
+6. Check whether signature accessories stay on their owning subject and whether
+   generic props expand through the preset's visual alias mapping.

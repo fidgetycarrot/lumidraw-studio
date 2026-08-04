@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.18.5'
+const EXTENSION_VERSION = '0.18.6'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -475,7 +475,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.18.5" aria-label="LumiDraw Studio v0.18.5">
+    <button class="ld-launcher" title="LumiDraw Studio v0.18.6" aria-label="LumiDraw Studio v0.18.6">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -484,7 +484,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.5</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.6</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -635,6 +635,24 @@ function realSetup(ctx) {
                 <option value="anima">Anima hybrid experimental — structured anchors + legacy-style tags</option>
               </select>
               <div class="ld-binding-note ld-parser-engine-note">Legacy sends the story passage to the selected parser using only the instruction below, then sends its returned tag prompt directly to Draw Things.</div>
+              <div class="ld-anima-context-controls" style="margin-top:9px;display:none">
+                <div class="ld-row ld-mobile-stack">
+                  <div>
+                    <span class="ld-label">Reference context</span>
+                    <select class="ld-parser-context">
+                      <option value="0">Current message only</option>
+                      <option value="1">1 previous chat message</option>
+                      <option value="2">2 previous chat messages</option>
+                      <option value="3">3 previous chat messages</option>
+                      <option value="4">4 previous chat messages</option>
+                    </select>
+                  </div>
+                  <div style="display:flex;align-items:end;padding-bottom:5px">
+                    <label style="display:flex;align-items:center;gap:7px;font-size:12px"><input type="checkbox" class="ld-use-loom-ledger" style="width:auto" /> Use latest &lt;loomledger&gt; as continuity reference</label>
+                  </div>
+                </div>
+                <div class="ld-help">Prior messages and the latest Loom ledger may resolve clothing, accessories, props, location, and pronouns. Only the current message may supply the illustrated moment or anchor.</div>
+              </div>
               <div class="ld-help ld-story-last-status">Auto illustrations idle.</div>
             </div>
             <div class="ld-row" style="margin-top:9px">
@@ -1397,6 +1415,10 @@ function realSetup(ctx) {
       subjectBinding: debug.subjectBinding,
       error: debug.error || null,
       rawReply: debug.rawReply || null,
+      contextMessageCount: debug.contextMessageCount || 0,
+      ledgerFound: !!debug.ledgerFound,
+      contextPreview: debug.contextPreview || '',
+      ledgerPreview: debug.ledgerPreview || '',
       entries: debug.entries || [],
       at: debug.at || null,
     }, null, 2) : ''
@@ -2505,6 +2527,8 @@ ${entry.prompt || ''}`.trim()
       maxImages: $('.ld-maximg').value,
       minImages: $('.ld-minimg').value,
       autoCharTags: $('.ld-chartags').checked,
+      parserContextMessages: $('.ld-parser-context').value,
+      useLoomLedger: $('.ld-use-loom-ledger').checked,
     })
     settings = res.settings
     updateScanLabel()
@@ -2524,10 +2548,12 @@ ${entry.prompt || ''}`.trim()
     const label = $('.ld-parser-instruction-label')
     const title = $('.ld-parser-debug-title')
     if (note) note.textContent = engine === 'anima'
-      ? 'Experimental: structured JSON locks identities and contact geometry, then LumiDraw keeps the final prompt mostly tags with only a few short ownership-safe sentences.'
+      ? 'Experimental: structured JSON uses the current message plus optional reference context and Loom continuity, then LumiDraw keeps the final prompt mostly tags with a few ownership-safe sentences.'
       : 'Known-good fallback: version 0.13-style instruction-only parsing. The returned tag prompt goes directly to Draw Things without identity JSON or the Anima compiler.'
     if (label) label.textContent = engine === 'anima' ? 'Anima hybrid scene-extraction guidance' : 'Legacy parser instruction'
     if (title) title.textContent = engine === 'anima' ? 'Last Anima hybrid compile' : 'Last legacy parser result'
+    const contextControls = $('.ld-anima-context-controls')
+    if (contextControls) contextControls.style.display = engine === 'anima' ? '' : 'none'
   }
 
   function updateScanLabel() {
@@ -2594,7 +2620,7 @@ ${entry.prompt || ''}`.trim()
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-parser-engine', '.ld-parser-conn']) {
+  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-parser-conn') {
@@ -2753,6 +2779,8 @@ ${entry.prompt || ''}`.trim()
       $('.ld-minimg').value = settings.minImages || 0
       $('.ld-chartags').checked = settings.autoCharTags !== false
       $('.ld-parser-engine').value = settings.parserEngine || 'legacy'
+      $('.ld-parser-context').value = String(settings.parserContextMessages ?? 2)
+      $('.ld-use-loom-ledger').checked = settings.useLoomLedger !== false
       try {
         await reloadParserSources(false)
       } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }

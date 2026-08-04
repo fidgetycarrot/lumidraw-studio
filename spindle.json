@@ -1,11 +1,11 @@
 {
-  "version": "0.18.5",
+  "version": "0.18.6",
   "name": "LumiDraw Studio",
   "identifier": "lumidraw_studio",
   "author": "fidgetycarrot",
   "github": "https://github.com/fidgetycarrot/lumidraw-studio",
   "homepage": "https://github.com/fidgetycarrot/lumidraw-studio",
-  "description": "An Anima-optimized Draw Things Studio with structured parser truncation recovery and compact hybrid prompts.",
+  "description": "An Anima-optimized Draw Things Studio with reference context, Loom ledger continuity, and compact Anima hybrid prompts.",
   "permissions": [
     "images",
     "image_gen",
