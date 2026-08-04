@@ -1,9 +1,9 @@
-# LumiDraw Studio 0.18.7
+# LumiDraw Studio 0.18.9
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.18.7 — Reliable automatic Anima scans
+## 0.18.9 — Reliable automatic Anima scans
 
 This release addresses the case where the full experimental Anima pipeline works
 from **Manual Parser** but a completed roleplay response produces no automatic
@@ -120,7 +120,7 @@ camera compositions retain their other framing tags.
 
 ## Suggested test
 
-1. Confirm the header and Terminal show **v0.18.7**.
+1. Confirm the header and Terminal show **v0.18.9**.
 2. Select **Parser**, **Anima hybrid experimental**, and enable automatic scans.
 3. Leave reference context at **2 previous messages** and Loom ledger on.
 4. Complete one new roleplay response without pressing Manual Parser.

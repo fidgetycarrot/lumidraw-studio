@@ -1668,7 +1668,7 @@ function signatureOwnershipSentence(tag, item, exclusive = false) {
   if (!value || signaturePriority(value) >= 99) return ''
   const name = signatureOwnerName(item)
   if (/\b(?:glasses|eyewear|goggles|monocle|eyepatch)\b/.test(value)) {
-    return exclusive ? `${name} is the only subject wearing ${value}.` : `${name} wears ${value}.`
+    return exclusive ? `The only eyewear in the scene is ${value} worn by ${name}.` : `${name} wears ${value}.`
   }
   return exclusive ? `${name} is the only subject with ${value}.` : `${name} has ${value}.`
 }
@@ -1710,10 +1710,16 @@ function aliasIsSheathable(description) {
 function normalizeAliasTag(tag, alias) {
   let value = normalizeVisualPhrase(tag)
   if (!aliasMentioned(value, alias)) return value
+  const description = String(alias && alias.description || '').trim()
+  const propName = String(alias && alias.name || '').trim()
   if (/\bsheathed\b/i.test(value) && !aliasIsSheathable(alias.description)) {
     value = value.replace(/\bsheathed\b/gi, 'carried on back')
   }
-  return value
+  if (description && !normalizeIdentityText(value).includes(normalizeIdentityText(description)) && propName) {
+    const propPattern = new RegExp(escapeRegExp(propName), 'i')
+    value = value.replace(propPattern, `${propName}, ${description}`)
+  }
+  return value.replace(/\s+,/g, ',').replace(/,\s*,+/g, ', ').replace(/\s{2,}/g, ' ').trim()
 }
 
 function aliasDescriptionMatchesScene(text, alias) {
@@ -1736,8 +1742,10 @@ function expandGenericAliasTag(tag, alias) {
   let value = normalizeVisualPhrase(tag)
   if (!value || !alias || aliasMentioned(value, alias) || !aliasDescriptionMatchesScene(value, alias)) return value
   const description = String(alias.description || '').trim()
+  const propName = String(alias.name || '').trim()
   if (!description) return value
   if (normalizeIdentityText(value).includes(normalizeIdentityText(description))) return value
+  const replacementText = propName ? `${propName}, ${description}` : description
   const replacements = [
     ['warhammer', /\bwarhammer\b/i], ['hammer', /\bhammer\b/i],
     ['greatsword', /\bgreatsword\b/i], ['longsword', /\blongsword\b/i], ['shortsword', /\bshortsword\b/i], ['sword', /\bsword\b/i],
@@ -1751,7 +1759,7 @@ function expandGenericAliasTag(tag, alias) {
   ]
   for (const [noun, pattern] of replacements) {
     if (!description.toLowerCase().includes(noun)) continue
-    if (pattern.test(value)) return value.replace(pattern, description)
+    if (pattern.test(value)) return value.replace(pattern, replacementText)
   }
   return value
 }
@@ -1816,20 +1824,12 @@ function subjectTagLine(item, scene, descriptors) {
     }
     return animaTag(value)
   }
-  // In multi-subject scenes the ownership sentence already carries the proper
-  // name, so repeat only the visual descriptor in the tag block. Solo scenes
-  // retain both name and descriptor because they do not receive prose anchors.
-  // Multi-subject prompts already receive a named ownership sentence and an
-  // expanded action tag; avoid repeating the descriptor as a floating prop.
-  const aliasTags = aliases.flatMap((alias) => descriptors.length > 1
-    ? []
-    : [alias.name, alias.description])
   const visibleAppearance = filterAppearanceByVisibility(item.appearance, item.outfit)
   const signatureAppearance = visibleAppearance
     .filter((tag) => signaturePriority(tag) < 99)
     .sort((a, b) => signaturePriority(a) - signaturePriority(b))
   const ordinaryAppearance = visibleAppearance.filter((tag) => signaturePriority(tag) >= 99)
-  const tags = uniqueStrings([
+  const coreTags = uniqueStrings([
     noun,
     ...signatureAppearance,
     ...ordinaryAppearance,
@@ -1837,8 +1837,25 @@ function subjectTagLine(item, scene, descriptors) {
     ...poses,
     ...item.expression,
     ...actions,
-    ...aliasTags,
   ].map(normalizeWithAliases).filter(Boolean))
+  // In multi-subject scenes the ownership sentence already carries the proper
+  // name, so keep prompts short and avoid repeating prop descriptors. Solo
+  // scenes retain a compact prop fallback only when the core tags did not
+  // already mention the named prop or its descriptor.
+  const aliasTags = aliases.flatMap((alias) => {
+    if (descriptors.length > 1) return []
+    const aliasName = normalizeIdentityText(alias && alias.name)
+    const aliasDesc = normalizeIdentityText(alias && alias.description)
+    const alreadyPresent = coreTags.some((tag) => {
+      const value = normalizeIdentityText(tag)
+      return (aliasName && value.includes(aliasName)) || (aliasDesc && value.includes(aliasDesc))
+    })
+    return alreadyPresent ? [] : [alias.name, alias.description]
+  })
+  const tags = uniqueStrings([
+    ...coreTags,
+    ...aliasTags.map(normalizeWithAliases).filter(Boolean),
+  ])
   return [anchor, ...tags].filter(Boolean).join(', ')
 }
 
@@ -1869,6 +1886,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '') {
   const headerTags = []
   if (scene.safety) headerTags.push(scene.safety)
   headerTags.push(...aggregateCountTags(descriptors))
+  if (descriptors.length === 1) headerTags.push('solo')
   if (headerTags.length) sections.push(headerTags.join(', '))
 
   // Natural language is intentionally surgical: at most three short spatial /
@@ -2887,7 +2905,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.18.7',
+          version: (spindle.manifest && spindle.manifest.version) || '0.18.9',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -3648,4 +3666,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.7'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.9'))

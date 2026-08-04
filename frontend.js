@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.18.7'
+const EXTENSION_VERSION = '0.18.9'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -445,9 +445,11 @@ function realSetup(ctx) {
       .ld-form-view { padding:8px; }
       .ld-story-hero { grid-template-columns:1fr; }
       .ld-profile-grid { grid-template-columns:1fr; }
-      .ld-text-editor { padding:0; }
-      .ld-text-editor-dialog { width:100%; height:100dvh; border-radius:0; border:none; }
-      .ld-text-editor-area { margin:10px; width:calc(100% - 20px) !important; }
+      .ld-text-editor { align-items:stretch; justify-content:stretch; overflow:hidden; box-sizing:border-box; padding:env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+      .ld-text-editor-dialog { width:100%; height:100%; max-height:100%; min-height:0; border-radius:0; border:none; }
+      .ld-text-editor-head, .ld-text-editor-actions { padding-left:max(13px, env(safe-area-inset-left)); padding-right:max(13px, env(safe-area-inset-right)); }
+      .ld-text-editor-actions { padding-bottom:max(11px, env(safe-area-inset-bottom)); }
+      .ld-text-editor-area { flex:1; min-height:0 !important; margin:10px; width:calc(100% - 20px) !important; }
       .ld-lightbox { align-items:stretch; justify-content:stretch; box-sizing:border-box; overflow:hidden; padding:env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
       .ld-lightbox-dialog { width:100%; height:100%; max-height:100%; min-height:0; border:0; border-radius:0; }
       .ld-lightbox-stage { padding:4px; }
@@ -469,13 +471,14 @@ function realSetup(ctx) {
       .ld-row.ld-mobile-stack { flex-direction:column; align-items:stretch; }
       .ld-story-picker { align-items:flex-end; padding:0; }
       .ld-story-dialog { width:100%; max-height:90vh; border-radius:14px 14px 0 0; }
+      .ld-text-editor-area { margin:8px; width:calc(100% - 16px) !important; }
     }
     @keyframes ld-rot { to { transform:rotate(360deg); } }
   `)
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.18.7" aria-label="LumiDraw Studio v0.18.7">
+    <button class="ld-launcher" title="LumiDraw Studio v0.18.9" aria-label="LumiDraw Studio v0.18.9">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -484,7 +487,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.7</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.9</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
