@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.18.9'
+const EXTENSION_VERSION = '0.18.11'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -122,6 +122,8 @@ function realSetup(ctx) {
     if (!payload) return
     if (payload.type === 'history_updated') {
       history = Array.isArray(payload.history) ? payload.history : history
+      const newest = payload.entry && payload.entry.images && payload.entry.images[0]
+      if (payload.source === 'studio' && newest && newest.url) selectedOutputUrl = newest.url
       renderHistory()
       return
     }
@@ -478,7 +480,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.18.9" aria-label="LumiDraw Studio v0.18.9">
+    <button class="ld-launcher" title="LumiDraw Studio v0.18.11" aria-label="LumiDraw Studio v0.18.11">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -487,7 +489,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.9</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.11</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -522,7 +524,7 @@ function realSetup(ctx) {
                 <div class="ld-card">
                   <span class="ld-label">Committed chat preset</span>
                   <select class="ld-preset-select"><option value="">— none (synced state) —</option></select>
-                  <div class="ld-help" style="margin-top:6px">Story images use this preset. Studio uses the temporary workspace below.</div>
+                  <div class="ld-help" style="margin-top:6px">Story images use this preset. Studio is fully separate and sends only the temporary workspace and text you enter below.</div>
                 </div>
                 <div class="ld-card">
                   <div class="ld-subtitle">Core generation</div>
@@ -613,7 +615,7 @@ function realSetup(ctx) {
           <div class="ld-card ld-story-hero">
             <div>
               <div class="ld-subtitle">Story illustration control</div>
-              <div class="ld-help">Committed preset: <strong class="ld-story-preset-name">None</strong>. Temporary Studio changes never affect automatic story images until saved.</div>
+              <div class="ld-help">Committed preset: <strong class="ld-story-preset-name">None</strong>. Studio is isolated: no story preset tags, profiles, quality tags, or hidden extras are sent unless you type them here yourself.</div>
             </div>
             <div class="ld-row" style="min-width:250px">
               <button class="ld-btn" data-act="scan">Scan latest 📖</button>
@@ -1437,18 +1439,17 @@ function realSetup(ctx) {
   }
 
   function currentDraftBundle() {
-    const preset = activePresetObj() || {}
     return {
       config: readDraftConfigFromControls(),
-      extra: preset.extra || null,
-      promptPrefix: preset.promptPrefix || '',
+      extra: null,
+      promptPrefix: '',
       negativePrompt: $('.ld-negative').value || '',
-      qualityTags: preset.qualityTags || '',
-      characterTags: preset.characterTags || '',
-      personaTags: preset.personaTags || '',
-      characterProfile: preset.characterProfile || null,
-      personaProfile: preset.personaProfile || null,
-      bannedTags: preset.bannedTags || '',
+      qualityTags: '',
+      characterTags: '',
+      personaTags: '',
+      characterProfile: null,
+      personaProfile: null,
+      bannedTags: '',
     }
   }
 
@@ -1950,12 +1951,12 @@ ${entry.prompt || ''}`.trim()
       const seedRaw = $('.ld-seed').value
       const res = await call('generate', {
         prompt: $('.ld-prompt').value,
-        qualityTags: bundle.qualityTags,
-        characterTags: bundle.characterTags,
+        // Studio is fully isolated. Add any quality tags, subjects, or other
+        // prompt text manually in the prompt field when you want them.
         negativePrompt: bundle.negativePrompt,
         seed: seedRaw === '' ? undefined : Number(seedRaw),
         config: bundle.config,
-        extra: bundle.extra,
+        extra: null,
       })
       history = res.history
       selectedOutputUrl = res.entry && res.entry.images && res.entry.images[0] ? res.entry.images[0].url : null

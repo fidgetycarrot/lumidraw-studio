@@ -2905,7 +2905,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.18.9',
+          version: (spindle.manifest && spindle.manifest.version) || '0.18.11',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -3261,15 +3261,17 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
       case 'generate': {
         const settings = await getSettings()
-        let manualPrompt = payload.prompt || ''
-        manualPrompt = [payload.qualityTags, payload.characterTags, manualPrompt].filter(Boolean).join(', ')
-        manualPrompt = await resolveMacros(manualPrompt, userId, await resolveActiveChatId(userId))
+        // Studio is fully isolated from Story presets and identity profiles.
+        // Send exactly what the user entered in Studio (plus explicit Studio
+        // workspace config), with no hidden quality tags, character tags,
+        // persona tags, macros, or preset extras injected.
+        const manualPrompt = String(payload.prompt || '').trim()
         const payloadOut = buildPayload({
           prompt: manualPrompt,
           negativePrompt: payload.negativePrompt,
           seed: payload.seed,
           config: payload.config,
-          extra: payload.extra,
+          extra: null,
         })
         if (!payloadOut.model) {
           throw new Error('No model set — sync from Draw Things or pick a preset first.')
@@ -3282,7 +3284,6 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // resources; try both accepted call shapes.
         const uploads = []
         for (const b64 of images) {
-    assertStoryScanActive(scan)
           const bytes = Uint8Array.from(Buffer.from(b64, 'base64'))
           const opts = {
             data: bytes,
@@ -3311,8 +3312,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
           seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
           images: uploads,
         }
-        assertStoryScanActive(scan)
-  const history = await pushHistory(entry)
+        const history = await pushHistory(entry)
+        // Push the completed result independently of the request reply. This
+        // keeps remote/mobile clients synchronized if the original response is
+        // delayed or dropped after Draw Things has already finished.
+        notifyFrontend(userId, 'history_updated', { history, entry, source: 'studio' })
+        spindle.log.info('[lumidraw] Studio generation saved · images=' + uploads.length + ' · duration=' + entry.durationMs + 'ms')
         reply = ok(payload, requestId, { entry, history })
         break
       }
@@ -3666,4 +3671,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.9'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.11'))

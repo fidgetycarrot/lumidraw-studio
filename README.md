@@ -1,9 +1,17 @@
-# LumiDraw Studio 0.18.9
+# LumiDraw Studio 0.18.11
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
-## 0.18.9 — Reliable automatic Anima scans
+
+## 0.18.11 — Studio isolation and result recovery
+
+- Studio manual generation no longer injects Story character or persona tags.
+- Fixed a post-render `scan is not defined` crash that could strand completed images in Draw Things before upload and History insertion.
+- Completed Studio generations now send an independent History update to connected clients, so mobile/remote LumiDraw can receive the result even if the original request reply is interrupted.
+- The newest pushed result is selected immediately in the Studio output viewer.
+
+## Retained automatic Anima pipeline
 
 This release addresses the case where the full experimental Anima pipeline works
 from **Manual Parser** but a completed roleplay response produces no automatic
@@ -120,7 +128,7 @@ camera compositions retain their other framing tags.
 
 ## Suggested test
 
-1. Confirm the header and Terminal show **v0.18.9**.
+1. Confirm the header and Terminal show **v0.18.11**.
 2. Select **Parser**, **Anima hybrid experimental**, and enable automatic scans.
 3. Leave reference context at **2 previous messages** and Loom ledger on.
 4. Complete one new roleplay response without pressing Manual Parser.
