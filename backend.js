@@ -16,6 +16,7 @@
 const SETTINGS_FILE = 'settings.json'
 const PRESETS_FILE = 'presets.json'
 const PERSONAS_FILE = 'personas.json'
+const CHARACTERS_FILE = 'characters.json'
 const HISTORY_FILE = 'history.json'
 const STORY_DEBUG_FILE = 'story_debug.json'
 
@@ -120,6 +121,15 @@ async function getPersonas() {
 
 async function savePersonas(personas) {
   await spindle.storage.setJson(PERSONAS_FILE, personas, { indent: 2 })
+}
+
+async function getCharacters() {
+  const value = await spindle.storage.getJson(CHARACTERS_FILE, { fallback: [] })
+  return Array.isArray(value) ? value : []
+}
+
+async function saveCharacters(characters) {
+  await spindle.storage.setJson(CHARACTERS_FILE, characters, { indent: 2 })
 }
 
 async function getHistory() {
@@ -1250,10 +1260,34 @@ async function resolveProfile(profile, userId, chatId) {
   }
 }
 
+// Cast refs are derived from the character's name so the parser can use them
+// naturally ("kira", "old_maren"), never colliding with the reserved refs.
+function castRefFor(anchor, index, taken) {
+  let ref = String(anchor || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24)
+  if (!ref || ref === 'character' || ref === 'persona' || /^other_\d+$/.test(ref)) ref = `cast_${index + 1}`
+  let unique = ref
+  let n = 2
+  while (taken.has(unique)) unique = `${ref}_${n++}`
+  taken.add(unique)
+  return unique
+}
+
 async function getStoryProfiles(preset, settings, userId, chatId) {
-  const activeCharacterTags = preset.characterTags ||
+  const needsLibrary = !!(preset.characterLibraryId || (Array.isArray(preset.castLibraryIds) && preset.castLibraryIds.length))
+  const characterLibrary = needsLibrary ? await getCharacters() : []
+
+  let characterSource = preset.characterProfile
+  let characterFallbackTags = preset.characterTags ||
     (settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : '')
-  const character = normalizeProfile(preset.characterProfile, activeCharacterTags, 'character')
+  if (preset.characterLibraryId) {
+    const linked = characterLibrary.find((item) => item && item.id === preset.characterLibraryId)
+    if (linked && linked.profile) {
+      characterSource = linked.profile
+      characterFallbackTags = linked.profile.appearanceTags || ''
+    }
+  }
+  const character = normalizeProfile(characterSource, characterFallbackTags, 'character')
+
   let personaSource = preset.personaProfile
   let personaFallbackTags = preset.personaTags || ''
   if (preset.personaLibraryId) {
@@ -1265,10 +1299,31 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
     }
   }
   const persona = normalizeProfile(personaSource, personaFallbackTags, 'persona')
+
+  // Additional cast: library characters beyond the main character/persona
+  // pair, each with its own named ref, locked profile, states, and anatomy
+  // rules — first-class citizens of the same pipeline.
+  const cast = []
+  const takenRefs = new Set(['character', 'persona'])
+  const castIds = Array.isArray(preset.castLibraryIds) ? preset.castLibraryIds.slice(0, 4) : []
+  for (let index = 0; index < castIds.length; index++) {
+    const linked = characterLibrary.find((item) => item && item.id === castIds[index])
+    if (!linked || !linked.profile) continue
+    if (linked.id === preset.characterLibraryId) continue // already the main character
+    const ref = castRefFor(linked.profile.anchor || linked.name, index, takenRefs)
+    const profile = normalizeProfile(linked.profile, linked.profile.appearanceTags || '', ref)
+    cast.push(await resolveProfile(profile, userId, chatId))
+  }
+
   return {
     character: await resolveProfile(character, userId, chatId),
     persona: await resolveProfile(persona, userId, chatId),
+    cast,
   }
+}
+
+function allKnownProfiles(profiles) {
+  return [profiles && profiles.character, profiles && profiles.persona, ...((profiles && profiles.cast) || [])].filter(Boolean)
 }
 
 function sanitizeJsonText(value) {
@@ -1450,10 +1505,13 @@ function normalizeSceneSubject(raw, index) {
   const fallbackRef = `other_${index + 1}`
   let ref = shortPhrase(source.ref || fallbackRef, `subject ${index + 1} ref`, 3, 32, false).toLowerCase().replace(/[^a-z0-9_]/g, '_')
   if (!ref) ref = fallbackRef
-  const known = ref === 'character' || ref === 'persona'
+  // A label is mandatory only for anonymous other_N refs. Named refs —
+  // character, persona, and cast refs such as "maren" — carry their identity
+  // in the ref itself; when no profile binds, the ref doubles as the label.
+  const needsLabel = /^other_\d+$/.test(ref)
   return {
     ref,
-    label: shortPhrase(source.label || '', `subject ${index + 1} label`, 7, 72, known),
+    label: shortPhrase(source.label || '', `subject ${index + 1} label`, 7, 72, !needsLabel),
     countTag: shortPhrase(source.count_tag || source.countTag || '', `subject ${index + 1} count tag`, 3, 24, true),
     booruCharacter: shortPhrase(source.booru_character || source.booruCharacter || '', `subject ${index + 1} character tag`, 6, 64, true),
     booruSeries: shortPhrase(source.booru_series || source.booruSeries || '', `subject ${index + 1} series tag`, 8, 72, true),
@@ -1614,15 +1672,18 @@ function profileMatchesSubject(profile, subject) {
 }
 
 function bindKnownSubjectRefs(scene, profiles) {
+  const known = allKnownProfiles(profiles)
+  const knownRefs = new Set(known.map((profile) => profile.ref))
   const remap = new Map()
   const claimed = new Set(scene.subjects
-    .filter((subject) => subject.ref === 'character' || subject.ref === 'persona')
+    .filter((subject) => knownRefs.has(subject.ref))
     .map((subject) => subject.ref))
   for (const subject of scene.subjects) {
-    if (subject.ref === 'character' || subject.ref === 'persona') continue
+    if (knownRefs.has(subject.ref)) continue
     const matches = []
-    if (profileMatchesSubject(profiles.character, subject)) matches.push('character')
-    if (profileMatchesSubject(profiles.persona, subject)) matches.push('persona')
+    for (const profile of known) {
+      if (profileMatchesSubject(profile, subject)) matches.push(profile.ref)
+    }
     if (matches.length === 1 && !claimed.has(matches[0])) {
       remap.set(subject.ref, matches[0])
       claimed.add(matches[0])
@@ -1640,8 +1701,10 @@ function bindKnownSubjectRefs(scene, profiles) {
   return { ...scene, subjects, relations }
 }
 
-function applyAnatomyFirewall(scene) {
-  const knownRefs = new Set(['character', 'persona'])
+function applyAnatomyFirewall(scene, profiles = null) {
+  const knownRefs = profiles
+    ? new Set(allKnownProfiles(profiles).map((profile) => profile.ref))
+    : new Set(['character', 'persona'])
   return {
     ...scene,
     subjects: scene.subjects.map((subject) => knownRefs.has(subject.ref) ? {
@@ -1673,7 +1736,7 @@ function positionLead(position) {
 function profileForSubject(subject, profiles) {
   if (subject.ref === 'character') return profiles.character
   if (subject.ref === 'persona') return profiles.persona
-  return null
+  return ((profiles && profiles.cast) || []).find((profile) => profile.ref === subject.ref) || null
 }
 
 function selectAppearanceState(profile, subject, sourcePassage = '') {
@@ -2373,7 +2436,7 @@ function displayName(item, lead = true) {
 // Trait nouns take "a/an" and belong in the "with …" list. A bare one-word
 // trait that names no body part ("hooded", "tall") is an adjective and must
 // not become "a hooded".
-const TRAIT_NOUN_RE = /\b(?:hair|eyes?|ears?|mouth|lips?|teeth|fangs?|tongue|nose|brows?|beard|stubble|skin|freckles?|moles?|scars?|tattoos?|piercings?|glasses|goggles|monocle|eyepatch|horns?|wings?|tails?|claws?|markings?|birthmarks?|build|figure|frame|fur|pelt|snout|muzzle|mane|paws?|hooves|whiskers|scales|feathers|antlers|talons?|paw pads)\b/
+const TRAIT_NOUN_RE = /\b(?:hair|eyes?|ears?|mouth|lips?|teeth|fangs?|tongue|nose|brows?|beard|stubble|skin|freckles?|moles?|scars?|tattoos?|piercings?|glasses|goggles|monocle|eyepatch|horns?|wings?|tails?|claws?|markings?|birthmarks?|build|figure|frame|fur|pelt|snout|muzzle|mane|paws?|hooves|whiskers|scales|feathers|antlers|talons?|paw pads|wrinkles?|dimples?|lashes|bun|braids?|ponytails?|twintails?|bangs)\b/
 
 // Nonhuman-form descriptors that really are adjectives, so a transformation
 // state does not compile to "a digitigrade werewolf with a quadruped build".
@@ -2677,8 +2740,8 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
 
 function profileSchemaHints(profiles) {
   const hints = []
-  for (const ref of ['character', 'persona']) {
-    const profile = profiles[ref]
+  for (const profile of allKnownProfiles(profiles)) {
+    const ref = profile.ref
     if (!profile) continue
     const label = [profile.anchor, profile.subject].filter(Boolean).join(' — ')
     const aliases = (profile.visualAliases || []).map((alias) => `${alias.name} = ${alias.description}`).join('; ')
@@ -2693,12 +2756,13 @@ function profileSchemaHints(profiles) {
 }
 
 function structuredParserSchema(maxImages, profiles) {
+  const knownRefList = allKnownProfiles(profiles).map((profile) => profile.ref).join('|')
   return `
 
 STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
 Return ONLY one compact JSON object, no markdown and no prose.
 Write every scene in the EXACT field order shown below. The order is a survival order: if your reply is ever cut off, everything already written must still form a usable scene, so the mandatory core (safety, core_action, setting, subjects) comes FIRST and droppable refinements (camera, lighting, style) come LAST:
-{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw compiles it into one Danbooru/Gelbooru-style tag run followed by a short natural-language caption block, in the tag order Anima was trained on. Do not write the final image prompt yourself.
@@ -2707,7 +2771,7 @@ For a subject that is a recognisable published character, set "booru_character" 
 "style" is for the mood of this one scene at most (e.g. "backlit", "soft focus"). Never put a medium, an artist, or a rendering style there — those belong to the preset and must stay identical between images, or characters will drift in appearance from one generation to the next.
 SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "Rook is fighting bandits." "Sovi is casting a spell with great intensity." "Sovi and Rook are having anal sex." In an nsfw or explicit scene, name the act plainly — a euphemism here costs the image its subject. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
 ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
-Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 3 outfit items, 2 pose items, 2 expression items, and 1 subject action item. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
+Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 3 outfit items, 2 pose items, 2 expression items, and 1 subject action item. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
 For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible. Use the camera tag "pov" only when ref "persona" is visibly represented from the viewer's body/eye position. In that persona subject's pose or action, include a concrete cue such as "viewer hands visible", "hands in foreground", or "face out of frame". Never use "pov" merely because two characters are interacting.
 For a solo scene, do not invent a relation merely to create prose; keep the visual skeleton tag-oriented. Natural-language anchors are reserved for cross-subject geometry.
@@ -2739,10 +2803,14 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
     }),
     anatomy: applyBannedToList(profile.anatomy, preset.bannedTags),
   })
-  const profiles = { character: filterProfile(rawProfiles.character), persona: filterProfile(rawProfiles.persona) }
+  const profiles = {
+    character: filterProfile(rawProfiles.character),
+    persona: filterProfile(rawProfiles.persona),
+    cast: (rawProfiles.cast || []).map(filterProfile),
+  }
   let scene = normalizeScene(sceneInput)
   scene = bindKnownSubjectRefs(scene, profiles)
-  scene = applyAnatomyFirewall(scene)
+  scene = applyAnatomyFirewall(scene, profiles)
   scene = applyBannedToScene(scene, preset.bannedTags)
   const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
   // User-authored quality tags and prompt prefix remain verbatim except for one
@@ -3791,12 +3859,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
   try {
     switch (payload && payload.type) {
       case 'init': {
-        const [settings, presets, personas, history, storyDebug] = await Promise.all([
-          getSettings(), getPresets(), getPersonas(), getHistory(), getStoryDebug(),
+        const [settings, presets, personas, characters, history, storyDebug] = await Promise.all([
+          getSettings(), getPresets(), getPersonas(), getCharacters(), getHistory(), getStoryDebug(),
         ])
         reply = ok(payload, requestId, {
-          settings, presets, personas, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.20.4',
+          settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
+          version: (spindle.manifest && spindle.manifest.version) || '0.21.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4131,6 +4199,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
           characterProfile: payload.characterProfile && typeof payload.characterProfile === 'object' ? payload.characterProfile : null,
           personaProfile: payload.personaProfile && typeof payload.personaProfile === 'object' ? payload.personaProfile : null,
           personaLibraryId: String(payload.personaLibraryId || '').trim(),
+          characterLibraryId: String(payload.characterLibraryId || '').trim(),
+          castLibraryIds: Array.isArray(payload.castLibraryIds)
+            ? uniqueStrings(payload.castLibraryIds.map((id) => String(id || '').trim()).filter(Boolean)).slice(0, 4)
+            : [],
           bannedTags: payload.bannedTags || '',
           updatedAt: Date.now(),
         }
@@ -4167,6 +4239,32 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const personas = (await getPersonas()).filter((item) => item && item.id !== id)
         await savePersonas(personas)
         reply = ok(payload, requestId, { personas })
+        break
+      }
+
+      case 'save_character': {
+        const name = String(payload.name || '').trim()
+        if (!name) throw new Error('Character needs a library name.')
+        const profileInput = payload.profile && typeof payload.profile === 'object' ? { ...payload.profile } : {}
+        if (!String(profileInput.anchor || '').trim()) profileInput.anchor = name
+        normalizeProfile(profileInput, profileInput.appearanceTags || '', 'character')
+        const characters = await getCharacters()
+        const id = String(payload.id || '').trim() || `character_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+        const entry = { id, name, profile: profileInput, updatedAt: Date.now() }
+        const index = characters.findIndex((item) => item && item.id === id)
+        if (index >= 0) characters[index] = entry
+        else characters.push(entry)
+        characters.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+        await saveCharacters(characters)
+        reply = ok(payload, requestId, { characters, entry })
+        break
+      }
+
+      case 'delete_character': {
+        const id = String(payload.id || '').trim()
+        const characters = (await getCharacters()).filter((item) => item && item.id !== id)
+        await saveCharacters(characters)
+        reply = ok(payload, requestId, { characters })
         break
       }
 
@@ -4589,4 +4687,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.20.4'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.21.0'))

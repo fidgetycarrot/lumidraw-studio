@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.20.4'
+const EXTENSION_VERSION = '0.21.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -88,6 +88,9 @@ function realSetup(ctx) {
   let settings = { host: '127.0.0.1', port: 7862 }
   let presets = []
   let personas = []
+  let characters = []
+  let libEditorKind = 'persona' // which library the shared editor is writing to
+  let editorCastIds = []        // additional cast member ids in the open preset editor
   let history = []
   let storyDebug = null
   let autoStatus = null
@@ -484,7 +487,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.20.4" aria-label="LumiDraw Studio v0.20.4">
+    <button class="ld-launcher" title="LumiDraw Studio v0.21.0" aria-label="LumiDraw Studio v0.21.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -493,7 +496,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.20.4</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.21.0</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -702,6 +705,13 @@ function realSetup(ctx) {
       <section class="ld-view" data-view="presets">
         <div class="ld-form-view">
           <div class="ld-card">
+            <div class="ld-subtitle">Reusable character library</div>
+            <div class="ld-help">Save a character once, then link it into any Story preset — as the main character or as an additional cast member. Changes to a linked character apply everywhere it is used.</div>
+            <button class="ld-btn" data-act="new-character" style="margin-top:8px">＋ New reusable character</button>
+            <div class="ld-status ld-charlib-status" style="margin-top:6px"></div>
+            <div class="ld-charlib-list" style="display:flex;flex-direction:column;gap:6px;margin-top:8px"></div>
+          </div>
+          <div class="ld-card">
             <div class="ld-subtitle">Reusable persona library</div>
             <div class="ld-help">Save a persona once, then link it into any Story preset. Changes to a linked persona apply everywhere it is used.</div>
             <button class="ld-btn" data-act="new-persona" style="margin-top:8px">＋ New reusable persona</button>
@@ -709,7 +719,7 @@ function realSetup(ctx) {
             <div class="ld-persona-list" style="display:flex;flex-direction:column;gap:6px;margin-top:8px"></div>
           </div>
           <div class="ld-persona-editor ld-card" style="display:none">
-            <div class="ld-subtitle">Persona library editor</div>
+            <div class="ld-subtitle ld-lib-ed-title">Persona library editor</div>
             <span class="ld-label">Library name</span><input class="ld-persona-ed-name" placeholder="Eric" />
             <div class="ld-profile-grid" style="margin-top:7px">
               <div><span class="ld-label">Anchor / name</span><input class="ld-persona-ed-anchor" placeholder="Eric" /></div>
@@ -725,7 +735,7 @@ Armored [outfit=omit; subject=armored man] | armor, battle gear => heavy plate a
             <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-persona-ed-aliases" style="min-height:48px" placeholder="Named weapon = visual description"></textarea></div>
             <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-persona-ed-anatomy" style="min-height:48px"></textarea></div>
             <div><span class="ld-label">Conditional anatomy rule</span><select class="ld-persona-ed-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Include in every NSFW/explicit scene</option><option value="manual">Never include automatically</option></select></div>
-            <div class="ld-row" style="margin-top:10px"><button class="ld-btn ld-primary" data-act="persona-save">Save persona</button><button class="ld-btn" data-act="persona-cancel">Cancel</button></div>
+            <div class="ld-row" style="margin-top:10px"><button class="ld-btn ld-primary ld-lib-ed-save" data-act="persona-save">Save persona</button><button class="ld-btn" data-act="persona-cancel">Cancel</button></div>
             <div class="ld-status ld-persona-ed-status" style="margin-top:6px"></div>
           </div>
           <div class="ld-card">
@@ -755,6 +765,8 @@ Armored [outfit=omit; subject=armored man] | armor, battle gear => heavy plate a
             <details class="ld-profile-block" open>
               <summary>Main character identity profile</summary>
               <div class="ld-profile-fields">
+                <div><span class="ld-label">Character source</span><select class="ld-ed-char-link"><option value="">Local profile stored in this preset</option></select></div>
+                <div class="ld-help">Link a reusable character from the library, or keep a local one-off character in this preset. Linked library profiles are edited from the Character Library above.</div>
                 <div class="ld-profile-grid">
                   <div><span class="ld-label">Anchor / name</span><input class="ld-ed-char-anchor" placeholder="Mara" /></div>
                   <div><span class="ld-label">Count tag</span><input class="ld-ed-char-count" placeholder="1girl" /></div>
@@ -794,6 +806,17 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
                 <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-ed-persona-anatomy" style="min-height:48px"></textarea></div>
                 <div><span class="ld-label">Conditional anatomy rule</span><select class="ld-ed-persona-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Include in every NSFW/explicit scene</option><option value="manual">Never include automatically</option></select></div>
                 <div class="ld-help">Enter only concrete anatomy that may be hidden by clothing or framing, such as penis. Put identity and presentation tags—femboy, feminine male, trans woman, androgynous—and stable body traits under Permanent appearance. Unsupported phrases are ignored by the Anima compiler.</div>
+              </div>
+            </details>
+            <details class="ld-profile-block">
+              <summary>Additional cast (saved characters)</summary>
+              <div class="ld-profile-fields">
+                <div class="ld-help">Add up to 4 saved characters from the Character Library beyond the main character and persona. Each gets its own named ref, locked appearance, states, and anatomy rules in the parser and compiler. The parser illustrates whoever is present in the scene — cast members who do not appear in a passage are simply not drawn.</div>
+                <div class="ld-row">
+                  <div style="flex:1"><select class="ld-ed-cast-select"><option value="">— choose a saved character —</option></select></div>
+                  <button class="ld-btn ld-compact" data-act="ed-cast-add" style="flex:0 0 auto">＋ Add to cast</button>
+                </div>
+                <div class="ld-ed-cast-list" style="display:flex;flex-direction:column;gap:5px;margin-top:6px"></div>
               </div>
             </details>
             <span class="ld-label" style="margin-top:7px">Banned tags</span><input class="ld-ed-banned" />
@@ -1436,6 +1459,82 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     return entry && entry.profile ? profileFromPreset({ personaProfile: entry.profile }, 'persona') : null
   }
 
+  function linkedCharacterProfile(id) {
+    const entry = characters.find((item) => item && item.id === id)
+    return entry && entry.profile ? profileFromPreset({ characterProfile: entry.profile }, 'character') : null
+  }
+
+  function renderCharacterLinkSelect(selectedId = '') {
+    const select = $('.ld-ed-char-link')
+    if (!select) return
+    select.innerHTML = '<option value="">Local profile stored in this preset</option>' + characters.map((item) => {
+      const option = document.createElement('option')
+      option.value = item.id
+      option.textContent = item.name
+      return option.outerHTML
+    }).join('')
+    select.value = selectedId || ''
+  }
+
+  function setCharacterFieldsLinked(linked) {
+    const selectors = [
+      '.ld-ed-char-anchor', '.ld-ed-char-count', '.ld-ed-char-subject', '.ld-ed-chartags',
+      '.ld-ed-char-outfit', '.ld-ed-char-default-state', '.ld-ed-char-states',
+      '.ld-ed-char-aliases', '.ld-ed-char-anatomy', '.ld-ed-char-anatomy-mode',
+    ]
+    for (const selector of selectors) {
+      const control = $(selector)
+      if (control) control.disabled = !!linked
+    }
+  }
+
+  function applyCharacterLink(id, fallbackProfile = null) {
+    const linked = id ? linkedCharacterProfile(id) : null
+    if (linked) writeEditorProfile('character', linked)
+    else if (fallbackProfile) writeEditorProfile('character', fallbackProfile)
+    setCharacterFieldsLinked(!!linked)
+  }
+
+  function renderCastEditor() {
+    const list = $('.ld-ed-cast-list')
+    const select = $('.ld-ed-cast-select')
+    if (!list || !select) return
+    // Selectable = library characters not already in the cast and not the main character link.
+    const mainId = $('.ld-ed-char-link') ? $('.ld-ed-char-link').value : ''
+    select.innerHTML = '<option value="">— choose a saved character —</option>' + characters
+      .filter((item) => item && !editorCastIds.includes(item.id) && item.id !== mainId)
+      .map((item) => {
+        const option = document.createElement('option')
+        option.value = item.id
+        option.textContent = item.name
+        return option.outerHTML
+      }).join('')
+    list.innerHTML = ''
+    if (!editorCastIds.length) {
+      list.innerHTML = '<div class="ld-status">No additional cast members. Up to 4 saved characters can join the main character and persona.</div>'
+      return
+    }
+    for (const id of editorCastIds) {
+      const entry = characters.find((item) => item && item.id === id)
+      const chip = document.createElement('div')
+      chip.className = 'ld-preset-item'
+      const name = document.createElement('span')
+      name.className = 'ld-preset-name'
+      name.textContent = entry ? entry.name : `(missing character ${id.slice(0, 12)}…)`
+      const remove = document.createElement('button')
+      remove.className = 'ld-x'
+      remove.textContent = '✕'
+      remove.title = 'Remove from cast'
+      remove.addEventListener('click', () => {
+        editorCastIds = editorCastIds.filter((castId) => castId !== id)
+        renderCastEditor()
+      })
+      chip.appendChild(name)
+      chip.appendChild(remove)
+      list.appendChild(chip)
+    }
+  }
+
   function renderPersonaLinkSelect(selectedId = '') {
     const select = $('.ld-ed-persona-link')
     if (!select) return
@@ -1836,14 +1935,69 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     renderHeaderState()
   }
 
-  function openPersonaEditor(id = null) {
+  // One shared editor serves both libraries; libEditorKind decides which one
+  // the Save button writes to.
+  function openPersonaEditor(id = null, kind = 'persona') {
+    libEditorKind = kind === 'character' ? 'character' : 'persona'
     personaEditorId = id || null
-    const entry = id ? personas.find((item) => item && item.id === id) : null
+    const source = libEditorKind === 'character' ? characters : personas
+    const entry = id ? source.find((item) => item && item.id === id) : null
     $('.ld-persona-editor').style.display = 'block'
+    const title = $('.ld-lib-ed-title')
+    if (title) title.textContent = libEditorKind === 'character' ? 'Character library editor' : 'Persona library editor'
+    const saveButton = $('.ld-lib-ed-save')
+    if (saveButton) saveButton.textContent = libEditorKind === 'character' ? 'Save character' : 'Save persona'
     $('.ld-persona-ed-name').value = entry ? (entry.name || '') : ''
     writeLibraryPersona(entry && entry.profile ? entry.profile : {})
-    setStatus('.ld-persona-ed-status', entry ? 'Editing reusable persona.' : 'Create a reusable persona that can be linked into multiple presets.')
+    setStatus('.ld-persona-ed-status', entry
+      ? `Editing reusable ${libEditorKind}.`
+      : `Create a reusable ${libEditorKind} that can be linked into multiple presets.`)
     if ($('.ld-persona-editor').scrollIntoView) $('.ld-persona-editor').scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }
+
+  function renderCharacterList() {
+    const list = $('.ld-charlib-list')
+    if (!list) return
+    list.innerHTML = ''
+    if (!characters.length) {
+      list.innerHTML = '<div class="ld-status">No reusable characters yet.</div>'
+      renderCharacterLinkSelect($('.ld-ed-char-link') ? $('.ld-ed-char-link').value : '')
+      renderCastEditor()
+      return
+    }
+    for (const character of characters) {
+      const item = document.createElement('div')
+      item.className = 'ld-preset-item'
+      const name = document.createElement('span')
+      name.className = 'ld-preset-name'
+      name.textContent = character.name || 'Unnamed character'
+      const detail = document.createElement('span')
+      detail.className = 'ld-preset-model'
+      const profile = character.profile || {}
+      const formCount = Array.isArray(profile.appearanceStates) ? profile.appearanceStates.length : (String(profile.appearanceStates || '').trim() ? String(profile.appearanceStates).split(/\r?\n/).filter(Boolean).length : 0)
+      detail.textContent = [profile.anchor || '', formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
+      name.appendChild(detail)
+      name.addEventListener('click', () => openPersonaEditor(character.id, 'character'))
+      const edit = document.createElement('button')
+      edit.className = 'ld-append'; edit.textContent = 'Edit'; edit.style.flex = '0 0 auto'; edit.style.width = 'auto'; edit.style.padding = '3px 8px'
+      edit.addEventListener('click', (event) => { event.stopPropagation(); openPersonaEditor(character.id, 'character') })
+      const del = document.createElement('button')
+      del.className = 'ld-x'; del.textContent = '✕'; del.title = 'Delete reusable character'
+      del.addEventListener('click', async (event) => {
+        event.stopPropagation()
+        if (!confirm(`Delete reusable character “${character.name}”? Presets linked to it will fall back to their stored local copy, and it will leave any casts that include it.`)) return
+        try {
+          const result = await call('delete_character', { id: character.id })
+          characters = result.characters || []
+          renderCharacterList()
+          setStatus('.ld-charlib-status', `Deleted “${character.name}”.`, 'good')
+        } catch (error) { setStatus('.ld-charlib-status', error.message, 'err') }
+      })
+      item.appendChild(name); item.appendChild(edit); item.appendChild(del)
+      list.appendChild(item)
+    }
+    renderCharacterLinkSelect($('.ld-ed-char-link') ? $('.ld-ed-char-link').value : '')
+    renderCastEditor()
   }
 
   function renderPersonaList() {
@@ -2441,12 +2595,19 @@ ${entry.prompt || ''}`.trim()
     for (const l of c.loras || []) lbox.appendChild(loraRow(l.file || l.name || '', l.weight))
     if (!(c.loras || []).length) lbox.appendChild(loraRow('', 1))
     $('.ld-ed-quality').value = p ? (p.qualityTags || '') : (seed ? (seed.qualityTags || '') : '')
-    writeEditorProfile('character', profileFromPreset(p || seed || {}, 'character'))
+    const localCharacter = profileFromPreset(p || seed || {}, 'character')
+    const characterLibraryId = (p && p.characterLibraryId) || (seed && seed.characterLibraryId) || ''
+    renderCharacterLinkSelect(characterLibraryId)
+    writeEditorProfile('character', localCharacter)
+    applyCharacterLink(characterLibraryId, localCharacter)
     const localPersona = profileFromPreset(p || seed || {}, 'persona')
     const personaLibraryId = (p && p.personaLibraryId) || (seed && seed.personaLibraryId) || ''
     renderPersonaLinkSelect(personaLibraryId)
     writeEditorProfile('persona', localPersona)
     applyPersonaLink(personaLibraryId, localPersona)
+    editorCastIds = Array.isArray(p && p.castLibraryIds) ? [...p.castLibraryIds]
+      : (Array.isArray(seed && seed.castLibraryIds) ? [...seed.castLibraryIds] : [])
+    renderCastEditor()
     $('.ld-ed-banned').value = p ? (p.bannedTags || '') : (seed ? (seed.bannedTags || '') : '')
     $('.ld-ed-prefix').value = p ? (p.promptPrefix || '') : (seed ? (seed.promptPrefix || '') : '')
     $('.ld-ed-negative').value = p ? (p.negativePrompt || '') : (seed ? (seed.negativePrompt || '') : '')
@@ -2491,7 +2652,8 @@ ${entry.prompt || ''}`.trim()
   const loraSearch = $('.ld-lora-search')
   if (loraSearch) loraSearch.addEventListener('input', renderLoraLibrary)
 
-  $('[data-act="new-persona"]').addEventListener('click', () => openPersonaEditor(null))
+  $('[data-act="new-persona"]').addEventListener('click', () => openPersonaEditor(null, 'persona'))
+  $('[data-act="new-character"]').addEventListener('click', () => openPersonaEditor(null, 'character'))
   $('[data-act="persona-cancel"]').addEventListener('click', () => {
     $('.ld-persona-editor').style.display = 'none'
     personaEditorId = null
@@ -2499,20 +2661,46 @@ ${entry.prompt || ''}`.trim()
   $('[data-act="persona-save"]').addEventListener('click', async () => {
     try {
       const name = $('.ld-persona-ed-name').value.trim()
-      if (!name) throw new Error('Persona needs a library name.')
-      const result = await call('save_persona', {
+      const kind = libEditorKind === 'character' ? 'character' : 'persona'
+      if (!name) throw new Error(`${kind === 'character' ? 'Character' : 'Persona'} needs a library name.`)
+      const result = await call(kind === 'character' ? 'save_character' : 'save_persona', {
         id: personaEditorId || '',
         name,
         profile: libraryPersonaProfile(),
       })
-      personas = result.personas || []
       personaEditorId = result.entry && result.entry.id ? result.entry.id : personaEditorId
-      renderPersonaList()
-      const selected = $('.ld-ed-persona-link') ? $('.ld-ed-persona-link').value : ''
-      if (selected && selected === personaEditorId) applyPersonaLink(selected)
-      setStatus('.ld-persona-ed-status', `Saved reusable persona “${name}”.`, 'good')
-      setStatus('.ld-persona-status', `Persona library updated · ${personas.length} saved.`, 'good')
+      if (kind === 'character') {
+        characters = result.characters || []
+        renderCharacterList()
+        const selected = $('.ld-ed-char-link') ? $('.ld-ed-char-link').value : ''
+        if (selected && selected === personaEditorId) applyCharacterLink(selected)
+        setStatus('.ld-persona-ed-status', `Saved reusable character “${name}”.`, 'good')
+        setStatus('.ld-charlib-status', `Character library updated · ${characters.length} saved.`, 'good')
+      } else {
+        personas = result.personas || []
+        renderPersonaList()
+        const selected = $('.ld-ed-persona-link') ? $('.ld-ed-persona-link').value : ''
+        if (selected && selected === personaEditorId) applyPersonaLink(selected)
+        setStatus('.ld-persona-ed-status', `Saved reusable persona “${name}”.`, 'good')
+        setStatus('.ld-persona-status', `Persona library updated · ${personas.length} saved.`, 'good')
+      }
     } catch (error) { setStatus('.ld-persona-ed-status', error.message, 'err') }
+  })
+  $('.ld-ed-char-link').addEventListener('change', (event) => {
+    const id = event.target.value || ''
+    applyCharacterLink(id)
+    renderCastEditor()
+    setStatus('.ld-ed-status', id
+      ? 'This preset now links to the selected reusable character. Edit it in the Character Library.'
+      : 'This preset now uses its local character fields.')
+  })
+  $('[data-act="ed-cast-add"]').addEventListener('click', () => {
+    const select = $('.ld-ed-cast-select')
+    const id = select ? select.value : ''
+    if (!id) { setStatus('.ld-ed-status', 'Choose a saved character to add to the cast.', 'err'); return }
+    if (editorCastIds.length >= 4) { setStatus('.ld-ed-status', 'A preset cast holds at most 4 additional characters.', 'err'); return }
+    if (!editorCastIds.includes(id)) editorCastIds.push(id)
+    renderCastEditor()
   })
   $('.ld-ed-persona-link').addEventListener('change', (event) => {
     const id = event.target.value || ''
@@ -2617,6 +2805,8 @@ ${entry.prompt || ''}`.trim()
         characterProfile: editorProfile('character'),
         personaProfile: editorProfile('persona'),
         personaLibraryId: $('.ld-ed-persona-link').value || '',
+        characterLibraryId: $('.ld-ed-char-link').value || '',
+        castLibraryIds: [...editorCastIds],
         bannedTags: $('.ld-ed-banned').value,
       })
       presets = res.presets
@@ -3074,7 +3264,7 @@ ${entry.prompt || ''}`.trim()
     if (initialized) return true
     try {
       const res = await call('init', {}, 8000)
-      settings = res.settings; presets = res.presets; personas = res.personas || []; history = res.history; storyDebug = res.storyDebug || null; autoStatus = res.lastAutoStatus || null
+      settings = res.settings; presets = res.presets; personas = res.personas || []; characters = res.characters || []; history = res.history; storyDebug = res.storyDebug || null; autoStatus = res.lastAutoStatus || null
       defaults = res.defaults || defaults
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
@@ -3119,7 +3309,7 @@ ${entry.prompt || ''}`.trim()
           }, { force: true })
         }
       }
-      renderPersonaList(); renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
+      renderCharacterList(); renderPersonaList(); renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
       updateScanLabel()
       initialized = true
       console.log(`[LumiDraw] backend connected — UI v${EXTENSION_VERSION}`)

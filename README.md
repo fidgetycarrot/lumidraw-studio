@@ -1,7 +1,49 @@
-# LumiDraw Studio 0.20.4
+# LumiDraw Studio 0.21.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.21.0 — Character Library and multi-character casts
+
+Characters get the same reusable-library treatment personas have had since
+0.19.0, and presets scale past the fixed character + persona pair.
+
+### Reusable character library
+
+A new Character Library sits alongside the Persona Library on the Presets tab,
+sharing the same editor (identity, permanent appearance, default outfit,
+appearance states/forms, named props, conditional anatomy). Save a character
+once, then link it anywhere:
+
+- **Main character slot** — a preset's main character can now link a library
+  character (mirroring the persona link). Swap image parameters freely; the
+  character definition lives in one place and edits apply to every linked
+  preset on the next parser run.
+- **Additional cast** — a preset can add up to 4 more saved characters beyond
+  the main character and persona, for a maximum of six profiled subjects.
+
+### Named cast refs through the whole pipeline
+
+Each cast member gets a ref derived from their name ("maren", "old_hendrick"),
+listed in the parser contract next to character and persona. Cast members are
+first-class: locked profiles injected by the compiler (the parser is forbidden
+from describing their permanent appearance), appearance states, named props,
+conditional anatomy rules and the anatomy firewall, natural-language identity
+binding in multi-subject captions, and count-tag aggregation ("2girls, 1boy")
+all work identically for them. A parser that emits `other_1` with a matching
+label still rebinds to the saved cast member automatically.
+
+The parser illustrates whoever appears in the passage — cast members absent
+from a scene are simply not drawn, so a large cast costs nothing until they
+show up.
+
+### Format notes
+
+- Preset fields: `characterLibraryId` (main-slot link) and `castLibraryIds`
+  (array, additional members). Both empty by default; existing presets are
+  unchanged.
+- Subject labels are now required only for anonymous `other_N` refs; named
+  refs carry their identity in the ref itself.
 
 ## 0.20.4 — Scan watchdog: no more immortal timers
 
