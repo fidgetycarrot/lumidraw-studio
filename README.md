@@ -1,7 +1,35 @@
-# LumiDraw Studio 0.20.1
+# LumiDraw Studio 0.20.2
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.20.2 — Compact two-character prompts (anima-hybrid-v9)
+
+Field feedback on 0.20.1: two-character generations showed extra limbs and
+clothing on the wrong subject. Two causes, both fixed.
+
+**Unbound subject tags.** The multi-subject tag run still carried each
+subject's outfit, pose, and action tags alongside the caption block that bound
+them — so `dark linen shirt` floated free to land on either character, and an
+unowned `grabbing a wrist` conjured hands belonging to nobody. In multi-subject
+scenes the tag run now carries only scene-level tags (safety, counts,
+character/series, artist, setting, camera, lighting, style); every
+subject-specific detail lives exclusively in the caption where it is bound to a
+name. `core_action` joins the tag run only when no relation sentence already
+covers it. Solo scenes are unchanged — with one subject nothing can misbind.
+
+**Caption budget.** Long prompts are themselves a confusion risk, so the
+caption is tightened: two sentences per subject (identity, then one combined
+outfit/pose/expression/action sentence, instead of up to five), at most seven
+appearance traits per subject ordered so bleed-prone signature traits — now
+including nonhuman features such as wolf ears, fangs, claws, snout, and fur —
+survive the cut, build adjectives dropped, relation sentences capped at two,
+and generic exclusivity anchors ("the only eyewear in the scene...") removed
+entirely since the identity sentence is now the only place appearance exists.
+Named-prop ownership keeps one sentence at most per subject.
+
+A representative two-character scene compiles to roughly 630 characters, down
+from about 880 in 0.20.1; explicit two-character scenes drop from ~770 to ~520.
 
 ## 0.20.1 — Truncation survival order, parser retry, startup echo guard
 
