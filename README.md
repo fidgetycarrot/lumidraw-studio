@@ -1,7 +1,83 @@
-# LumiDraw Studio 0.19.1
+# LumiDraw Studio 0.20.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.20.0 — Anima-native prompt assembly
+
+The compiler is now `anima-hybrid-v8`. The parser contract is unchanged in
+shape; what changed is how the extracted scene is turned into a prompt.
+
+### Natural-language identity binding
+
+Previously each subject compiled to a comma-separated run headed by its proper
+name:
+
+```text
+Ilsa, a half-elf woman, round glasses, silver hair, white blouse, sitting, ...
+Corin, a tall human man, black hair, stubble, dark linen shirt, standing, ...
+```
+
+Anima has no mechanism to bind a name to the tags that follow it. The name is an
+unknown token, and every trait after it sits in the same undifferentiated tag
+soup as the other subject's traits — which is precisely how glasses, hair
+colour, markings, and species features end up on the wrong character.
+
+Anima's own guidance is to name a character and then describe them in prose.
+Multi-subject scenes now emit sentences, and permanent appearance is kept out of
+the shared tag run entirely:
+
+```text
+safe, 1girl, 1boy, white blouse, sitting, laughing, dark linen shirt, standing, kitchen, night, cowboy shot, dim light
+
+Ilsa is a half-elf woman with silver hair, long hair, green eyes, pointed elf
+ears, round glasses, a shoulder tattoo, freckles, and a slender build. Ilsa
+wears a white blouse. Ilsa is sitting on the counter. Corin is a tall human man
+with black hair, short hair, brown eyes, stubble, and a muscular build. Corin
+grips the wrist of Ilsa. The only eyewear in the scene is round glasses, worn by
+the half-elf Ilsa. Ilsa is on the right and Corin is on the left.
+```
+
+Solo scenes remain tag-only. With one subject there is nothing to bind, and tags
+are what the model renders best.
+
+### Trained tag order
+
+Output follows Anima's documented order — quality/meta/year/safety, then count
+tags, then character, series, artist, then general tags. Subjects may now carry
+`booru_character` and `booru_series` for recognisable published characters;
+original characters are carried by the caption block instead.
+
+### Safety-tag reconciliation
+
+A preset's quality field almost always ends `..., score_7, safe`. On an
+nsfw/explicit passage that compiled to `safe, ..., explicit` — two mutually
+exclusive tags in one prompt. The scene's classification now wins and the stale
+tag is dropped from the header.
+
+### Single tag run
+
+The prompt was previously split into six labelled lines. Anima saw newlines
+almost exclusively in its dataset-tagged captions, so a multi-line prompt is
+off-distribution. Tags now flow as one comma-separated run, with a single
+paragraph break before the caption block.
+
+### Artist tags
+
+Anima requires the `@` prefix or the effect is very weak. `artist:foo` and
+`by foo` in a preset are rewritten to `@foo`, and artist tags are moved into
+Anima's artist slot regardless of where the preset put them.
+
+### Smaller compiler fixes
+
+- Hedge phrasing such as `sitting on the clearly visible counter edge` has no
+  booru counterpart; pose and support surface are separate tags again.
+- Named props expanded on every mention, repeating a long descriptor two or
+  three times per prompt. Expansion is now once per subject, description only.
+- Standing characters no longer inherit furniture from the setting.
+- Redundant tags are collapsed: `desk, study, wooden desk` and
+  `carrying hammer, carrying a hammer` no longer pay twice for one concept.
+- Left/right placement is a sentence rather than the pseudo-tag `ilsa on right`.
 
 ## 0.19.1 — Truncation recovery and cleaner parser context
 
@@ -44,7 +120,7 @@ sampler, and LoRA catalogs plus separate Studio and Story workflows.
 One state per line:
 
 ```text
-Name [count=1boy; outfit=inherit; subject=adult human man] | recognition phrases => appearance tags
+Name [count=1boy; outfit=inherit; appearance=inherit; subject=adult human man] | recognition phrases => appearance tags
 ```
 
 Example:
@@ -52,12 +128,27 @@ Example:
 ```text
 Human [count=1boy; outfit=inherit; subject=adult human man] | human form, unshifted => broad shoulders, messy dark brown hair
 Hybrid [count=1boy; outfit=inherit; subject=humanoid werewolf] | hybrid form, half-shifted => wolf ears, partial muzzle, furred arms, claws, tail
-Wolf [count=1other; outfit=omit; subject=massive wolf] | wolf form, fully shifted, on four paws => dark brown fur, amber eyes, quadruped
+Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wolf form, fully shifted, on four paws => dark brown fur, amber eyes, quadruped
 ```
+
+The directive block belongs immediately after the state name, before the `|`
+separator. Directives placed after the recognition phrases are ignored.
 
 `outfit=inherit` keeps the profile's default outfit when the scene does not
 specify clothing. `outfit=omit` suppresses that fallback, useful for full animal
 forms. `count` and `subject` are optional.
+
+`appearance=inherit` (the default) layers the state's tags over the profile's
+Permanent appearance, which is right for a costume change or a partial shift.
+`appearance=replace` discards the permanent tags for that form — added in
+0.20.0, because a fully shifted werewolf was otherwise still carrying its human
+hair, and any form declaring its own eye colour produced two eye colours at
+once.
+
+For a three-form werewolf, `Human` and `Hybrid` want `inherit` and `Wolf` wants
+`replace`. If a hybrid form needs to override a specific permanent trait rather
+than add to it, either drop that trait from Permanent appearance and let each
+form declare it, or mark the hybrid `replace` and restate the shared traits.
 
 ## Retained automatic Anima pipeline
 
@@ -115,8 +206,8 @@ job.
 
 ## Anima hybrid refinements
 
-The compiler remains compact and tag-first. Its identifier is now
-`anima-hybrid-v7`.
+Retained from earlier releases. The compiler identifier is now
+`anima-hybrid-v8`.
 
 ### Generic signature ownership
 
@@ -125,7 +216,7 @@ its owner's tag block and reinforced with a short generic ownership anchor, for
 example:
 
 ```text
-The elf Sovi is the only subject wearing round glasses.
+The only eyewear in the scene is round glasses, worn by the elf Sovi.
 ```
 
 The behavior is profile-driven rather than character-specific. It applies to
@@ -176,7 +267,7 @@ camera compositions retain their other framing tags.
 
 ## Suggested test
 
-1. Confirm the header and Terminal show **v0.19.1**.
+1. Confirm the header and Terminal show **v0.20.0**.
 2. Select **Parser**, **Anima hybrid experimental**, and enable automatic scans.
 3. Leave reference context at **2 previous messages** and Loom ledger on.
 4. Complete one new roleplay response without pressing Manual Parser.
@@ -185,3 +276,8 @@ camera compositions retain their other framing tags.
 6. If no image is warranted, the Story panel should show that decision rather
    than remaining silent.
 7. Run Manual Parser once afterward to compare the same Anima pipeline directly.
+8. Inspect a two-character prompt in the Story debug panel: the tag run should
+   contain no character names and no permanent appearance tags, and the caption
+   block below it should name each character and describe them.
+9. If you use appearance states, confirm a fully shifted form no longer carries
+   its human traits once marked `appearance=replace`.

@@ -55,7 +55,7 @@ const DEFAULT_PROTOCOL = LEGACY_DEFAULT_PROTOCOL
 
 const LEGACY_DEFAULT_PARSER_INSTRUCTION = `You convert a story passage into ONE image prompt of comma-separated danbooru-style tags (subject count, expression, outfit, pose, setting, lighting, composition). Choose the single most visual moment of the passage. Do not use character names; describe appearance instead. Respond with ONLY the tags. You may return up to {{max_images}} prompts for distinct visual moments, one per line, but prefer a single strong one. If the passage has no strong visual moment, respond with exactly: NONE`
 
-const DEFAULT_PARSER_INSTRUCTION = `Choose the strongest visual moment in the story passage. Prefer one image, but you may choose up to {{max_images}} distinct moments. Extract a compact visual skeleton: subjects, current clothing, expressions, poses, support surfaces, the base body arrangement, direct contact points, setting, camera, and lighting. Do not rewrite permanent character identity or invent anatomy. LumiDraw will keep the final prompt mostly Danbooru/Gelbooru-style tags and inject only a few short ownership-safe natural-language anchors where tags are prone to character bleed or spatial ambiguity.`
+const DEFAULT_PARSER_INSTRUCTION = `Choose the strongest visual moment in the story passage. Prefer one image, but you may choose up to {{max_images}} distinct moments. Extract a compact visual skeleton: subjects, current clothing, expressions, poses, support surfaces, the base body arrangement, direct contact points, setting, camera, and lighting. Every value is a lowercase Danbooru/Gelbooru-style tag, never hedged prose. Do not rewrite permanent character identity or invent anatomy. LumiDraw compiles this into an Anima prompt itself: a tag run in Anima's trained order, followed by a natural-language caption block that names each character and describes their appearance, which is Anima's documented remedy for traits bleeding between characters. Give it clean scene state and let it own the wording.`
 const V0181_ANIMA_PARSER_INSTRUCTION = `Choose the strongest visual moment in the story passage. Prefer one image, but you may choose up to {{max_images}} distinct moments. Describe only scene state: which subjects are present, their current outfit, pose, expression, active-voice interaction, setting, camera, and lighting. Do not rewrite permanent character identity or invent anatomy. LumiDraw will append a strict JSON schema and compile the final image prompt itself.`
 const HISTORY_LIMIT = 24
 
@@ -1072,6 +1072,16 @@ function normalizeOutfitPolicy(value) {
   return ['inherit', 'omit'].includes(policy) ? policy : 'inherit'
 }
 
+// A state's appearance tags are added to the profile's permanent appearance by
+// default, which is right for a costume change and wrong for a transformation:
+// a fully shifted werewolf was still carrying "messy dark brown hair" and
+// "amber eyes" alongside "dark brown fur" and "yellow eyes". "replace" lets a
+// form stand on its own tags. Default stays "inherit" for existing presets.
+function normalizeAppearancePolicy(value) {
+  const policy = String(value || 'inherit').trim().toLowerCase()
+  return ['inherit', 'replace'].includes(policy) ? policy : 'inherit'
+}
+
 function parseAppearanceStateLine(line, label) {
   const source = String(line || '').trim()
   if (!source || source.startsWith('#')) return null
@@ -1091,6 +1101,7 @@ function parseAppearanceStateLine(line, label) {
   const recognition = shortList(parts.slice(1).join(', '), `${label} recognition`, { maxItems: 12, maxWords: 8, maxChars: 80 })
   let countTag = ''
   let outfitPolicy = 'inherit'
+  let appearancePolicy = 'inherit'
   let subject = ''
   for (const directive of directives.split(';').map((value) => value.trim()).filter(Boolean)) {
     const idx = directive.indexOf('=')
@@ -1099,6 +1110,7 @@ function parseAppearanceStateLine(line, label) {
     const value = directive.slice(idx + 1).trim()
     if (key === 'count') countTag = shortPhrase(value, `${label} count tag`, 3, 24, true)
     else if (key === 'outfit') outfitPolicy = normalizeOutfitPolicy(value)
+    else if (key === 'appearance') appearancePolicy = normalizeAppearancePolicy(value)
     else if (key === 'subject') subject = shortPhrase(value, `${label} subject`, 8, 72, true)
   }
   return {
@@ -1108,6 +1120,7 @@ function parseAppearanceStateLine(line, label) {
     countTag,
     subject,
     outfitPolicy,
+    appearancePolicy,
   }
 }
 
@@ -1126,6 +1139,7 @@ function normalizeAppearanceStates(value, label = 'appearance state') {
         countTag: shortPhrase(raw.countTag || raw.count_tag || '', `${label} ${name} count tag`, 3, 24, true),
         subject: shortPhrase(raw.subject || '', `${label} ${name} subject`, 8, 72, true),
         outfitPolicy: normalizeOutfitPolicy(raw.outfitPolicy || raw.outfit_policy),
+        appearancePolicy: normalizeAppearancePolicy(raw.appearancePolicy || raw.appearance_policy),
       }
     } else {
       state = parseAppearanceStateLine(raw, `${label} ${index + 1}`)
@@ -1202,6 +1216,7 @@ async function resolveProfile(profile, userId, chatId) {
       countTag: await resolveOne(state.countTag),
       subject: await resolveOne(state.subject),
       outfitPolicy: normalizeOutfitPolicy(state.outfitPolicy),
+      appearancePolicy: normalizeAppearancePolicy(state.appearancePolicy),
     }))),
   }
 }
@@ -1411,6 +1426,8 @@ function normalizeSceneSubject(raw, index) {
     ref,
     label: shortPhrase(source.label || '', `subject ${index + 1} label`, 7, 72, known),
     countTag: shortPhrase(source.count_tag || source.countTag || '', `subject ${index + 1} count tag`, 3, 24, true),
+    booruCharacter: shortPhrase(source.booru_character || source.booruCharacter || '', `subject ${index + 1} character tag`, 6, 64, true),
+    booruSeries: shortPhrase(source.booru_series || source.booruSeries || '', `subject ${index + 1} series tag`, 8, 72, true),
     position: shortPhrase(source.position || '', `subject ${index + 1} position`, 4, 40, true),
     appearance: shortList(source.appearance || [], `subject ${index + 1} appearance`, { maxItems: 24, maxWords: 7, maxChars: 72 }),
     outfit: shortList(source.outfit || [], `subject ${index + 1} outfit`, { maxItems: 12, maxWords: 7, maxChars: 72 }),
@@ -1641,7 +1658,13 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   const state = profile ? selectAppearanceState(profile, subject, sourcePassage) : null
   const anchor = profile ? profile.anchor : (subject.label || subject.ref.replace(/_/g, ' '))
   const noun = state && state.subject ? state.subject : (profile ? profile.subject : subject.label)
-  const appearance = profile ? uniqueStrings([...(profile.appearance || []), ...((state && state.appearance) || [])]) : subject.appearance
+  // A transformation state marked appearance=replace stands on its own tags;
+  // otherwise the form's tags are layered over the profile's permanent ones.
+  const appearance = profile
+    ? (state && state.appearancePolicy === 'replace' && (state.appearance || []).length
+      ? uniqueStrings(state.appearance)
+      : uniqueStrings([...(profile.appearance || []), ...((state && state.appearance) || [])]))
+    : subject.appearance
   const inheritedOutfit = profile && (!state || state.outfitPolicy !== 'omit') ? profile.defaultOutfit : []
   const outfit = subject.outfit.length ? subject.outfit : inheritedOutfit
   const anatomyAllowed = profile && (
@@ -1650,7 +1673,9 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   )
   const anatomy = anatomyAllowed ? profile.anatomy : []
   const countTag = state && state.countTag ? state.countTag : (profile ? profile.countTag : subject.countTag)
-  return { subject, profile, appearanceState: state, anchor, noun, appearance, outfit, anatomy, countTag }
+  // `named` distinguishes "Ilsa" (a proper name that can head a sentence) from
+  // "cloaked stranger" (a label that needs an article: "the cloaked stranger").
+  return { subject, profile, appearanceState: state, anchor, noun, appearance, outfit, anatomy, countTag, named: !!profile }
 }
 
 
@@ -1665,8 +1690,11 @@ function normalizeVisualPhrase(value) {
     .replace(/\bone heel hooked behind (his|her|their) knee\b/gi, 'one bare heel curled behind $1 knee')
     .replace(/\bhooked behind (his|her|their) knee\b/gi, 'curled behind $1 knee')
     .replace(/\bhooking (his|her|their) knee\b/gi, 'curling a bare heel behind $1 knee')
-    .replace(/\bsitting on counter\b/gi, 'sitting on the clearly visible counter edge')
-    .replace(/\bseated on counter\b/gi, 'seated on the clearly visible counter edge')
+    // Anima is a booru-tag model: hedge phrasing such as "the clearly visible X"
+    // has no counterpart in its training captions and only dilutes the tag.
+    // Support surfaces are emitted as their own tags instead (see supportTags).
+    .replace(/\bthe clearly visible\b/gi, 'the')
+    .replace(/\bon (cheek|face|forehead|arm|shoulder|back|chest|neck|hand|thigh|hip)\b/gi, 'on the $1')
     .replace(/\s{2,}/g, ' ')
     .trim()
 }
@@ -1688,6 +1716,75 @@ function animaTag(value) {
 
 function animaTagList(list) {
   return uniqueStrings((Array.isArray(list) ? list : []).map(animaTag).filter(Boolean))
+}
+
+const ANIMA_SAFETY_TAGS = ['safe', 'sensitive', 'nsfw', 'explicit']
+
+// Drops tags that are wholly contained in a longer tag already present, in
+// this list or in `others`. "desk, study, wooden desk" collapses to
+// "study, wooden desk"; "carrying hammer, carrying a hammer" loses the
+// shorter duplicate. Cheap way to stop the same concept being paid for twice.
+function collapseRedundantTags(tags, others = []) {
+  // Booru tags carry no articles, so "carrying hammer" and "carrying a hammer"
+  // are the same concept and must compare equal.
+  const key = (value) => normalizeIdentityText(value).replace(/\b(?:a|an|the)\s+/g, '').replace(/\s{2,}/g, ' ').trim()
+  const pool = uniqueStrings([...(tags || []), ...(others || [])])
+  const seen = new Set()
+  return (tags || []).filter((tag) => {
+    const value = key(tag)
+    if (!value || seen.has(value)) return false
+    const covered = pool.some((candidate) => {
+      const other = key(candidate)
+      return other !== value && other.length > value.length && new RegExp(`\\b${escapeRegExp(value)}\\b`).test(other)
+    })
+    if (covered) return false
+    seen.add(value)
+    return true
+  })
+}
+
+// Prompt weighting works on Anima but needs a heavier hand than SDXL — the
+// model card's own example is "(chibi:2)". Reserved for the few places the
+// compiler has a defensible reason to emphasise something.
+function animaWeight(tag, weight) {
+  const value = animaTag(tag)
+  if (!value) return ''
+  const w = Number(weight)
+  if (!Number.isFinite(w) || w === 1) return value
+  return `(${value}:${w})`
+}
+
+// Anima requires artist tags to be prefixed with "@" — the model card is blunt
+// that "the effect will be very weak if you don't". Presets written in A1111
+// habits spell them "artist:foo" or "by foo", so normalise those forms rather
+// than silently rendering a near-no-op tag.
+function normalizeArtistTags(headerText) {
+  return String(headerText || '')
+    .split(',')
+    .map((part) => {
+      const value = part.trim()
+      if (!value || value.startsWith('@')) return value
+      const match = /^(?:artist\s*:\s*|by\s+)(.+)$/i.exec(value)
+      return match ? `@${match[1].trim().toLowerCase()}` : value
+    })
+    .filter(Boolean)
+    .join(', ')
+}
+
+// A preset's quality-tag field is free text and almost always carries a safety
+// tag ("masterpiece, best quality, score_7, safe"). When the parser classifies
+// a passage as nsfw/explicit the two disagree, and the old compiler emitted
+// both — "…, safe, explicit, 1girl" — which is the single worst thing you can
+// hand a model trained with mutually exclusive safety tags. The scene wins.
+function reconcileSafetyTags(headerText, safety) {
+  const text = String(headerText || '').trim()
+  if (!text) return ''
+  if (!ANIMA_SAFETY_TAGS.includes(String(safety || '').toLowerCase())) return text
+  const kept = text
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part && !ANIMA_SAFETY_TAGS.includes(part.toLowerCase()))
+  return kept.join(', ')
 }
 
 function naturalList(items) {
@@ -1746,23 +1843,54 @@ function findSupportSurface(setting) {
   return ''
 }
 
+const SUPPORTED_POSE_RE = /\b(?:sitting|seated|perched|leaning|lying|lying down|reclining|kneeling|sprawled|slumped|straddling)\b/
+
 function supportForSubject(item, scene) {
   if (item.subject.support) return animaTag(item.subject.support)
+  // Only infer a surface from the setting when the pose actually rests on one.
+  // Otherwise a standing character inherited the room's furniture and ended up
+  // "standing ... against the counter edge".
+  const poseText = animaTagList(item.pose || (item.subject && item.subject.pose) || []).join(', ')
+  if (!SUPPORTED_POSE_RE.test(poseText)) return ''
   return findSupportSurface(scene.setting)
 }
 
+const SUPPORT_SURFACE_RE = /countertop|counter edge|bar stool|stool|chair|bed|couch|sofa|floor|wall|table|desk|counter/
+
+// Danbooru keeps the pose and the furniture as separate tags ("sitting",
+// "counter"), so the compiler no longer welds them into one pseudo-tag. The
+// pose list stays clean and the surface is emitted alongside the scene tags.
 function poseWithSupport(item, scene) {
+  return animaTagList(item.pose)
+}
+
+// Collects the visible support surfaces across every subject so they can join
+// the general tag block exactly once.
+function supportTags(descriptors, scene) {
+  const surfaces = []
+  for (const item of descriptors) {
+    const support = supportForSubject(item, scene)
+    if (!support) continue
+    const poseText = animaTagList(item.pose).join(', ')
+    if (SUPPORT_SURFACE_RE.test(poseText)) continue
+    surfaces.push(support)
+  }
+  return uniqueStrings(surfaces)
+}
+
+// Natural-language rendering of a pose plus its surface, used only in the
+// multi-subject caption block where the binding actually matters.
+function poseClause(item, scene) {
   const poses = animaTagList(item.pose)
-  if (!poses.length) return poses
+  if (!poses.length) return ''
   const support = supportForSubject(item, scene)
-  if (!support) return poses
-  const joined = poses.join(', ')
-  if (joined.includes(support) || /countertop|counter edge|bar stool|stool|chair|bed|couch|sofa|floor|wall|table|desk/.test(joined)) return poses
-  if (/(sitting|seated|perched)/.test(joined)) poses[0] = `${poses[0]} on the clearly visible ${support}`
-  else if (/leaning/.test(joined)) poses[0] = `${poses[0]} against the clearly visible ${support}`
-  else if (/lying/.test(joined)) poses[0] = `${poses[0]} on the clearly visible ${support}`
-  else if (/kneeling/.test(joined) && support === 'floor') poses[0] = `${poses[0]} on the clearly visible floor`
-  return uniqueStrings(poses)
+  const joined = naturalList(poses)
+  if (!support || SUPPORT_SURFACE_RE.test(poses.join(', '))) return joined
+  if (/(sitting|seated|perched)/.test(joined)) return `${joined} on the ${support}`
+  if (/leaning/.test(joined)) return `${joined} against the ${support}`
+  if (/lying/.test(joined)) return `${joined} on the ${support}`
+  if (/kneeling/.test(joined) && support === 'floor') return `${joined} on the floor`
+  return joined
 }
 
 function cleanAppearanceForNoun(items, noun) {
@@ -1792,7 +1920,7 @@ function visibleAnatomySentence(item, scene) {
   // A safe/sensitive scene must never receive an exposed-anatomy sentence.
   // This also prevents a profile override from contradicting the safety tag.
   if (!scene || !['nsfw', 'explicit'].includes(scene.safety)) return ''
-  const anchor = sentenceName(item.anchor)
+  const anchor = displayName(item, true)
   const anatomy = normalizeConditionalAnatomy(item.anatomy)
   if (anatomy.includes('penis')) return `${anchor}'s penis is visibly exposed.`
   if (anatomy.includes('vulva')) return `${anchor}'s vulva is visibly exposed.`
@@ -1844,7 +1972,7 @@ function outfitCaptionSentences(anchor, outfit) {
     else clothes.push(tag)
   }
   const sentences = []
-  if (clothes.length) sentences.push(`${anchor} wears ${naturalList(clothes)}.`)
+  if (clothes.length) sentences.push(`${anchor} wears ${naturalList(withArticleList(clothes))}.`)
   for (const state of uniqueStrings(states)) {
     if (state === 'nude' || state === 'naked') sentences.push(`${anchor} is nude.`)
     else if (state === 'barefoot' || state === 'bare feet') sentences.push(`${anchor} is barefoot.`)
@@ -1902,20 +2030,26 @@ function subjectSpeciesCue(item) {
   return species.find((value) => new RegExp(`\\b${escapeRegExp(value)}\\b`, 'i').test(text)) || ''
 }
 
-function signatureOwnerName(item) {
-  const name = sentenceName(item && item.anchor)
+// `lead` controls capitalisation: a species cue reads "The half-elf Ilsa" at
+// the start of a sentence but must not shout mid-sentence ("worn by The
+// half-elf Ilsa").
+function signatureOwnerName(item, lead = true) {
   const species = subjectSpeciesCue(item)
-  return species ? `The ${species} ${name}` : name
+  if (!species || !(item && item.named)) return displayName(item, lead)
+  return `${lead ? 'The' : 'the'} ${species} ${sentenceName(item.anchor)}`
 }
 
 function signatureOwnershipSentence(tag, item, exclusive = false) {
   const value = animaTag(tag)
   if (!value || signaturePriority(value) >= 99) return ''
-  const name = signatureOwnerName(item)
   if (/\b(?:glasses|eyewear|goggles|monocle|eyepatch)\b/.test(value)) {
-    return exclusive ? `The only eyewear in the scene is ${value} worn by ${name}.` : `${name} wears ${value}.`
+    return exclusive
+      ? `The only eyewear in the scene is ${value}, worn by ${signatureOwnerName(item, false)}.`
+      : `${signatureOwnerName(item, true)} wears ${value}.`
   }
-  return exclusive ? `${name} is the only subject with ${value}.` : `${name} has ${value}.`
+  return exclusive
+    ? `${signatureOwnerName(item, true)} is the only character with ${withArticle(value)}.`
+    : `${signatureOwnerName(item, true)} has ${withArticle(value)}.`
 }
 
 function aliasMentioned(text, alias) {
@@ -1990,7 +2124,10 @@ function expandGenericAliasTag(tag, alias) {
   const propName = String(alias.name || '').trim()
   if (!description) return value
   if (normalizeIdentityText(value).includes(normalizeIdentityText(description))) return value
-  const replacementText = propName ? `${propName}, ${description}` : description
+  // Tag space gets the *description* only. A proper noun like "dawnbreaker" is
+  // an unknown token to Anima and buys nothing here; the name still appears in
+  // the natural-language ownership sentence, where it can actually bind.
+  const replacementText = description.replace(/^(?:a|an|the)\s+/i, '')
   const replacements = [
     ['warhammer', /\bwarhammer\b/i], ['hammer', /\bhammer\b/i],
     ['greatsword', /\bgreatsword\b/i], ['longsword', /\blongsword\b/i], ['shortsword', /\bshortsword\b/i], ['sword', /\bsword\b/i],
@@ -2021,7 +2158,7 @@ function activeAliasesForSubject(item, scene) {
 }
 
 function aliasOwnershipSentence(alias, item, scene) {
-  const name = sentenceName(item.anchor)
+  const name = displayName(item, true)
   const subjectText = normalizeIdentityText(subjectSceneText(item, scene))
   const prop = String(alias.name || '').trim()
   const description = aliasDescriptorWithArticle(alias.description)
@@ -2053,29 +2190,46 @@ function subjectOwnershipAnchors(item, scene, exclusive = false) {
   return uniqueStrings(anchors).slice(0, 2)
 }
 
-function subjectTagLine(item, scene, descriptors) {
-  const anchor = sentenceName(item.anchor)
-  const noun = animaTag(item.noun) || 'subject'
+// Tag-space rendering for a subject. `includeAppearance` is false in
+// multi-subject scenes, where permanent appearance is carried by the
+// natural-language identity sentences instead — keeping "silver hair" and
+// "black hair" out of the same undifferentiated tag run is the whole point.
+function subjectTagLine(item, scene, descriptors, { includeAppearance = true } = {}) {
   const poses = poseWithSupport(item, scene).map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
   const actions = item.action
     .filter((part) => !actionDuplicatesRelation(part, item.subject.ref, scene.relations))
     .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
   const aliases = activeAliasesForSubject(item, scene)
+  // A named prop is expanded to its full descriptor at most once per subject.
+  // Expanding on every mention produced lines like "dawnbreaker, a chipped
+  // bronze warhammer with a leather-wrapped haft over shoulder, ... carrying
+  // dawnbreaker, a chipped bronze warhammer with a leather-wrapped haft".
+  const expanded = new Set()
   const normalizeWithAliases = (part) => {
     let value = part
     for (const alias of aliases) {
+      const key = normalizeIdentityText(alias && alias.name)
       value = normalizeAliasTag(value, alias)
-      value = expandGenericAliasTag(value, alias)
+      if (!expanded.has(key)) {
+        const grown = expandGenericAliasTag(value, alias)
+        if (grown !== value) expanded.add(key)
+        value = grown
+      }
+      if (normalizeIdentityText(value).includes(normalizeIdentityText(alias && alias.description))) expanded.add(key)
     }
     return animaTag(value)
   }
-  const visibleAppearance = filterAppearanceByVisibility(item.appearance, item.outfit)
+  const visibleAppearance = includeAppearance
+    ? filterAppearanceByVisibility(item.appearance, item.outfit)
+    : []
   const signatureAppearance = visibleAppearance
     .filter((tag) => signaturePriority(tag) < 99)
     .sort((a, b) => signaturePriority(a) - signaturePriority(b))
   const ordinaryAppearance = visibleAppearance.filter((tag) => signaturePriority(tag) >= 99)
+  // The subject's prose noun ("a half-elf woman") and proper name are
+  // deliberately absent: neither is a booru tag, and the count tag in the
+  // header already carries the subject count.
   const coreTags = uniqueStrings([
-    noun,
     ...signatureAppearance,
     ...ordinaryAppearance,
     ...item.outfit,
@@ -2095,20 +2249,184 @@ function subjectTagLine(item, scene, descriptors) {
       const value = normalizeIdentityText(tag)
       return (aliasName && value.includes(aliasName)) || (aliasDesc && value.includes(aliasDesc))
     })
-    return alreadyPresent ? [] : [alias.name, alias.description]
+    // Description only — the proper name is meaningless to the image model.
+    return alreadyPresent ? [] : [alias.description]
   })
-  const tags = uniqueStrings([
+  return uniqueStrings([
     ...coreTags,
     ...aliasTags.map(normalizeWithAliases).filter(Boolean),
-  ])
-  return [anchor, ...tags].filter(Boolean).join(', ')
+  ]).join(', ')
+}
+
+// --- natural-language identity binding -------------------------------------
+//
+// Anima's own guidance for multi-character prompts is explicit: "Name a
+// character, then describe their basic appearance... If you just list off
+// character names with no description of appearance, the model can get
+// confused." A comma-separated run that merely *starts* with a name
+// ("Ilsa, silver hair, round glasses, ...") gives the text encoder nothing to
+// bind with — the name is an unknown token and every trait after it is loose
+// in the same tag soup as the other subject's traits. These helpers emit real
+// sentences instead, which is the documented mechanism for ownership.
+
+const BODY_TRAIT_RE = /\b(?:eyes?|mouth|brows?|teeth|tongue|blush|tears|fangs?|lips?|cheeks?|ears?|hair)\b/
+
+// Build traits are adjectives — "a slender half-elf woman", never "…with
+// slender". Everything else is treated as a noun phrase for the "with" list.
+const BUILD_ADJECTIVE_RE = /^(?:extremely |very |slightly )?(?:slender|slim|thin|petite|curvy|voluptuous|muscular|athletic|toned|lean|stocky|chubby|plump|tall|short|large|small|young|old|androgynous|freckled|pale|tanned|dark-skinned|light-skinned)$/
+
+// English orders adjectives size → age → build; "a tall muscular man", not
+// "a muscular tall man".
+const ADJECTIVE_ORDER = ['tall', 'short', 'large', 'small', 'petite', 'young', 'old']
+function orderAdjectives(list) {
+  return [...list].sort((a, b) => {
+    const rank = (value) => {
+      const index = ADJECTIVE_ORDER.findIndex((word) => new RegExp(`\\b${word}\\b`).test(value))
+      return index === -1 ? ADJECTIVE_ORDER.length : index
+    }
+    return rank(a) - rank(b)
+  })
+}
+
+// Mass and inherently plural nouns take no article.
+const NO_ARTICLE_RE = /\b(?:hair|skin|stubble|fur|makeup|armou?r|clothing|lingerie|jewelry|hosiery|underwear|nudity)\b/
+const SINGULAR_S_WORDS = new Set(['dress', 'glass', 'harness', 'corset', 'bodice', 'blouse', 'chemise'])
+
+function isPluralPhrase(text) {
+  const head = String(text || '').trim().split(/\s+/).pop() || ''
+  if (!/s$/i.test(head)) return false
+  return !SINGULAR_S_WORDS.has(head.toLowerCase())
+}
+
+// "shoulder tattoo" → "a shoulder tattoo"; "silver hair" → "silver hair";
+// "round glasses" → "round glasses"; "open mouth" → "an open mouth".
+function withArticle(tag) {
+  const value = animaTag(tag)
+  if (!value) return ''
+  if (/^(?:a|an|the)\s+/.test(value)) return value
+  if (NO_ARTICLE_RE.test(value) || isPluralPhrase(value)) return value
+  return `${articleFor(value)} ${value}`
+}
+
+function withArticleList(tags) {
+  return uniqueStrings((tags || []).map(withArticle).filter(Boolean))
+}
+
+// Proper names stand alone; descriptive labels take an article.
+function displayName(item, lead = true) {
+  const anchor = String((item && item.anchor) || '').trim()
+  if (!anchor) return lead ? 'The subject' : 'the subject'
+  if (item && item.named) return sentenceName(anchor)
+  return `${lead ? 'The' : 'the'} ${anchor.toLowerCase()}`
+}
+
+// Trait nouns take "a/an" and belong in the "with …" list. A bare one-word
+// trait that names no body part ("hooded", "tall") is an adjective and must
+// not become "a hooded".
+const TRAIT_NOUN_RE = /\b(?:hair|eyes?|ears?|mouth|lips?|teeth|fangs?|tongue|nose|brows?|beard|stubble|skin|freckles?|moles?|scars?|tattoos?|piercings?|glasses|goggles|monocle|eyepatch|horns?|wings?|tails?|claws?|markings?|birthmarks?|build|figure|frame|fur|pelt|snout|muzzle|mane|paws?|hooves|whiskers|scales|feathers|antlers|talons?|paw pads)\b/
+
+// Nonhuman-form descriptors that really are adjectives, so a transformation
+// state does not compile to "a digitigrade werewolf with a quadruped build".
+const FORM_ADJECTIVE_RE = /^(?:digitigrade|quadruped|bipedal|furred|scaled|feathered|winged|horned|clawed|fanged|hulking|towering|monstrous|bestial|shaggy|sleek)$/
+
+function splitTraitWords(tags) {
+  const builds = []      // "slender"  → "a slender build"
+  const modifiers = []   // "hooded"   → "a hooded cloaked stranger"
+  const nouns = []       // "silver hair" → "with silver hair"
+  for (const tag of tags) {
+    if (BUILD_ADJECTIVE_RE.test(tag)) { builds.push(tag); continue }
+    if (FORM_ADJECTIVE_RE.test(tag)) { modifiers.push(tag); continue }
+    if (TRAIT_NOUN_RE.test(tag)) { nouns.push(tag); continue }
+    if (!/\s/.test(tag)) { modifiers.push(tag); continue }
+    nouns.push(tag)
+  }
+  return { builds, modifiers, nouns }
+}
+
+function subjectNounPhrase(item) {
+  const noun = normalizeVisualPhrase(item.noun || '').toLowerCase()
+  if (noun) return /^(?:a|an|the)\s+/.test(noun) ? noun : `${articleFor(noun)} ${noun}`
+  const count = animaTag(item.countTag)
+  if (/girl/.test(count)) return 'a girl'
+  if (/boy/.test(count)) return 'a boy'
+  if (/woman|female/.test(count)) return 'a woman'
+  if (/man|male/.test(count)) return 'a man'
+  return 'a character'
+}
+
+// Sorts expression/action tags into the three sentence frames that read
+// naturally: "is laughing", "has an open mouth", "looks serious".
+function stateClauses(tags) {
+  const doing = []
+  const having = []
+  const looking = []
+  for (const tag of animaTagList(tags)) {
+    if (/\w+ing\b/.test(tag)) doing.push(tag)
+    else if (BODY_TRAIT_RE.test(tag)) having.push(tag)
+    else looking.push(tag)
+  }
+  return { doing, having, looking }
+}
+
+function subjectIdentitySentences(item, scene, descriptors) {
+  const name = displayName(item)
+  const sentences = []
+
+  // 1. Who they are. In a multi-subject prompt this is the ONLY place
+  //    permanent appearance appears, so the traits cannot drift into the
+  //    shared tag run and land on the wrong character.
+  const nounPhrase = subjectNounPhrase(item)
+  const visible = animaTagList(filterAppearanceByVisibility(item.appearance, item.outfit))
+    .filter((tag) => !normalizeIdentityText(nounPhrase).includes(normalizeIdentityText(tag)))
+  // Build adjectives become a trailing "and a slender build" rather than being
+  // stuffed in front of the noun, which produced "a muscular tall human man"
+  // whenever the profile's own subject phrase already carried an adjective.
+  const { builds, modifiers, nouns } = splitTraitWords(visible)
+  const ordered = orderAdjectives(builds)
+  const traits = withArticleList(nouns)
+  if (ordered.length) traits.push(`${articleFor(ordered[0])} ${ordered.join(', ')} build`)
+
+  // An unprofiled subject's label doubles as its noun ("cloaked stranger"), so
+  // skip the tautology "The cloaked stranger is a cloaked stranger".
+  const redundantNoun = normalizeIdentityText(nounPhrase).includes(normalizeIdentityText(item.anchor))
+  if (redundantNoun) {
+    if (modifiers.length) sentences.push(`${name} is ${naturalList(modifiers)}.`)
+    if (traits.length) sentences.push(`${name} has ${naturalList(traits)}.`)
+  } else {
+    const described = modifiers.length
+      ? nounPhrase.replace(/^(?:a|an|the)\s+/, '')
+      : nounPhrase
+    const phrase = modifiers.length
+      ? `${articleFor(modifiers[0])} ${modifiers.join(', ')} ${described}`
+      : described
+    sentences.push(traits.length
+      ? `${name} is ${phrase} with ${naturalList(traits)}.`
+      : `${name} is ${phrase}.`)
+  }
+
+  // 2. What they are wearing.
+  sentences.push(...outfitCaptionSentences(name, item.outfit))
+
+  // 3. What they are doing, with their own support surface attached.
+  const pose = poseClause(item, scene)
+  if (pose) sentences.push(`${name} is ${pose}.`)
+
+  const actions = item.action
+    .filter((part) => !actionDuplicatesRelation(part, item.subject.ref, scene.relations))
+    .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
+  const { doing, having, looking } = stateClauses([...item.expression, ...actions])
+  if (doing.length) sentences.push(`${name} is ${naturalList(doing)}.`)
+  if (having.length) sentences.push(`${name} has ${naturalList(withArticleList(having))}.`)
+  if (looking.length) sentences.push(`${name} looks ${naturalList(looking)}.`)
+
+  return sentences.filter(Boolean)
 }
 
 function relationSentence(relation, byRef) {
   const actor = byRef.get(relation.actor)
   const target = relation.target ? byRef.get(relation.target) : null
-  const actorName = sentenceName(actor ? actor.anchor : relation.actor)
-  const targetName = target ? sentenceName(target.anchor) : ''
+  const actorName = actor ? displayName(actor, true) : sentenceName(relation.actor)
+  const targetName = target ? displayName(target, false) : ''
   const action = normalizeVisualPhrase(relation.action)
   if (!action) return ''
   let sentence = `${actorName} ${action}`
@@ -2116,7 +2434,22 @@ function relationSentence(relation, byRef) {
   return sentence.replace(/\s+([,.])/g, '$1').replace(/\s{2,}/g, ' ').trim() + '.'
 }
 
-function compileStructuredScene(scene, profiles, sourcePassage = '') {
+// Splits "@kantoku" style artist tags out of a free-text header so they can be
+// placed in Anima's artist slot rather than wherever the user happened to type
+// them. Returns { artists, rest }.
+function splitArtistTags(headerText) {
+  const artists = []
+  const rest = []
+  for (const part of String(headerText || '').split(',')) {
+    const value = part.trim()
+    if (!value) continue
+    if (value.startsWith('@')) artists.push(value)
+    else rest.push(value)
+  }
+  return { artists, rest: rest.join(', ') }
+}
+
+function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [] } = {}) {
   const descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
     ...item,
     appearance: cleanAppearanceForNoun(item.appearance, item.noun),
@@ -2127,48 +2460,69 @@ function compileStructuredScene(scene, profiles, sourcePassage = '') {
     action: animaTagList(item.subject.action),
   }))
 
-  const sections = []
+  const multi = descriptors.length > 1
+
+  // Anima's trained tag order is
+  //   [quality/meta/year/safety] [1girl/1boy] [character] [series] [artist] [general]
+  // The preset's quality tags are prepended upstream, so the compiler owns
+  // everything from the safety tag rightward.
   const headerTags = []
   if (scene.safety) headerTags.push(scene.safety)
   headerTags.push(...aggregateCountTags(descriptors))
-  if (descriptors.length === 1) headerTags.push('solo')
-  if (headerTags.length) sections.push(headerTags.join(', '))
+  if (!multi) headerTags.push('solo')
+  // [character] then [series], the slots Anima expects between the count tags
+  // and the general tags. Only populated for recognisable published
+  // characters; original characters are carried by the caption block instead.
+  headerTags.push(...animaTagList(descriptors.map((item) => item.subject.booruCharacter)))
+  headerTags.push(...animaTagList(descriptors.map((item) => item.subject.booruSeries)))
+  // [artist] sits after character/series and before the general tags.
+  headerTags.push(...uniqueStrings(artistTags))
 
-  // Natural language is intentionally surgical: at most three short spatial /
-  // ownership anchors. Everything else remains tag-oriented for Anima.
+  // --- natural-language block --------------------------------------------
+  // Solo scenes stay tag-only: with one subject there is nothing to bind, and
+  // tags are what Anima renders best. Multi-subject scenes get real sentences,
+  // which is the model card's prescribed remedy for character confusion.
   const byRef = new Map(descriptors.map((item) => [item.subject.ref, item]))
-  const relationAnchors = []
-  if (descriptors.length > 1) {
+  const prose = []
+  if (multi) {
+    for (const item of descriptors) prose.push(...subjectIdentitySentences(item, scene, descriptors))
+
+    let geometry = 0
     for (const relation of scene.relations) {
-      // Natural language is reserved for cross-subject geometry. Solo scenes
-      // remain tag-only unless explicit anatomy ownership truly needs a line.
       if (!relation.target || relation.target === relation.actor) continue
       const sentence = relationSentence(relation, byRef)
-      if (sentence) relationAnchors.push(sentence)
-      if (relationAnchors.length >= 3) break
+      if (sentence) { prose.push(sentence); geometry++ }
+      if (geometry >= 3) break
     }
-  }
-  if (relationAnchors.length) sections.push(relationAnchors.join(' '))
 
-  for (const item of descriptors) {
-    // Signature ownership anchors are used only in multi-subject scenes, where
-    // glasses, markings, species features, and named props are most likely to
-    // bleed onto the wrong subject. Keep solo prompts tag-only and compact.
-    if (descriptors.length > 1) {
+    // Exclusivity anchors go last so they read as corrections to anything the
+    // preceding description left ambiguous.
+    for (const item of descriptors) {
       const ownership = subjectOwnershipAnchors(item, scene, true)
-      if (ownership.length) sections.push(ownership.join(' '))
+      if (ownership.length) prose.push(...ownership)
     }
-    const line = subjectTagLine(item, scene, descriptors)
-    if (line) sections.push(line)
+  }
+  for (const item of descriptors) {
     const anatomy = visibleAnatomySentence(item, scene)
-    if (anatomy) sections.push(anatomy)
+    if (anatomy) prose.push(anatomy)
   }
 
-  const positionTags = []
+  // --- subject tags -------------------------------------------------------
+  // Deduped across subjects: two nude characters used to emit "nude" twice.
+  const subjectTags = animaTagList(descriptors.flatMap((item) =>
+    subjectTagLine(item, scene, descriptors, { includeAppearance: !multi }).split(',')
+  ))
+
+  // Left/right placement used to be emitted as pseudo-tags ("ilsa on right"),
+  // which is not a booru tag and reintroduces a bare name into tag space. It
+  // is a sentence now, and only in the scenes that actually have two sides.
+  const placements = []
   for (const item of descriptors) {
     const pos = animaTag(item.subject.position)
-    if (/^(left|right)$/.test(pos)) positionTags.push(`${item.anchor} on ${pos}`.toLowerCase())
+    if (/^(left|right)$/.test(pos)) placements.push(`${displayName(item, placements.length === 0)} is on the ${pos}`)
   }
+  if (multi && placements.length) prose.push(`${naturalList(placements)}.`)
+
   const relationDetails = scene.relations.flatMap((relation) => relation.details || []).filter((detail) => !/^(?:pulling|pushing|holding|grabbing|biting|kissing|touching|lifting|carrying|dragging|pressing|pinning|wrapping|hooking|gripping|bracing|straddling)\b/i.test(String(detail || '').trim()))
   const personaPovVisible = descriptors.some((item) => {
     if (!item.subject || item.subject.ref !== 'persona') return false
@@ -2186,18 +2540,28 @@ function compileStructuredScene(scene, profiles, sourcePassage = '') {
     return true
   })
   const generalTags = animaTagList([
-    ...(descriptors.length > 1 ? ['same frame'] : []),
-    ...positionTags,
     ...relationDetails,
     ...(scene.coreAction ? [scene.coreAction] : []),
+    ...supportTags(descriptors, scene),
     ...scene.setting,
     ...cameraTags,
     ...scene.lighting,
     ...scene.style,
   ])
-  if (generalTags.length) sections.push(generalTags.join(', '))
 
-  return sections.join('\n')
+  // Anima saw newlines almost exclusively in its dataset-tagged captions
+  // (a "ye-pop"/"deviantart" line, then a title, then prose), so a prompt
+  // chopped into six labelled lines is off-distribution. Tags flow as one
+  // comma-separated run; the caption block is the single paragraph break.
+  // One collapse pass over the whole body so a concept paid for in the subject
+  // run is not paid for again in the scene run ("carrying hammer" vs the
+  // core action "carrying a hammer").
+  const tagRun = joinPromptParts([
+    headerTags.join(', '),
+    collapseRedundantTags([...subjectTags, ...generalTags]).join(', '),
+  ])
+  const caption = prose.filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim()
+  return caption ? `${tagRun}\n\n${caption}` : tagRun
 }
 
 function profileSchemaHints(profiles) {
@@ -2209,7 +2573,8 @@ function profileSchemaHints(profiles) {
     const aliases = (profile.visualAliases || []).map((alias) => `${alias.name} = ${alias.description}`).join('; ')
     const states = (profile.appearanceStates || []).map((state) => {
       const recognition = (state.recognition || []).join(', ')
-      return `${state.name}${recognition ? ` (recognize: ${recognition})` : ''}`
+      const form = state.appearancePolicy === 'replace' ? ', a distinct physical form' : ''
+      return `${state.name}${recognition ? ` (recognize: ${recognition}${form})` : form ? ` (${form.replace(/^, /, '')})` : ''}`
     }).join('; ')
     hints.push(`- ref "${ref}" means ${label || ref}. Do not output permanent appearance for this ref.${states ? ` Appearance states: ${states}. Use appearance_state with the exact state name only when the current passage or reference context establishes it; otherwise omit it and LumiDraw uses the default “${profile.defaultAppearanceState || (profile.appearanceStates[0] && profile.appearanceStates[0].name) || ''}”. Never mix states.` : ''}${aliases ? ` Named visual aliases: ${aliases}. Use the exact prop name when it is present.` : ''}`)
   }
@@ -2222,10 +2587,13 @@ function structuredParserSchema(maxImages, profiles) {
 STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
 Return ONLY one compact JSON object, no markdown and no prose.
 Write every scene in the EXACT field order shown below. Finish the scene essentials BEFORE writing subjects so a truncated response still preserves the visual moment:
-{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","core_action":"one short visible action or pose","setting":["essential location/context tags"],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","count_tag":"1girl|1boy|1other etc","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","core_action":"one short visible action or pose","setting":["essential location/context tags"],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
-This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw will preserve a mostly Danbooru/Gelbooru-style tag prompt and create only a few short natural-language anchors for subject ownership and spatial contact. Do not write the final image prompt yourself.
+This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw compiles it into one Danbooru/Gelbooru-style tag run followed by a short natural-language caption block, in the tag order Anima was trained on. Do not write the final image prompt yourself.
+TAG STYLE — every string you emit is destined for a booru-tag model. Lowercase, spaces instead of underscores, and the Gelbooru spelling whenever Danbooru and Gelbooru disagree. Use the plain tag ("sitting", "counter", "from side"), never hedged prose such as "clearly visible", "prominently shown", or "in full view", which the model was never trained on and which only dilutes the tag. Do not include quality tags, score tags, meta tags, year tags, or artist tags anywhere in this JSON — LumiDraw owns the header and the preset owns the artist.
+For a subject that is a recognisable published character, set "booru_character" to that character's booru tag and "booru_series" to the work it comes from. Leave both empty for original characters; a made-up name in those fields is worse than nothing.
+"style" is for the mood of this one scene at most (e.g. "backlit", "soft focus"). Never put a medium, an artist, or a rendering style there — those belong to the preset and must stay identical between images, or characters will drift in appearance from one generation to the next.
 ESSENTIALS FIRST: core_action, setting, camera, lighting, style, and relations must be completed before subjects. Never spend output on extra appearance or emotion words until those fields are finished. Every image must include at least one setting tag. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
 Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 3 outfit items, 2 pose items, 2 expression items, and 1 subject action item. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
@@ -2264,13 +2632,19 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   scene = bindKnownSubjectRefs(scene, profiles)
   scene = applyAnatomyFirewall(scene)
   scene = applyBannedToScene(scene, preset.bannedTags)
-  const core = compileStructuredScene(scene, profiles, sourcePassage)
   const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
-  // User-authored quality tags and prompt prefix remain verbatim. The Anima
-  // compiler owns safety/count → short interaction anchors → character tag blocks → scene tags.
-  const customHeader = joinPromptParts([preset.qualityTags, prefix])
-  const prompt = joinPromptParts([customHeader, core])
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v7' }
+  // User-authored quality tags and prompt prefix remain verbatim except for one
+  // thing: a stale safety tag. Presets almost always end "…, score_7, safe",
+  // and on an nsfw passage that used to compile to "safe, …, explicit" — two
+  // mutually exclusive tags in the same prompt. The scene's classification wins.
+  // Artist tags are pulled out and handed to the compiler so they land in
+  // Anima's artist slot instead of wherever the preset happened to put them.
+  const { artists, rest } = splitArtistTags(normalizeArtistTags(
+    reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), scene.safety)
+  ))
+  const core = compileStructuredScene(scene, profiles, sourcePassage, { artistTags: artists })
+  const prompt = joinPromptParts([rest, core])
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v8' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -2810,7 +3184,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v7',
+          compiler: compiled.compiler || 'anima-hybrid-v8',
         })
         done++
       } catch (e) {
@@ -2934,7 +3308,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v7',
+          compiler: compiled.compiler || 'anima-hybrid-v8',
         })
       }
 
@@ -3191,7 +3565,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.19.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.20.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -3984,4 +4358,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.19.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.20.0'))
