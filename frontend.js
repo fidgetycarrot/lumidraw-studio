@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.20.3'
+const EXTENSION_VERSION = '0.20.4'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -92,6 +92,7 @@ function realSetup(ctx) {
   let storyDebug = null
   let autoStatus = null
   let liveScanStatus = null
+  let liveScanStatusAt = 0
   let scanElapsedTimer = null
   let activePreset = null   // name of selected preset
   let personaEditorId = null
@@ -136,6 +137,7 @@ function realSetup(ctx) {
     }
     if (payload.type === 'scan_status') {
       liveScanStatus = payload.scan || null
+      liveScanStatusAt = Date.now()
       renderLiveScanStatus()
       return
     }
@@ -482,7 +484,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.20.3" aria-label="LumiDraw Studio v0.20.3">
+    <button class="ld-launcher" title="LumiDraw Studio v0.20.4" aria-label="LumiDraw Studio v0.20.4">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -491,7 +493,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.20.3</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.20.4</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -1521,6 +1523,17 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     const update = () => {
       const elapsed = Math.max(0, Math.round((Date.now() - Number(scan.startedAt)) / 1000))
       const message = scan.messageId ? `message ${scan.messageId.slice(0, 8)}…` : 'story message'
+      // The backend heartbeats every running scan every 10 s. Silence beyond
+      // 45 s means the scan (or the backend) is dead — say so and stop the
+      // eternally climbing counter instead of impersonating progress.
+      const silence = liveScanStatusAt ? Date.now() - liveScanStatusAt : 0
+      if (!['done', 'cancelled', 'error'].includes(scan.stage) && silence > 45000) {
+        setStatus('.ld-gen-status', `Scan lost contact with the backend after ${elapsed}s (no updates for ${Math.round(silence / 1000)}s). It will not complete — run the parser again, or reload the extension if this repeats.`, 'err')
+        liveScanStatus = { ...scan, stage: 'error', cancellable: false }
+        stopScanElapsedTimer()
+        renderLiveScanStatus()
+        return
+      }
       const stageLabel = String(scan.stage || 'working').replace(/_/g, ' ')
       setStatus('.ld-gen-status', `${stageLabel[0].toUpperCase() + stageLabel.slice(1)} ${message} · ${elapsed}s${scan.note ? ' — ' + scan.note : ''}`, scan.stage === 'error' ? 'err' : (scan.stage === 'done' ? 'good' : undefined))
       if (['done', 'cancelled', 'error'].includes(scan.stage)) stopScanElapsedTimer()

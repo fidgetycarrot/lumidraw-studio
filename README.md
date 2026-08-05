@@ -1,7 +1,37 @@
-# LumiDraw Studio 0.20.3
+# LumiDraw Studio 0.20.4
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.20.4 — Scan watchdog: no more immortal timers
+
+Field failure: the Story panel showed "Starting message … · 2130s — Preparing
+story message." — a scan pinned at its first stage for over half an hour, with
+the elapsed counter climbing forever. Worse than cosmetic: the stuck scan held
+the single scan lane, so every subsequent scan was rejected as "already
+running" until the extension was reloaded.
+
+Root cause: the chat-read RPCs used to locate the story message had no
+timeouts, so one hung host call blocked the scan before its own parser/
+generation timeouts ever applied; and the panel timer ticks on local time,
+only stopping when a terminal status arrives — which a hung or restarted
+backend never sends.
+
+- Every chat-read RPC (`getMessages`, active-chat resolution) now has a
+  10–15 s timeout.
+- A stage-aware watchdog guards each scan: "starting" may take 90 s, parsing
+  its own timeout plus margin, compiling 60 s, generating 20 min, 30 min
+  absolute cap. On breach it aborts the scan, emits a terminal error status
+  itself (a truly hung promise never reaches its own error handler), and
+  releases the scan lane.
+- A scan the watchdog has declared dead cannot resurrect the panel widget if
+  its hung promise settles minutes later.
+- If a dead scan is still holding the lane when a new scan arrives (including
+  lanes stuck from before this version), it is evicted and the new scan
+  proceeds.
+- The backend heartbeats every running scan every 10 s; the panel now marks a
+  scan dead and stops the counter after 45 s of silence instead of counting
+  into eternity.
 
 ## 0.20.3 — Scene statement (anima-hybrid-v10)
 

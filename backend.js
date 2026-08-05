@@ -555,8 +555,8 @@ async function resolveActiveChatId(userId) {
     if (typeof spindle.chats[fn] === 'function') {
       try {
         let active
-        try { active = await spindle.chats[fn](userId) }
-        catch { active = await spindle.chats[fn]() }
+        try { active = await withTimeout(spindle.chats[fn](userId), 10000, 'chats.' + fn) }
+        catch { active = await withTimeout(spindle.chats[fn](), 10000, 'chats.' + fn) }
         const id = active && (active.id || active.chatId || active)
         if (id) return id
       } catch { /* try next */ }
@@ -580,7 +580,7 @@ async function fetchMessages(userId, explicitChatId = '') {
   for (const args of shapes) {
     if (args.length && args[0] === null) continue
     try {
-      const res = await chatApi.getMessages(...args)
+      const res = await withTimeout(chatApi.getMessages(...args), 15000, 'chats.getMessages')
       const arr = Array.isArray(res) ? res : (res && (res.messages || res.items))
       if (Array.isArray(arr) && arr.length) {
         const ts = (m) => m.createdAt || m.created_at || m.timestamp || 0
@@ -632,6 +632,19 @@ function stripParserTrigger(text) {
 }
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// A hung host RPC (chat read against a dead frontend process, for example)
+// otherwise pins a story scan at "starting" forever, holding the single scan
+// lane and leaving the panel timer counting for eternity.
+function withTimeout(promise, ms, label) {
+  let timer
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s.`)), ms)
+    }),
+  ]).finally(() => clearTimeout(timer))
+}
 
 function comparableMessageText(value) {
   return cleanParserMessageText(value)
@@ -2771,8 +2784,12 @@ function assertStoryScanActive(scan) {
 
 function setStoryScanStage(scan, stage, note = '') {
   if (!scan) return
+  // A scan the watchdog already declared dead must not resurrect the panel
+  // widget when its hung promise finally settles minutes later.
+  if (scan.terminated) return
   scan.stage = stage
   scan.note = note
+  scan.stageChangedAt = Date.now()
   const elapsedMs = Date.now() - scan.startedAt
   spindle.log.info('[lumidraw] story scan stage · ' + stage + ' · ' + elapsedMs + 'ms' + (scan.messageId ? ' · message=' + scan.messageId : '') + (note ? ' · ' + note : ''))
   notifyFrontend(scan.userId, 'scan_status', {
@@ -3216,8 +3233,21 @@ function scheduleAutoStoryScan(userId, request = {}) {
   return { accepted: true, messageId, chatId, source }
 }
 
+const SCAN_TOTAL_LIMIT_MS = 30 * 60000
+
 async function scanStory(userId, options = {}) {
   const requestedMessageId = options && options.messageId ? String(options.messageId) : ''
+  // Evict a scan that has plainly died with the lane still held — belt and
+  // braces alongside the watchdog, and it also frees lanes stuck from before
+  // this version was installed.
+  if (activeStoryScan && (activeStoryScan.terminated || Date.now() - activeStoryScan.startedAt > SCAN_TOTAL_LIMIT_MS)) {
+    spindle.log.warn('[lumidraw] evicting a dead story scan holding the lane · stage=' + activeStoryScan.stage + ' · age=' + Math.round((Date.now() - activeStoryScan.startedAt) / 1000) + 's')
+    activeStoryScan.cancelled = true
+    if (activeStoryScan.abortController) { try { activeStoryScan.abortController.abort() } catch { /* ignore */ } }
+    setStoryScanStage(activeStoryScan, 'error', 'Superseded: this scan was stuck and has been evicted.')
+    activeStoryScan.terminated = true
+    activeStoryScan = null
+  }
   if (activeStoryScan) {
     return {
       mode: 'busy',
@@ -3243,6 +3273,52 @@ async function scanStory(userId, options = {}) {
   }
   activeStoryScan = scan
   setStoryScanStage(scan, 'starting', 'Preparing story message.')
+
+  // Watchdog: no stage may run longer than its budget, and no scan may run
+  // longer than the absolute cap. Without this, one hung host call left the
+  // scan pinned at "starting" with the timer counting forever AND the scan
+  // lane held, so every later scan was rejected as "already running". The
+  // watchdog emits the terminal stage itself because a truly hung core
+  // promise never reaches the catch/finally below. Between checks it
+  // re-broadcasts the current stage as a heartbeat so the panel can tell a
+  // live scan from a dead backend.
+  const stageLimits = {
+    starting: 90000,
+    parsing: PARSER_TIMEOUT_MS + 30000,
+    compiling: 60000,
+    generating: 20 * 60000,
+    inserting: 2 * 60000,
+  }
+  const watchdog = setInterval(() => {
+    if (scan.terminated || ['done', 'cancelled', 'error'].includes(scan.stage)) { clearInterval(watchdog); return }
+    const stageAge = Date.now() - (scan.stageChangedAt || scan.startedAt)
+    const totalAge = Date.now() - scan.startedAt
+    const limit = stageLimits[scan.stage] || (10 * 60000)
+    if (stageAge > limit || totalAge > SCAN_TOTAL_LIMIT_MS) {
+      scan.cancelled = true
+      if (scan.abortController) { try { scan.abortController.abort() } catch { /* ignore */ } }
+      setStoryScanStage(scan, 'error',
+        `Stage "${scan.stage}" exceeded its ${Math.round((stageAge > limit ? limit : SCAN_TOTAL_LIMIT_MS) / 1000)}s budget — a host call likely hung. The scan lane has been released; try again.`)
+      scan.terminated = true
+      if (activeStoryScan === scan) activeStoryScan = null
+      clearInterval(watchdog)
+      return
+    }
+    // Heartbeat: same payload shape the panel already understands.
+    notifyFrontend(scan.userId, 'scan_status', {
+      scan: {
+        id: scan.id,
+        stage: scan.stage,
+        note: scan.note,
+        messageId: scan.messageId || '',
+        startedAt: scan.startedAt,
+        elapsedMs: totalAge,
+        cancellable: true,
+        heartbeat: true,
+      },
+    })
+  }, 10000)
+
   try {
     const result = await scanStoryCore(userId, { ...(options || {}), _scan: scan })
     assertStoryScanActive(scan)
@@ -3256,6 +3332,7 @@ async function scanStory(userId, options = {}) {
     setStoryScanStage(scan, 'error', error && error.message ? error.message : String(error))
     throw error
   } finally {
+    clearInterval(watchdog)
     if (scan.abortController) { try { scan.abortController.abort() } catch { /* ignore */ } }
     if (activeStoryScan === scan) activeStoryScan = null
   }
@@ -3719,7 +3796,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.20.3',
+          version: (spindle.manifest && spindle.manifest.version) || '0.20.4',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4512,4 +4589,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.20.3'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.20.4'))
