@@ -1498,6 +1498,7 @@ function normalizeScene(raw) {
   return {
     subjects,
     relations,
+    sceneStatement: shortPhrase(source.scene_statement || source.sceneStatement || '', 'scene statement', 16, 150, true),
     coreAction: shortPhrase(source.core_action || source.coreAction || '', 'core action', 10, 96, true),
     setting: shortList(source.setting || [], 'setting', { maxItems: 14, maxWords: 7, maxChars: 72 }),
     camera: shortList(source.camera || [], 'camera', { maxItems: 10, maxWords: 7, maxChars: 72 }),
@@ -2479,6 +2480,45 @@ function relationSentence(relation, byRef) {
   return sentence.replace(/\s+([,.])/g, '$1').replace(/\s{2,}/g, ' ').trim() + '.'
 }
 
+const SEXUAL_ACT_RE = /\b(?:sex|anal|vaginal|oral|blowjob|fellatio|cunnilingus|handjob|fingering|penetrat\w*|orgasm\w*|masturbat\w*|cum|climax\w*|thrust\w*|riding|grinding)\b/i
+
+// The scene statement is the thesis sentence of the caption: "who is doing
+// what", stated plainly, first. Field observation: adding exactly this kind
+// of sentence in front of the caption block turned a muddled two-character
+// image into a nearly perfect one. The parser writes it; this resolves,
+// guards, and — for solo scenes with no statement — synthesizes it from
+// core_action.
+function resolveSceneStatement(scene, descriptors) {
+  let statement = normalizeVisualPhrase(scene.sceneStatement || '')
+  // A sexual act named in a scene the parser itself rated safe/sensitive is a
+  // contradiction; the safety tag wins and the statement is dropped.
+  if (statement && !['nsfw', 'explicit'].includes(scene.safety) && SEXUAL_ACT_RE.test(statement)) {
+    spindle.log.warn('[lumidraw] scene statement dropped: names a sexual act in a ' + (scene.safety || 'unrated') + ' scene.')
+    statement = ''
+  }
+  if (!statement && descriptors.length === 1 && scene.coreAction) {
+    const core = normalizeVisualPhrase(scene.coreAction).toLowerCase()
+    if (core) statement = `${displayName(descriptors[0], true)} is ${core}`
+  }
+  if (!statement) return ''
+  statement = statement.charAt(0).toUpperCase() + statement.slice(1)
+  if (!/[.!?]$/.test(statement)) statement += '.'
+  return statement
+}
+
+// A relation sentence that just restates the scene statement's action buys
+// length, not information.
+function relationCoveredByStatement(relation, statement) {
+  if (!statement) return false
+  const action = comparableAction(relation.action)
+  if (!action) return false
+  const haystack = normalizeIdentityText(statement)
+  const words = action.split(/\s+/).filter((word) => word.length > 3)
+  if (!words.length) return false
+  const hits = words.filter((word) => haystack.includes(word)).length
+  return hits / words.length >= 0.6
+}
+
 // Splits "@kantoku" style artist tags out of a free-text header so they can be
 // placed in Anima's artist slot rather than wherever the user happened to type
 // them. Returns { artists, rest }.
@@ -2529,12 +2569,17 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   // which is the model card's prescribed remedy for character confusion.
   const byRef = new Map(descriptors.map((item) => [item.subject.ref, item]))
   const prose = []
+  // The thesis sentence leads the caption for BOTH solo and multi scenes:
+  // "Sovi is casting a spell with great intensity." before any detail.
+  const statement = resolveSceneStatement(scene, descriptors)
+  if (statement) prose.push(statement)
   let crossRelationCount = 0
   if (multi) {
     for (const item of descriptors) prose.push(...subjectIdentitySentences(item, scene, descriptors))
 
     for (const relation of scene.relations) {
       if (!relation.target || relation.target === relation.actor) continue
+      if (relationCoveredByStatement(relation, statement)) { crossRelationCount++; continue }
       const sentence = relationSentence(relation, byRef)
       if (sentence) { prose.push(sentence); crossRelationCount++ }
       if (crossRelationCount >= 2) break
@@ -2640,14 +2685,15 @@ function structuredParserSchema(maxImages, profiles) {
 STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
 Return ONLY one compact JSON object, no markdown and no prose.
 Write every scene in the EXACT field order shown below. The order is a survival order: if your reply is ever cut off, everything already written must still form a usable scene, so the mandatory core (safety, core_action, setting, subjects) comes FIRST and droppable refinements (camera, lighting, style) come LAST:
-{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw compiles it into one Danbooru/Gelbooru-style tag run followed by a short natural-language caption block, in the tag order Anima was trained on. Do not write the final image prompt yourself.
 TAG STYLE — every string you emit is destined for a booru-tag model. Lowercase, spaces instead of underscores, and the Gelbooru spelling whenever Danbooru and Gelbooru disagree. Use the plain tag ("sitting", "counter", "from side"), never hedged prose such as "clearly visible", "prominently shown", or "in full view", which the model was never trained on and which only dilutes the tag. Do not include quality tags, score tags, meta tags, year tags, or artist tags anywhere in this JSON — LumiDraw owns the header and the preset owns the artist.
 For a subject that is a recognisable published character, set "booru_character" to that character's booru tag and "booru_series" to the work it comes from. Leave both empty for original characters; a made-up name in those fields is worse than nothing.
 "style" is for the mood of this one scene at most (e.g. "backlit", "soft focus"). Never put a medium, an artist, or a rendering style there — those belong to the preset and must stay identical between images, or characters will drift in appearance from one generation to the next.
-ESSENTIALS FIRST: safety, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
+SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "Rook is fighting bandits." "Sovi is casting a spell with great intensity." "Sovi and Rook are having anal sex." In an nsfw or explicit scene, name the act plainly — a euphemism here costs the image its subject. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
+ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
 Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 3 outfit items, 2 pose items, 2 expression items, and 1 subject action item. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
 For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible. Use the camera tag "pov" only when ref "persona" is visibly represented from the viewer's body/eye position. In that persona subject's pose or action, include a concrete cue such as "viewer hands visible", "hands in foreground", or "face out of frame". Never use "pov" merely because two characters are interacting.
@@ -2697,7 +2743,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   ))
   const core = compileStructuredScene(scene, profiles, sourcePassage, { artistTags: artists })
   const prompt = joinPromptParts([rest, core])
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v9' }
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v10' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -3292,7 +3338,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v9',
+          compiler: compiled.compiler || 'anima-hybrid-v10',
         })
         done++
       } catch (e) {
@@ -3416,7 +3462,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v9',
+          compiler: compiled.compiler || 'anima-hybrid-v10',
         })
       }
 
@@ -3673,7 +3719,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.20.2',
+          version: (spindle.manifest && spindle.manifest.version) || '0.20.3',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4466,4 +4512,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.20.2'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.20.3'))

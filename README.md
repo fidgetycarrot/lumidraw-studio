@@ -1,7 +1,30 @@
-# LumiDraw Studio 0.20.2
+# LumiDraw Studio 0.20.3
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.20.3 — Scene statement (anima-hybrid-v10)
+
+Field observation: manually prepending one plain sentence stating the central
+action ("Sovi and Rook are having anal sex", "Rook is fighting bandits") in
+front of the caption block dramatically improved a two-character image. The
+compiler previously buried the central action in relation fragments at the end
+of the caption and never stated what the scene *is*.
+
+The parser now emits a mandatory `scene_statement` — one blunt declarative
+sentence naming the subjects and the central visible action, no mood words, no
+scenery, under 15 words — and the compiler places it as the first sentence of
+the caption block for both solo and multi-subject scenes.
+
+- Placed immediately after `safety` in the truncation-survival field order.
+- In nsfw/explicit scenes the parser is told to name the act plainly; a
+  euphemism costs the image its subject.
+- Guard: a statement naming a sexual act inside a scene the parser itself
+  rated safe/sensitive contradicts the safety tag and is dropped.
+- A relation sentence that merely restates the statement's action is deduped.
+- Solo scenes without a parser-provided statement synthesize one from
+  `core_action` ("Ilsa is casting a spell with great intensity."), so every
+  solo prompt now leads its caption with a thesis sentence too.
 
 ## 0.20.2 — Compact two-character prompts (anima-hybrid-v9)
 
