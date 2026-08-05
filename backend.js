@@ -15,6 +15,7 @@
 
 const SETTINGS_FILE = 'settings.json'
 const PRESETS_FILE = 'presets.json'
+const PERSONAS_FILE = 'personas.json'
 const HISTORY_FILE = 'history.json'
 const STORY_DEBUG_FILE = 'story_debug.json'
 
@@ -110,6 +111,15 @@ async function getPresets() {
 
 async function savePresets(presets) {
   await spindle.storage.setJson(PRESETS_FILE, presets, { indent: 2 })
+}
+
+async function getPersonas() {
+  const value = await spindle.storage.getJson(PERSONAS_FILE, { fallback: [] })
+  return Array.isArray(value) ? value : []
+}
+
+async function savePersonas(personas) {
+  await spindle.storage.setJson(PERSONAS_FILE, personas, { indent: 2 })
 }
 
 async function getHistory() {
@@ -1042,6 +1052,86 @@ function normalizeAnatomyMode(value) {
   return ['always', 'relevant', 'manual'].includes(mode) ? mode : 'relevant'
 }
 
+function normalizeOutfitPolicy(value) {
+  const policy = String(value || 'inherit').trim().toLowerCase()
+  return ['inherit', 'omit'].includes(policy) ? policy : 'inherit'
+}
+
+function parseAppearanceStateLine(line, label) {
+  const source = String(line || '').trim()
+  if (!source || source.startsWith('#')) return null
+  const arrow = source.indexOf('=>')
+  if (arrow < 0) throw new Error(`${label} must use “=>” between the form header and appearance tags.`)
+  let header = source.slice(0, arrow).trim()
+  const appearanceText = source.slice(arrow + 2).trim()
+  if (!header || !appearanceText) throw new Error(`${label} needs a form name and appearance tags.`)
+  let directives = ''
+  const directiveMatch = /\[([^\]]+)\]\s*$/.exec(header.split('|')[0] || '')
+  if (directiveMatch) {
+    directives = directiveMatch[1]
+    header = header.replace(/\[([^\]]+)\]\s*/, '').trim()
+  }
+  const parts = header.split('|').map((part) => part.trim())
+  const name = shortPhrase(parts[0] || '', `${label} name`, 6, 64, false)
+  const recognition = shortList(parts.slice(1).join(', '), `${label} recognition`, { maxItems: 12, maxWords: 8, maxChars: 80 })
+  let countTag = ''
+  let outfitPolicy = 'inherit'
+  let subject = ''
+  for (const directive of directives.split(';').map((value) => value.trim()).filter(Boolean)) {
+    const idx = directive.indexOf('=')
+    if (idx < 0) continue
+    const key = directive.slice(0, idx).trim().toLowerCase()
+    const value = directive.slice(idx + 1).trim()
+    if (key === 'count') countTag = shortPhrase(value, `${label} count tag`, 3, 24, true)
+    else if (key === 'outfit') outfitPolicy = normalizeOutfitPolicy(value)
+    else if (key === 'subject') subject = shortPhrase(value, `${label} subject`, 8, 72, true)
+  }
+  return {
+    name,
+    recognition,
+    appearance: shortList(appearanceText, `${label} appearance`, { maxItems: 32, maxWords: 8, maxChars: 80 }),
+    countTag,
+    subject,
+    outfitPolicy,
+  }
+}
+
+function normalizeAppearanceStates(value, label = 'appearance state') {
+  const rawItems = Array.isArray(value) ? value : String(value || '').split(/\r?\n/)
+  const out = []
+  for (let index = 0; index < rawItems.length; index++) {
+    const raw = rawItems[index]
+    let state
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const name = shortPhrase(raw.name || '', `${label} ${index + 1} name`, 6, 64, false)
+      state = {
+        name,
+        recognition: shortList(raw.recognition || raw.aliases || [], `${label} ${name} recognition`, { maxItems: 12, maxWords: 8, maxChars: 80 }),
+        appearance: shortList(raw.appearance || raw.appearanceTags || [], `${label} ${name} appearance`, { maxItems: 32, maxWords: 8, maxChars: 80 }),
+        countTag: shortPhrase(raw.countTag || raw.count_tag || '', `${label} ${name} count tag`, 3, 24, true),
+        subject: shortPhrase(raw.subject || '', `${label} ${name} subject`, 8, 72, true),
+        outfitPolicy: normalizeOutfitPolicy(raw.outfitPolicy || raw.outfit_policy),
+      }
+    } else {
+      state = parseAppearanceStateLine(raw, `${label} ${index + 1}`)
+    }
+    if (!state) continue
+    if (!state.appearance.length) throw new Error(`${label} “${state.name}” needs at least one appearance tag.`)
+    const key = state.name.toLowerCase()
+    const existing = out.findIndex((item) => item.name.toLowerCase() === key)
+    if (existing >= 0) out[existing] = state
+    else out.push(state)
+  }
+  return out.slice(0, 12)
+}
+
+function normalizeDefaultAppearanceState(value, states) {
+  const requested = String(value || '').trim()
+  if (!requested) return states.length ? states[0].name : ''
+  const match = states.find((state) => state.name.toLowerCase() === requested.toLowerCase())
+  return match ? match.name : (states.length ? states[0].name : '')
+}
+
 function normalizeProfile(raw, fallbackTags, fallbackRef) {
   const source = raw && typeof raw === 'object' ? raw : {}
   let appearance = tagsFrom(source.appearanceTags || fallbackTags)
@@ -1051,6 +1141,7 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
     if (found) countTag = found
   }
   if (countTag) appearance = appearance.filter((tag) => tag.toLowerCase() !== countTag.toLowerCase())
+  const appearanceStates = normalizeAppearanceStates(source.appearanceStates || source.forms || '', `${fallbackRef} appearance state`)
   return {
     ref: fallbackRef,
     anchor: shortPhrase(source.anchor || '', `${fallbackRef} anchor`, 6, 64, true) || fallbackRef,
@@ -1061,6 +1152,8 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
     visualAliases: normalizeVisualAliases(source.visualAliases || source.namedVisualAliases || '', `${fallbackRef} visual alias`),
     anatomy: normalizeConditionalAnatomy(shortList(source.anatomyTags || '', `${fallbackRef} conditional anatomy`, { maxItems: 12, maxWords: 7, maxChars: 72 })),
     anatomyMode: normalizeAnatomyMode(source.anatomyMode),
+    appearanceStates,
+    defaultAppearanceState: normalizeDefaultAppearanceState(source.defaultAppearanceState || source.defaultForm || '', appearanceStates),
   }
 }
 
@@ -1086,6 +1179,15 @@ async function resolveProfile(profile, userId, chatId) {
       description: await resolveMacros(alias.description, userId, chatId),
     }))), `${profile.ref} visual alias`),
     anatomy: normalizeConditionalAnatomy(await resolveMany(profile.anatomy, `${profile.ref} conditional anatomy`)),
+    appearanceStates: await Promise.all((profile.appearanceStates || []).map(async (state) => ({
+      ...state,
+      name: await resolveOne(state.name),
+      recognition: await resolveMany(state.recognition, `${profile.ref} ${state.name} recognition`),
+      appearance: await resolveMany(state.appearance, `${profile.ref} ${state.name} appearance`),
+      countTag: await resolveOne(state.countTag),
+      subject: await resolveOne(state.subject),
+      outfitPolicy: normalizeOutfitPolicy(state.outfitPolicy),
+    }))),
   }
 }
 
@@ -1093,7 +1195,17 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
   const activeCharacterTags = preset.characterTags ||
     (settings.autoCharTags !== false ? await getCharacterImageTags(userId, chatId) : '')
   const character = normalizeProfile(preset.characterProfile, activeCharacterTags, 'character')
-  const persona = normalizeProfile(preset.personaProfile, preset.personaTags || '', 'persona')
+  let personaSource = preset.personaProfile
+  let personaFallbackTags = preset.personaTags || ''
+  if (preset.personaLibraryId) {
+    const personas = await getPersonas()
+    const linked = personas.find((item) => item && item.id === preset.personaLibraryId)
+    if (linked && linked.profile) {
+      personaSource = linked.profile
+      personaFallbackTags = linked.profile.appearanceTags || ''
+    }
+  }
+  const persona = normalizeProfile(personaSource, personaFallbackTags, 'persona')
   return {
     character: await resolveProfile(character, userId, chatId),
     persona: await resolveProfile(persona, userId, chatId),
@@ -1234,6 +1346,7 @@ function normalizeSceneSubject(raw, index) {
     expression: shortList(source.expression || [], `subject ${index + 1} expression`, { maxItems: 8, maxWords: 7, maxChars: 72 }),
     action: shortList(source.action || [], `subject ${index + 1} action`, { maxItems: 10, maxWords: 8, maxChars: 80 }),
     support: shortPhrase(source.support || source.support_surface || source.supportSurface || '', `subject ${index + 1} support surface`, 7, 72, true),
+    appearanceState: shortPhrase(source.appearance_state || source.appearanceState || source.form || '', `subject ${index + 1} appearance state`, 6, 64, true),
     anatomyVisible: source.anatomy_visible === true || source.anatomyVisible === true,
   }
 }
@@ -1265,6 +1378,7 @@ function normalizeScene(raw) {
   return {
     subjects,
     relations,
+    coreAction: shortPhrase(source.core_action || source.coreAction || '', 'core action', 10, 96, true),
     setting: shortList(source.setting || [], 'setting', { maxItems: 14, maxWords: 7, maxChars: 72 }),
     camera: shortList(source.camera || [], 'camera', { maxItems: 10, maxWords: 7, maxChars: 72 }),
     lighting: shortList(source.lighting || [], 'lighting', { maxItems: 10, maxWords: 7, maxChars: 72 }),
@@ -1273,6 +1387,40 @@ function normalizeScene(raw) {
       ? String(source.safety || source.rating || '').trim().toLowerCase()
       : '',
     aspect: VALID_ASPECTS.has(aspectRaw) ? aspectRaw : '',
+  }
+}
+
+function assessStructuredScene(scene) {
+  const source = scene && typeof scene === 'object' ? scene : {}
+  const subjects = Array.isArray(source.subjects) ? source.subjects : []
+  const relations = Array.isArray(source.relations) ? source.relations : []
+  const setting = Array.isArray(source.setting) ? source.setting : []
+  const camera = Array.isArray(source.camera) ? source.camera : []
+  const lighting = Array.isArray(source.lighting) ? source.lighting : []
+  const style = Array.isArray(source.style) ? source.style : []
+  const coreAction = String(source.coreAction || source.core_action || '').trim()
+  const hasSubjectAction = subjects.some((subject) =>
+    (Array.isArray(subject.pose) && subject.pose.length) ||
+    (Array.isArray(subject.action) && subject.action.length)
+  )
+  const hasRelation = relations.some((relation) => String(relation && relation.action || '').trim())
+  const missing = []
+  const warnings = []
+
+  if (!setting.length) missing.push('setting/context')
+  if (subjects.length > 1) {
+    if (!hasRelation) missing.push('cross-subject relation/action')
+  } else if (!coreAction && !hasSubjectAction) {
+    missing.push('visible pose/action')
+  }
+  if (!camera.length) warnings.push('camera/framing')
+  if (!lighting.length && !style.length) warnings.push('lighting/style')
+
+  return {
+    valid: missing.length === 0,
+    missing,
+    warnings,
+    summary: missing.length ? `missing ${missing.join(', ')}` : (warnings.length ? `usable; weak ${warnings.join(', ')}` : 'complete'),
   }
 }
 
@@ -1313,6 +1461,7 @@ function applyBannedToScene(scene, bannedCsv) {
       action: applyBannedToList(subject.action, bannedCsv),
     })),
     relations: scene.relations.map((relation) => ({ ...relation, details: applyBannedToList(relation.details, bannedCsv) })),
+    coreAction: applyBannedToList([scene.coreAction], bannedCsv)[0] || '',
     setting: applyBannedToList(scene.setting, bannedCsv),
     camera: applyBannedToList(scene.camera, bannedCsv),
     lighting: applyBannedToList(scene.lighting, bannedCsv),
@@ -1393,19 +1542,43 @@ function profileForSubject(subject, profiles) {
   return null
 }
 
+function selectAppearanceState(profile, subject, sourcePassage = '') {
+  const states = profile && Array.isArray(profile.appearanceStates) ? profile.appearanceStates : []
+  if (!states.length) return null
+  const requested = String(subject && subject.appearanceState || '').trim().toLowerCase()
+  if (requested) {
+    const direct = states.find((state) => state.name.toLowerCase() === requested || (state.recognition || []).some((value) => value.toLowerCase() === requested))
+    if (direct) return direct
+  }
+  const passage = String(sourcePassage || '').toLowerCase()
+  const candidates = []
+  for (const state of states) {
+    for (const phrase of [state.name, ...(state.recognition || [])]) {
+      const value = String(phrase || '').trim().toLowerCase()
+      if (value.length >= 3 && passage.includes(value)) candidates.push({ state, length: value.length })
+    }
+  }
+  candidates.sort((a, b) => b.length - a.length)
+  if (candidates.length) return candidates[0].state
+  const defaultName = String(profile.defaultAppearanceState || '').toLowerCase()
+  return states.find((state) => state.name.toLowerCase() === defaultName) || states[0]
+}
+
 function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false) {
   const profile = profileForSubject(subject, profiles)
+  const state = profile ? selectAppearanceState(profile, subject, sourcePassage) : null
   const anchor = profile ? profile.anchor : (subject.label || subject.ref.replace(/_/g, ' '))
-  const noun = profile ? profile.subject : subject.label
-  const appearance = profile ? profile.appearance : subject.appearance
-  const outfit = subject.outfit.length ? subject.outfit : (profile ? profile.defaultOutfit : [])
+  const noun = state && state.subject ? state.subject : (profile ? profile.subject : subject.label)
+  const appearance = profile ? uniqueStrings([...(profile.appearance || []), ...((state && state.appearance) || [])]) : subject.appearance
+  const inheritedOutfit = profile && (!state || state.outfitPolicy !== 'omit') ? profile.defaultOutfit : []
+  const outfit = subject.outfit.length ? subject.outfit : inheritedOutfit
   const anatomyAllowed = profile && (
     profile.anatomyMode === 'always' ||
     (profile.anatomyMode === 'relevant' && subject.anatomyVisible && anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, profile.anchor, requireAnatomyOwner))
   )
   const anatomy = anatomyAllowed ? profile.anatomy : []
-  const countTag = profile ? profile.countTag : subject.countTag
-  return { subject, profile, anchor, noun, appearance, outfit, anatomy, countTag }
+  const countTag = state && state.countTag ? state.countTag : (profile ? profile.countTag : subject.countTag)
+  return { subject, profile, appearanceState: state, anchor, noun, appearance, outfit, anatomy, countTag }
 }
 
 
@@ -1944,6 +2117,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '') {
     ...(descriptors.length > 1 ? ['same frame'] : []),
     ...positionTags,
     ...relationDetails,
+    ...(scene.coreAction ? [scene.coreAction] : []),
     ...scene.setting,
     ...cameraTags,
     ...scene.lighting,
@@ -1961,24 +2135,33 @@ function profileSchemaHints(profiles) {
     if (!profile) continue
     const label = [profile.anchor, profile.subject].filter(Boolean).join(' — ')
     const aliases = (profile.visualAliases || []).map((alias) => `${alias.name} = ${alias.description}`).join('; ')
-    hints.push(`- ref "${ref}" means ${label || ref}. Do not output permanent appearance for this ref.${aliases ? ` Named visual aliases: ${aliases}. Use the exact prop name when it is present.` : ''}`)
+    const states = (profile.appearanceStates || []).map((state) => {
+      const recognition = (state.recognition || []).join(', ')
+      return `${state.name}${recognition ? ` (recognize: ${recognition})` : ''}`
+    }).join('; ')
+    hints.push(`- ref "${ref}" means ${label || ref}. Do not output permanent appearance for this ref.${states ? ` Appearance states: ${states}. Use appearance_state with the exact state name only when the current passage or reference context establishes it; otherwise omit it and LumiDraw uses the default “${profile.defaultAppearanceState || (profile.appearanceStates[0] && profile.appearanceStates[0].name) || ''}”. Never mix states.` : ''}${aliases ? ` Named visual aliases: ${aliases}. Use the exact prop name when it is present.` : ''}`)
   }
   return hints.join('\n')
 }
 
 function structuredParserSchema(maxImages, profiles) {
-  return `\n\nSTRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
-Return ONLY one compact JSON object, no markdown and no prose:
-{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","count_tag":"1girl|1boy|1other etc","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["non-action visual modifiers only"]}],"setting":["short tags"],"camera":["short tags"],"lighting":["short tags"],"style":["short tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+  return `
+
+STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
+Return ONLY one compact JSON object, no markdown and no prose.
+Write every scene in the EXACT field order shown below. Finish the scene essentials BEFORE writing subjects so a truncated response still preserves the visual moment:
+{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","core_action":"one short visible action or pose","setting":["essential location/context tags"],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","count_tag":"1girl|1boy|1other etc","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw will preserve a mostly Danbooru/Gelbooru-style tag prompt and create only a few short natural-language anchors for subject ownership and spatial contact. Do not write the final image prompt yourself.
-Keep each image object compact: no more than 5 outfit items, 4 pose items, 3 expression items, 3 action items, 6 setting items, 4 camera items, 4 lighting items, and 4 style items. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles.
+ESSENTIALS FIRST: core_action, setting, camera, lighting, style, and relations must be completed before subjects. Never spend output on extra appearance or emotion words until those fields are finished. Every image must include at least one setting tag. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
+Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 4 outfit items, 3 pose items, 2 expression items, and 2 subject action items. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Leave it empty when uncertain. Never combine traits from multiple states.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
 For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible. Use the camera tag "pov" only when ref "persona" is visibly represented from the viewer's body/eye position. In that persona subject's pose or action, include a concrete cue such as "viewer hands visible", "hands in foreground", or "face out of frame". Never use "pov" merely because two characters are interacting.
 For a solo scene, do not invent a relation merely to create prose; keep the visual skeleton tag-oriented. Natural-language anchors are reserved for cross-subject geometry.
 Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Set anatomy_visible false for safe or sensitive scenes. Never place genital/anatomy terms in appearance, outfit, pose, support, expression, action, relation action, or details. LumiDraw alone controls saved anatomy.
-Known subject refs:\n${profileSchemaHints(profiles)}`
+Known subject refs:
+${profileSchemaHints(profiles)}`
 }
 
 function joinPromptParts(parts) {
@@ -2015,7 +2198,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   // compiler owns safety/count → short interaction anchors → character tag blocks → scene tags.
   const customHeader = joinPromptParts([preset.qualityTags, prefix])
   const prompt = joinPromptParts([customHeader, core])
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v6' }
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v7' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -2108,7 +2291,7 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
 
   const structuredImageCount = Math.max(1, Math.min(4, Number(settings.maxImages) || 2))
   const parserTokenLimit = structured
-    ? Math.min(4200, 1800 + ((structuredImageCount - 1) * 800))
+    ? Math.min(4400, 2200 + ((structuredImageCount - 1) * 700))
     : 1200
   const opts = {
     // Operator-scoped extensions must pass the active user explicitly in the
@@ -2555,7 +2738,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v6',
+          compiler: compiled.compiler || 'anima-hybrid-v7',
         })
         done++
       } catch (e) {
@@ -2629,11 +2812,42 @@ async function scanStoryCore(userId, options = {}) {
       const mds = []
       const debugEntries = []
       const limitedParsed = parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2)))
+      const acceptedParsed = []
+      for (let i = 0; i < limitedParsed.length; i++) {
+        const item = limitedParsed[i]
+        const assessment = assessStructuredScene(item.scene)
+        if (!assessment.valid) {
+          const error = `Incomplete structured scene — ${assessment.summary}.`
+          spindle.log.warn('[lumidraw] parser scene rejected before Draw Things · image=' + (i + 1) + ' · ' + error)
+          debugEntries.push({ anchor: item.anchor, scene: item.scene, rejected: true, error, assessment })
+        } else {
+          if (assessment.warnings.length) spindle.log.warn('[lumidraw] parser scene accepted with warning · image=' + (i + 1) + ' · ' + assessment.summary)
+          acceptedParsed.push(item)
+        }
+      }
+      if (!acceptedParsed.length) {
+        const reason = debugEntries.map((entry) => entry.error).filter(Boolean).join(' ') || 'Structured parser returned no complete visual scenes.'
+        const storyDebug = await saveStoryDebug({
+          mode: 'parser',
+          parserEngine: 'anima',
+          subjectBinding: true,
+          rawReply: out,
+          error: reason,
+          entries: debugEntries,
+          lastCompiledPrompt: '',
+          contextPreview: parserInput.contextPreview,
+          ledgerPreview: parserInput.ledgerPreview,
+          contextMessageCount: parserInput.contextMessageCount,
+          ledgerFound: parserInput.ledgerFound,
+        })
+        if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
+        return { mode: 'parser', processed: 0, note: `Parser result was incomplete, so LumiDraw skipped Draw Things rather than generating a character-only image. ${reason}`, storyDebug }
+      }
       let parserImageIndex = 0
-      for (const item of limitedParsed) {
+      for (const item of acceptedParsed) {
         parserImageIndex++
         assertStoryScanActive(scan)
-        setStoryScanStage(scan, 'generating', `Sending image ${parserImageIndex} of ${limitedParsed.length} to Draw Things.`)
+        setStoryScanStage(scan, 'generating', `Sending image ${parserImageIndex} of ${acceptedParsed.length} to Draw Things.`)
         const compiled = await compileSceneWithPreset(item.scene, preset, settings, userId, chatId, passage)
         const dims = aspectDims(preset.config, compiled.aspect)
         const entry = await generateAndUpload({
@@ -2648,7 +2862,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v6',
+          compiler: compiled.compiler || 'anima-hybrid-v7',
         })
       }
 
@@ -2656,7 +2870,7 @@ async function scanStoryCore(userId, options = {}) {
       setStoryScanStage(scan, 'inserting', 'Adding generated images to the story message.')
       let newContent = target.content
       const topMds = []
-      const generatedParsed = parsed.slice(0, mds.length)
+      const generatedParsed = acceptedParsed.slice(0, mds.length)
       for (let i = 0; i < mds.length; i++) {
         const anchor = generatedParsed[i] ? generatedParsed[i].anchor : ''
         let placed = false
@@ -2683,7 +2897,7 @@ async function scanStoryCore(userId, options = {}) {
         subjectBinding: true,
         rawReply: out,
         entries: debugEntries,
-        lastCompiledPrompt: debugEntries[0]?.compiledPrompt || '',
+        lastCompiledPrompt: debugEntries.find((entry) => entry.compiledPrompt)?.compiledPrompt || '',
         contextPreview: parserInput.contextPreview,
         ledgerPreview: parserInput.ledgerPreview,
         contextMessageCount: parserInput.contextMessageCount,
@@ -2693,7 +2907,7 @@ async function scanStoryCore(userId, options = {}) {
         mode: 'parser',
         messageId: String(target.id || ''),
         processed: mds.length,
-        note: `Illustrated ${mds.length} moment(s) via ${instrLabel}. First compiled prompt: ${(debugEntries[0]?.compiledPrompt || '').slice(0, 120)}`,
+        note: `Illustrated ${mds.length} moment(s) via ${instrLabel}. First compiled prompt: ${(debugEntries.find((entry) => entry.compiledPrompt)?.compiledPrompt || '').slice(0, 120)}`,
         storyDebug,
       }
     }
@@ -2900,12 +3114,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
   try {
     switch (payload && payload.type) {
       case 'init': {
-        const [settings, presets, history, storyDebug] = await Promise.all([
-          getSettings(), getPresets(), getHistory(), getStoryDebug(),
+        const [settings, presets, personas, history, storyDebug] = await Promise.all([
+          getSettings(), getPresets(), getPersonas(), getHistory(), getStoryDebug(),
         ])
         reply = ok(payload, requestId, {
-          settings, presets, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.18.11',
+          settings, presets, personas, history, storyDebug, lastAutoStatus,
+          version: (spindle.manifest && spindle.manifest.version) || '0.19.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -3239,6 +3453,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           personaTags: payload.personaTags || '',
           characterProfile: payload.characterProfile && typeof payload.characterProfile === 'object' ? payload.characterProfile : null,
           personaProfile: payload.personaProfile && typeof payload.personaProfile === 'object' ? payload.personaProfile : null,
+          personaLibraryId: String(payload.personaLibraryId || '').trim(),
           bannedTags: payload.bannedTags || '',
           updatedAt: Date.now(),
         }
@@ -3249,6 +3464,32 @@ spindle.onFrontendMessage(async (payload, userId) => {
         presets.sort((a, b) => a.name.localeCompare(b.name))
         await savePresets(presets)
         reply = ok(payload, requestId, { presets })
+        break
+      }
+
+      case 'save_persona': {
+        const name = String(payload.name || '').trim()
+        if (!name) throw new Error('Persona needs a library name.')
+        const profileInput = payload.profile && typeof payload.profile === 'object' ? { ...payload.profile } : {}
+        if (!String(profileInput.anchor || '').trim()) profileInput.anchor = name
+        normalizeProfile(profileInput, profileInput.appearanceTags || '', 'persona')
+        const personas = await getPersonas()
+        const id = String(payload.id || '').trim() || `persona_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+        const entry = { id, name, profile: profileInput, updatedAt: Date.now() }
+        const index = personas.findIndex((item) => item && item.id === id)
+        if (index >= 0) personas[index] = entry
+        else personas.push(entry)
+        personas.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+        await savePersonas(personas)
+        reply = ok(payload, requestId, { personas, entry })
+        break
+      }
+
+      case 'delete_persona': {
+        const id = String(payload.id || '').trim()
+        const personas = (await getPersonas()).filter((item) => item && item.id !== id)
+        await savePersonas(personas)
+        reply = ok(payload, requestId, { personas })
         break
       }
 
@@ -3671,4 +3912,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.18.11'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.19.0'))

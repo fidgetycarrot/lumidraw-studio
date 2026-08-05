@@ -1,15 +1,48 @@
-# LumiDraw Studio 0.18.11
+# LumiDraw Studio 0.19.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
 
+## 0.19.0 — Persona Library and Appearance States
 
-## 0.18.11 — Studio isolation and result recovery
+- Added a reusable **Persona Library** stored independently of Story presets.
+- A Story preset can link to one saved persona; edits to that persona apply to
+  every linked preset on the next parser run.
+- Presets retain a local fallback copy, so deleting a library persona does not
+  erase the profile fields already stored in those presets.
+- Added **Appearance States / Forms** to character profiles and reusable
+  personas. Only one state is injected into an Anima prompt at a time.
+- Each state may define recognition phrases, a subject/count override, and
+  whether the profile's default outfit is inherited or omitted.
+- The structured parser receives the saved state names and may select one with
+  `appearance_state` when the current passage or reference context establishes
+  it. When uncertain, LumiDraw uses the configured default state.
+- Shared identity traits remain in Permanent appearance; state-specific tags
+  are appended only for the selected form, preventing Human/Hybrid/Wolf traits
+  from being mixed together.
+- Retains the 0.18.12 essentials-first parser gate, fully isolated Studio mode,
+  remote History delivery, auto-trigger diagnostics, prop locks, and selective
+  Anima hybrid prompting.
 
-- Studio manual generation no longer injects Story character or persona tags.
-- Fixed a post-render `scan is not defined` crash that could strand completed images in Draw Things before upload and History insertion.
-- Completed Studio generations now send an independent History update to connected clients, so mobile/remote LumiDraw can receive the result even if the original request reply is interrupted.
-- The newest pushed result is selected immediately in the Studio output viewer.
+### Appearance-state line format
+
+One state per line:
+
+```text
+Name [count=1boy; outfit=inherit; subject=adult human man] | recognition phrases => appearance tags
+```
+
+Example:
+
+```text
+Human [count=1boy; outfit=inherit; subject=adult human man] | human form, unshifted => broad shoulders, messy dark brown hair
+Hybrid [count=1boy; outfit=inherit; subject=humanoid werewolf] | hybrid form, half-shifted => wolf ears, partial muzzle, furred arms, claws, tail
+Wolf [count=1other; outfit=omit; subject=massive wolf] | wolf form, fully shifted, on four paws => dark brown fur, amber eyes, quadruped
+```
+
+`outfit=inherit` keeps the profile's default outfit when the scene does not
+specify clothing. `outfit=omit` suppresses that fallback, useful for full animal
+forms. `count` and `subject` are optional.
 
 ## Retained automatic Anima pipeline
 
@@ -68,7 +101,7 @@ job.
 ## Anima hybrid refinements
 
 The compiler remains compact and tag-first. Its identifier is now
-`anima-hybrid-v6`.
+`anima-hybrid-v7`.
 
 ### Generic signature ownership
 
@@ -128,7 +161,7 @@ camera compositions retain their other framing tags.
 
 ## Suggested test
 
-1. Confirm the header and Terminal show **v0.18.11**.
+1. Confirm the header and Terminal show **v0.19.0**.
 2. Select **Parser**, **Anima hybrid experimental**, and enable automatic scans.
 3. Leave reference context at **2 previous messages** and Loom ledger on.
 4. Complete one new roleplay response without pressing Manual Parser.

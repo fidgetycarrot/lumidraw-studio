@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.18.11'
+const EXTENSION_VERSION = '0.19.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -87,12 +87,14 @@ function realSetup(ctx) {
   // ------------------------------------------------------------------ state
   let settings = { host: '127.0.0.1', port: 7862 }
   let presets = []
+  let personas = []
   let history = []
   let storyDebug = null
   let autoStatus = null
   let liveScanStatus = null
   let scanElapsedTimer = null
   let activePreset = null   // name of selected preset
+  let personaEditorId = null
   let syncedConfig = null   // last synced/loaded config powering the form
   let draftConfig = null    // temporary workspace config for manual generation
   let draftDirty = false
@@ -480,7 +482,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.18.11" aria-label="LumiDraw Studio v0.18.11">
+    <button class="ld-launcher" title="LumiDraw Studio v0.19.0" aria-label="LumiDraw Studio v0.19.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -489,7 +491,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.18.11</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.19.0</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -698,6 +700,33 @@ function realSetup(ctx) {
       <section class="ld-view" data-view="presets">
         <div class="ld-form-view">
           <div class="ld-card">
+            <div class="ld-subtitle">Reusable persona library</div>
+            <div class="ld-help">Save a persona once, then link it into any Story preset. Changes to a linked persona apply everywhere it is used.</div>
+            <button class="ld-btn" data-act="new-persona" style="margin-top:8px">＋ New reusable persona</button>
+            <div class="ld-status ld-persona-status" style="margin-top:6px"></div>
+            <div class="ld-persona-list" style="display:flex;flex-direction:column;gap:6px;margin-top:8px"></div>
+          </div>
+          <div class="ld-persona-editor ld-card" style="display:none">
+            <div class="ld-subtitle">Persona library editor</div>
+            <span class="ld-label">Library name</span><input class="ld-persona-ed-name" placeholder="Eric" />
+            <div class="ld-profile-grid" style="margin-top:7px">
+              <div><span class="ld-label">Anchor / name</span><input class="ld-persona-ed-anchor" placeholder="Eric" /></div>
+              <div><span class="ld-label">Count tag</span><input class="ld-persona-ed-count" placeholder="1boy" /></div>
+            </div>
+            <div><span class="ld-label">Stable subject phrase</span><input class="ld-persona-ed-subject" placeholder="adult man" /></div>
+            <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-persona-ed-tags" style="min-height:58px"></textarea></div>
+            <div><span class="ld-label">Default outfit tags</span><textarea class="ld-persona-ed-outfit" style="min-height:48px"></textarea></div>
+            <div><span class="ld-label">Default appearance state</span><input class="ld-persona-ed-default-state" placeholder="Default" /></div>
+            <div><span class="ld-label">Appearance states / forms</span><textarea class="ld-persona-ed-states" style="min-height:92px" placeholder="Casual | casual clothes => t-shirt, jeans
+Armored [outfit=omit; subject=armored man] | armor, battle gear => heavy plate armor"></textarea></div>
+            <div class="ld-help">One per line: <code>Name [count=1boy; outfit=inherit|omit; subject=optional phrase] | recognition phrases =&gt; appearance tags</code>. Only the selected state is injected.</div>
+            <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-persona-ed-aliases" style="min-height:48px" placeholder="Named weapon = visual description"></textarea></div>
+            <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-persona-ed-anatomy" style="min-height:48px"></textarea></div>
+            <div><span class="ld-label">Conditional anatomy rule</span><select class="ld-persona-ed-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Include in every NSFW/explicit scene</option><option value="manual">Never include automatically</option></select></div>
+            <div class="ld-row" style="margin-top:10px"><button class="ld-btn ld-primary" data-act="persona-save">Save persona</button><button class="ld-btn" data-act="persona-cancel">Cancel</button></div>
+            <div class="ld-status ld-persona-ed-status" style="margin-top:6px"></div>
+          </div>
+          <div class="ld-card">
             <div class="ld-subtitle">Preset manager</div>
             <div class="ld-help">Presets pin the complete story recipe. Studio experiments remain separate until you explicitly save them.</div>
             <button class="ld-btn" data-act="new-preset" style="margin-top:8px">＋ New preset from synced state</button>
@@ -731,6 +760,11 @@ function realSetup(ctx) {
                 <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-char-subject" placeholder="adult woman" /></div>
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-chartags" style="min-height:58px" placeholder="feminine appearance, tall, curvy, long black hair, green eyes"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-char-outfit" style="min-height:48px" placeholder="black fitted jacket, dark trousers"></textarea></div>
+                <div><span class="ld-label">Default appearance state</span><input class="ld-ed-char-default-state" placeholder="Human" /></div>
+                <div><span class="ld-label">Appearance states / forms</span><textarea class="ld-ed-char-states" style="min-height:92px" placeholder="Human [count=1boy; outfit=inherit; subject=adult human man] | human form, unshifted => broad shoulders, messy dark brown hair
+Hybrid [count=1boy; outfit=inherit; subject=humanoid werewolf] | hybrid form, half-shifted => wolf ears, partial muzzle, furred arms, claws, tail
+Wolf [count=1other; outfit=omit; subject=massive wolf] | wolf form, fully shifted, on four paws => dark brown fur, amber eyes, quadruped"></textarea></div>
+                <div class="ld-help">Optional, one per line: <code>Name [count=...; outfit=inherit|omit; subject=...] | recognition phrases =&gt; appearance tags</code>. Shared traits stay under Permanent appearance; only one saved state is injected at a time.</div>
                 <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-ed-char-aliases" style="min-height:48px" placeholder="Aegis-fang = single massive warhammer"></textarea></div>
                 <div class="ld-help">Optional, one per line: <code>proper name = visual description</code>. The description is injected only when that prop appears in this character's parsed scene.</div>
                 <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-ed-char-anatomy" style="min-height:48px" placeholder="penis"></textarea></div>
@@ -741,6 +775,8 @@ function realSetup(ctx) {
             <details class="ld-profile-block">
               <summary>User / persona identity profile</summary>
               <div class="ld-profile-fields">
+                <div><span class="ld-label">Persona source</span><select class="ld-ed-persona-link"><option value="">Local profile stored in this preset</option></select></div>
+                <div class="ld-help">Link a reusable persona from the library, or keep a local one-off persona in this preset. Linked library profiles are edited from the Persona Library above.</div>
                 <div class="ld-profile-grid">
                   <div><span class="ld-label">Anchor / name</span><input class="ld-ed-persona-anchor" placeholder="User" /></div>
                   <div><span class="ld-label">Count tag</span><input class="ld-ed-persona-count" placeholder="1boy" /></div>
@@ -748,6 +784,9 @@ function realSetup(ctx) {
                 <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-persona-subject" placeholder="adult man" /></div>
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-personatags" style="min-height:58px"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-persona-outfit" style="min-height:48px"></textarea></div>
+                <div><span class="ld-label">Default appearance state</span><input class="ld-ed-persona-default-state" placeholder="Default" /></div>
+                <div><span class="ld-label">Appearance states / forms</span><textarea class="ld-ed-persona-states" style="min-height:92px"></textarea></div>
+                <div class="ld-help">Optional, one per line: <code>Name [count=...; outfit=inherit|omit; subject=...] | recognition phrases =&gt; appearance tags</code>.</div>
                 <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-ed-persona-aliases" style="min-height:48px" placeholder="Named weapon = visual description"></textarea></div>
                 <div class="ld-help">Optional, one per line: <code>proper name = visual description</code>. The description is injected only when that prop appears in this persona's parsed scene.</div>
                 <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-ed-persona-anatomy" style="min-height:48px"></textarea></div>
@@ -1323,6 +1362,22 @@ function realSetup(ctx) {
     return String(value || '')
   }
 
+  function appearanceStatesToText(value) {
+    if (!Array.isArray(value)) return String(value || '')
+    return value.map((state) => {
+      if (!state || typeof state !== 'object') return String(state || '').trim()
+      const directives = []
+      if (state.countTag) directives.push(`count=${state.countTag}`)
+      if (state.outfitPolicy && state.outfitPolicy !== 'inherit') directives.push(`outfit=${state.outfitPolicy}`)
+      if (state.subject) directives.push(`subject=${state.subject}`)
+      const directiveText = directives.length ? ` [${directives.join('; ')}]` : ''
+      const recognition = Array.isArray(state.recognition) ? state.recognition.join(', ') : String(state.recognition || '')
+      const left = `${state.name || ''}${directiveText}${recognition ? ` | ${recognition}` : ''}`.trim()
+      const appearance = Array.isArray(state.appearance) ? state.appearance.join(', ') : String(state.appearance || state.appearanceTags || '')
+      return left && appearance ? `${left} => ${appearance}` : ''
+    }).filter(Boolean).join('\n')
+  }
+
   function profileFromPreset(preset, kind) {
     const p = preset || {}
     const profile = (kind === 'character' ? p.characterProfile : p.personaProfile) || {}
@@ -1336,6 +1391,8 @@ function realSetup(ctx) {
       visualAliases: visualAliasesToText(profile.visualAliases),
       anatomyTags: profile.anatomyTags || '',
       anatomyMode: profile.anatomyMode || 'relevant',
+      appearanceStates: appearanceStatesToText(profile.appearanceStates || profile.forms),
+      defaultAppearanceState: profile.defaultAppearanceState || profile.defaultForm || '',
     }
   }
 
@@ -1351,6 +1408,8 @@ function realSetup(ctx) {
       visualAliases: $(`.ld-ed-${prefix}-aliases`).value.trim(),
       anatomyTags: $(`.ld-ed-${prefix}-anatomy`).value.trim(),
       anatomyMode: $(`.ld-ed-${prefix}-anatomy-mode`).value || 'relevant',
+      appearanceStates: $(`.ld-ed-${prefix}-states`).value.trim(),
+      defaultAppearanceState: $(`.ld-ed-${prefix}-default-state`).value.trim(),
     }
   }
 
@@ -1366,6 +1425,73 @@ function realSetup(ctx) {
     $(`.ld-ed-${prefix}-aliases`).value = visualAliasesToText(value.visualAliases)
     $(`.ld-ed-${prefix}-anatomy`).value = value.anatomyTags || ''
     $(`.ld-ed-${prefix}-anatomy-mode`).value = value.anatomyMode || 'relevant'
+    $(`.ld-ed-${prefix}-states`).value = appearanceStatesToText(value.appearanceStates || value.forms)
+    $(`.ld-ed-${prefix}-default-state`).value = value.defaultAppearanceState || value.defaultForm || ''
+  }
+
+  function linkedPersonaProfile(id) {
+    const entry = personas.find((item) => item && item.id === id)
+    return entry && entry.profile ? profileFromPreset({ personaProfile: entry.profile }, 'persona') : null
+  }
+
+  function renderPersonaLinkSelect(selectedId = '') {
+    const select = $('.ld-ed-persona-link')
+    if (!select) return
+    select.innerHTML = '<option value="">Local profile stored in this preset</option>' + personas.map((item) => {
+      const option = document.createElement('option')
+      option.value = item.id
+      option.textContent = item.name
+      return option.outerHTML
+    }).join('')
+    select.value = selectedId || ''
+  }
+
+  function setPersonaFieldsLinked(linked) {
+    const selectors = [
+      '.ld-ed-persona-anchor', '.ld-ed-persona-count', '.ld-ed-persona-subject', '.ld-ed-personatags',
+      '.ld-ed-persona-outfit', '.ld-ed-persona-default-state', '.ld-ed-persona-states',
+      '.ld-ed-persona-aliases', '.ld-ed-persona-anatomy', '.ld-ed-persona-anatomy-mode',
+    ]
+    for (const selector of selectors) {
+      const control = $(selector)
+      if (control) control.disabled = !!linked
+    }
+  }
+
+  function applyPersonaLink(id, fallbackProfile = null) {
+    const linked = id ? linkedPersonaProfile(id) : null
+    if (linked) writeEditorProfile('persona', linked)
+    else if (fallbackProfile) writeEditorProfile('persona', fallbackProfile)
+    setPersonaFieldsLinked(!!linked)
+  }
+
+  function libraryPersonaProfile() {
+    return {
+      anchor: $('.ld-persona-ed-anchor').value.trim(),
+      countTag: $('.ld-persona-ed-count').value.trim(),
+      subject: $('.ld-persona-ed-subject').value.trim(),
+      appearanceTags: $('.ld-persona-ed-tags').value.trim(),
+      defaultOutfitTags: $('.ld-persona-ed-outfit').value.trim(),
+      defaultAppearanceState: $('.ld-persona-ed-default-state').value.trim(),
+      appearanceStates: $('.ld-persona-ed-states').value.trim(),
+      visualAliases: $('.ld-persona-ed-aliases').value.trim(),
+      anatomyTags: $('.ld-persona-ed-anatomy').value.trim(),
+      anatomyMode: $('.ld-persona-ed-anatomy-mode').value || 'relevant',
+    }
+  }
+
+  function writeLibraryPersona(profile) {
+    const value = profile || {}
+    $('.ld-persona-ed-anchor').value = value.anchor || ''
+    $('.ld-persona-ed-count').value = value.countTag || ''
+    $('.ld-persona-ed-subject').value = value.subject || ''
+    $('.ld-persona-ed-tags').value = value.appearanceTags || ''
+    $('.ld-persona-ed-outfit').value = value.defaultOutfitTags || ''
+    $('.ld-persona-ed-default-state').value = value.defaultAppearanceState || value.defaultForm || ''
+    $('.ld-persona-ed-states').value = appearanceStatesToText(value.appearanceStates || value.forms)
+    $('.ld-persona-ed-aliases').value = visualAliasesToText(value.visualAliases)
+    $('.ld-persona-ed-anatomy').value = value.anatomyTags || ''
+    $('.ld-persona-ed-anatomy-mode').value = value.anatomyMode || 'relevant'
   }
 
 
@@ -1695,6 +1821,59 @@ function realSetup(ctx) {
       }).join('')
     sel.value = current
     renderHeaderState()
+  }
+
+  function openPersonaEditor(id = null) {
+    personaEditorId = id || null
+    const entry = id ? personas.find((item) => item && item.id === id) : null
+    $('.ld-persona-editor').style.display = 'block'
+    $('.ld-persona-ed-name').value = entry ? (entry.name || '') : ''
+    writeLibraryPersona(entry && entry.profile ? entry.profile : {})
+    setStatus('.ld-persona-ed-status', entry ? 'Editing reusable persona.' : 'Create a reusable persona that can be linked into multiple presets.')
+    if ($('.ld-persona-editor').scrollIntoView) $('.ld-persona-editor').scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }
+
+  function renderPersonaList() {
+    const list = $('.ld-persona-list')
+    if (!list) return
+    list.innerHTML = ''
+    if (!personas.length) {
+      list.innerHTML = '<div class="ld-status">No reusable personas yet.</div>'
+      renderPersonaLinkSelect($('.ld-ed-persona-link') ? $('.ld-ed-persona-link').value : '')
+      return
+    }
+    for (const persona of personas) {
+      const item = document.createElement('div')
+      item.className = 'ld-preset-item'
+      const name = document.createElement('span')
+      name.className = 'ld-preset-name'
+      name.textContent = persona.name || 'Unnamed persona'
+      const detail = document.createElement('span')
+      detail.className = 'ld-preset-model'
+      const profile = persona.profile || {}
+      const formCount = Array.isArray(profile.appearanceStates) ? profile.appearanceStates.length : (String(profile.appearanceStates || '').trim() ? String(profile.appearanceStates).split(/\r?\n/).filter(Boolean).length : 0)
+      detail.textContent = [profile.anchor || '', formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
+      name.appendChild(detail)
+      name.addEventListener('click', () => openPersonaEditor(persona.id))
+      const edit = document.createElement('button')
+      edit.className = 'ld-append'; edit.textContent = 'Edit'; edit.style.flex = '0 0 auto'; edit.style.width = 'auto'; edit.style.padding = '3px 8px'
+      edit.addEventListener('click', (event) => { event.stopPropagation(); openPersonaEditor(persona.id) })
+      const del = document.createElement('button')
+      del.className = 'ld-x'; del.textContent = '✕'; del.title = 'Delete reusable persona'
+      del.addEventListener('click', async (event) => {
+        event.stopPropagation()
+        if (!confirm(`Delete reusable persona “${persona.name}”? Presets linked to it will fall back to their stored local persona copy.`)) return
+        try {
+          const result = await call('delete_persona', { id: persona.id })
+          personas = result.personas || []
+          renderPersonaList()
+          setStatus('.ld-persona-status', `Deleted “${persona.name}”.`, 'good')
+        } catch (error) { setStatus('.ld-persona-status', error.message, 'err') }
+      })
+      item.appendChild(name); item.appendChild(edit); item.appendChild(del)
+      list.appendChild(item)
+    }
+    renderPersonaLinkSelect($('.ld-ed-persona-link') ? $('.ld-ed-persona-link').value : '')
   }
 
   function renderPresetList() {
@@ -2250,7 +2429,11 @@ ${entry.prompt || ''}`.trim()
     if (!(c.loras || []).length) lbox.appendChild(loraRow('', 1))
     $('.ld-ed-quality').value = p ? (p.qualityTags || '') : (seed ? (seed.qualityTags || '') : '')
     writeEditorProfile('character', profileFromPreset(p || seed || {}, 'character'))
-    writeEditorProfile('persona', profileFromPreset(p || seed || {}, 'persona'))
+    const localPersona = profileFromPreset(p || seed || {}, 'persona')
+    const personaLibraryId = (p && p.personaLibraryId) || (seed && seed.personaLibraryId) || ''
+    renderPersonaLinkSelect(personaLibraryId)
+    writeEditorProfile('persona', localPersona)
+    applyPersonaLink(personaLibraryId, localPersona)
     $('.ld-ed-banned').value = p ? (p.bannedTags || '') : (seed ? (seed.bannedTags || '') : '')
     $('.ld-ed-prefix').value = p ? (p.promptPrefix || '') : (seed ? (seed.promptPrefix || '') : '')
     $('.ld-ed-negative').value = p ? (p.negativePrompt || '') : (seed ? (seed.negativePrompt || '') : '')
@@ -2295,6 +2478,37 @@ ${entry.prompt || ''}`.trim()
   const loraSearch = $('.ld-lora-search')
   if (loraSearch) loraSearch.addEventListener('input', renderLoraLibrary)
 
+  $('[data-act="new-persona"]').addEventListener('click', () => openPersonaEditor(null))
+  $('[data-act="persona-cancel"]').addEventListener('click', () => {
+    $('.ld-persona-editor').style.display = 'none'
+    personaEditorId = null
+  })
+  $('[data-act="persona-save"]').addEventListener('click', async () => {
+    try {
+      const name = $('.ld-persona-ed-name').value.trim()
+      if (!name) throw new Error('Persona needs a library name.')
+      const result = await call('save_persona', {
+        id: personaEditorId || '',
+        name,
+        profile: libraryPersonaProfile(),
+      })
+      personas = result.personas || []
+      personaEditorId = result.entry && result.entry.id ? result.entry.id : personaEditorId
+      renderPersonaList()
+      const selected = $('.ld-ed-persona-link') ? $('.ld-ed-persona-link').value : ''
+      if (selected && selected === personaEditorId) applyPersonaLink(selected)
+      setStatus('.ld-persona-ed-status', `Saved reusable persona “${name}”.`, 'good')
+      setStatus('.ld-persona-status', `Persona library updated · ${personas.length} saved.`, 'good')
+    } catch (error) { setStatus('.ld-persona-ed-status', error.message, 'err') }
+  })
+  $('.ld-ed-persona-link').addEventListener('change', (event) => {
+    const id = event.target.value || ''
+    applyPersonaLink(id)
+    setStatus('.ld-ed-status', id
+      ? 'This preset now links to the selected reusable persona. Edit it in the Persona Library.'
+      : 'This preset now uses its local persona fields.')
+  })
+
   $('[data-act="new-preset"]').addEventListener('click', () => openEditor(null))
   $('[data-act="ed-cancel"]').addEventListener('click', () => { $('.ld-editor').style.display = 'none' })
   $('[data-act="ed-addlora"]').addEventListener('click', () => $('.ld-ed-loras').appendChild(loraRow('', 1)))
@@ -2326,18 +2540,20 @@ ${entry.prompt || ''}`.trim()
     try {
       if (!activePreset) throw new Error('No active preset selected. Choose one or use Save as new preset.')
       const bundle = currentDraftBundle()
+      const existing = presets.find((item) => item.name === activePreset) || {}
       const result = await call('save_preset', {
         name: activePreset,
         config: bundle.config,
-        extra: bundle.extra,
-        promptPrefix: bundle.promptPrefix,
+        extra: existing.extra || null,
+        promptPrefix: existing.promptPrefix || '',
         negativePrompt: bundle.negativePrompt,
-        qualityTags: bundle.qualityTags,
-        characterTags: bundle.characterTags,
-        personaTags: bundle.personaTags,
-        characterProfile: bundle.characterProfile,
-        personaProfile: bundle.personaProfile,
-        bannedTags: bundle.bannedTags,
+        qualityTags: existing.qualityTags || '',
+        characterTags: existing.characterTags || '',
+        personaTags: existing.personaTags || '',
+        characterProfile: existing.characterProfile || null,
+        personaProfile: existing.personaProfile || null,
+        personaLibraryId: existing.personaLibraryId || '',
+        bannedTags: existing.bannedTags || '',
       })
       presets = result.presets
       syncedConfig = cloneJson(bundle.config)
@@ -2387,6 +2603,7 @@ ${entry.prompt || ''}`.trim()
         personaTags: $('.ld-ed-personatags').value,
         characterProfile: editorProfile('character'),
         personaProfile: editorProfile('persona'),
+        personaLibraryId: $('.ld-ed-persona-link').value || '',
         bannedTags: $('.ld-ed-banned').value,
       })
       presets = res.presets
@@ -2844,7 +3061,7 @@ ${entry.prompt || ''}`.trim()
     if (initialized) return true
     try {
       const res = await call('init', {}, 8000)
-      settings = res.settings; presets = res.presets; history = res.history; storyDebug = res.storyDebug || null; autoStatus = res.lastAutoStatus || null
+      settings = res.settings; presets = res.presets; personas = res.personas || []; history = res.history; storyDebug = res.storyDebug || null; autoStatus = res.lastAutoStatus || null
       defaults = res.defaults || defaults
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
@@ -2889,7 +3106,7 @@ ${entry.prompt || ''}`.trim()
           }, { force: true })
         }
       }
-      renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
+      renderPersonaList(); renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
       updateScanLabel()
       initialized = true
       console.log(`[LumiDraw] backend connected — UI v${EXTENSION_VERSION}`)
