@@ -406,6 +406,7 @@ const TAG_RE = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/g
 const PARSER_TRIGGER_TAG = '<lumidraw-parse request="generate"></lumidraw-parse>'
 const PARSER_TRIGGER_RE = /<lumidraw-parse\b[^>]*><\/lumidraw-parse>|<lumidraw-parse\b[^>]*>[\s\S]*?<\/lumidraw-parse>|<lumidraw-parse\b[^>]*\/>/gi
 const LOOM_LEDGER_RE = /<loomledger\b[^>]*>[\s\S]*?<\/loomledger>/gi
+const PARSER_UTILITY_CARD_RE = /<(?:scenecard|adventurecard|statuscard|choicecard|summarycard)\b[^>]*>[\s\S]*?<\/(?:scenecard|adventurecard|statuscard|choicecard|summarycard)>/gi
 
 function stripBannedTags(sceneTags, bannedCsv) {
   if (!bannedCsv || !sceneTags) return sceneTags
@@ -433,6 +434,11 @@ function stripLoomLedgers(text) {
   return String(text || '').replace(LOOM_LEDGER_RE, '').replace(/\n{3,}/g, '\n\n').trim()
 }
 
+function stripParserUtilityCards(text) {
+  PARSER_UTILITY_CARD_RE.lastIndex = 0
+  return String(text || '').replace(PARSER_UTILITY_CARD_RE, '').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 function decodeBasicHtmlEntities(text) {
   return String(text || '')
     .replace(/&nbsp;/gi, ' ')
@@ -456,7 +462,7 @@ function loomLedgerToText(html) {
 }
 
 function cleanParserMessageText(text, { keepLedger = false } = {}) {
-  let value = stripParserTrigger(stripThinking(text))
+  let value = stripParserUtilityCards(stripParserTrigger(stripThinking(text)))
   if (!keepLedger) value = stripLoomLedgers(value)
   return value
     .replace(TAG_RE, ' ')
@@ -470,15 +476,24 @@ function buildAnimaParserInput(messages, targetIndex, target, settings) {
   const contextCount = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
   const previous = []
   if (contextCount > 0 && Number.isInteger(targetIndex) && targetIndex > 0) {
+    // Prefer the nearest messages and cap the entire reference window. Large
+    // scene/adventure cards are stripped above and cannot crowd out the actual
+    // prose or inflate the parser request.
+    const collected = []
+    let remainingChars = 3000
     const start = Math.max(0, targetIndex - contextCount)
-    for (let i = start; i < targetIndex; i++) {
+    for (let i = targetIndex - 1; i >= start && remainingChars > 0; i--) {
       const bits = messageBits(messages[i])
       if (!bits.contentKey || typeof bits.content !== 'string') continue
-      const clean = cleanParserMessageText(bits.content).slice(-1600)
+      const cleanAll = cleanParserMessageText(bits.content)
+      if (!cleanAll) continue
+      const clean = cleanAll.slice(-Math.min(1200, remainingChars))
       if (!clean) continue
       const label = bits.isAssistant ? 'Previous assistant message' : bits.isUser ? 'Previous user message' : 'Previous chat message'
-      previous.push(`[${label}]\n${clean}`)
+      collected.push(`[${label}]\n${clean}`)
+      remainingChars -= clean.length
     }
+    previous.push(...collected.reverse())
   }
 
   let ledgerText = ''
@@ -1287,6 +1302,57 @@ function tryCloseTruncatedJson(raw) {
   catch { return null }
 }
 
+function tryRepairTruncatedJsonTail(raw) {
+  let candidate = String(raw || '').trim().replace(/,\s*$/, '')
+  if (!candidate) return null
+
+  const stack = []
+  const commas = []
+  let inString = false
+  let escaped = false
+  let stringStart = -1
+
+  for (let i = 0; i < candidate.length; i++) {
+    const ch = candidate[i]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') { inString = false; stringStart = -1 }
+      continue
+    }
+    if (ch === '"') { inString = true; stringStart = i; continue }
+    if (ch === '{') stack.push({ type: 'object', open: i })
+    else if (ch === '[') stack.push({ type: 'array', open: i })
+    else if (ch === '}' || ch === ']') {
+      const expected = ch === '}' ? 'object' : 'array'
+      if (!stack.length || stack[stack.length - 1].type !== expected) return null
+      stack.pop()
+    } else if (ch === ',' && stack.length) {
+      commas.push({ pos: i, depth: stack.length, type: stack[stack.length - 1].type })
+    }
+  }
+
+  // If generation stopped inside the final key/value or array item, discard
+  // only that unfinished fragment, then close the surrounding containers.
+  if (inString && stack.length) {
+    const top = stack[stack.length - 1]
+    const sameContainerComma = [...commas].reverse().find((item) =>
+      item.depth === stack.length && item.type === top.type && item.pos < stringStart)
+    const cut = sameContainerComma ? sameContainerComma.pos : top.open + 1
+    candidate = candidate.slice(0, cut).replace(/[,:\s]+$/, '')
+  }
+
+  // Remove a dangling property separator or unfinished bare token.
+  candidate = candidate.replace(/[,\s]+$/, '')
+  if (/[:]\s*$/.test(candidate)) {
+    const lastComma = candidate.lastIndexOf(',')
+    const lastOpen = Math.max(candidate.lastIndexOf('{'), candidate.lastIndexOf('['))
+    candidate = candidate.slice(0, Math.max(lastComma, lastOpen + 1)).replace(/[,\s]+$/, '')
+  }
+
+  return tryCloseTruncatedJson(candidate)
+}
+
 function parseJsonObject(text, label = 'structured scene') {
   if (text && typeof text === 'object' && !Array.isArray(text)) return text
   let raw = String(text || '').trim()
@@ -1318,6 +1384,12 @@ function parseJsonObject(text, label = 'structured scene') {
   const recoveredImages = extractCompleteObjectsFromArray(candidateSource, 'images')
   if (recoveredImages.length) {
     return { images: recoveredImages, _lumidrawRecovered: 'complete_images_from_truncated_reply' }
+  }
+
+  const tailRepaired = tryRepairTruncatedJsonTail(candidateSource)
+  if (tailRepaired && typeof tailRepaired === 'object' && !Array.isArray(tailRepaired)) {
+    tailRepaired._lumidrawRecovered = 'trimmed_incomplete_tail_and_closed_json'
+    return tailRepaired
   }
 
   const repaired = tryCloseTruncatedJson(candidateSource)
@@ -2155,7 +2227,7 @@ Return at most ${maxImages} image object(s). If no image is warranted, return {"
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw will preserve a mostly Danbooru/Gelbooru-style tag prompt and create only a few short natural-language anchors for subject ownership and spatial contact. Do not write the final image prompt yourself.
 ESSENTIALS FIRST: core_action, setting, camera, lighting, style, and relations must be completed before subjects. Never spend output on extra appearance or emotion words until those fields are finished. Every image must include at least one setting tag. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
-Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 4 outfit items, 3 pose items, 2 expression items, and 2 subject action items. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Leave it empty when uncertain. Never combine traits from multiple states.
+Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 3 outfit items, 2 pose items, 2 expression items, and 1 subject action item. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
 For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible. Use the camera tag "pov" only when ref "persona" is visibly represented from the viewer's body/eye position. In that persona subject's pose or action, include a concrete cue such as "viewer hands visible", "hands in foreground", or "face out of frame". Never use "pov" merely because two characters are interacting.
 For a solo scene, do not invent a relation merely to create prose; keep the visual skeleton tag-oriented. Natural-language anchors are reserved for cross-subject geometry.
@@ -2291,7 +2363,7 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
 
   const structuredImageCount = Math.max(1, Math.min(4, Number(settings.maxImages) || 2))
   const parserTokenLimit = structured
-    ? Math.min(4400, 2200 + ((structuredImageCount - 1) * 700))
+    ? Math.min(4800, 2800 + ((structuredImageCount - 1) * 650))
     : 1200
   const opts = {
     // Operator-scoped extensions must pass the active user explicitly in the
@@ -3119,7 +3191,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.19.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.19.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -3912,4 +3984,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.19.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.19.1'))

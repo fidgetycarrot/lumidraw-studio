@@ -1,7 +1,22 @@
-# LumiDraw Studio 0.19.0
+# LumiDraw Studio 0.19.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.19.1 — Truncation recovery and cleaner parser context
+
+- Strips `<scenecard>`, `<adventurecard>`, and similar utility-card blocks from
+  current and prior parser prose so UI/state metadata cannot crowd out the
+  actual roleplay scene.
+- Keeps the nearest configured previous messages while capping their combined
+  text, preserving continuity without sending several oversized cards.
+- Repairs structured replies that stop inside the final optional key, string,
+  or array item by discarding only the unfinished tail and safely closing the
+  JSON containers.
+- Recovered scenes still pass the normal minimum-scene validation before Draw
+  Things can run; malformed or skeletal results remain rejected.
+- Tightens optional JSON fields and raises the structured output allowance
+  modestly while retaining compact scene extraction.
 
 ## 0.19.0 — Persona Library and Appearance States
 
@@ -161,7 +176,7 @@ camera compositions retain their other framing tags.
 
 ## Suggested test
 
-1. Confirm the header and Terminal show **v0.19.0**.
+1. Confirm the header and Terminal show **v0.19.1**.
 2. Select **Parser**, **Anima hybrid experimental**, and enable automatic scans.
 3. Leave reference context at **2 previous messages** and Loom ledger on.
 4. Complete one new roleplay response without pressing Manual Parser.
