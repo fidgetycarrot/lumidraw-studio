@@ -1,7 +1,47 @@
-# LumiDraw Studio 0.20.0
+# LumiDraw Studio 0.20.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.20.1 — Truncation survival order, parser retry, startup echo guard
+
+Fixes for two field failures observed on 0.20.0.
+
+### Parser truncation no longer discards the scene
+
+A reasoning-capable parser model routed through a gateway can burn most of the
+completion budget on hidden reasoning tokens that the `reasoning: off` request
+flag does not reliably suppress (observed: 3,450 completion tokens spent, ~250
+tokens of visible JSON, `finish=length`). Three layers now handle this:
+
+- **Survival field order.** The schema previously asked for scene essentials
+  before subjects — so a truncated reply kept camera and lighting and lost the
+  one field validation cannot live without. The order is now safety →
+  core_action → setting → **subjects** → relations → camera/lighting/style:
+  whatever survives a cutoff forms a usable scene.
+- **Automatic retry.** When a structured reply ends with `finish=length`, the
+  parser is retried once with a much larger output allowance sized from the
+  observed hidden-token drain (capped at 12k). The truncated first reply is
+  kept as a fallback if the retry fails.
+- **Relation salvage.** A half-written or malformed relation (the typical tail
+  of a truncated reply) is dropped with a log line instead of invalidating the
+  entire scene.
+
+### No more phantom scan at app start
+
+`CHARACTER_MESSAGE_RENDERED` fires for every message the host renders,
+including existing history painted while a chat loads. On startup this queued
+an automatic scan for the last old message — a visible "Preparing story
+message" timer, minutes of chat lookups, and potentially an image nobody
+requested. Now:
+
+- render-events arriving within 12 s of backend start are ignored as startup
+  echoes (`GENERATION_ENDED`, the real completion signal, is never gated);
+- an auto trigger for an already-illustrated message is settled from local
+  storage before any scan widget or chat fetch is started;
+- the automatic message lookup has a 20 s overall budget and stops early once
+  the chat's message list has visibly settled, instead of always burning ten
+  full chat fetches.
 
 ## 0.20.0 — Anima-native prompt assembly
 

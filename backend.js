@@ -646,14 +646,30 @@ async function locateStoryMessage(userId, options = {}) {
   const expected = comparableMessageText(options.expectedContent || '')
   const isAuto = !!options.auto
   const attempts = isAuto ? 10 : 1
+  // Each attempt is a full chat fetch; on a slow host 10 of those for a
+  // message that will never appear kept the scan pinned at "Preparing story
+  // message" for a minute or more. Retries stop once the overall budget is
+  // spent, and early once the message list itself has clearly settled.
+  const LOOKUP_BUDGET_MS = 20000
+  const lookupStarted = Date.now()
   let lastResult = null
   let lastError = null
+  let lastFingerprint = ''
+  let stableFetches = 0
 
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await wait(Math.min(1500, 250 + (attempt * 175)))
+    if (attempt > 0) {
+      if (Date.now() - lookupStarted > LOOKUP_BUDGET_MS) break
+      if (stableFetches >= 2) break
+      await wait(Math.min(1500, 250 + (attempt * 175)))
+    }
     try {
       const result = await fetchMessages(userId, requestedChatId)
       lastResult = result
+      const fingerprint = (result.messages || []).length + ':' + String(messageBits((result.messages || [])[(result.messages || []).length - 1] || {}).id || '')
+      if (fingerprint === lastFingerprint && (result.messages || []).length) stableFetches++
+      else stableFetches = 0
+      lastFingerprint = fingerprint
       const messages = result.messages
       let target = null
       let targetIndex = -1
@@ -1450,18 +1466,33 @@ function normalizeScene(raw) {
   const refs = new Set(subjects.map((subject) => subject.ref))
   if (refs.size !== subjects.length) throw new Error('Each structured subject needs a unique ref.')
   const relationsRaw = Array.isArray(source.relations) ? source.relations : []
-  const relations = relationsRaw.slice(0, 8).map((relation, index) => {
+  // A malformed or half-written relation (typically the tail of a truncated
+  // reply) is dropped rather than discarding the whole scene — the subjects
+  // and setting above it are intact and worth keeping.
+  const relations = relationsRaw.slice(0, 8).flatMap((relation, index) => {
     const item = relation && typeof relation === 'object' ? relation : {}
-    const actor = shortPhrase(item.actor || '', `relation ${index + 1} actor`, 3, 32, false).toLowerCase().replace(/[^a-z0-9_]/g, '_')
-    const target = shortPhrase(item.target || '', `relation ${index + 1} target`, 3, 32, true).toLowerCase().replace(/[^a-z0-9_]/g, '_')
-    if (!refs.has(actor)) throw new Error(`Relation actor “${actor}” is not one of the scene subjects.`)
-    if (target && !refs.has(target)) throw new Error(`Relation target “${target}” is not one of the scene subjects.`)
-    return {
-      actor,
-      target,
-      action: shortPhrase(item.action || item.verb || '', `relation ${index + 1} action`, 9, 84, false),
-      details: shortList(item.details || [], `relation ${index + 1} details`, { maxItems: 6, maxWords: 7, maxChars: 72 }),
+    let actor = ''
+    let action = ''
+    let target = ''
+    let details = []
+    try {
+      actor = shortPhrase(item.actor || '', `relation ${index + 1} actor`, 3, 32, false).toLowerCase().replace(/[^a-z0-9_]/g, '_')
+      action = shortPhrase(item.action || item.verb || '', `relation ${index + 1} action`, 9, 84, false)
+      target = shortPhrase(item.target || '', `relation ${index + 1} target`, 3, 32, true).toLowerCase().replace(/[^a-z0-9_]/g, '_')
+      details = shortList(item.details || [], `relation ${index + 1} details`, { maxItems: 6, maxWords: 7, maxChars: 72 })
+    } catch (error) {
+      spindle.log.warn(`[lumidraw] dropping incomplete relation ${index + 1}: ${error.message}`)
+      return []
     }
+    if (!refs.has(actor)) {
+      spindle.log.warn(`[lumidraw] dropping relation ${index + 1}: actor “${actor}” is not one of the scene subjects.`)
+      return []
+    }
+    if (target && !refs.has(target)) {
+      spindle.log.warn(`[lumidraw] dropping relation ${index + 1}: target “${target}” is not one of the scene subjects.`)
+      return []
+    }
+    return [{ actor, target, action, details }]
   })
   const aspectRaw = String(source.aspect || '').trim()
   return {
@@ -2586,15 +2617,15 @@ function structuredParserSchema(maxImages, profiles) {
 
 STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
 Return ONLY one compact JSON object, no markdown and no prose.
-Write every scene in the EXACT field order shown below. Finish the scene essentials BEFORE writing subjects so a truncated response still preserves the visual moment:
-{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","core_action":"one short visible action or pose","setting":["essential location/context tags"],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+Write every scene in the EXACT field order shown below. The order is a survival order: if your reply is ever cut off, everything already written must still form a usable scene, so the mandatory core (safety, core_action, setting, subjects) comes FIRST and droppable refinements (camera, lighting, style) come LAST:
+{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"character|persona|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw compiles it into one Danbooru/Gelbooru-style tag run followed by a short natural-language caption block, in the tag order Anima was trained on. Do not write the final image prompt yourself.
 TAG STYLE — every string you emit is destined for a booru-tag model. Lowercase, spaces instead of underscores, and the Gelbooru spelling whenever Danbooru and Gelbooru disagree. Use the plain tag ("sitting", "counter", "from side"), never hedged prose such as "clearly visible", "prominently shown", or "in full view", which the model was never trained on and which only dilutes the tag. Do not include quality tags, score tags, meta tags, year tags, or artist tags anywhere in this JSON — LumiDraw owns the header and the preset owns the artist.
 For a subject that is a recognisable published character, set "booru_character" to that character's booru tag and "booru_series" to the work it comes from. Leave both empty for original characters; a made-up name in those fields is worse than nothing.
 "style" is for the mood of this one scene at most (e.g. "backlit", "soft focus"). Never put a medium, an artist, or a rendering style there — those belong to the preset and must stay identical between images, or characters will drift in appearance from one generation to the next.
-ESSENTIALS FIRST: core_action, setting, camera, lighting, style, and relations must be completed before subjects. Never spend output on extra appearance or emotion words until those fields are finished. Every image must include at least one setting tag. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
+ESSENTIALS FIRST: safety, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
 Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 3 outfit items, 2 pose items, 2 expression items, and 1 subject action item. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ref "character" or "persona"; LumiDraw inserts their locked profiles. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
 For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible. Use the camera tag "pov" only when ref "persona" is visibly represented from the viewer's body/eye position. In that persona subject's pose or action, include a concrete cue such as "viewer hands visible", "hands in foreground", or "face out of frame". Never use "pov" merely because two characters are interacting.
@@ -2785,38 +2816,67 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
       }, remaining)
     })
 
-    const requestPromise = (async () => {
-      try {
-        return await method(opts)
-      } catch (error) {
-        if (/userId/i.test(error && error.message || '')) return await method(opts, userId)
-        throw error
+    const runOnce = async () => {
+      const requestPromise = (async () => {
+        try {
+          return await method(opts)
+        } catch (error) {
+          if (/userId/i.test(error && error.message || '')) return await method(opts, userId)
+          throw error
+        }
+      })()
+      const res = await Promise.race([requestPromise, timeoutPromise])
+      assertStoryScanActive(scan)
+
+      const responseText = (res && (res.content || res.text ||
+        (res.choices && res.choices[0] && (res.choices[0].text || (res.choices[0].message && res.choices[0].message.content))))) ||
+        (typeof res === 'string' ? res : null)
+      if (!responseText) {
+        throw new Error('Parser returned an unrecognized response shape: ' + (res ? Object.keys(res).join(',') : String(res)))
       }
-    })()
 
-    const res = await Promise.race([requestPromise, timeoutPromise])
-    assertStoryScanActive(scan)
-
-    const responseText = (res && (res.content || res.text ||
-      (res.choices && res.choices[0] && (res.choices[0].text || (res.choices[0].message && res.choices[0].message.content))))) ||
-      (typeof res === 'string' ? res : null)
-    if (!responseText) {
-      throw new Error('Parser returned an unrecognized response shape: ' + (res ? Object.keys(res).join(',') : String(res)))
+      const elapsed = Date.now() - parserStarted
+      const usage = res && res.usage
+      const usageText = usage
+        ? ' · tokens=' + [usage.prompt_tokens ?? '?', usage.completion_tokens ?? '?', usage.total_tokens ?? '?'].join('/')
+        : ''
+      const finishReason = res && (res.finish_reason || (res.choices && res.choices[0] && res.choices[0].finish_reason))
+      const finishText = finishReason ? ' · finish=' + finishReason : ''
+      const cleanResponse = responseText.trim()
+      spindle.log.info('[lumidraw] parser completed in ' + elapsed + 'ms via ' + methodName + usageText + finishText + ' · chars=' + cleanResponse.length + ' → raw reply: ' + cleanResponse.slice(0, 500))
+      return { text: cleanResponse, finishReason, usage }
     }
 
-    const elapsed = Date.now() - parserStarted
-    const usage = res && res.usage
-    const usageText = usage
-      ? ' · tokens=' + [usage.prompt_tokens ?? '?', usage.completion_tokens ?? '?', usage.total_tokens ?? '?'].join('/')
-      : ''
-    const finishReason = res && (res.finish_reason || (res.choices && res.choices[0] && res.choices[0].finish_reason))
-    const finishText = finishReason ? ' · finish=' + finishReason : ''
-    const cleanResponse = responseText.trim()
-    if (finishReason === 'length' || finishReason === 'max_tokens') {
+    let result = await runOnce()
+
+    // Reasoning-capable models routed through gateways can burn most of the
+    // completion budget on hidden reasoning tokens that `reasoning: off` does
+    // not reliably suppress (observed: 3450 completion tokens, ~1000 visible
+    // chars). One retry with a much larger allowance costs a second request
+    // only in the truncation case and usually returns the full JSON.
+    if (structured && (result.finishReason === 'length' || result.finishReason === 'max_tokens')) {
+      const visibleTokens = Math.ceil(result.text.length / 4)
+      const completionTokens = (result.usage && result.usage.completion_tokens) || opts.parameters.max_tokens
+      const hiddenTokens = Math.max(0, completionTokens - visibleTokens)
+      const retryLimit = Math.min(12000, opts.parameters.max_tokens + Math.max(2400, hiddenTokens * 2))
+      spindle.log.warn('[lumidraw] parser reply was truncated (visible≈' + visibleTokens + ' tokens, hidden≈' + hiddenTokens + '); retrying once with max_tokens=' + retryLimit)
+      setStoryScanStage(scan, 'parsing', 'Parser reply was truncated; retrying with a larger output allowance.')
+      opts.parameters.max_tokens = retryLimit
+      try {
+        const retry = await runOnce()
+        // Keep the retry only if it actually finished (or produced more text).
+        if (retry.finishReason !== 'length' && retry.finishReason !== 'max_tokens') result = retry
+        else if (retry.text.length > result.text.length) result = retry
+      } catch (retryError) {
+        if (retryError && (retryError.name === 'ParserTimeoutError' || retryError.name === 'StoryScanCancelledError')) throw retryError
+        spindle.log.warn('[lumidraw] parser retry failed (' + retryError.message + '); using the truncated first reply.')
+      }
+    }
+
+    if (result.finishReason === 'length' || result.finishReason === 'max_tokens') {
       spindle.log.warn('[lumidraw] parser response reached its output limit; LumiDraw will attempt to preserve any complete image objects.')
     }
-    spindle.log.info('[lumidraw] parser completed in ' + elapsed + 'ms via ' + methodName + usageText + finishText + ' · chars=' + cleanResponse.length + ' → raw reply: ' + cleanResponse.slice(0, 500))
-    return responseText.trim()
+    return result.text
   } catch (error) {
     if (error && error.name === 'AbortError') {
       if (scan && scan.cancelled) throw new StoryScanCancelledError()
@@ -2931,6 +2991,18 @@ let storyScanSequence = 0
 const autoScanJobs = new Map()
 const recentAutoScans = new Map()
 
+// CHARACTER_MESSAGE_RENDERED fires for every message the host renders,
+// including the existing history it paints while a chat is loading. Without a
+// grace window, opening the app queued an automatic scan for the last old
+// message — a visible "Preparing story message" timer (and potentially a
+// generation) that nobody requested. GENERATION_ENDED is the real completion
+// signal and is not gated.
+const BACKEND_STARTED_AT = Date.now()
+const RENDERED_EVENT_GRACE_MS = 12000
+function isStartupRenderedEcho(source) {
+  return /rendered/i.test(String(source || '')) && (Date.now() - BACKEND_STARTED_AT) < RENDERED_EVENT_GRACE_MS
+}
+
 function autoScanKey(userId, chatId, messageId) {
   // message IDs are globally stable enough for deduplication. Ignoring chatId
   // when one is present lets a tag callback with a missing chatId be enriched
@@ -2959,6 +3031,10 @@ function scheduleAutoStoryScan(userId, request = {}) {
   const source = String(request.source || 'auto-event')
   if (!userId) return { accepted: false, note: 'Automatic scan has no userId.' }
   if (!chatId && !messageId) return { accepted: false, note: 'Automatic scan has neither chatId nor messageId.' }
+  if (isStartupRenderedEcho(source)) {
+    spindle.log.info('[lumidraw] ignored startup render echo · source=' + source + (messageId ? ' · message=' + messageId : ''))
+    return { accepted: false, startupEcho: true, messageId, chatId, source }
+  }
 
   pruneRecentAutoScans()
   const key = autoScanKey(userId, chatId, messageId)
@@ -2996,6 +3072,16 @@ function scheduleAutoStoryScan(userId, request = {}) {
       if (settings.mode !== 'parser' || settings.autoScan === false) {
         const result = { mode: settings.mode, processed: 0, skipped: true, note: 'Parser auto-scan is disabled.' }
         setAutoStatus(userId, { mode: settings.mode, status: 'idle', messageId, chatId, source, note: result.note })
+        return result
+      }
+
+      // An event replay for an already-illustrated message (startup echoes,
+      // re-renders, chat switches) is settled here from local storage, before
+      // any scan widget, chat fetch, or message lookup is started.
+      if (job.messageId && await wasProcessed(job.messageId)) {
+        const result = { mode: 'parser', processed: 0, skipped: true, note: 'This message was already illustrated.' }
+        recentAutoScans.set(key, Date.now())
+        setAutoStatus(userId, { mode: 'parser', status: 'idle', messageId: job.messageId, chatId: job.chatId, source, note: result.note })
         return result
       }
 
@@ -3565,7 +3651,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.20.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.20.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4358,4 +4444,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.20.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.20.1'))
