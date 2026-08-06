@@ -1,7 +1,47 @@
-# LumiDraw Studio 0.26.1
+# LumiDraw Studio 0.27.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.27.0 — Established scene state
+
+Why the parser lost the location at all: it is a separate, stateless request.
+It never sees the chat. Its entire world is the system instruction, the current
+passage, and a recency window of up to four prior messages capped at 3,000
+characters — and during a long scene the prose stops naming the location
+precisely because everyone already knows it. The window goes blank on exactly
+the fact the schema still requires, so the parser fills the gap.
+
+A sliding window is the right instrument for what just changed — pronouns,
+contact, who moved — and the wrong one for stable facts. Those need memory.
+
+### Scene state, supplied outright
+
+LumiDraw now keeps a per-chat record of the established location and lighting,
+and hands it to the parser on every request as a short authoritative block:
+
+```text
+----- ESTABLISHED SCENE STATE — AUTHORITATIVE -----
+Location: mycetheric grove, pink bioluminescent mushrooms
+Lighting: bioluminescent glow
+```
+
+It costs a few dozen tokens, is always present regardless of how far back the
+location was last mentioned, and states plainly that the place may only change
+when the current passage says the characters moved. The record updates itself
+from each successful scan, using only values the text supported — so a genuine
+move is followed, and an invented one never enters the record.
+
+### Scene anchor
+
+Presets gain a **Scene anchor**: the story's default location, as tags. It
+seeds a fresh chat, and acts as the fallback whenever nothing else has
+established a place — author-declared canon underneath the automatic record,
+matching how character profiles already work.
+
+This supersedes the Loom ledger as the continuity mechanism. The ledger
+required the roleplay model to emit a block every turn; this requires nothing.
+Ledger support remains for anyone using it.
 
 ## 0.26.1 — The location arrived through the lighting field
 

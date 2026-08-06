@@ -154,13 +154,19 @@ async function getSceneMemory() {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
 
-async function rememberSceneSetting(chatId, setting) {
+async function rememberSceneState(chatId, { setting = [], lighting = [] } = {}) {
   const key = String(chatId || '').trim()
   const tags = uniqueStrings(setting || []).slice(0, 6)
-  if (!key || !tags.length) return
+  const light = uniqueStrings(lighting || []).slice(0, 4)
+  if (!key || (!tags.length && !light.length)) return
   try {
     const memory = await getSceneMemory()
-    memory[key] = { setting: tags, at: Date.now() }
+    const previous = memory[key] || {}
+    memory[key] = {
+      setting: tags.length ? tags : (previous.setting || []),
+      lighting: light.length ? light : (previous.lighting || []),
+      at: Date.now(),
+    }
     const keys = Object.keys(memory)
     if (keys.length > 40) {
       keys.sort((a, b) => (memory[a].at || 0) - (memory[b].at || 0))
@@ -168,7 +174,7 @@ async function rememberSceneSetting(chatId, setting) {
     }
     await spindle.storage.setJson(SCENE_MEMORY_FILE, memory, { indent: 2 })
   } catch (error) {
-    spindle.log.warn('[lumidraw] could not remember the scene setting: ' + error.message)
+    spindle.log.warn('[lumidraw] could not remember the scene state: ' + error.message)
   }
 }
 
@@ -554,7 +560,7 @@ function cleanParserMessageText(text, { keepLedger = false } = {}) {
     .trim()
 }
 
-function buildAnimaParserInput(messages, targetIndex, target, settings) {
+function buildAnimaParserInput(messages, targetIndex, target, settings, sceneState = null) {
   const currentPassage = cleanParserMessageText(target.content).slice(-6000)
   const contextCount = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
   const previous = []
@@ -592,6 +598,20 @@ function buildAnimaParserInput(messages, targetIndex, target, settings) {
   }
 
   const sections = []
+  // The established location, stated outright. A recency window is the wrong
+  // instrument for stable facts: during a long scene the prose stops naming
+  // the place precisely because everyone already knows it, so the window goes
+  // blank exactly when the schema still demands a setting tag. This block is
+  // small, always present, and independent of how far back the location was
+  // last mentioned.
+  const stateLines = []
+  if (sceneState && (sceneState.setting || []).length) stateLines.push('Location: ' + sceneState.setting.join(', '))
+  if (sceneState && (sceneState.lighting || []).length) stateLines.push('Lighting: ' + sceneState.lighting.join(', '))
+  if (stateLines.length) {
+    sections.push('----- ESTABLISHED SCENE STATE — AUTHORITATIVE -----\n' +
+      'This is where the story currently is. Use it for setting and lighting unless the CURRENT PASSAGE states that the characters moved or the light changed. Never invent a different place, and never describe a location that appears nowhere in this request.\n\n' +
+      stateLines.join('\n'))
+  }
   if (previous.length) {
     sections.push('----- PRIOR CONTEXT — REFERENCE ONLY -----\nUse only to resolve identity, pronouns, carried props, clothing continuity, accessories, location, and circumstances. Do not choose an image moment or anchor from this section. Current passage details override it.\n\n' + previous.join('\n\n'))
   }
@@ -3512,7 +3532,12 @@ function joinPromptParts(parts) {
 
 async function compileSceneWithPreset(sceneInput, preset, settings, userId, chatId, sourcePassage = '', contextText = '') {
   const sceneMemory = await getSceneMemory()
-  const remembered = (sceneMemory[String(chatId || '')] || {}).setting || []
+  const memoryEntry = sceneMemory[String(chatId || '')] || {}
+  // Author intent is the floor; verified memory is the current truth. A story
+  // that has moved keeps its new location, but a chat with no history yet
+  // still starts in the place the preset declares.
+  const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
+  const remembered = (memoryEntry.setting || []).length ? memoryEntry.setting : anchorTags
   const rawProfiles = await getStoryProfiles(preset, settings, userId, chatId)
   const filterProfile = (profile) => ({
     ...profile,
@@ -3549,12 +3574,10 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
     contextText,
   })
   // Remember whatever survived reconciliation as the story's location.
-  const establishedSetting = reconcileSetting(
-    scene.setting,
-    [sourcePassage, contextText].filter(Boolean).join('\n'),
-    remembered,
-  ).setting
-  await rememberSceneSetting(chatId, establishedSetting)
+  const groundingForMemory = [sourcePassage, contextText].filter(Boolean).join('\n')
+  const establishedSetting = reconcileSetting(scene.setting, groundingForMemory, remembered).setting
+  const establishedLighting = scrubUnsupportedPlaces(animaTagList(scene.lighting), groundingForMemory, 'lighting').tags
+  await rememberSceneState(chatId, { setting: establishedSetting, lighting: establishedLighting })
   const prompt = joinPromptParts([rest, core])
   return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v13' }
 }
@@ -4316,7 +4339,19 @@ async function scanStoryCore(userId, options = {}) {
     const passage = cleanParserMessageText(target.content).slice(-6000)
 
     if (settings.parserEngine === 'anima') {
-      const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings)
+      // Hand the parser the location outright rather than hoping it survives
+      // inside the recency window.
+      const sceneMemoryForParser = await getSceneMemory()
+      const rememberedState = sceneMemoryForParser[String(chatId || '')] || {}
+      const anchorForParser = tagsFrom(preset.sceneAnchor || '', 8)
+      const parserSceneState = {
+        setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorForParser,
+        lighting: rememberedState.lighting || [],
+      }
+      const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, parserSceneState)
+      if (parserSceneState.setting.length) {
+        spindle.log.info('[lumidraw] established scene state supplied to parser · ' + parserSceneState.setting.join(', '))
+      }
       const profiles = await getStoryProfiles(preset, settings, userId, chatId)
       const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
         .replaceAll('{{max_images}}', String(settings.maxImages || 2))
@@ -4672,7 +4707,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.26.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.27.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5018,6 +5053,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
             ? uniqueStrings(payload.castLibraryIds.map((id) => String(id || '').trim()).filter(Boolean)).slice(0, 4)
             : [],
           bannedTags: payload.bannedTags || '',
+          sceneAnchor: String(payload.sceneAnchor || '').trim(),
           updatedAt: Date.now(),
         }
         try { await rememberModels(preset.config || {}) } catch { /* best-effort */ }
@@ -5629,4 +5665,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.26.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.27.0'))
