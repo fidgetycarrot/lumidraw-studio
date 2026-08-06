@@ -1,7 +1,29 @@
-# LumiDraw Studio 0.22.5
+# LumiDraw Studio 0.22.6
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.22.6 — The viewer no longer implies an accept step
+
+**Regeneration has no accept step.** "Regenerate & replace now" both generates
+the image and swaps it into the story message in place. When the new image
+appears, the work is already done — close with **Done**.
+
+The old button row invited the opposite conclusion. Next to "Fix this image"
+sat **Insert into chat**, which reads like "accept this image" but actually
+adds a *second* copy at the top of the latest message — producing exactly the
+"a new image appeared at the top and the old one is still there" outcome, from
+a button press that seemed like the natural way to confirm.
+
+- **Insert into chat → "Add copy to chat"**, with a tooltip stating what it
+  does and that it is not needed after a regeneration.
+- **Confirmation before duplicating.** Adding a copy of an image that is
+  already placed in a story message now asks first, and points at
+  "Fix this image…" as the way to replace rather than duplicate.
+- **The fix panel states its contract up front** ("one button does everything;
+  there is no separate accept step") and, on success, says the replacement is
+  complete, in its original position, and explicitly warns against pressing
+  "Add copy to chat" afterwards.
 
 ## 0.22.5 — Replace the right image, and keep it where it sits
 

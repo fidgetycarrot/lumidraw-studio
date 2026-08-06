@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.22.5'
+const EXTENSION_VERSION = '0.22.6'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -491,7 +491,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.22.5" aria-label="LumiDraw Studio v0.22.5">
+    <button class="ld-launcher" title="LumiDraw Studio v0.22.6" aria-label="LumiDraw Studio v0.22.6">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -500,7 +500,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.22.5</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.22.6</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -889,7 +889,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
           </label>
           <div class="ld-help">Keeping the seed holds the composition steady so prompt edits show their own effect. Uncheck to roll a completely new image.</div>
           <div class="ld-row" style="margin-top:8px">
-            <button class="ld-btn ld-primary ld-lightbox-regen-run">Regenerate &amp; replace</button>
+            <button class="ld-btn ld-primary ld-lightbox-regen-run">Regenerate &amp; replace now</button>
             <button class="ld-btn ld-lightbox-regen-cancel" style="flex:0 0 auto">Cancel</button>
           </div>
           <div class="ld-status ld-lightbox-regen-status" style="margin-top:6px"></div>
@@ -897,8 +897,8 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
         <div class="ld-lightbox-foot">
           <div class="ld-lightbox-meta"></div>
           <div class="ld-lightbox-actions">
-            <button class="ld-btn ld-lightbox-fix">Fix this image</button>
-            <button class="ld-btn ld-lightbox-insert">Insert into chat</button>
+            <button class="ld-btn ld-lightbox-fix">Fix this image…</button>
+            <button class="ld-btn ld-lightbox-insert" title="Adds a SECOND copy of this image at the top of the latest story message. Not needed after a regeneration — that already replaced the image in place.">Add copy to chat</button>
             <button class="ld-btn ld-primary ld-lightbox-done">Done</button>
           </div>
         </div>
@@ -1106,7 +1106,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     seedBox.disabled = !seedKnown
     $('.ld-lightbox-regen-seedval').textContent = seedKnown ? `(${entry.seed})` : '(the original seed was random and was not recorded)'
     box.style.display = 'block'
-    setStatus('.ld-lightbox-regen-status', 'Edit the prompt, then regenerate. The new image replaces this one in the story message.')
+    setStatus('.ld-lightbox-regen-status', 'Edit the prompt, then press “Regenerate & replace now”. That one button does everything: it generates the new image AND swaps it into the story message in place. There is no separate accept step.')
     const prompt = $('.ld-lightbox-regen-prompt')
     prompt.focus()
     if (prompt.scrollIntoView) prompt.scrollIntoView({ block: 'nearest' })
@@ -2171,6 +2171,20 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
   }
 
   async function appendToChat(img, entry) {
+    // This adds a NEW copy at the top of the latest message. When the image is
+    // already placed in a story message — every parser/inline image is — that
+    // is almost never what was wanted, so make the consequence explicit before
+    // duplicating it.
+    const alreadyPlaced = !!(entry && entry.origin && entry.origin.messageId)
+    if (alreadyPlaced && !confirm(
+      'This image is already placed in a story message.\n\n' +
+      '"Add copy to chat" does NOT replace it — it adds a SECOND copy at the top of the latest message.\n\n' +
+      'To replace an image, use "Fix this image…" instead (that replaces it in place).\n\n' +
+      'Add a duplicate copy anyway?'
+    )) {
+      setStatus('.ld-gen-status', 'Cancelled — nothing was added.')
+      return
+    }
     setStatus('.ld-gen-status', 'Adding to chat…')
     try {
       const res = await call('append_to_chat', {
@@ -2178,7 +2192,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
         alt: (entry && entry.prompt) ? entry.prompt.slice(0, 120) : 'Generated image',
       })
       setStatus('.ld-gen-status', res.mode === 'inserted'
-        ? 'Placed at the top of the latest story message.'
+        ? 'Added a copy at the top of the latest story message.'
         : 'Could not edit the latest message — posted as a new message instead.', 'good')
     } catch (e) {
       setStatus('.ld-gen-status', e.message, 'err')
@@ -2606,7 +2620,11 @@ ${entry.prompt || ''}`.trim()
       const next = lightboxItems.findIndex(({ image }) => image.url === res.newUrl)
       if (next >= 0) lightboxIndex = next
       renderLightbox()
-      setStatus('.ld-lightbox-regen-status', res.note || 'Regenerated.', res.replaced ? 'good' : 'err')
+      if (res.replaced) {
+        setStatus('.ld-lightbox-regen-status', '✓ Done — this image has replaced the old one in the story message, in its original position. Nothing else to press: close with Done. (Do NOT press "Add copy to chat" — that would add a second copy.)', 'good')
+      } else {
+        setStatus('.ld-lightbox-regen-status', res.note || 'Regenerated.', 'err')
+      }
       setStatus('.ld-gen-status', res.replaced ? 'Replaced an image in the story message.' : (res.note || 'Regenerated.'), res.replaced ? 'good' : 'err')
     } catch (error) {
       setStatus('.ld-lightbox-regen-status', error.message, 'err')
