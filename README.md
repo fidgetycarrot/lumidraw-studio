@@ -1,7 +1,33 @@
-# LumiDraw Studio 0.30.0
+# LumiDraw Studio 0.30.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.30.1 — Re-parse now uses the model you just picked, and says which one ran
+
+Switching the parser model and pressing **Re-run parser** kept running the old
+one. Two causes, both fixed.
+
+**The button read saved settings.** A model typed into Settings but not saved
+did not reach the request. It now sends the connection and model exactly as they
+appear in the fields, so a model can be tried without committing to it — which
+is the entire point of a comparison button.
+
+**The panel reported the requested model, not the one that ran.** These come
+apart whenever a model override cannot be applied: if the chosen connection
+exposes no raw provider route, LumiDraw falls back to the connection's own model
+and, until now, said so only in the Spindle log. The panel now shows **the model
+the request actually resolved to**, and if an override was refused it says so in
+orange, in the panel, with what to do about it — change the model on the
+Lumiverse connection itself.
+
+Reasoning tokens appear next to the timing when the provider reports them, so
+two candidate models can be compared on speed and hidden cost at a glance.
+
+The button is also labelled **Re-run parser (prompt only)** now. It loads a new
+prompt for you to read; pressing **Regenerate & replace** is still a separate,
+deliberate step.
+
 
 ## 0.30.0 — Re-run parser
 

@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.30.0'
+const EXTENSION_VERSION = '0.30.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -494,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.30.0" aria-label="LumiDraw Studio v0.30.0">
+    <button class="ld-launcher" title="LumiDraw Studio v0.30.1" aria-label="LumiDraw Studio v0.30.1">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.30.0</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.30.1</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -902,7 +902,7 @@ fangs = fangs, sharp teeth"></textarea></div>
         </div>
         <div class="ld-lightbox-regen" style="display:none">
           <div class="ld-row" style="margin-bottom:7px;align-items:center">
-            <button class="ld-btn ld-compact ld-lightbox-reparse" title="Run the parser again over the passage this image came from and load the new prompt below. Nothing is generated and no image is replaced.">Re-run parser</button>
+            <button class="ld-btn ld-compact ld-lightbox-reparse" title="Run the parser again over the passage this image came from and load the new prompt below. Nothing is generated and no image is replaced.">Re-run parser <span style="opacity:.6">(prompt only)</span></button>
             <span class="ld-lightbox-reparse-info" style="font-size:11px;opacity:.7"></span>
           </div>
           <div class="ld-lightbox-reparse-picker" style="display:none;margin-bottom:7px"></div>
@@ -2867,10 +2867,26 @@ ${entry.prompt || ''}`.trim()
     picker.innerHTML = ''
     setStatus('.ld-lightbox-regen-status', 'Re-reading the original passage with the current parser model — nothing is being generated.')
     try {
-      const res = await call('reparse_image', { imageUrl: item.image.url }, 300000)
+      const res = await call('reparse_image', {
+        imageUrl: item.image.url,
+        // Whatever is typed in Settings right now, saved or not — trying a
+        // model should not require committing to it first.
+        parserModel: $('.ld-parser-model') ? $('.ld-parser-model').value.trim() : undefined,
+        parserConnection: $('.ld-parser-conn') ? $('.ld-parser-conn').value : undefined,
+      }, 300000)
       const results = Array.isArray(res.results) ? res.results : []
       const usable = results.filter((entry) => entry && entry.ok)
-      info.textContent = `${res.model || 'parser'} · ${((res.parserMs || 0) / 1000).toFixed(1)}s`
+      const tokenNote = res.reasoningTokens != null && res.reasoningTokens > 0 ? ` · ${res.reasoningTokens} reasoning tokens` : ''
+      info.textContent = `${res.model || 'parser'} · ${((res.parserMs || 0) / 1000).toFixed(1)}s${tokenNote}`
+      info.title = res.requestedModel && res.requestedModel !== res.model
+        ? `Requested "${res.requestedModel}" but the request resolved to "${res.model}".`
+        : ''
+      if (res.overrideNote) {
+        info.style.color = 'var(--ld-warn, #e0a458)'
+        setStatus('.ld-lightbox-regen-status', res.overrideNote, 'err')
+      } else {
+        info.style.color = ''
+      }
       if (!usable.length) {
         setStatus('.ld-lightbox-regen-status', res.note || 'The parser produced no usable scene. The prompt below is unchanged.', 'err')
         return
@@ -2906,7 +2922,7 @@ ${entry.prompt || ''}`.trim()
         picker.appendChild(row)
       }
       const rejected = results.length - usable.length
-      setStatus('.ld-lightbox-regen-status',
+      if (!res.overrideNote) setStatus('.ld-lightbox-regen-status',
         `${res.note || 'Parsed.'}${rejected ? ` ${rejected} scene(s) were rejected by the compiler.` : ''} Read the prompt, then press Regenerate & replace when you are happy with it.`,
         'good')
     } catch (error) {

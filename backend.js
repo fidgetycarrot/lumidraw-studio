@@ -4350,7 +4350,11 @@ function extractParserReasoning(res) {
   return /"images"\s*:|"scene"\s*:/.test(text) ? text : ''
 }
 
-async function quietLLM(system, user, settings, userId, structured = false, scan = null) {
+// `report`, when supplied, is filled in with what ACTUALLY happened — the model
+// the request resolved to, whether a model override could be applied, and the
+// token split. "I changed the model and the log still shows the old one" is
+// otherwise impossible to tell apart from "the override was silently refused".
+async function quietLLM(system, user, settings, userId, structured = false, scan = null, report = null) {
   const generateApi = spindle.generate || spindle.generation || spindle.llm
   if (!generateApi || (typeof generateApi.quiet !== 'function' && typeof generateApi.raw !== 'function')) {
     throw new Error('Lumiverse generation API unavailable. Expected spindle.generate.quiet(). Surface: ' + Object.keys(spindle).join(', '))
@@ -4451,6 +4455,16 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
   const parserStarted = Date.now()
   const providerLabel = connection && connection.provider ? connection.provider : 'connection default'
   const modelLabel = useRawOverride ? requestedModel : (connectionModel || requestedModel || 'connection default')
+  if (report) {
+    report.model = modelLabel
+    report.requestedModel = requestedModel
+    report.provider = providerLabel
+    report.connectionModel = connectionModel || ''
+    report.overrideApplied = useRawOverride
+    if (requestedModel && !useRawOverride && connectionModel && requestedModel !== connectionModel) {
+      report.overrideNote = `The model override "${requestedModel}" could NOT be applied — this connection exposes no raw provider route, so the connection's own model "${connectionModel}" was used instead. Change the model on the Lumiverse connection itself to switch it.`
+    }
+  }
   spindle.log.info('[lumidraw] parser request started' +
     ' · api=' + methodName +
     ' · provider=' + providerLabel +
@@ -4534,6 +4548,12 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
       }
 
       const cleanResponse = responseText.trim()
+      if (report) {
+        report.elapsedMs = elapsed
+        report.usage = usage || null
+        report.reasoningTokens = reasoningTokens
+        report.finishReason = finishReason || ''
+      }
       spindle.log.info('[lumidraw] parser completed in ' + elapsed + 'ms via ' + methodName + usageText + finishText + ' · chars=' + cleanResponse.length + ' → raw reply: ' + cleanResponse.slice(0, 500))
       return { text: cleanResponse, finishReason, usage }
     }
@@ -5441,7 +5461,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.30.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.30.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5861,7 +5881,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
           throw new Error('This image has no recorded source message, so there is no passage to re-parse. Only images made by a story scan can be re-parsed.')
         }
 
-        const settings = await getSettings()
+        const saved = await getSettings()
+        // Overrides come from the Settings fields as they are typed, so a model
+        // can be tried without saving it first — the whole point of the button.
+        const settings = { ...saved }
+        if (payload.parserModel !== undefined) settings.parserModel = String(payload.parserModel || '').trim()
+        if (payload.parserConnection) settings.parserConnection = String(payload.parserConnection).trim()
         const presets = await getPresets()
         const preset = presets.find((item) => item.name === (origin.presetName || settings.activePreset))
         if (!preset) throw new Error('No preset available to compile against.')
@@ -5891,7 +5916,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           structuredParserSchema(settings.maxImages || 2, profiles)
 
         const startedAt = Date.now()
-        const raw = await quietLLM(instruction, parserInput.input, settings, userId, true, null)
+        const report = {}
+        const raw = await quietLLM(instruction, parserInput.input, settings, userId, true, null, report)
         const parserMs = Date.now() - startedAt
 
         let parsed = []
@@ -5902,11 +5928,13 @@ spindle.onFrontendMessage(async (payload, userId) => {
             ok: false,
             note: `Parser returned invalid structured data: ${error.message}`,
             parserMs,
+            model: report.model || '',
+            overrideNote: report.overrideNote || '',
             raw: String(raw || '').slice(0, 600),
           }
         }
         if (!parsed.length) {
-          return { ok: false, note: 'The parser judged this passage to have no visual moment.', parserMs, raw: String(raw || '').slice(0, 600) }
+          return { ok: false, note: 'The parser judged this passage to have no visual moment.', parserMs, model: report.model || '', overrideNote: report.overrideNote || '', raw: String(raw || '').slice(0, 600) }
         }
 
         // Compile every scene the parser returned, keeping the rejects visible
@@ -5938,7 +5966,14 @@ spindle.onFrontendMessage(async (payload, userId) => {
           ok: usable > 0,
           results,
           parserMs,
-          model: settings.parserModel || '(connection default)',
+          // The model actually used, not the one asked for. Those differ more
+          // often than is comfortable.
+          model: report.model || settings.parserModel || '(connection default)',
+          requestedModel: report.requestedModel || '',
+          provider: report.provider || '',
+          overrideNote: report.overrideNote || '',
+          reasoningTokens: report.reasoningTokens ?? null,
+          usage: report.usage || null,
           presetName: preset.name || '',
           messageId,
           note: usable
@@ -6502,4 +6537,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.30.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.30.1'))
