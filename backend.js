@@ -934,8 +934,14 @@ async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
   // The hinted chat first, then the active chat. '' means "let fetchMessages
   // resolve the active chat", and must survive here — uniqueStrings would drop
   // it, which previously made this return null whenever there was no hint.
-  const needles = imageMatchNeedles(imageUrl, hint.imageId)
+  // A URL captured from the rendered chat image is authoritative: it is what
+  // the message actually contains right now, so no inference is needed.
+  const needles = uniqueStrings([
+    ...(hint.chatImageUrl ? imageMatchNeedles(hint.chatImageUrl, '') : []),
+    ...imageMatchNeedles(imageUrl, hint.imageId),
+  ])
   if (!needles.length) return null
+  let ambiguous = false
   const hintedChat = String(hint.chatId || '').trim()
   // Hinted chat, then the active chat, then any other chat the host will list.
   const searchOrder = hintedChat ? [hintedChat, ''] : ['']
@@ -979,23 +985,29 @@ async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
     }
 
     // Tier 2: the host rewrote the URL entirely — find the image by alt text.
-    const altCandidates = findImageCandidatesByAlt(messages, hint.promptText)
+    let altCandidates = findImageCandidatesByAlt(messages, hint.promptText)
     if (altCandidates.length) {
+      // The exact alt recorded for THIS image beats any prefix overlap. Images
+      // from one preset share their opening tags, so without this a message
+      // holding several illustrations would match them all.
+      const recordedAlt = normalizeIdentityText(hint.alt)
+      if (recordedAlt) {
+        const exact = altCandidates.filter((c) => c.alt === recordedAlt)
+        if (exact.length) altCandidates = exact
+      }
       let pool = altCandidates
       if (hint.messageId) {
         const hinted = altCandidates.filter((c) => String(c.bits.id) === String(hint.messageId))
         if (hinted.length) pool = hinted
       }
-      const messageIds = new Set(pool.map((c) => String(c.bits.id)))
-      // Prompt prefixes are similar across images from the same preset, so an
-      // ambiguous match across several messages must not guess: a wrong swap
-      // silently destroys a good image.
-      if (messageIds.size > 1) {
-        spindle.log.warn('[lumidraw] alt-text match is ambiguous across ' + messageIds.size + ' messages; refusing to guess.')
+      const distinctUrls = new Set(pool.map((c) => c.url))
+      // Never guess. Replacing the wrong image destroys a good one and, worse,
+      // moves the illustration away from the story beat it was placed at.
+      if (distinctUrls.size > 1) {
+        spindle.log.warn('[lumidraw] alt-text match is ambiguous across ' + distinctUrls.size +
+          ' images (' + [...distinctUrls].slice(0, 4).join(', ') + '); refusing to guess. Click the image in the chat instead — that identifies it exactly.')
+        ambiguous = true
       } else {
-        if (pool.length > 1) {
-          spindle.log.warn('[lumidraw] ' + pool.length + ' images in the message share this prompt prefix; replacing the first. If the wrong one was swapped, regenerate the other from History.')
-        }
         const chosen = pool[0]
         spindle.log.info('[lumidraw] image located by alt text; its stored URL is now "' + chosen.url + '"')
         return { ...chosen.bits, chatId: resolvedChatId, matchedNeedle: chosen.url, matchedBy: 'alt' }
@@ -1006,7 +1018,7 @@ async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
   spindle.log.warn('[lumidraw] image not found in any message · needles=' + needles.join(' | ') +
     ' · scanned=' + (scanned.map((item) => `${item.chatId || '(active)'}:${item.messages}`).join(', ') || 'nothing') +
     ' · image refs actually present in those messages: ' + (sampleRefs.join(' | ') || 'none at all'))
-  return { notFound: true, scanned, needles, sampleRefs }
+  return { notFound: true, ambiguous, scanned, needles, sampleRefs }
 }
 
 // Encoded spellings a needle may wear inside stored message text. The host may
@@ -3793,6 +3805,7 @@ async function scanStoryCore(userId, options = {}) {
         const compiled = await compileInlineBody(body, preset, settings, userId, chatId)
         const tagAspect = (/aspect\s*=\s*"([^"]+)"/.exec(attrs) || [])[1]
         const dims = aspectDims(preset.config, tagAspect || compiled.aspect)
+        const inlineAlt = compiled.core.slice(0, 100).replace(/[\[\]]/g, '')
         const fp = tagFingerprint(body)
         // wait up to 90s for a streaming pregeneration already underway
         for (let w = 0; w < 90 && pregenInflight.has(fp); w++) {
@@ -3809,10 +3822,10 @@ async function scanStoryCore(userId, options = {}) {
             config: preset.config,
             extra: preset.extra,
             dims,
-            origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'inline' },
+            origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'inline', alt: inlineAlt },
           }, userId)
         }
-        const md = `![${compiled.core.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`
+        const md = `![${inlineAlt}](${entry.images[0].url})`
         content = content.replace(m[0], md)
         debugEntries.push({
           format: compiled.format,
@@ -3931,15 +3944,16 @@ async function scanStoryCore(userId, options = {}) {
         setStoryScanStage(scan, 'generating', `Sending image ${parserImageIndex} of ${acceptedParsed.length} to Draw Things.`)
         const compiled = await compileSceneWithPreset(item.scene, preset, settings, userId, chatId, passage)
         const dims = aspectDims(preset.config, compiled.aspect)
+        const parserAlt = compiled.core.slice(0, 100).replace(/[\[\]]/g, '')
         const entry = await generateAndUpload({
           prompt: compiled.prompt,
           negativePrompt: preset.negativePrompt,
           config: preset.config,
           extra: preset.extra,
           dims,
-          origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'parser' },
+          origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'parser', alt: parserAlt },
         }, userId, scan)
-        mds.push(`![${compiled.core.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`)
+        mds.push(`![${parserAlt}](${entry.images[0].url})`)
         debugEntries.push({
           anchor: item.anchor,
           scene: compiled.scene,
@@ -4202,7 +4216,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.22.4',
+          version: (spindle.manifest && spindle.manifest.version) || '0.22.5',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4648,16 +4662,21 @@ spindle.onFrontendMessage(async (payload, userId) => {
             ...origin,
             imageId: sourceImage && sourceImage.id ? sourceImage.id : '',
             promptText: source && source.prompt ? source.prompt : '',
+            chatImageUrl: String(payload.chatImageUrl || '').trim(),
           })
           if (!target || target.notFound) {
-            const scanned = target && target.scanned ? target.scanned : []
-            const where = scanned.length
-              ? scanned.map((item) => `${item.chatId || 'active chat'} (${item.messages} messages)`).join(', ')
-              : 'no chat could be read'
-            const sample = target && target.sampleRefs && target.sampleRefs.length
-              ? ` Image references that ARE present look like: ${target.sampleRefs.slice(0, 3).join(' · ')}`
-              : ' Those messages contain no image references at all.'
-            note = `Generated and saved to History, but the original image was not found in any message. Searched: ${where}.${sample}`
+            if (target && target.ambiguous) {
+              note = 'Generated and saved to History, but this message holds several images with the same prompt opening and the exact one could not be identified — nothing was replaced, so no good image was overwritten. Click the image directly in the chat and fix it from there; that identifies it precisely.'
+            } else {
+              const scanned = target && target.scanned ? target.scanned : []
+              const where = scanned.length
+                ? scanned.map((item) => `${item.chatId || 'active chat'} (${item.messages} messages)`).join(', ')
+                : 'no chat could be read'
+              const sample = target && target.sampleRefs && target.sampleRefs.length
+                ? ` Image references that ARE present look like: ${target.sampleRefs.slice(0, 3).join(' · ')}`
+                : ' Those messages contain no image references at all.'
+              note = `Generated and saved to History, but the original image was not found in any message. Searched: ${where}.${sample}`
+            }
           } else {
             // Swap on whatever actually matched — the full URL, the id or
             // filename if the host rewrote the markdown — trying each encoded
@@ -5126,4 +5145,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.4'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.5'))

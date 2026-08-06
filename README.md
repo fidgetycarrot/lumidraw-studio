@@ -1,7 +1,34 @@
-# LumiDraw Studio 0.22.4
+# LumiDraw Studio 0.22.5
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.22.5 — Replace the right image, and keep it where it sits
+
+A regeneration replaced the wrong illustration: the new image appeared at the
+top of the message while the failed one stayed put. Image placement at the
+right story beat is the whole point of the parser's anchor logic, so this was
+worse than a cosmetic slip.
+
+**Cause.** Alt text is the first 100 characters of the compiled prompt, so two
+illustrations from the same scene in one message share an opening. Both alts
+appear inside the recorded prompt, the 0.22.4 lookup matched several, and it
+replaced the first — the topmost image — rather than the one being fixed.
+
+- **The exact alt is now recorded** with every generated image and used to
+  identify it, so a shared prefix no longer causes a collision.
+- **Ambiguity refuses to act.** When the exact image still cannot be
+  identified, nothing is replaced and the panel says so. A wrong swap destroys
+  a good image and moves an illustration away from its story beat; leaving the
+  new image in History is strictly better.
+- **Clicking the image in the chat now works on rebuilt chats.** Chat images
+  are matched to History by alt text as well as URL, so the click handler
+  fires even after the host has rewritten every URL. The clicked image's
+  current URL is sent with the regeneration and used as the authoritative
+  target — no inference at all, and it is the reliable way to fix one specific
+  image in a message that holds several.
+- Replacement continues to swap only the URL inside the existing markdown, so
+  the image keeps its exact position between the surrounding paragraphs.
 
 ## 0.22.4 — Alt-text matching survives the host's chat rebuild
 

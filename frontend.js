@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.22.4'
+const EXTENSION_VERSION = '0.22.5'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -96,6 +96,7 @@ function realSetup(ctx) {
   let autoStatus = null
   let liveScanStatus = null
   let liveScanStatusAt = 0
+  let clickedChatImageUrl = ''
   let scanElapsedTimer = null
   let activePreset = null   // name of selected preset
   let personaEditorId = null
@@ -490,7 +491,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.22.4" aria-label="LumiDraw Studio v0.22.4">
+    <button class="ld-launcher" title="LumiDraw Studio v0.22.5" aria-label="LumiDraw Studio v0.22.5">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -499,7 +500,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.22.4</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.22.5</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -976,6 +977,33 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     return flattenHistoryImages().find(({ image }) => image.url === imageUrl) || null
   }
 
+  function normalizeAltText(value) {
+    return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  }
+
+  // The host rebuilds chats and rewrites image URLs to its own canonical form,
+  // so a chat image's src is usually NOT the URL History recorded. The alt
+  // text survives that rewrite, and LumiDraw wrote it from the compiled
+  // prompt — so it identifies the History entry when the URL cannot.
+  function findHistoryImageByAlt(altText) {
+    const alt = normalizeAltText(altText)
+    if (alt.length < 20) return null
+    const matches = flattenHistoryImages().filter(({ entry }) => {
+      const recorded = normalizeAltText(entry.origin && entry.origin.alt)
+      if (recorded) return recorded === alt
+      return normalizeAltText(entry.prompt).includes(alt)
+    })
+    if (!matches.length) return null
+    // Prefer an exact recorded-alt hit; otherwise the newest prompt match.
+    const exact = matches.find(({ entry }) => normalizeAltText(entry.origin && entry.origin.alt) === alt)
+    return exact || matches[0]
+  }
+
+  function findHistoryImageForChatImage(img) {
+    const src = img.getAttribute('src') || img.src || ''
+    return findHistoryImage(src) || findHistoryImageByAlt(img.getAttribute('alt') || '')
+  }
+
   function currentOutputItem() {
     const selected = findHistoryImage(selectedOutputUrl)
     if (selected) return selected
@@ -1098,6 +1126,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
   }
 
   function closeLightbox() {
+    clickedChatImageUrl = ''
     lightbox.classList.remove('ld-open')
     lightbox.setAttribute('aria-hidden', 'true')
     lightboxImage.removeAttribute('src')
@@ -1108,6 +1137,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
 
   function moveLightbox(delta) {
     if (!lightboxItems.length) return
+    clickedChatImageUrl = ''   // the handle belonged to the previous image
     lightboxIndex = (lightboxIndex + delta + lightboxItems.length) % lightboxItems.length
     renderLightbox()
   }
@@ -2563,6 +2593,7 @@ ${entry.prompt || ''}`.trim()
     try {
       const res = await call('regenerate_image', {
         imageUrl: oldUrl,
+        chatImageUrl: clickedChatImageUrl,
         prompt,
         negativePrompt: $('.ld-lightbox-regen-negative').value,
         reuseSeed: $('.ld-lightbox-regen-seed').checked && !$('.ld-lightbox-regen-seed').disabled,
@@ -2596,22 +2627,28 @@ ${entry.prompt || ''}`.trim()
     const target = event.target
     if (!target || target.tagName !== 'IMG') return
     if (panel.contains(target) || lightbox.contains(target)) return
-    const src = target.getAttribute('src') || target.src || ''
-    if (!src || !findHistoryImage(src)) return
+    const found = findHistoryImageForChatImage(target)
+    if (!found) return
     event.preventDefault()
     event.stopPropagation()
-    if (openLightbox(src)) openRegenPanel()
+    // Remember the URL the chat is actually displaying. It is the only exact
+    // handle on WHICH image was clicked when a message holds several, and it
+    // is what the backend will swap — preserving the image's position in the
+    // story rather than guessing at a similar-looking one.
+    const clickedSrc = target.getAttribute('src') || target.src || ''
+    if (openLightbox(found.image.url)) {
+      clickedChatImageUrl = clickedSrc
+      openRegenPanel()
+    }
   }
   document.addEventListener('click', onDocumentImageClick, true)
 
   // Purely cosmetic affordance so a fixable image shows a zoom cursor.
   function markFixableChatImages() {
     if (!history || !history.length) return
-    const known = new Set(flattenHistoryImages().map(({ image }) => image.url))
     for (const img of document.querySelectorAll('img')) {
       if (panel.contains(img) || lightbox.contains(img)) continue
-      const src = img.getAttribute('src') || img.src || ''
-      img.classList.toggle('ld-chat-image-fixable', !!src && known.has(src))
+      img.classList.toggle('ld-chat-image-fixable', !!findHistoryImageForChatImage(img))
     }
   }
   const fixableTimer = setInterval(markFixableChatImages, 4000)
