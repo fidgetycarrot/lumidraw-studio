@@ -1,7 +1,35 @@
-# LumiDraw Studio 0.27.2
+# LumiDraw Studio 0.28.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.28.0 — Sentence first, then tags (anima-hybrid-v14)
+
+Prompt order is reversed. The natural-language block now leads and the tag run
+follows:
+
+```text
+masterpiece, best quality, score_9, @artist. Sovi is performing oral sex on
+Rook, chin tipped up. Sovi, an elf femboy with round glasses…, nude, kneeling,
+tearful. Rook, a masculine adult man with…, nude, standing.
+
+nsfw, 2boys, pheromone grove, crystal trees, from above, full body,
+pink violet glow, intimate
+```
+
+A sentence naming what is happening, read first, frames everything the tags
+then specify — and the tags keep full booru control over characters, clothing,
+and lighting. This also matches the model card's own example shape, where
+quality tags are followed by prose.
+
+- The **quality header still leads the whole prompt** and is now separated from
+  the sentence by a full stop rather than a comma, exactly as the card writes
+  it: `masterpiece, best quality, @big chungus. An anime girl…`
+- A tag-only scene (solo, no caption) is unchanged and still joins with a comma.
+- No schema change: the parser contract is untouched.
+
+Twelve assertions pin the order, the two-block shape, the full-stop join, and
+the guarantee that character detail never appears in the tag run.
 
 ## 0.27.2 — The scene statement says what is happening again
 

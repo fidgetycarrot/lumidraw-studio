@@ -3545,7 +3545,11 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     collapseRedundantTags([...subjectTags, ...generalTags]).join(', '),
   ])
   const caption = prose.filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim()
-  return caption ? `${tagRun}\n\n${caption}` : tagRun
+  // The caption LEADS. A sentence naming what is happening, read first, frames
+  // everything the tags then specify — and it matches the model card's own
+  // example shape, where quality tags are followed by prose. The tag run that
+  // follows keeps full booru control over characters, clothing, and lighting.
+  return caption ? `${caption}\n\n${tagRun}` : tagRun
 }
 
 function profileSchemaHints(profiles) {
@@ -3651,8 +3655,13 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   const establishedSetting = reconcileSetting(scene.setting, groundingForMemory, remembered).setting
   const establishedLighting = scrubUnsupportedPlaces(animaTagList(scene.lighting), groundingForMemory, 'lighting').tags
   await rememberSceneState(chatId, { setting: establishedSetting, lighting: establishedLighting })
-  const prompt = joinPromptParts([rest, core])
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v13' }
+  // A sentence follows the quality header with a full stop, not a comma:
+  // "masterpiece, best quality, @artist. Sovi is …" is the card's own shape.
+  const coreLeadsWithSentence = /^[A-Z][^,\n]*\s/.test(core)
+  const prompt = rest && coreLeadsWithSentence
+    ? `${rest.replace(/[\s,]+$/g, '')}. ${core}`
+    : joinPromptParts([rest, core])
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v14' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -4384,7 +4393,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v13',
+          compiler: compiled.compiler || 'anima-hybrid-v14',
         })
         done++
       } catch (e) {
@@ -4522,7 +4531,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v13',
+          compiler: compiled.compiler || 'anima-hybrid-v14',
         })
       }
 
@@ -4780,7 +4789,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.27.2',
+          version: (spindle.manifest && spindle.manifest.version) || '0.28.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5738,4 +5747,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.27.2'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.28.0'))
