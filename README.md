@@ -1,7 +1,25 @@
-# LumiDraw Studio 0.22.2
+# LumiDraw Studio 0.22.3
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.22.3 — Encoded URLs, and forensics for the not-found case
+
+Follow-up to a field report where the right chat was searched (51 messages)
+and none of the four identifiers matched — the stored message text holds the
+image reference in some other spelling.
+
+- **Encoded-content matching.** The lookup now normalizes message text before
+  matching (HTML entities such as `&amp;`, markdown escapes such as `\_` and
+  `\(`), and the replacement tries every encoded spelling of the identifier —
+  including entity encoding and markdown escaping applied together — so a URL
+  the host re-encoded on save is still found and still swapped.
+- **Forensics.** When the image genuinely cannot be found, both the panel note
+  and the Terminal line now include a sample of the image references that ARE
+  present in the scanned messages, next to the identifiers that were searched
+  for. "Not found" is now a visible diff between what LumiDraw expected and
+  what the host actually stores, which is exactly what is needed to close the
+  remaining gap if one exists.
 
 ## 0.22.2 — Finding the image to replace
 

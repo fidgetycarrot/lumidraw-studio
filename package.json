@@ -1,6 +1,6 @@
 {
   "name": "lumidraw-studio",
-  "version": "0.22.2",
+  "version": "0.22.3",
   "private": true,
   "description": "An Anima-optimized Draw Things Studio with reusable personas, appearance states, context continuity, and compact hybrid prompts.",
   "license": "MIT",

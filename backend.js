@@ -878,6 +878,36 @@ async function listCandidateChatIds(userId, preferred = []) {
   return ids
 }
 
+// Message text may hold the URL in an encoded form: HTML entities from the
+// host's renderer (&amp;), or markdown escapes (\_ \( \)). Matching runs
+// against a normalized copy; includes() only needs truth, not positions.
+function normalizeForImageMatch(text) {
+  return String(text || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&#0?39;|&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/\\([_()[\]*~`-])/g, '$1')
+}
+
+// Forensics for the not-found case: which image references actually exist in
+// the scanned messages? Logged next to the needles, "not found" becomes a
+// diff instead of a mystery.
+function collectImageReferences(messages, limit = 8) {
+  const refs = []
+  const push = (value) => {
+    const ref = String(value || '').trim()
+    if (ref && !refs.includes(ref)) refs.push(ref)
+  }
+  for (const message of messages) {
+    const bits = messageBits(message)
+    if (!bits.contentKey || typeof bits.content !== 'string') continue
+    for (const match of bits.content.matchAll(/!\[[^\]]*\]\(([^)\s]+)[^)]*\)/g)) push(match[1])
+    for (const match of bits.content.matchAll(/<img[^>]+src\s*=\s*["']([^"']+)["']/gi)) push(match[1])
+    if (refs.length >= limit) break
+  }
+  return refs.slice(0, limit)
+}
+
 async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
   // The hinted chat first, then the active chat. '' means "let fetchMessages
   // resolve the active chat", and must survive here — uniqueStrings would drop
@@ -904,13 +934,14 @@ async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
       resolvedChatId = String(result.chatId || requestedChatId || '')
     } catch { continue }
     if (scanned.some((item) => item.chatId === resolvedChatId)) continue
-    scanned.push({ chatId: resolvedChatId, messages: messages.length })
+    scanned.push({ chatId: resolvedChatId, messages: messages.length, sample: collectImageReferences(messages) })
 
     const matches = []
     for (let i = messages.length - 1; i >= 0; i--) {
       const bits = messageBits(messages[i])
       if (!bits.contentKey || typeof bits.content !== 'string') continue
-      const matchedNeedle = needles.find((needle) => bits.content.includes(needle))
+      const haystack = normalizeForImageMatch(bits.content)
+      const matchedNeedle = needles.find((needle) => haystack.includes(needle))
       if (matchedNeedle) matches.push({ ...bits, matchedNeedle })
     }
     if (!matches.length) continue
@@ -924,9 +955,28 @@ async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
     }
     return { ...chosen, chatId: resolvedChatId }
   }
+  const sampleRefs = uniqueStrings(scanned.flatMap((item) => item.sample || []))
   spindle.log.warn('[lumidraw] image not found in any message · needles=' + needles.join(' | ') +
-    ' · scanned=' + (scanned.map((item) => `${item.chatId || '(active)'}:${item.messages}`).join(', ') || 'nothing'))
-  return { notFound: true, scanned, needles }
+    ' · scanned=' + (scanned.map((item) => `${item.chatId || '(active)'}:${item.messages}`).join(', ') || 'nothing') +
+    ' · image refs actually present in those messages: ' + (sampleRefs.join(' | ') || 'none at all'))
+  return { notFound: true, scanned, needles, sampleRefs }
+}
+
+// Encoded spellings a needle may wear inside stored message text. The host may
+// apply entity encoding AND markdown escaping together, so the set is closed
+// under both transforms rather than applying each in isolation.
+function needleEncodings(needle) {
+  const value = String(needle || '')
+  const entity = (text) => text.replace(/&(?!amp;)/g, '&amp;')
+  const escapeMd = (text) => text.replace(/(?<!\\)([_()])/g, '\\$1')
+  return uniqueStrings([
+    value,
+    entity(value),
+    escapeMd(value),
+    entity(escapeMd(value)),
+    escapeMd(entity(value)),
+    value.replace(/_/g, '\\_'),
+  ])
 }
 
 async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, seed, origin }, userId, scan = null) {
@@ -4105,7 +4155,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.22.2',
+          version: (spindle.manifest && spindle.manifest.version) || '0.22.3',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4556,14 +4606,22 @@ spindle.onFrontendMessage(async (payload, userId) => {
             const where = scanned.length
               ? scanned.map((item) => `${item.chatId || 'active chat'} (${item.messages} messages)`).join(', ')
               : 'no chat could be read'
-            note = `Generated and saved to History, but the original image was not found in any message. Searched: ${where}. If the image is still visible in your chat, the host may store its URL differently — send the Terminal line beginning "[lumidraw] image not found".`
+            const sample = target && target.sampleRefs && target.sampleRefs.length
+              ? ` Image references that ARE present look like: ${target.sampleRefs.slice(0, 3).join(' · ')}`
+              : ' Those messages contain no image references at all.'
+            note = `Generated and saved to History, but the original image was not found in any message. Searched: ${where}.${sample}`
           } else {
-            // Swap on whatever actually matched: the full URL, or the id /
-            // filename if the host rewrote the markdown.
-            const swap = replaceImageUrlInContent(target.content, imageUrl, newUrl)
-            if (!swap.replaced && target.matchedNeedle && target.matchedNeedle !== imageUrl) {
-              const alt = replaceImageUrlInContent(target.content, target.matchedNeedle, newUrl)
-              if (alt.replaced) { swap.content = alt.content; swap.replaced = true }
+            // Swap on whatever actually matched — the full URL, the id or
+            // filename if the host rewrote the markdown — trying each encoded
+            // spelling the stored text might use.
+            const swapCandidates = uniqueStrings([
+              ...needleEncodings(imageUrl),
+              ...(target.matchedNeedle ? needleEncodings(target.matchedNeedle) : []),
+            ])
+            let swap = { content: target.content, replaced: false }
+            for (const candidate of swapCandidates) {
+              const attempt = replaceImageUrlInContent(target.content, candidate, newUrl)
+              if (attempt.replaced) { swap = attempt; break }
             }
             if (!swap.replaced) {
               note = 'Generated, but the original image markdown could not be matched — it is in History.'
@@ -5020,4 +5078,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.2'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.3'))
