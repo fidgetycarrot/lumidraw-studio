@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS = {
   activePreset: '',       // preset used for story-driven generations
   parserConnection: '',   // optional connection name/id for the parser LLM
   parserModel: '',        // optional model override for the parser LLM
+  parserRequestOverrides: '', // JSON merged into the parser request — the escape hatch for provider-specific reasoning keys
   parserInstruction: '',  // selected engine instruction (blank = that engine's built-in default)
   parserEngine: 'legacy',  // 'legacy' (v0.13 instruction-only) | 'anima' (structured JSON compiler)
   parserContextMessages: 2, // Anima only: number of immediately preceding chat messages used as reference context
@@ -4398,13 +4399,43 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
       temperature: 0.2,
       max_tokens: parserTokenLimit,
     },
-    reasoning: { source: 'off' },
+    // OpenRouter documents `effort: "none"` as "disables reasoning entirely",
+    // and derives Anthropic's thinking budget from it, so that is the switch
+    // that matters. `enabled: false` and `source: 'off'` ride along for
+    // providers that spell it their own way; keys nobody recognises are
+    // ignored.
+    //
+    // Deliberately NOT sent:
+    //   exclude: true    hides reasoning but still generates and bills it —
+    //                    the exact behaviour that made this hard to diagnose.
+    //   max_tokens: 0    OpenRouter clamps Anthropic's budget to a 1024-token
+    //                    MINIMUM, so this would switch reasoning on, not off,
+    //                    and it conflicts with `effort` ("one of, not both").
+    reasoning: { source: 'off', enabled: false, effort: 'none' },
     signal: parserController.signal,
   }
   if (connectionId) opts.connection_id = connectionId
   if (useRawOverride) {
     opts.provider = connection.provider
     opts.model = requestedModel
+  }
+
+  // User-supplied overrides win over everything above — the escape hatch for a
+  // provider key LumiDraw does not know about yet.
+  const overrideText = String(settings.parserRequestOverrides || '').trim()
+  if (overrideText && overrideText !== '{}') {
+    try {
+      const extra = JSON.parse(overrideText)
+      if (extra && typeof extra === 'object' && !Array.isArray(extra)) {
+        for (const [key, value] of Object.entries(extra)) {
+          if (key === 'parameters' && value && typeof value === 'object') Object.assign(opts.parameters, value)
+          else opts[key] = value
+        }
+        spindle.log.info('[lumidraw] parser request overrides applied: ' + Object.keys(extra).join(', '))
+      }
+    } catch (error) {
+      spindle.log.warn('[lumidraw] parser request overrides ignored — not valid JSON: ' + error.message)
+    }
   }
 
   const parserStarted = Date.now()
@@ -4439,7 +4470,17 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
         try {
           return await method(opts)
         } catch (error) {
-          if (/userId/i.test(error && error.message || '')) return await method(opts, userId)
+          const message = (error && error.message) || ''
+          if (/userId/i.test(message)) return await method(opts, userId)
+          // A strict provider may reject the multi-spelling reasoning object.
+          // Drop back to the minimal form once rather than failing the scan.
+          if (/reasoning|unrecognized key|unknown (?:field|parameter)|invalid.*param|mandatory/i.test(message) &&
+              opts.reasoning && Object.keys(opts.reasoning).length > 1) {
+            // Some models mark reasoning mandatory and reject effort:"none".
+            spindle.log.warn('[lumidraw] provider rejected the reasoning options (' + message + '); retrying with reasoning={source:off}')
+            opts.reasoning = { source: 'off' }
+            return await method(opts)
+          }
           throw error
         }
       })()
@@ -4449,8 +4490,15 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
       const responseText = extractParserText(res)
       const elapsed = Date.now() - parserStarted
       const usage = res && res.usage
+      const reasoningTokens = usage && (
+        (usage.completion_tokens_details && usage.completion_tokens_details.reasoning_tokens) ??
+        usage.reasoning_tokens ?? null)
       const usageText = usage
-        ? ' · tokens=' + [usage.prompt_tokens ?? '?', usage.completion_tokens ?? '?', usage.total_tokens ?? '?'].join('/')
+        ? ' · tokens=' + [usage.prompt_tokens ?? '?', usage.completion_tokens ?? '?', usage.total_tokens ?? '?'].join('/') +
+          (reasoningTokens != null
+            ? ' · reasoning_tokens=' + reasoningTokens +
+              (usage.completion_tokens ? ' (' + Math.round((reasoningTokens / usage.completion_tokens) * 100) + '% of output)' : '')
+            : ' · reasoning_tokens=not reported')
         : ''
       const finishReason = res && (res.finish_reason || (res.choices && res.choices[0] && res.choices[0].finish_reason))
       const finishText = finishReason ? ' · finish=' + finishReason : ''
@@ -5383,7 +5431,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.29.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.29.3',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6341,4 +6389,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.29.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.29.3'))

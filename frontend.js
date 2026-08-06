@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.29.1'
+const EXTENSION_VERSION = '0.29.3'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -494,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.29.1" aria-label="LumiDraw Studio v0.29.1">
+    <button class="ld-launcher" title="LumiDraw Studio v0.29.3" aria-label="LumiDraw Studio v0.29.3">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.29.1</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.29.3</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -691,6 +691,7 @@ function realSetup(ctx) {
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Connection</span><div style="display:flex;gap:6px;align-items:center"><select class="ld-parser-conn" style="flex:1"><option value="">— default connection —</option></select><button class="ld-btn ld-compact" data-act="refresh-parser-sources" title="Reload available parser connections">↻</button></div></div>
               <div><span class="ld-label">Model override (optional)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="e.g. your Kimi deployment" /><button class="ld-btn ld-compact" data-act="use-conn-model" title="Copy the selected connection's current model into the override field">Use connection model</button></div></div>
+              <div><span class="ld-label">Parser request overrides (JSON, advanced)</span><textarea class="ld-parser-overrides" style="min-height:64px;font-family:ui-monospace,monospace;font-size:12px" placeholder='{"reasoning":{"enabled":false}}'></textarea><div class="ld-hint">Merged into the parser request. Use this to force a provider-specific setting — most often turning reasoning off. Check the Spindle log for <code>reasoning_tokens=</code> after a scan to see whether it worked.</div></div>
             </div>
           </div>
           <div class="ld-card">
@@ -3374,6 +3375,7 @@ ${entry.prompt || ''}`.trim()
       parserEngine: $('.ld-parser-engine').value,
       parserConnection: $('.ld-parser-conn').value,
       parserModel: $('.ld-parser-model').value,
+      parserRequestOverrides: $('.ld-parser-overrides') ? $('.ld-parser-overrides').value : '',
       parserInstruction: $('.ld-parser-instr').value,
       protocol: $('.ld-protocol').value,
       maxImages: $('.ld-maximg').value,
@@ -3462,7 +3464,7 @@ ${entry.prompt || ''}`.trim()
 
   // All settings text fields auto-save as you type (debounced).
   let settingsSaveTimer = null
-  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port']) {
+  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-overrides', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port']) {
     const el = $(sel)
     if (el) el.addEventListener('input', () => {
       clearTimeout(settingsSaveTimer)
@@ -3704,6 +3706,7 @@ ${entry.prompt || ''}`.trim()
       } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
+      if ($('.ld-parser-overrides')) $('.ld-parser-overrides').value = settings.parserRequestOverrides || ''
       $('.ld-parser-instr').value = settings.parserInstruction || parserDefaultFor(settings.parserEngine || 'legacy')
       $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
       await loadCatalog()

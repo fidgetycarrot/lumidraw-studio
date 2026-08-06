@@ -1,7 +1,84 @@
-# LumiDraw Studio 0.29.1
+# LumiDraw Studio 0.29.3
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.29.3 — Correcting 0.29.2 against the actual spec
+
+0.29.2 sent every spelling of "reasoning off" at once on the theory that
+providers ignore keys they do not recognise. Reading OpenRouter's reference
+afterwards, two of those keys were wrong in ways that mattered.
+
+**`exclude: true` does not disable reasoning.** The documentation is explicit:
+*"The model will still use reasoning, but it won't be returned in the
+response."* It hides the trace while still generating and billing the tokens —
+the precise behaviour that made this failure so hard to see. Removed.
+
+**`max_tokens: 0` may have switched reasoning on.** For Anthropic models
+OpenRouter clamps the reasoning budget to a **1024-token minimum**, so a zero
+budget becomes a 1024-token one. It also conflicts with `effort`, which the
+reference states is "one of the following (not both)". Removed.
+
+What is sent now:
+
+```json
+{ "reasoning": { "source": "off", "enabled": false, "effort": "none" } }
+```
+
+`effort: "none"` is documented as "disables reasoning entirely", and OpenRouter
+derives Anthropic's thinking budget from `effort`, so it is the key that
+decides. The other two ride along for providers that spell it differently.
+
+Some models mark reasoning **mandatory** and reject `effort: "none"` outright;
+that rejection is now also caught by the fallback, which retries once with the
+minimal form rather than failing the scan.
+
+For the Lumiverse preset's own Custom Body field, the equivalent is:
+
+```json
+{"reasoning": {"effort": "none"}}
+```
+
+
+## 0.29.2 — Finding out where the reasoning is actually coming from
+
+The parser does not run through a Lumiverse preset. It calls the generation API
+directly against a **connection**, so a preset's Reasoning / CoT panel never
+reaches it. Turning API Reasoning off there is correct for the story and has no
+effect on the parser.
+
+Two changes so this stops being guesswork.
+
+### Reasoning tokens are reported, not inferred
+
+Every estimate so far came from subtracting visible characters from
+`completion_tokens`. Providers report the real number, so LumiDraw now logs it:
+
+```text
+· tokens=7510/4100/11610 · reasoning_tokens=3508 (86% of output)
+```
+
+or `reasoning_tokens=not reported` when the provider does not send it. One scan
+now answers the question outright.
+
+### Every spelling of "reasoning off", plus an escape hatch
+
+LumiDraw sent `reasoning: {source:'off'}` — one vendor's spelling. Providers
+ignore keys they do not recognise, so all the common ones now ride together:
+`source`, `enabled`, `effort`, `exclude`, `max_tokens`. If a strict provider
+rejects the object, the request falls back to the minimal form once rather than
+failing the scan.
+
+For anything not covered, **Settings → Parser request overrides** takes raw JSON
+and merges it into the parser request:
+
+```json
+{"reasoning": {"enabled": false}}
+```
+
+Keys replace what LumiDraw sends; a `parameters` object is merged into the
+existing parameters rather than replacing them.
+
 
 ## 0.29.1 — Say it once, and say it in words the model knows
 
