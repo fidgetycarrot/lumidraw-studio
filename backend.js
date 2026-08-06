@@ -1714,6 +1714,13 @@ function sanitizeJsonText(value) {
   return String(value || '')
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
+    // A stray duplicate key silently destroys the real one: JSON.parse keeps
+    // the LAST occurrence, so `"scene":{…full scene…},"scene":{}` collapses to
+    // an empty scene and a perfectly good reply is thrown away. An empty
+    // object carries no information in either position, so it is safe to drop
+    // wherever it appears as a repeat.
+    .replace(/,\s*"(scene|images)"\s*:\s*\{\s*\}/g, '')
+    .replace(/,\s*"(scene|images)"\s*:\s*\[\s*\]/g, '')
     .replace(/,\s*([}\]])/g, '$1')
 }
 
@@ -2013,10 +2020,29 @@ function parseParserScenes(text, maxImages) {
   if (/^\s*NONE\s*$/i.test(String(root && root.result || ''))) return []
   const items = Array.isArray(root.images) ? root.images : (root.scene ? [root] : [])
   if (!items.length) throw new Error('Parser JSON must contain an images array.')
-  return items.slice(0, maxImages).map((item, index) => ({
-    anchor: shortPhrase(item.anchor || '', `image ${index + 1} anchor`, 14, 120, false),
-    scene: normalizeScene(item.scene || item),
-  }))
+
+  // Images are independent. One that fails validation is skipped rather than
+  // discarding the whole reply — losing three good illustrations because a
+  // fourth had a stray key is the worst possible trade.
+  const scenes = []
+  const failures = []
+  for (const [index, item] of items.slice(0, maxImages).entries()) {
+    try {
+      scenes.push({
+        anchor: shortPhrase(item.anchor || '', `image ${index + 1} anchor`, 14, 120, false),
+        scene: normalizeScene(item.scene || item),
+      })
+    } catch (error) {
+      failures.push(`image ${index + 1}: ${error.message}`)
+    }
+  }
+  if (failures.length) {
+    spindle.log.warn('[lumidraw] skipped ' + failures.length + ' unusable image object(s) · ' + failures.join(' · '))
+  }
+  if (!scenes.length) {
+    throw new Error(failures.length ? failures[0] : 'Parser JSON contained no usable image.')
+  }
+  return scenes
 }
 
 function applyBannedToList(items, bannedCsv) {
@@ -2890,7 +2916,7 @@ const BODY_TRAIT_RE = /\b(?:eyes?|mouth|brows?|teeth|tongue|blush|tears|fangs?|l
 // prove the shot is POV, and they never reach the caption.
 // Matching runs on normalised text, where punctuation becomes a space, so
 // "viewer's hands" arrives as "viewer s hands".
-const POV_CUE_RE = /\b(?:viewer(?:\s+s)?\s+(?:hands?|arms?|body|fingers?|pov)|hands?\s+in\s+(?:the\s+)?foreground|face\s+out\s+of\s+frame|faceless|first[\s-]person|pov\s+body|body\s+only|forearms?\s+only|lower\s+body\s+only|off[\s-]screen\s+face|head\s+out\s+of\s+frame|cropped\s+head)\b/i
+const POV_CUE_RE = /\b(?:viewer(?:\s+s)?\s+(?:hands?|arms?|body|fingers?|pov)|hands?\s+in\s+(?:the\s+)?foreground|hands?\s+(?:only|visible\s+only)|face\s+turned\s+away|only\s+(?:the\s+)?hands?\s+visible|face\s+out\s+of\s+frame|faceless|first[\s-]person|pov\s+body|body\s+only|forearms?\s+only|lower\s+body\s+only|off[\s-]screen\s+face|head\s+out\s+of\s+frame|cropped\s+head)\b/i
 
 function isPovStagingCue(value) {
   const text = normalizeIdentityText(value)
@@ -4789,7 +4815,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.28.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.28.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5747,4 +5773,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.28.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.28.1'))

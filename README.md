@@ -1,7 +1,34 @@
-# LumiDraw Studio 0.28.0
+# LumiDraw Studio 0.28.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.28.1 — A duplicate key was throwing away complete replies
+
+`Structured scene needs at least one subject` on a reply that finished cleanly
+(`finish=stop`) and contained three fully-formed images.
+
+The first image object ended:
+
+```json
+… "aspect":"4:3"},"scene":{}}
+```
+
+Two `"scene"` keys. `JSON.parse` keeps the **last** occurrence, so the complete
+scene was replaced by an empty object before any validation ran. The scene was
+never malformed; it was deleted by the parse.
+
+- **Empty duplicate keys are stripped before parsing.** An empty object or
+  array carries no information in either position, so `"scene":{}` and
+  `"images":[]` are dropped when they repeat a key that already has content.
+- **One unusable image no longer discards the rest.** Images are independent;
+  a failure is now skipped and logged, and the reply fails only when nothing
+  usable survives — in which case the underlying reason is still reported.
+  Three good illustrations were lost to a stray key on the first one.
+
+Also recognised as POV staging cues, from the same reply: `hand visible only`,
+`face turned away`, `only the hands visible`. `bare arm` and `bare torso` were
+already rejected as clothing by 0.27.1.
 
 ## 0.28.0 — Sentence first, then tags (anima-hybrid-v14)
 
