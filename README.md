@@ -1,7 +1,34 @@
-# LumiDraw Studio 0.29.4
+# LumiDraw Studio 0.30.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.30.0 — Re-run parser
+
+Comparing parser models meant regenerating a whole story message and hoping the
+model picked the same moment to illustrate. **Fix this image…** now has a
+**Re-run parser** button.
+
+It re-reads the passage the image came from, runs whichever parser model is
+currently selected, compiles the result, and loads the new prompt into the
+editable box. It does **not** generate and it does **not** touch the story
+message — so a comparison costs one parser call and no Draw Things time.
+
+- The parser model and how long it took are shown next to the button, which is
+  most of what you want when the question is "is this one faster".
+- When the parser returns several scenes you get **Scene 1 / Scene 2 …** chips
+  to flip between the compiled prompts, each tooltipped with its anchor text.
+- An **Original** chip restores the prompt the image was actually made with, so
+  you can read old against new without losing the old one.
+- Scenes the compiler rejects are reported by count rather than hidden — a
+  rejected scene is exactly what you want to see when judging a model.
+
+Read the prompt, and press **Regenerate & replace** only if it is better.
+
+Re-parsing needs the source message, so it works on images made by a story scan.
+Studio images and images whose message has since been deleted will say so rather
+than failing quietly.
+
 
 ## 0.29.4 — Stop fighting the reasoning; budget for it
 

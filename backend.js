@@ -5441,7 +5441,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.29.4',
+          version: (spindle.manifest && spindle.manifest.version) || '0.30.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5842,6 +5842,109 @@ spindle.onFrontendMessage(async (payload, userId) => {
         await saveCharacters(characters)
         reply = ok(payload, requestId, { characters, entry })
         break
+      }
+
+      // Re-runs the parser over the passage that produced an existing image and
+      // returns the freshly compiled prompt(s) WITHOUT generating anything.
+      // The point is comparison: swap the parser model, press the button, and
+      // read the two prompts side by side for the cost of one parser call and
+      // no Draw Things time.
+      case 'reparse_image': {
+        const imageUrl = String(payload.imageUrl || '').trim()
+        if (!imageUrl) throw new Error('Re-parsing needs to know which image to work from.')
+
+        const history = await getHistory()
+        const source = history.find((item) => (item.images || []).some((image) => image && image.url === imageUrl))
+        const origin = (source && source.origin) || {}
+        const messageId = String(origin.messageId || '').trim()
+        if (!messageId) {
+          throw new Error('This image has no recorded source message, so there is no passage to re-parse. Only images made by a story scan can be re-parsed.')
+        }
+
+        const settings = await getSettings()
+        const presets = await getPresets()
+        const preset = presets.find((item) => item.name === (origin.presetName || settings.activePreset))
+        if (!preset) throw new Error('No preset available to compile against.')
+
+        const { messages, chatId: resolvedChatId } = await fetchMessages(userId, String(origin.chatId || '').trim())
+        const chatId = String(origin.chatId || resolvedChatId || '')
+        const targetIndex = messages.findIndex((message) => String((message.id || message.messageId) || '') === messageId)
+        if (targetIndex < 0) {
+          throw new Error(`The source message (${messageId}) is no longer in this chat, so its passage cannot be re-read.`)
+        }
+        const target = messageBits(messages[targetIndex])
+        if (!target.content) throw new Error('The source message has no readable text.')
+
+        const passage = cleanParserMessageText(target.content).slice(-6000)
+        const sceneMemory = await getSceneMemory()
+        const rememberedState = sceneMemory[String(chatId || '')] || {}
+        const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
+        const parserSceneState = {
+          setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorTags,
+          lighting: rememberedState.lighting || [],
+        }
+        const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, parserSceneState)
+        const profiles = await getStoryProfiles(preset, settings, userId, chatId)
+        const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
+          .replaceAll('{{max_images}}', String(settings.maxImages || 2))
+        const instruction = (await resolveMacros(guidance, userId, chatId)) +
+          structuredParserSchema(settings.maxImages || 2, profiles)
+
+        const startedAt = Date.now()
+        const raw = await quietLLM(instruction, parserInput.input, settings, userId, true, null)
+        const parserMs = Date.now() - startedAt
+
+        let parsed = []
+        try {
+          parsed = parseParserScenes(raw, settings.maxImages || 2)
+        } catch (error) {
+          return {
+            ok: false,
+            note: `Parser returned invalid structured data: ${error.message}`,
+            parserMs,
+            raw: String(raw || '').slice(0, 600),
+          }
+        }
+        if (!parsed.length) {
+          return { ok: false, note: 'The parser judged this passage to have no visual moment.', parserMs, raw: String(raw || '').slice(0, 600) }
+        }
+
+        // Compile every scene the parser returned, keeping the rejects visible
+        // rather than silently dropping them — a rejected scene is exactly the
+        // kind of thing worth seeing when comparing two models.
+        const results = []
+        for (const item of parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2)))) {
+          const assessment = assessStructuredScene(item.scene)
+          if (!assessment.valid) {
+            results.push({ ok: false, anchor: item.anchor || '', note: `Incomplete scene — ${assessment.summary}.` })
+            continue
+          }
+          const compiled = await compileSceneWithPreset(
+            item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '')
+          results.push({
+            ok: true,
+            anchor: item.anchor || '',
+            prompt: compiled.prompt,
+            core: compiled.core,
+            aspect: compiled.aspect || '',
+            negativePrompt: preset.negativePrompt || '',
+            warnings: assessment.warnings,
+          })
+        }
+
+        const usable = results.filter((item) => item.ok).length
+        spindle.log.info(`[lumidraw] re-parsed message ${messageId} in ${parserMs}ms · ${usable}/${results.length} scene(s) usable`)
+        return {
+          ok: usable > 0,
+          results,
+          parserMs,
+          model: settings.parserModel || '(connection default)',
+          presetName: preset.name || '',
+          messageId,
+          note: usable
+            ? `Parsed in ${(parserMs / 1000).toFixed(1)}s — ${usable} of ${results.length} scene(s) usable.`
+            : 'The parser ran but produced no usable scene.',
+        }
       }
 
       case 'regenerate_image': {
@@ -6399,4 +6502,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.29.4'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.30.0'))

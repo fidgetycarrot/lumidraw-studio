@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.29.4'
+const EXTENSION_VERSION = '0.30.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -494,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.29.4" aria-label="LumiDraw Studio v0.29.4">
+    <button class="ld-launcher" title="LumiDraw Studio v0.30.0" aria-label="LumiDraw Studio v0.30.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.29.4</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.30.0</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -901,6 +901,11 @@ fangs = fangs, sharp teeth"></textarea></div>
           </div>
         </div>
         <div class="ld-lightbox-regen" style="display:none">
+          <div class="ld-row" style="margin-bottom:7px;align-items:center">
+            <button class="ld-btn ld-compact ld-lightbox-reparse" title="Run the parser again over the passage this image came from and load the new prompt below. Nothing is generated and no image is replaced.">Re-run parser</button>
+            <span class="ld-lightbox-reparse-info" style="font-size:11px;opacity:.7"></span>
+          </div>
+          <div class="ld-lightbox-reparse-picker" style="display:none;margin-bottom:7px"></div>
           <span class="ld-label">Prompt</span>
           <textarea class="ld-lightbox-regen-prompt" spellcheck="false" style="min-height:104px"></textarea>
           <span class="ld-label" style="margin-top:6px">Negative prompt</span>
@@ -962,6 +967,8 @@ fangs = fangs, sharp teeth"></textarea></div>
   let expandedTextarea = null
   let lightboxIndex = 0
   let lightboxItems = []
+  // The prompt an image was actually made with, kept so a re-parse can be undone.
+  let reparseOriginalPrompt = ''
   let selectedOutputUrl = null
   let lightboxScale = 1
   let lightboxPanX = 0
@@ -1121,6 +1128,12 @@ fangs = fangs, sharp teeth"></textarea></div>
     const box = $('.ld-lightbox-regen')
     if (!box) return
     $('.ld-lightbox-regen-prompt').value = entry.prompt || ''
+    reparseOriginalPrompt = ''
+    if ($('.ld-lightbox-reparse-info')) $('.ld-lightbox-reparse-info').textContent = ''
+    if ($('.ld-lightbox-reparse-picker')) {
+      $('.ld-lightbox-reparse-picker').style.display = 'none'
+      $('.ld-lightbox-reparse-picker').innerHTML = ''
+    }
     $('.ld-lightbox-regen-negative').value = entry.negativePrompt || ''
     const seedKnown = entry.seed !== undefined && entry.seed !== 'random'
     const seedBox = $('.ld-lightbox-regen-seed')
@@ -2834,6 +2847,74 @@ ${entry.prompt || ''}`.trim()
     const box = $('.ld-lightbox-regen')
     if (box && box.style.display === 'block') closeRegenPanel()
     else openRegenPanel()
+  })
+  // Re-parse: run the parser again over the source passage and load the result
+  // into the prompt box. Deliberately does NOT generate — the whole point is to
+  // read the new prompt before spending Draw Things time on it.
+  $('.ld-lightbox-reparse').addEventListener('click', async () => {
+    const item = lightboxItems[lightboxIndex]
+    if (!item) return
+    const button = $('.ld-lightbox-reparse')
+    const promptBox = $('.ld-lightbox-regen-prompt')
+    const picker = $('.ld-lightbox-reparse-picker')
+    const info = $('.ld-lightbox-reparse-info')
+    if (!reparseOriginalPrompt) reparseOriginalPrompt = promptBox.value
+    button.disabled = true
+    const label = button.textContent
+    button.textContent = 'Parsing…'
+    info.textContent = ''
+    picker.style.display = 'none'
+    picker.innerHTML = ''
+    setStatus('.ld-lightbox-regen-status', 'Re-reading the original passage with the current parser model — nothing is being generated.')
+    try {
+      const res = await call('reparse_image', { imageUrl: item.image.url }, 300000)
+      const results = Array.isArray(res.results) ? res.results : []
+      const usable = results.filter((entry) => entry && entry.ok)
+      info.textContent = `${res.model || 'parser'} · ${((res.parserMs || 0) / 1000).toFixed(1)}s`
+      if (!usable.length) {
+        setStatus('.ld-lightbox-regen-status', res.note || 'The parser produced no usable scene. The prompt below is unchanged.', 'err')
+        return
+      }
+      const applyResult = (entry) => {
+        promptBox.value = entry.prompt || ''
+        if (entry.negativePrompt) $('.ld-lightbox-regen-negative').value = entry.negativePrompt
+      }
+      applyResult(usable[0])
+      // Several scenes usually come back; let the user flip between them and
+      // back to what was there before, since comparison is the point.
+      if (usable.length > 1 || reparseOriginalPrompt) {
+        picker.style.display = 'block'
+        const row = document.createElement('div')
+        row.className = 'ld-row'
+        row.style.flexWrap = 'wrap'
+        usable.forEach((entry, index) => {
+          const chip = document.createElement('button')
+          chip.className = 'ld-btn ld-compact'
+          chip.textContent = usable.length > 1 ? `Scene ${index + 1}` : 'New prompt'
+          chip.title = entry.anchor ? `Anchored at: ${entry.anchor}` : ''
+          chip.addEventListener('click', () => applyResult(entry))
+          row.appendChild(chip)
+        })
+        if (reparseOriginalPrompt) {
+          const revert = document.createElement('button')
+          revert.className = 'ld-btn ld-compact'
+          revert.textContent = 'Original'
+          revert.title = 'Put the prompt this image was actually made with back in the box'
+          revert.addEventListener('click', () => { promptBox.value = reparseOriginalPrompt })
+          row.appendChild(revert)
+        }
+        picker.appendChild(row)
+      }
+      const rejected = results.length - usable.length
+      setStatus('.ld-lightbox-regen-status',
+        `${res.note || 'Parsed.'}${rejected ? ` ${rejected} scene(s) were rejected by the compiler.` : ''} Read the prompt, then press Regenerate & replace when you are happy with it.`,
+        'good')
+    } catch (error) {
+      setStatus('.ld-lightbox-regen-status', error.message, 'err')
+    } finally {
+      button.disabled = false
+      button.textContent = label
+    }
   })
   $('.ld-lightbox-regen-cancel').addEventListener('click', closeRegenPanel)
   $('.ld-lightbox-regen-run').addEventListener('click', async () => {
