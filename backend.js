@@ -3102,14 +3102,45 @@ function splitArtistTags(headerText) {
 
 const GENERIC_INDOOR_SETTING_RE = /^(?:kitchen|bedroom|bathroom|living room|office|hallway|corridor|dining room|classroom|bar|cafe|restaurant|apartment|house|room|indoors|interior)$/
 
+// Place words can ride into a scene through ANY field, not just `setting`.
+// Observed in the field: the parser never named a kitchen as the location — it
+// wrote "kitchen lighting" three times across three images, and the location
+// arrived through the lighting field, unchallenged.
+const PLACE_WORD_RE = /\b(?:kitchen|bedroom|bathroom|bedchamber|living room|office|study|hallway|corridor|dining room|classroom|library|tavern|inn|bar|pub|cafe|restaurant|shop|store|market|apartment|house|cabin|cottage|castle|dungeon|cave|temple|church|hospital|laboratory|lab|garage|basement|attic|balcony|rooftop|street|alley|forest|grove|woods|beach|desert|mountain|garden|courtyard|stable|barn|ship|deck|train|car|elevator|shower|pool|arena|stage|studio)\b/g
+
+function placeWordsIn(value) {
+  PLACE_WORD_RE.lastIndex = 0
+  return uniqueStrings(String(normalizeIdentityText(value)).match(PLACE_WORD_RE) || [])
+}
+
 // A tag is supported when its distinctive words appear in the source text.
+// Any PLACE word it contains must be supported specifically: "kitchen
+// lighting" must not pass merely because the passage happens to say
+// "mushrooms lighting the moss".
 function settingTagSupported(tag, text) {
   const value = normalizeIdentityText(tag)
   if (!value) return false
-  const words = value.split(/\s+/).filter((word) => word.length >= 4)
-  if (!words.length) return normalizeIdentityText(text).includes(value)
   const haystack = normalizeIdentityText(text)
+  const places = placeWordsIn(value)
+  if (places.length && !places.every((place) => haystack.includes(place))) return false
+  const words = value.split(/\s+/).filter((word) => word.length >= 4)
+  if (!words.length) return haystack.includes(value)
   return words.some((word) => haystack.includes(word))
+}
+
+// Drops atmosphere tags that smuggle in an unsupported location. The whole tag
+// goes rather than just the place word — "kitchen lighting" minus "kitchen" is
+// not a lighting instruction, and the genuine lighting tags survive alongside.
+function scrubUnsupportedPlaces(tags, text, field) {
+  const haystack = normalizeIdentityText(text)
+  const kept = []
+  const dropped = []
+  for (const tag of tags || []) {
+    const places = placeWordsIn(tag)
+    if (places.length && !places.every((place) => haystack.includes(place))) dropped.push(tag)
+    else kept.push(tag)
+  }
+  return { tags: kept, dropped, field }
 }
 
 function reconcileSetting(settingTags, sourceText, rememberedSetting) {
@@ -3377,25 +3408,36 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   const repaired = repairCameraTags(povFiltered, scene, descriptors)
   const cameraTags = animaTagList(repaired.tags)
   if (repaired.note) spindle.log.info('[lumidraw] camera repair · ' + repaired.note)
-  const settingCheck = reconcileSetting(
-    scene.setting,
-    [sourcePassage, contextText].filter(Boolean).join('\n'),
-    rememberedSetting,
-  )
+  const groundingText = [sourcePassage, contextText].filter(Boolean).join('\n')
+  const settingCheck = reconcileSetting(scene.setting, groundingText, rememberedSetting)
   if (settingCheck.note) spindle.log.warn('[lumidraw] setting continuity · ' + settingCheck.note)
+
+  // A location can arrive through any atmosphere field, not just `setting`.
+  const placeChecks = [
+    scrubUnsupportedPlaces(cameraTags, groundingText, 'camera'),
+    scrubUnsupportedPlaces(animaTagList(scene.lighting), groundingText, 'lighting'),
+    scrubUnsupportedPlaces(animaTagList(scene.style), groundingText, 'style'),
+    scrubUnsupportedPlaces(animaTagList(relationDetails), groundingText, 'relation details'),
+  ]
+  for (const check of placeChecks) {
+    if (check.dropped.length) {
+      spindle.log.warn(`[lumidraw] setting continuity · dropped ${check.field} tag(s) naming a place the story never mentions: ${check.dropped.join(', ')}`)
+    }
+  }
+  const [safeCamera, safeLighting, safeStyle, safeRelationDetails] = placeChecks.map((check) => check.tags)
 
   // In multi-subject scenes, action-flavoured tags stay out of the tag run:
   // an unowned "grabbing a wrist" or "leaning in" conjures limbs that belong
   // to nobody. The relation sentences already carry that geometry, bound to
   // names. core_action is kept only when no relation sentence covered it.
   const generalTags = animaTagList([
-    ...(multi ? [] : relationDetails),
+    ...(multi ? [] : safeRelationDetails),
     ...(scene.coreAction && !(multi && crossRelationCount) ? [scene.coreAction] : []),
     ...(multi ? [] : supportTags(descriptors, scene)),
     ...settingCheck.setting,
-    ...cameraTags,
-    ...scene.lighting,
-    ...scene.style,
+    ...safeCamera,
+    ...safeLighting,
+    ...safeStyle,
   ])
 
   // Anima saw newlines almost exclusively in its dataset-tagged captions
@@ -4630,7 +4672,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.26.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.26.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5587,4 +5629,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.26.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.26.1'))

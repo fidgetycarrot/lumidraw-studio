@@ -1,7 +1,31 @@
-# LumiDraw Studio 0.26.0
+# LumiDraw Studio 0.26.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.26.1 — The location arrived through the lighting field
+
+The 0.26.0 setting firewall guarded `setting`. The kitchen was never in
+`setting` — the parser wrote **"kitchen lighting"** three times across three
+images, and the location rode in through a field nothing was checking.
+
+Worse, the support test had a hole that would have let it through even in
+`setting`: it accepted a tag when ANY of its words appeared in the passage, and
+that passage reads *"pink mushrooms **lighting** the moss"*. "kitchen lighting"
+would have matched on "lighting".
+
+- **Place words are now checked specifically.** A tag containing a location
+  noun is trusted only when that noun itself appears in the text — a
+  neighbouring word can no longer vouch for it.
+- **Every atmosphere field is guarded**, not just `setting`: lighting, style,
+  camera, and relation details. A tag naming a place the story never mentions
+  is dropped whole, because "kitchen lighting" minus "kitchen" is not a
+  lighting instruction. Genuine lighting alongside it survives untouched.
+- Drops are logged with the field and the offending tags.
+
+Your case now compiles to `mycetheric grove, glowing moss, wide shot,
+blue-white bioluminescent glow` — both kitchen variants gone, the real glow
+kept.
 
 ## 0.26.0 — Setting continuity, camera repair, tighter captions
 
