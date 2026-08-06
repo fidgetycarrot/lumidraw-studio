@@ -816,11 +816,59 @@ async function updateMessageContent(messageId, contentKey, newContent, userId, c
   throw new Error('updateMessage failed: ' + errs.join(' | '))
 }
 
-async function generateAndUpload({ prompt, negativePrompt, config, extra, dims }, userId, scan = null) {
+// Swaps one image URL for another inside a markdown image, leaving the alt
+// text and every other character of the message untouched.
+function replaceImageUrlInContent(content, oldUrl, newUrl) {
+  const text = String(content || '')
+  if (!text || !oldUrl) return { content: text, replaced: false }
+  const pattern = new RegExp(`(!\\[[^\\]]*\\]\\()${escapeRegExp(oldUrl)}(\\s*(?:"[^"]*")?\\))`, 'g')
+  let replaced = false
+  let next = text.replace(pattern, (_match, head, tail) => { replaced = true; return `${head}${newUrl}${tail}` })
+  if (!replaced && text.includes(oldUrl)) {
+    // Bare URL (html <img>, or a link the host rewrote) — still safe to swap.
+    next = text.split(oldUrl).join(newUrl)
+    replaced = true
+  }
+  return { content: next, replaced }
+}
+
+// Finds the message that currently displays a given image. The history entry's
+// origin is a hint; a scan by URL is the ground truth and also covers images
+// generated before origins were recorded, and pregenerated ones whose message
+// did not exist yet at generation time.
+async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
+  // The hinted chat first, then the active chat. '' means "let fetchMessages
+  // resolve the active chat", and must survive here — uniqueStrings would drop
+  // it, which previously made this return null whenever there was no hint.
+  const hintedChat = String(hint.chatId || '').trim()
+  const chatIds = hintedChat ? [hintedChat, ''] : ['']
+  for (const chatId of chatIds) {
+    let messages = []
+    try { ({ messages } = await fetchMessages(userId, chatId)) } catch { continue }
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const bits = messageBits(messages[i])
+      if (!bits.contentKey || typeof bits.content !== 'string') continue
+      if (!bits.content.includes(imageUrl)) continue
+      if (hint.messageId && String(bits.id) !== String(hint.messageId)) {
+        // Same URL in a different message is still a valid target, but prefer
+        // the hinted one if we meet it later in this sweep.
+        const hinted = messages.find((message) => String(messageBits(message).id) === String(hint.messageId))
+        const hintedBits = hinted ? messageBits(hinted) : null
+        if (hintedBits && typeof hintedBits.content === 'string' && hintedBits.content.includes(imageUrl)) {
+          return { ...hintedBits, chatId: chatId || null }
+        }
+      }
+      return { ...bits, chatId: chatId || null }
+    }
+  }
+  return null
+}
+
+async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, seed, origin }, userId, scan = null) {
   assertStoryScanActive(scan)
   const settings = await getSettings()
   const merged = dims ? { ...config, ...dims } : config
-  const payloadOut = buildPayload({ prompt, negativePrompt, config: merged, extra })
+  const payloadOut = buildPayload({ prompt, negativePrompt, seed, config: merged, extra })
   if (!payloadOut.model) throw new Error('Active preset has no model.')
   const started = Date.now()
   const images = await dtGenerate(settings, payloadOut)
@@ -843,6 +891,10 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims }
     negativePrompt: payloadOut.negative_prompt || '',
     seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
     images: uploads,
+    // Everything needed to regenerate this image later and put the result back
+    // where it came from: the owning message, and the exact recipe used.
+    ...(origin && typeof origin === 'object' ? { origin } : {}),
+    recipe: { config: merged || null, extra: extra || null },
   }
   assertStoryScanActive(scan)
   const history = await pushHistory(entry)
@@ -1752,13 +1804,103 @@ function selectAppearanceState(profile, subject, sourcePassage = '') {
   for (const state of states) {
     for (const phrase of [state.name, ...(state.recognition || [])]) {
       const value = String(phrase || '').trim().toLowerCase()
-      if (value.length >= 3 && passage.includes(value)) candidates.push({ state, length: value.length })
+      if (value.length < 3) continue
+      // Whole-word matching only. Substring matching flipped a werewolf into
+      // full wolf form whenever the prose merely said "werewolf" or "wolfish",
+      // because the state named "Wolf" matched inside those words.
+      if (!new RegExp(`\\b${escapeRegExp(value)}\\b`).test(passage)) continue
+      candidates.push({ state, length: value.length, words: value.split(/\s+/).length })
     }
   }
-  candidates.sort((a, b) => b.length - a.length)
+  // A multi-word cue ("wolf form", "fully shifted") is far stronger evidence
+  // than a bare one-word state name, so it wins regardless of length.
+  candidates.sort((a, b) => (b.words - a.words) || (b.length - a.length))
   if (candidates.length) return candidates[0].state
   const defaultName = String(profile.defaultAppearanceState || '').toLowerCase()
   return states.find((state) => state.name.toLowerCase() === defaultName) || states[0]
+}
+
+// --- form firewall ----------------------------------------------------------
+//
+// A shapeshifter in human form must not carry a single word from its other
+// forms. Two failures made this urgent: a werewolf whose *inactive* wolf
+// vocabulary reached the prompt, and the fact that once "wolf ears" or "tail"
+// exists anywhere in a multi-character prompt, Anima is free to hang it on the
+// wrong character — which is how an elf became a wolf boy. So the vocabulary
+// of every inactive form is banned from the ENTIRE scene, not just its owner.
+
+const FORM_WORD_STOPLIST = new Set([
+  'form', 'forms', 'state', 'mode', 'shape', 'normal', 'default', 'base', 'true',
+  'full', 'fully', 'half', 'partial', 'partially', 'shifted', 'unshifted', 'turned',
+  'transformed', 'untransformed', 'adult', 'human', 'humanoid', 'massive', 'large',
+  'small', 'with', 'and', 'the', 'his', 'her', 'their', 'four', 'both', 'more',
+])
+
+function formWords(phrase) {
+  const text = normalizeIdentityText(phrase)
+  if (!text) return []
+  const words = text.split(/\s+/).filter((word) => word.length >= 4 && !FORM_WORD_STOPLIST.has(word))
+  // Two-word phrases ("wolf ears", "dark fur") are banned as phrases too, so a
+  // benign single word is not scrubbed out of an unrelated tag.
+  const phrases = []
+  const parts = text.split(/\s+/)
+  for (let i = 0; i < parts.length - 1; i++) {
+    const pair = `${parts[i]} ${parts[i + 1]}`
+    if (parts[i].length >= 3 && parts[i + 1].length >= 3) phrases.push(pair)
+  }
+  return uniqueStrings([...words, ...phrases])
+}
+
+function inactiveFormTerms(descriptors) {
+  const banned = new Set()
+  const allowed = new Set()
+  // Everything legitimately visible in this scene, across every subject.
+  for (const item of descriptors) {
+    for (const value of [item.noun, ...(item.appearance || []), ...(item.outfit || [])]) {
+      for (const word of formWords(value)) allowed.add(word)
+    }
+  }
+  for (const item of descriptors) {
+    const profile = item.profile
+    const states = profile && Array.isArray(profile.appearanceStates) ? profile.appearanceStates : []
+    if (states.length < 2) continue
+    const activeName = item.appearanceState ? normalizeIdentityText(item.appearanceState.name) : ''
+    for (const state of states) {
+      if (activeName && normalizeIdentityText(state.name) === activeName) continue
+      const sources = [state.name, state.subject, ...(state.recognition || []), ...(state.appearance || [])]
+      for (const value of sources) {
+        for (const word of formWords(value)) banned.add(word)
+      }
+    }
+  }
+  for (const word of allowed) banned.delete(word)
+  // Longest first so "wolf ears" is removed before the bare word "wolf".
+  return [...banned].sort((a, b) => b.length - a.length)
+}
+
+function scrubFormTermsFromText(value, terms) {
+  let text = String(value || '')
+  if (!text || !terms.length) return text
+  for (const term of terms) {
+    text = text.replace(new RegExp(`\\b${escapeRegExp(term)}\\b`, 'gi'), ' ')
+  }
+  return text
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/,\s*(?=[,.])/g, '')
+    .replace(/\b(?:a|an|the)\s+(?=[,.]|$)/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s,]+|[\s,]+$/g, '')
+    .trim()
+}
+
+// Tags are dropped wholesale rather than mangled — a tag missing its head noun
+// is worse than no tag.
+function scrubFormTermsFromTags(list, terms) {
+  if (!terms.length) return list || []
+  return (list || []).filter((tag) => {
+    const text = normalizeIdentityText(tag)
+    return !terms.some((term) => new RegExp(`\\b${escapeRegExp(term)}\\b`).test(text))
+  })
 }
 
 function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false) {
@@ -2611,7 +2753,7 @@ function splitArtistTags(headerText) {
 }
 
 function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [] } = {}) {
-  const descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
+  let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
     ...item,
     appearance: cleanAppearanceForNoun(item.appearance, item.noun),
     outfit: animaTagList(item.outfit),
@@ -2620,6 +2762,37 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     expression: animaTagList(item.subject.expression),
     action: animaTagList(item.subject.action),
   }))
+
+  // Form firewall: strip every trace of a shapeshifter's inactive forms from
+  // the whole scene. Scene-wide, not per-subject — "wolf ears" loose anywhere
+  // in a multi-character prompt is exactly how it lands on the wrong person.
+  const formTerms = inactiveFormTerms(descriptors)
+  if (formTerms.length) {
+    descriptors = descriptors.map((item) => ({
+      ...item,
+      noun: scrubFormTermsFromText(item.noun, formTerms),
+      appearance: scrubFormTermsFromTags(item.appearance, formTerms),
+      outfit: scrubFormTermsFromTags(item.outfit, formTerms),
+      pose: scrubFormTermsFromTags(item.pose, formTerms),
+      expression: scrubFormTermsFromTags(item.expression, formTerms),
+      action: scrubFormTermsFromTags(item.action, formTerms),
+    }))
+    scene = {
+      ...scene,
+      sceneStatement: scrubFormTermsFromText(scene.sceneStatement, formTerms),
+      coreAction: scrubFormTermsFromText(scene.coreAction, formTerms),
+      setting: scrubFormTermsFromTags(scene.setting, formTerms),
+      camera: scrubFormTermsFromTags(scene.camera, formTerms),
+      lighting: scrubFormTermsFromTags(scene.lighting, formTerms),
+      style: scrubFormTermsFromTags(scene.style, formTerms),
+      relations: (scene.relations || []).map((relation) => ({
+        ...relation,
+        action: scrubFormTermsFromText(relation.action, formTerms),
+        details: scrubFormTermsFromTags(relation.details, formTerms),
+      })).filter((relation) => relation.action),
+    }
+    spindle.log.info('[lumidraw] form firewall scrubbed inactive-form vocabulary: ' + formTerms.slice(0, 12).join(', '))
+  }
 
   const multi = descriptors.length > 1
 
@@ -2750,7 +2923,7 @@ function profileSchemaHints(profiles) {
       const form = state.appearancePolicy === 'replace' ? ', a distinct physical form' : ''
       return `${state.name}${recognition ? ` (recognize: ${recognition}${form})` : form ? ` (${form.replace(/^, /, '')})` : ''}`
     }).join('; ')
-    hints.push(`- ref "${ref}" means ${label || ref}. Do not output permanent appearance for this ref.${states ? ` Appearance states: ${states}. Use appearance_state with the exact state name only when the current passage or reference context establishes it; otherwise omit it and LumiDraw uses the default “${profile.defaultAppearanceState || (profile.appearanceStates[0] && profile.appearanceStates[0].name) || ''}”. Never mix states.` : ''}${aliases ? ` Named visual aliases: ${aliases}. Use the exact prop name when it is present.` : ''}`)
+    hints.push(`- ref "${ref}" means ${label || ref}. Do not output permanent appearance for this ref.${states ? ` Appearance states: ${states}. Use appearance_state with the exact state name only when the CURRENT PASSAGE shows that transformation happening or already in effect; otherwise omit it and LumiDraw uses the default “${profile.defaultAppearanceState || (profile.appearanceStates[0] && profile.appearanceStates[0].name) || ''}”. Never mix states. A passage that merely calls this character by their species, mentions a past or future transformation, or uses a figure of speech is NOT a transformation — keep the default state. When a state is not active, never describe this character with that form's vocabulary anywhere in the JSON, including scene_statement.` : ''}${aliases ? ` Named visual aliases: ${aliases}. Use the exact prop name when it is present.` : ''}`)
   }
   return hints.join('\n')
 }
@@ -2824,7 +2997,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   ))
   const core = compileStructuredScene(scene, profiles, sourcePassage, { artistTags: artists })
   const prompt = joinPromptParts([rest, core])
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v10' }
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v11' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -3474,6 +3647,7 @@ async function scanStoryCore(userId, options = {}) {
             config: preset.config,
             extra: preset.extra,
             dims,
+            origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'inline' },
           }, userId)
         }
         const md = `![${compiled.core.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`
@@ -3483,7 +3657,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v10',
+          compiler: compiled.compiler || 'anima-hybrid-v11',
         })
         done++
       } catch (e) {
@@ -3601,13 +3775,14 @@ async function scanStoryCore(userId, options = {}) {
           config: preset.config,
           extra: preset.extra,
           dims,
+          origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'parser' },
         }, userId, scan)
         mds.push(`![${compiled.core.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`)
         debugEntries.push({
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v10',
+          compiler: compiled.compiler || 'anima-hybrid-v11',
         })
       }
 
@@ -3708,6 +3883,7 @@ async function scanStoryCore(userId, options = {}) {
         negativePrompt: preset.negativePrompt,
         config: preset.config,
         extra: preset.extra,
+        origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'legacy-parser' },
       }, userId, scan)
       mds.push(`![${line.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`)
     }
@@ -3864,7 +4040,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.21.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.22.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4257,6 +4433,79 @@ spindle.onFrontendMessage(async (payload, userId) => {
         characters.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
         await saveCharacters(characters)
         reply = ok(payload, requestId, { characters, entry })
+        break
+      }
+
+      case 'regenerate_image': {
+        const imageUrl = String(payload.imageUrl || '').trim()
+        if (!imageUrl) throw new Error('Regeneration needs the image being replaced.')
+        const prompt = String(payload.prompt || '').trim()
+        if (!prompt) throw new Error('The prompt cannot be empty.')
+
+        const history = await getHistory()
+        const source = history.find((item) => (item.images || []).some((image) => image && image.url === imageUrl))
+        const origin = (source && source.origin) || {}
+
+        // Recipe priority: the exact config this image was made with, then the
+        // preset it came from, then the active preset. A regeneration must not
+        // silently switch models because a preset was edited since.
+        let config = source && source.recipe && source.recipe.config ? source.recipe.config : null
+        let extra = source && source.recipe ? source.recipe.extra : null
+        if (!config) {
+          const presets = await getPresets()
+          const settings = await getSettings()
+          const preset = presets.find((item) => item.name === (origin.presetName || settings.activePreset))
+          if (!preset) throw new Error('No saved recipe for this image and no matching preset to fall back on.')
+          config = preset.config
+          extra = preset.extra
+        }
+
+        const reuseSeed = payload.reuseSeed !== false
+        const previousSeed = source && source.seed !== undefined && source.seed !== 'random' ? Number(source.seed) : NaN
+        const seed = reuseSeed && Number.isFinite(previousSeed) ? previousSeed : undefined
+
+        const entry = await generateAndUpload({
+          prompt,
+          negativePrompt: String(payload.negativePrompt || ''),
+          config,
+          extra,
+          seed,
+          origin: { ...origin, regeneratedFrom: imageUrl },
+        }, userId)
+
+        const newUrl = entry.images && entry.images[0] ? entry.images[0].url : ''
+        if (!newUrl) throw new Error('Draw Things returned no image.')
+
+        // Put it back where the old one was. A failure here is not fatal: the
+        // new image already exists in History and the panel says so.
+        let replaced = false
+        let note = ''
+        try {
+          const target = await locateMessageByImageUrl(userId, imageUrl, origin)
+          if (!target) {
+            note = 'Generated, but the original image is no longer in any visible message — it is in History.'
+          } else {
+            const swap = replaceImageUrlInContent(target.content, imageUrl, newUrl)
+            if (!swap.replaced) {
+              note = 'Generated, but the original image markdown could not be matched — it is in History.'
+            } else {
+              await updateMessageContent(target.id, target.contentKey, swap.content, userId, target.chatId || origin.chatId || '')
+              replaced = true
+              note = 'Replaced the image in the story message.'
+            }
+          }
+        } catch (error) {
+          note = 'Generated, but replacing it in the message failed: ' + error.message
+          spindle.log.warn('[lumidraw] regeneration replace failed: ' + error.message)
+        }
+
+        reply = ok(payload, requestId, {
+          history: await getHistory(),
+          entry,
+          newUrl,
+          replaced,
+          note,
+        })
         break
       }
 
@@ -4687,4 +4936,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.21.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.0'))

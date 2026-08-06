@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.21.0'
+const EXTENSION_VERSION = '0.22.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -406,6 +406,9 @@ function realSetup(ctx) {
     .ld-lightbox-zoom-level { min-width:60px !important; font-variant-numeric:tabular-nums; }
     .ld-lightbox-meta { flex:1; min-width:0; font-size:11px; line-height:1.35; color:var(--lumiverse-text-muted, #a2a5b4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .ld-lightbox-actions { display:flex; gap:7px; flex:0 0 auto; }
+    .ld-lightbox-regen { flex:0 0 auto; max-height:46%; overflow-y:auto; padding:10px 12px; border-top:1px solid var(--lumiverse-border, #3d4050); background:#15161c; }
+    .ld-lightbox-regen textarea { width:100%; box-sizing:border-box; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; line-height:1.4; }
+    .ld-chat-image-fixable { cursor:zoom-in; }
 
     .ld-story-picker { position:fixed; inset:0; z-index:9200; display:none; align-items:center; justify-content:center; padding:14px; background:var(--lumiverse-modal-backdrop, rgba(0,0,0,.62)); }
     .ld-story-picker.ld-open { display:flex; }
@@ -487,7 +490,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.21.0" aria-label="LumiDraw Studio v0.21.0">
+    <button class="ld-launcher" title="LumiDraw Studio v0.22.0" aria-label="LumiDraw Studio v0.22.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -496,7 +499,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.21.0</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.22.0</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -874,9 +877,26 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
             <button class="ld-btn ld-lightbox-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
           </div>
         </div>
+        <div class="ld-lightbox-regen" style="display:none">
+          <span class="ld-label">Prompt</span>
+          <textarea class="ld-lightbox-regen-prompt" spellcheck="false" style="min-height:104px"></textarea>
+          <span class="ld-label" style="margin-top:6px">Negative prompt</span>
+          <textarea class="ld-lightbox-regen-negative" spellcheck="false" style="min-height:44px"></textarea>
+          <label class="ld-lightbox-regen-seedrow" style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px">
+            <input type="checkbox" class="ld-lightbox-regen-seed" checked />
+            <span>Reuse the original seed <span class="ld-lightbox-regen-seedval"></span></span>
+          </label>
+          <div class="ld-help">Keeping the seed holds the composition steady so prompt edits show their own effect. Uncheck to roll a completely new image.</div>
+          <div class="ld-row" style="margin-top:8px">
+            <button class="ld-btn ld-primary ld-lightbox-regen-run">Regenerate &amp; replace</button>
+            <button class="ld-btn ld-lightbox-regen-cancel" style="flex:0 0 auto">Cancel</button>
+          </div>
+          <div class="ld-status ld-lightbox-regen-status" style="margin-top:6px"></div>
+        </div>
         <div class="ld-lightbox-foot">
           <div class="ld-lightbox-meta"></div>
           <div class="ld-lightbox-actions">
+            <button class="ld-btn ld-lightbox-fix">Fix this image</button>
             <button class="ld-btn ld-lightbox-insert">Insert into chat</button>
             <button class="ld-btn ld-primary ld-lightbox-done">Done</button>
           </div>
@@ -1033,17 +1053,48 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     lightboxMeta.title = details.join(' · ')
     $('.ld-lightbox-prev').disabled = lightboxItems.length < 2
     $('.ld-lightbox-next').disabled = lightboxItems.length < 2
+    // Moving to another image abandons an open edit rather than silently
+    // applying it to the wrong picture.
+    closeRegenPanel()
+  }
+
+  function closeRegenPanel() {
+    const box = $('.ld-lightbox-regen')
+    if (box) box.style.display = 'none'
+    setStatus('.ld-lightbox-regen-status', '')
+  }
+
+  function openRegenPanel() {
+    const item = lightboxItems[lightboxIndex]
+    if (!item) return
+    const { entry } = item
+    const box = $('.ld-lightbox-regen')
+    if (!box) return
+    $('.ld-lightbox-regen-prompt').value = entry.prompt || ''
+    $('.ld-lightbox-regen-negative').value = entry.negativePrompt || ''
+    const seedKnown = entry.seed !== undefined && entry.seed !== 'random'
+    const seedBox = $('.ld-lightbox-regen-seed')
+    seedBox.checked = seedKnown
+    seedBox.disabled = !seedKnown
+    $('.ld-lightbox-regen-seedval').textContent = seedKnown ? `(${entry.seed})` : '(the original seed was random and was not recorded)'
+    box.style.display = 'block'
+    setStatus('.ld-lightbox-regen-status', 'Edit the prompt, then regenerate. The new image replaces this one in the story message.')
+    const prompt = $('.ld-lightbox-regen-prompt')
+    prompt.focus()
+    if (prompt.scrollIntoView) prompt.scrollIntoView({ block: 'nearest' })
   }
 
   function openLightbox(imageUrl) {
     lightboxItems = flattenHistoryImages()
     const found = lightboxItems.findIndex(({ image }) => image.url === imageUrl)
+    if (found < 0 && imageUrl) return false
     lightboxIndex = found >= 0 ? found : 0
-    if (!lightboxItems.length) return
+    if (!lightboxItems.length) return false
     renderLightbox()
     lightbox.classList.add('ld-open')
     lightbox.setAttribute('aria-hidden', 'false')
     document.body.classList.add('ld-fullscreen-lock')
+    return true
   }
 
   function closeLightbox() {
@@ -1051,6 +1102,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     lightbox.setAttribute('aria-hidden', 'true')
     lightboxImage.removeAttribute('src')
     resetLightboxZoom()
+    closeRegenPanel()
     if (!panel.classList.contains('ld-fullscreen')) document.body.classList.remove('ld-fullscreen-lock')
   }
 
@@ -2491,9 +2543,78 @@ ${entry.prompt || ''}`.trim()
     const item = lightboxItems[lightboxIndex]
     if (item) appendToChat(item.image, item.entry)
   })
+  $('.ld-lightbox-fix').addEventListener('click', () => {
+    const box = $('.ld-lightbox-regen')
+    if (box && box.style.display === 'block') closeRegenPanel()
+    else openRegenPanel()
+  })
+  $('.ld-lightbox-regen-cancel').addEventListener('click', closeRegenPanel)
+  $('.ld-lightbox-regen-run').addEventListener('click', async () => {
+    const item = lightboxItems[lightboxIndex]
+    if (!item) return
+    const button = $('.ld-lightbox-regen-run')
+    const oldUrl = item.image.url
+    const prompt = $('.ld-lightbox-regen-prompt').value.trim()
+    if (!prompt) { setStatus('.ld-lightbox-regen-status', 'The prompt cannot be empty.', 'err'); return }
+    button.disabled = true
+    const originalLabel = button.textContent
+    button.textContent = 'Generating…'
+    setStatus('.ld-lightbox-regen-status', 'Generating a replacement — this takes as long as a normal story image.')
+    try {
+      const res = await call('regenerate_image', {
+        imageUrl: oldUrl,
+        prompt,
+        negativePrompt: $('.ld-lightbox-regen-negative').value,
+        reuseSeed: $('.ld-lightbox-regen-seed').checked && !$('.ld-lightbox-regen-seed').disabled,
+      }, 600000)
+      history = Array.isArray(res.history) ? res.history : history
+      renderHistory()
+      // Re-point the viewer at the new image so you can immediately judge it
+      // and, if it is still wrong, fix it again.
+      lightboxItems = flattenHistoryImages()
+      const next = lightboxItems.findIndex(({ image }) => image.url === res.newUrl)
+      if (next >= 0) lightboxIndex = next
+      renderLightbox()
+      setStatus('.ld-lightbox-regen-status', res.note || 'Regenerated.', res.replaced ? 'good' : 'err')
+      setStatus('.ld-gen-status', res.replaced ? 'Replaced an image in the story message.' : (res.note || 'Regenerated.'), res.replaced ? 'good' : 'err')
+    } catch (error) {
+      setStatus('.ld-lightbox-regen-status', error.message, 'err')
+    } finally {
+      button.disabled = false
+      button.textContent = originalLabel || 'Regenerate & replace'
+    }
+  })
   lightbox.addEventListener('click', (event) => {
     if (event.target === lightbox) closeLightbox()
   })
+
+  // Clicking a LumiDraw-generated image anywhere in the chat transcript opens
+  // it in the viewer, ready to fix. Deliberately conservative: the click is
+  // only intercepted when the image URL is one LumiDraw actually produced, so
+  // avatars, host UI, and anything inside our own panel behave normally.
+  function onDocumentImageClick(event) {
+    const target = event.target
+    if (!target || target.tagName !== 'IMG') return
+    if (panel.contains(target) || lightbox.contains(target)) return
+    const src = target.getAttribute('src') || target.src || ''
+    if (!src || !findHistoryImage(src)) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (openLightbox(src)) openRegenPanel()
+  }
+  document.addEventListener('click', onDocumentImageClick, true)
+
+  // Purely cosmetic affordance so a fixable image shows a zoom cursor.
+  function markFixableChatImages() {
+    if (!history || !history.length) return
+    const known = new Set(flattenHistoryImages().map(({ image }) => image.url))
+    for (const img of document.querySelectorAll('img')) {
+      if (panel.contains(img) || lightbox.contains(img)) continue
+      const src = img.getAttribute('src') || img.src || ''
+      img.classList.toggle('ld-chat-image-fixable', !!src && known.has(src))
+    }
+  }
+  const fixableTimer = setInterval(markFixableChatImages, 4000)
   $('.ld-text-editor-close').addEventListener('click', () => closeTextEditor(false))
   $('.ld-text-editor-cancel').addEventListener('click', () => closeTextEditor(false))
   $('.ld-text-editor-apply').addEventListener('click', () => closeTextEditor(true))
@@ -3333,6 +3454,9 @@ ${entry.prompt || ''}`.trim()
     if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
     window.removeEventListener('keydown', onStoryPickerKeyDown)
+    document.removeEventListener('click', onDocumentImageClick, true)
+    clearInterval(fixableTimer)
+    for (const img of document.querySelectorAll('img.ld-chat-image-fixable')) img.classList.remove('ld-chat-image-fixable')
     closeLightbox()
     document.body.classList.remove('ld-fullscreen-lock')
     if (window[INSTANCE_KEY] === liveInstance) delete window[INSTANCE_KEY]

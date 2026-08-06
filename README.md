@@ -1,7 +1,91 @@
-# LumiDraw Studio 0.21.0
+# LumiDraw Studio 0.22.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.22.0 — Fix a failed image instead of deleting it
+
+A generation that comes out wrong no longer has to be thrown away. Click any
+LumiDraw image — in the chat transcript or in the History panel — to open it in
+the viewer, edit the prompt that produced it, and regenerate. The new image
+replaces the old one in the story message, in place.
+
+### Fixing an image
+
+- **Click to open.** A delegated click handler opens any image LumiDraw
+  generated in the viewer, with the fix panel already expanded. The handler is
+  deliberately narrow: it only intercepts URLs that appear in LumiDraw's own
+  history, so avatars, host UI, and unrelated images behave exactly as before.
+  Fixable images get a zoom cursor.
+- **Edit before regenerating.** The compiled prompt is loaded into an editable
+  textarea, alongside the negative prompt and a seed control.
+- **Seed reuse is the default** when the original seed is known: holding the
+  seed steady keeps the composition and shows what your prompt edit actually
+  changed. Uncheck to roll a fresh image. When the original was generated with
+  a random seed, the control says so and is disabled.
+- **Replace in place.** Only the image URL inside the markdown is swapped —
+  alt text, surrounding prose, and sibling images in the same message are
+  untouched.
+- **The original is kept in History**, so a failed attempt is still there to
+  compare against or fall back to.
+- After a successful regeneration the viewer re-points at the new image, so a
+  still-imperfect result can be fixed again immediately.
+
+### Exact recipes
+
+History entries now record the recipe an image was made with (full config plus
+extras) and its origin (message, chat, content key, preset). A regeneration
+reuses the original recipe, so editing a preset in between does not silently
+change the model, sampler, or size of the replacement. Where no recipe was
+recorded — images from older versions — it falls back to the originating
+preset, then the active one.
+
+The owning message is found by scanning for the image URL rather than trusting
+the recorded id, which also covers pre-generated images whose message did not
+exist yet when they were made. If the message has since been deleted or edited
+beyond recognition, the new image is still generated and kept in History, and
+the panel says exactly that instead of failing silently.
+
+## 0.21.1 — Form firewall (anima-hybrid-v11)
+
+Field failure: a werewolf character in **human** form still put wolf traits in
+the prompt, and an unrelated elf character came out as a wolf boy with ears and
+a tail.
+
+### Root cause: substring state matching
+
+Appearance-state recognition matched with a plain substring test, so the state
+named "Wolf" matched inside the words "werewolf" and "wolfish". A passage that
+merely *called* the character a werewolf — or described a wolfish grin — flipped
+him into full wolf form and injected fur, ears, and a tail.
+
+Matching is now whole-word, and a multi-word cue ("wolf form", "fully shifted")
+outranks a bare one-word state name, so narration about a wolf elsewhere in the
+scene cannot transform the character.
+
+### Form firewall
+
+Even with correct state selection, one loose "wolf ears" anywhere in a
+multi-character prompt is enough for Anima to hang it on the wrong character.
+So, mirroring the existing anatomy firewall, the vocabulary of every **inactive**
+form is now banned from the entire scene — not just from its owner:
+
+- Words and two-word phrases drawn from each inactive state's name, recognition
+  cues, subject phrase, and appearance tags are collected.
+- Anything legitimately visible in the scene (any subject's active noun,
+  appearance, or outfit) is subtracted, so shared vocabulary is never lost —
+  an elf's "pointed elf ears" survive a werewolf's "wolf ears" being banned.
+- The remainder is scrubbed from scene_statement, core_action, relation actions
+  and details, setting/camera/lighting/style, and every subject's tags.
+- Tags containing banned vocabulary are dropped whole rather than mangled;
+  sentences are scrubbed and re-tidied.
+- Characters with fewer than two appearance states are untouched — a plain
+  werewolf with no forms stays a werewolf.
+
+The parser is also told directly that being called by species, a past or future
+transformation, or a figure of speech is not a transformation, and that a
+character's inactive-form vocabulary must not appear anywhere in its JSON,
+including `scene_statement`.
 
 ## 0.21.0 — Character Library and multi-character casts
 
