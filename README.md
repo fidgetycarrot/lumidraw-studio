@@ -1,7 +1,94 @@
-# LumiDraw Studio 0.27.0
+# LumiDraw Studio 0.27.2
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.27.2 — The scene statement says what is happening again
+
+The opening sentence was still being written, but it had drifted from naming
+the act to describing a gesture: an oral sex scene opened with *"Rook tips
+Sovi's chin up, forcing tear-streaked eye contact."* True, but not what the
+image is of.
+
+### The regression
+
+0.26.0 added this to the tag rules, to stop a format example leaking into tags
+as a location:
+
+> no word used to explain a rule may be copied into your answer as if it were
+> part of the scene
+
+That is over-broad. The scene-statement examples live in the same instruction,
+and they are the one place where copying the wording's shape is exactly what is
+wanted. The rule is now scoped to tags, and explicitly exempts
+`scene_statement`, whose examples should be imitated closely.
+
+### The ongoing act outranks the gesture
+
+A passage is usually one beat inside a continuing act, and the continuing act
+is what the image is of. The instruction now states that plainly, with a worked
+contrast:
+
+```text
+WRONG:  "[name] tips [name]'s chin up."
+RIGHT:  "[name] is performing oral sex on [name], chin tipped up."
+```
+
+A hand, glance, shift of weight, or change of expression during an act is a
+detail of that act — it belongs in pose, expression, or action, never in place
+of the act. When the current passage alone does not reveal the continuing act,
+the parser is told to consult prior context and the established scene state
+before falling back to the gesture.
+
+### Two related fixes
+
+- **Real cast names are no longer hard-coded** into the statement examples.
+  Priming the model with actual character names is the same mistake as
+  `counter`; the examples use a `[name]` placeholder instead.
+- **The statement can no longer silently vanish.** A sexual statement in a
+  scene the parser under-rated as safe or sensitive was deleted outright,
+  leaving no thesis sentence at all. It is now rebuilt from the characters
+  present and the core action, so every prompt still opens by saying what is
+  happening.
+
+## 0.27.1 — Phantom limbs: three compiler faults
+
+A field prompt contained `wearing a bare hand`, described a viewer's hand and
+the character's own hand in the same clause, and asked for `pov, full body,
+from above` simultaneously. Extra limbs were the predictable result. All three
+are compiler faults.
+
+### Outfit is now validated as clothing
+
+`bare hand` reached the outfit array and the compiler rendered outfit as
+"wearing X" without ever asking whether X could be worn. Telling an image model
+that a man *wears a hand* is a request for a spare one.
+
+Outfit entries are now checked: garments and bare-states pass, body parts,
+staging cues, and verb phrases are dropped.
+
+### POV staging cues no longer describe bodies
+
+The schema asks the parser to record POV cues — "viewer hands visible", "face
+out of frame" — in the persona's pose or action, because that is the only place
+it can put them. The compiler then rendered them as descriptions of that
+character, so a single subject was described as having a viewer's hand *and* a
+thumb tracing a jaw: two hands, one of which belongs to the camera.
+
+Those cues are now consumed rather than described. They still prove the shot is
+POV — which is what they were for — and never reach the caption.
+
+### POV framing is no longer widened
+
+`pov, full body, from above` asks for three incompatible cameras. The `full
+body` came from 0.26.0's camera repair, which widened the frame to reach a
+kneeling figure's legs without noticing the shot was POV. Framing is never
+widened while `pov` is present, and a conflicting wide framing already in the
+list is removed.
+
+The reported prompt now compiles without any of the three faults: no worn hand,
+no viewer's hand in the description, and `pov, from above` with no framing
+conflict.
 
 ## 0.27.0 — Established scene state
 

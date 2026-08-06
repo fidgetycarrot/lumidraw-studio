@@ -2879,6 +2879,47 @@ function subjectTagLine(item, scene, descriptors, { includeAppearance = true } =
 
 const BODY_TRAIT_RE = /\b(?:eyes?|mouth|brows?|teeth|tongue|blush|tears|fangs?|lips?|cheeks?|ears?|hair)\b/
 
+// --- staging cues and non-clothing ------------------------------------------
+//
+// The schema asks the parser to put POV cues ("viewer hands visible", "face
+// out of frame") into the persona's pose or action, because that is where it
+// can see them. They are camera directions about the FRAME, not descriptions
+// of a body, and rendering them as character traits is how a prompt ends up
+// describing a viewer's hand and the character's own hand in the same clause —
+// which is a request for an extra limb. They are consumed here: they still
+// prove the shot is POV, and they never reach the caption.
+// Matching runs on normalised text, where punctuation becomes a space, so
+// "viewer's hands" arrives as "viewer s hands".
+const POV_CUE_RE = /\b(?:viewer(?:\s+s)?\s+(?:hands?|arms?|body|fingers?|pov)|hands?\s+in\s+(?:the\s+)?foreground|face\s+out\s+of\s+frame|faceless|first[\s-]person|pov\s+body|body\s+only|forearms?\s+only|lower\s+body\s+only|off[\s-]screen\s+face|head\s+out\s+of\s+frame|cropped\s+head)\b/i
+
+function isPovStagingCue(value) {
+  const text = normalizeIdentityText(value)
+  if (!text) return false
+  return POV_CUE_RE.test(text)
+}
+
+// Clothing is a garment. A body part is not clothing, and neither is an
+// action. "wearing a bare hand" is a phantom limb waiting to happen.
+const GARMENT_RE = /\b(?:shirt|blouse|dress|skirt|trousers|pants|jeans|shorts|coat|jacket|cloak|cape|capelet|robe|gown|tunic|sweater|hoodie|vest|corset|bodice|apron|uniform|armou?r|helmet|hood|hat|cap|scarf|tie|belt|glove|gloves|mitten|sock|socks|stocking|stockings|pantyhose|tights|shoe|shoes|boot|boots|sandal|sandals|heels|lingerie|bra|panties|underwear|briefs|thong|swimsuit|bikini|kimono|yukata|haori|sash|obi|collar|choker|necklace|earring|earrings|bracelet|ring|glasses|goggles|mask|veil|crown|tiara|headband|ribbon|bow|jewelry|clothes|clothing|outfit|garment|leotard|bodysuit|overalls|jumpsuit|nightgown|pyjamas|pajamas|towel|blanket|harness|strap|straps)\b/i
+
+// Bare-state words are legitimate outfit values even though no garment is named.
+const BARE_STATE_RE = /^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs|bare shoulders|undressed|clothed|fully clothed|partially clothed|disheveled clothes|torn clothes|open shirt)$/i
+
+const BODY_PART_RE = /\b(?:hand|hands|thumb|finger|fingers|palm|wrist|arm|arms|elbow|shoulder|shoulders|jaw|chin|face|cheek|cheeks|eye|eyes|mouth|lip|lips|neck|throat|chest|torso|back|waist|hip|hips|thigh|thighs|knee|knees|leg|legs|foot|feet|toe|toes|head|hair|skin|tail|ear|ears)\b/i
+
+// True when an outfit entry does not actually describe something worn.
+function isNotClothing(value) {
+  const text = normalizeIdentityText(value)
+  if (!text) return true
+  if (BARE_STATE_RE.test(text)) return false
+  if (GARMENT_RE.test(text)) return false
+  if (isPovStagingCue(text)) return true
+  if (BODY_PART_RE.test(text)) return true
+  // A verb phrase is an action, not a garment.
+  if (/\w+ing\b/.test(text) && !/^(?:matching|flowing|clinging|form fitting)/.test(text)) return true
+  return false
+}
+
 // Build traits are adjectives — "a slender half-elf woman", never "…with
 // slender". Everything else is treated as a noun phrase for the "with" list.
 const BUILD_ADJECTIVE_RE = /^(?:extremely |very |slightly )?(?:slender|slim|thin|petite|curvy|voluptuous|muscular|athletic|toned|lean|stocky|chubby|plump|tall|short|large|small|young|old|androgynous|freckled|pale|tanned|dark-skinned|light-skinned)$/
@@ -3069,9 +3110,22 @@ function resolveSceneStatement(scene, descriptors) {
     spindle.log.warn('[lumidraw] scene statement dropped: names a sexual act in a ' + (scene.safety || 'unrated') + ' scene.')
     statement = ''
   }
-  if (!statement && descriptors.length === 1 && scene.coreAction) {
+  // Every scene deserves its thesis sentence. When one is missing — never
+  // written, or dropped just above — it is rebuilt from the names present and
+  // the core action, so a multi-character scene never silently loses the one
+  // line that says what is happening.
+  if (!statement) {
     const core = normalizeVisualPhrase(scene.coreAction).toLowerCase()
-    if (core) statement = `${displayName(descriptors[0], true)} is ${core}`
+    const names = descriptors.map((item) => displayName(item, true))
+    if (core && names.length === 1) {
+      statement = `${names[0]} is ${core}`
+    } else if (core && names.length > 1) {
+      statement = `${naturalList(names)} — ${core}`
+    } else if (names.length > 1) {
+      // No action offered either: at minimum say who is in frame together.
+      statement = `${naturalList(names)} together in one scene`
+    }
+    if (statement) spindle.log.info('[lumidraw] scene statement rebuilt from the scene: ' + statement)
   }
   if (!statement) return ''
   statement = statement.charAt(0).toUpperCase() + statement.slice(1)
@@ -3258,6 +3312,22 @@ function repairCameraTags(cameraTags, scene, descriptors) {
   const tags = [...cameraTags]
   const notes = []
 
+  // A POV shot is the viewer's own eyeline. "pov, full body, from above" asks
+  // for three incompatible cameras at once, and widening a POV frame is how
+  // that happens — so framing is never widened while pov is present.
+  const isPov = tags.some((tag) => /^(?:pov|first person view|first-person view)$/.test(animaTag(tag)))
+  if (isPov) {
+    const conflicting = tags.filter((tag) => {
+      const level = framingLevelForTag(tag)
+      return level && level.level >= 2
+    })
+    if (conflicting.length) {
+      for (const tag of conflicting) tags.splice(tags.indexOf(tag), 1)
+      notes.push(`removed ${conflicting.join(', ')} — incompatible with a pov shot`)
+    }
+    return { tags, note: notes.join('; ') }
+  }
+
   const framingIndex = tags.findIndex((tag) => framingLevelForTag(tag))
   const current = framingIndex >= 0 ? framingLevelForTag(tags[framingIndex]) : null
   const covered = new Set(current ? current.covers : [])
@@ -3299,11 +3369,14 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
     ...item,
     appearance: cleanAppearanceForNoun(item.appearance, item.noun),
-    outfit: animaTagList(item.outfit),
     anatomy: animaTagList(item.anatomy),
-    pose: animaTagList(item.subject.pose),
-    expression: animaTagList(item.subject.expression),
-    action: animaTagList(item.subject.action),
+    // Outfit keeps only things that can be worn; POV staging cues are removed
+    // from every descriptive list. Both would otherwise be rendered as if they
+    // described the character's body.
+    outfit: animaTagList(item.outfit).filter((tag) => !isNotClothing(tag)),
+    pose: animaTagList(item.subject.pose).filter((tag) => !isPovStagingCue(tag)),
+    expression: animaTagList(item.subject.expression).filter((tag) => !isPovStagingCue(tag)),
+    action: animaTagList(item.subject.action).filter((tag) => !isPovStagingCue(tag)),
   }))
 
   // Form firewall: strip every trace of a shapeshifter's inactive forms from
@@ -3504,10 +3577,10 @@ Write every scene in the EXACT field order shown below. The order is a survival 
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw compiles it into one Danbooru/Gelbooru-style tag run followed by a short natural-language caption block, in the tag order Anima was trained on. Do not write the final image prompt yourself.
-TAG STYLE — every string you emit is destined for a booru-tag model. Lowercase, spaces instead of underscores, and the Gelbooru spelling whenever Danbooru and Gelbooru disagree. Write plain booru tags rather than hedged prose: never "clearly visible", "prominently shown", or "in full view", which the model was never trained on and which only dilute the tag. Take every tag from what the passage actually describes; the formatting rules here are about SHAPE, never about content, and no word used to explain a rule may be copied into your answer as if it were part of the scene. Do not include quality tags, score tags, meta tags, year tags, or artist tags anywhere in this JSON — LumiDraw owns the header and the preset owns the artist.
+TAG STYLE — every string you emit is destined for a booru-tag model. Lowercase, spaces instead of underscores, and the Gelbooru spelling whenever Danbooru and Gelbooru disagree. Write plain booru tags rather than hedged prose: never "clearly visible", "prominently shown", or "in full view", which the model was never trained on and which only dilute the tag. Take every tag from what the passage actually describes. Words used in these rules to illustrate TAG FORMAT are examples of shape only and must never appear among your tags as if they were part of the scene. This restriction applies to tags; it does not apply to scene_statement, whose examples below you SHOULD imitate closely. Do not include quality tags, score tags, meta tags, year tags, or artist tags anywhere in this JSON — LumiDraw owns the header and the preset owns the artist.
 For a subject that is a recognisable published character, set "booru_character" to that character's booru tag and "booru_series" to the work it comes from. Leave both empty for original characters; a made-up name in those fields is worse than nothing.
 "style" is for the mood of this one scene at most (e.g. "backlit", "soft focus"). Never put a medium, an artist, or a rendering style there — those belong to the preset and must stay identical between images, or characters will drift in appearance from one generation to the next.
-SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "Rook is fighting bandits." "Sovi is casting a spell with great intensity." "Sovi and Rook are having anal sex." In an nsfw or explicit scene, name the act plainly — a euphemism here costs the image its subject. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
+SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "[name] is fighting three bandits." "[name] is casting a large spell." "[name] is performing oral sex on [name]." (Write the characters' real names in place of [name].) ONGOING ACT BEATS MOMENTARY GESTURE. A passage is usually one beat inside a continuing act, and the continuing act is what the image is of. Name that act, even when it began in an earlier message and the current passage only shows a small movement within it. A hand, a glance, a shift of weight, or a change of expression during an act is a detail of that act, never a replacement for it — put those in pose, expression, or action, not here. WRONG: "[name] tips [name]'s chin up." RIGHT: "[name] is performing oral sex on [name], chin tipped up." If you cannot tell what the continuing act is from the CURRENT PASSAGE alone, read PRIOR CONTEXT and the ESTABLISHED SCENE STATE to find it before falling back to the gesture. In an nsfw or explicit scene, name the act plainly and anatomically — a euphemism, or a literary substitute such as "forcing eye contact" in place of the act being performed, costs the image its subject. Write it as flatly as a caption in a reference book. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
 ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag, and every setting tag must come from the CURRENT PASSAGE or, if the passage does not restate it, from the established location in PRIOR CONTEXT. NEVER invent a location, and never fall back on a generic room such as a kitchen, bedroom, office, or living room to satisfy this requirement. A story continues in the place it was already in unless the passage says the characters moved; if you cannot tell where they are, repeat the location from PRIOR CONTEXT verbatim. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
 Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 3 outfit items, 2 pose items, 2 expression items, and 1 subject action item. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 PARTIAL CHANGES ARE NOT STATE CHANGES. When a passage shows only SOME of a character's transformation — a single feature slipping, eyes changing, claws extending, "partly", "slightly", "a little", "just his eyes", "beginning to" — keep appearance_state at the form they are otherwise in and list the specific features in "partial_features" using the exact saved feature names listed below. Switching appearance_state transforms the WHOLE character, which is wrong for a partial change and produces a completely different creature than the passage describes. Use partial_features for anything short of a full, completed transformation. Select only names that are listed for that ref; never invent a feature name, and never put transformation words in appearance, outfit, pose, or expression.
@@ -4707,7 +4780,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.27.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.27.2',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5665,4 +5738,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.27.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.27.2'))
