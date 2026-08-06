@@ -19,6 +19,7 @@ const PERSONAS_FILE = 'personas.json'
 const CHARACTERS_FILE = 'characters.json'
 const HISTORY_FILE = 'history.json'
 const STORY_DEBUG_FILE = 'story_debug.json'
+const SCENE_MEMORY_FILE = 'scene_memory.json'
 
 const DEFAULT_SETTINGS = {
   host: '127.0.0.1',
@@ -145,6 +146,31 @@ async function pushHistory(entry) {
   return trimmed
 }
 
+
+// The location a chat has established, so an uncertain parser cannot relocate
+// the story. Keyed by chat; a handful of entries, pruned to a sane size.
+async function getSceneMemory() {
+  const value = await spindle.storage.getJson(SCENE_MEMORY_FILE, { fallback: {} })
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+async function rememberSceneSetting(chatId, setting) {
+  const key = String(chatId || '').trim()
+  const tags = uniqueStrings(setting || []).slice(0, 6)
+  if (!key || !tags.length) return
+  try {
+    const memory = await getSceneMemory()
+    memory[key] = { setting: tags, at: Date.now() }
+    const keys = Object.keys(memory)
+    if (keys.length > 40) {
+      keys.sort((a, b) => (memory[a].at || 0) - (memory[b].at || 0))
+      for (const stale of keys.slice(0, keys.length - 40)) delete memory[stale]
+    }
+    await spindle.storage.setJson(SCENE_MEMORY_FILE, memory, { indent: 2 })
+  } catch (error) {
+    spindle.log.warn('[lumidraw] could not remember the scene setting: ' + error.message)
+  }
+}
 
 async function getStoryDebug() {
   return spindle.storage.getJson(STORY_DEBUG_FILE, { fallback: null })
@@ -1408,6 +1434,9 @@ function tagsFrom(value, maxItems = 40) {
 
 function shortPhrase(value, label, maxWords = 10, maxChars = 96, allowEmpty = true) {
   let text = String(value || '').trim().replace(/^['"`]+|['"`]+$/g, '').trim()
+  // An optional field filled with filler is an empty field. Required fields
+  // still reject it loudly rather than silently becoming blank.
+  if (allowEmpty && isPlaceholderTag(text)) return ''
   if (!text && allowEmpty) return ''
   if (!text) throw new Error(`${label} is required.`)
   text = text.replace(/[.!?]+$/g, '').trim()
@@ -1424,7 +1453,9 @@ function shortList(value, label, { maxItems = 12, maxWords = 7, maxChars = 72 } 
   const out = []
   for (const item of raw.slice(0, maxItems)) {
     const cleaned = shortPhrase(item, label, maxWords, maxChars, true)
-    if (cleaned) out.push(cleaned)
+    // Filler is dropped at the boundary so no downstream field has to know
+    // about it — a placeholder is the absence of a value, not a value.
+    if (cleaned && !isPlaceholderTag(cleaned)) out.push(cleaned)
   }
   return uniqueStrings(out)
 }
@@ -2244,9 +2275,20 @@ function normalizeVisualList(list) {
   return uniqueStrings((Array.isArray(list) ? list : []).map(normalizeVisualPhrase).filter(Boolean))
 }
 
+// Parsers fill gaps with filler rather than omitting a field: "unknown",
+// "not specified", "n/a", "default clothing". Every one that reaches Anima is
+// a token spent telling the model nothing, and some of them ("unknown") are
+// real words it will try to draw.
+const PLACEHOLDER_TERM_RE = /^(?:unknown|unspecified|unclear|unstated|not specified|not stated|not mentioned|unmentioned|undetermined|undefined|none|n\/?a|null|nil|tbd|default|default outfit|default clothing|default attire|no change|unchanged|same as before|as before|as described|standard|generic)$/i
+
+function isPlaceholderTag(value) {
+  return PLACEHOLDER_TERM_RE.test(String(value || '').trim())
+}
+
 function animaTag(value) {
   let tag = normalizeVisualPhrase(value).trim()
   if (!tag) return ''
+  if (isPlaceholderTag(tag)) return ''
   // Anima expects spaces rather than underscores, except for score_* tags.
   if (!/^score_[1-9]$/i.test(tag)) tag = tag.replace(/_/g, ' ')
   tag = tag.toLowerCase()
@@ -2922,12 +2964,13 @@ const MAX_CAPTION_TRAITS = 7
 
 function subjectIdentitySentences(item, scene, descriptors) {
   const name = displayName(item)
-  const sentences = []
 
-  // 1. Who they are — one sentence. In a multi-subject prompt this is the
-  //    ONLY place permanent appearance exists at all, so traits cannot land on
-  //    the wrong character. Build adjectives ("slender") are dropped here:
-  //    low bleed value, and every saved character costs prompt length twice.
+  // One appositive caption phrase per subject, not three narrative sentences.
+  // "Sovi is an elf woman with… Sovi wears… Sovi is standing and laughing."
+  // spends a third of its length on copulas and connectives that carry no
+  // visual information — and on a model that degrades with prompt length that
+  // is pure cost. An image caption reads
+  // "Sovi, an elf woman with…, wearing…, standing, laughing."
   const nounPhrase = subjectNounPhrase(item)
   const visible = animaTagList(filterAppearanceByVisibility(item.appearance, item.outfit))
     .filter((tag) => !normalizeIdentityText(nounPhrase).includes(normalizeIdentityText(tag)))
@@ -2937,22 +2980,21 @@ function subjectIdentitySentences(item, scene, descriptors) {
   const leadModifiers = modifiers.slice(0, 2)
 
   // An unprofiled subject's label doubles as its noun ("cloaked stranger"), so
-  // skip the tautology "The cloaked stranger is a cloaked stranger".
+  // the appositive is dropped rather than repeating it.
   const redundantNoun = normalizeIdentityText(nounPhrase).includes(normalizeIdentityText(item.anchor))
+  const described = leadModifiers.length
+    ? `${articleFor(leadModifiers[0])} ${leadModifiers.join(', ')} ${nounPhrase.replace(/^(?:a|an|the)\s+/, '')}`
+    : nounPhrase
+
+  const parts = []
   if (redundantNoun) {
-    if (traits.length) sentences.push(`${name} has ${naturalList(traits)}.`)
-    else if (leadModifiers.length) sentences.push(`${name} is ${naturalList(leadModifiers)}.`)
+    parts.push(name)
+    if (leadModifiers.length) parts.push(naturalList(leadModifiers))
+    if (traits.length) parts.push(`with ${naturalList(traits)}`)
   } else {
-    const phrase = leadModifiers.length
-      ? `${articleFor(leadModifiers[0])} ${leadModifiers.join(', ')} ${nounPhrase.replace(/^(?:a|an|the)\s+/, '')}`
-      : nounPhrase
-    sentences.push(traits.length
-      ? `${name} is ${phrase} with ${naturalList(traits)}.`
-      : `${name} is ${phrase}.`)
+    parts.push(traits.length ? `${name}, ${described} with ${naturalList(traits)}` : `${name}, ${described}`)
   }
 
-  // 2. Current state — one sentence combining outfit, pose + support,
-  //    expression, and actions, instead of the previous four.
   const clothes = []
   const stateWords = []
   for (const value of item.outfit || []) {
@@ -2966,15 +3008,17 @@ function subjectIdentitySentences(item, scene, descriptors) {
     .filter((part) => !actionDuplicatesRelation(part, item.subject.ref, scene.relations))
     .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
   const { doing, having, looking } = stateClauses([...item.expression, ...actions])
-  const predicates = []
-  if (clothes.length) predicates.push(`wears ${naturalList(withArticleList(clothes))}`)
-  const beingGroup = [...uniqueStrings(stateWords), pose, ...doing].filter(Boolean)
-  if (beingGroup.length) predicates.push(`is ${naturalList(beingGroup)}`)
-  if (looking.length) predicates.push(`looks ${naturalList(looking)}`)
-  if (having.length) predicates.push(`has ${naturalList(withArticleList(having))}`)
-  if (predicates.length) sentences.push(`${name} ${predicates.join(' and ')}.`)
 
-  return sentences.filter(Boolean)
+  if (clothes.length) parts.push(`wearing ${naturalList(withArticleList(clothes))}`)
+  const bare = uniqueStrings(stateWords)
+  if (bare.length) parts.push(naturalList(bare))
+  if (pose) parts.push(pose)
+  if (doing.length) parts.push(naturalList(doing))
+  if (looking.length) parts.push(naturalList(looking))
+  if (having.length) parts.push(naturalList(withArticleList(having)))
+
+  const caption = parts.filter(Boolean).join(', ').replace(/\s{2,}/g, ' ').trim()
+  return caption ? [caption + '.'] : []
 }
 
 function relationSentence(relation, byRef) {
@@ -3043,7 +3087,164 @@ function splitArtistTags(headerText) {
   return { artists, rest: rest.join(', ') }
 }
 
-function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [] } = {}) {
+// --- setting continuity -----------------------------------------------------
+//
+// A location that appears in the prompt but nowhere in the story is the worst
+// class of failure: the image is confidently wrong and the reader knows it.
+// An uncertain parser will fill a required field with whatever is nearest to
+// hand, and one invented "kitchen" ruins an image that was otherwise correct.
+//
+// So a setting tag is trusted only when the text supports it. When nothing in
+// the passage or the recent context backs ANY of the offered tags, the scene
+// keeps the location it already had — a story stays where it was unless it
+// says otherwise. This mirrors the field-level inheritance Inlay Illustrator
+// uses for character attributes, applied to place.
+
+const GENERIC_INDOOR_SETTING_RE = /^(?:kitchen|bedroom|bathroom|living room|office|hallway|corridor|dining room|classroom|bar|cafe|restaurant|apartment|house|room|indoors|interior)$/
+
+// A tag is supported when its distinctive words appear in the source text.
+function settingTagSupported(tag, text) {
+  const value = normalizeIdentityText(tag)
+  if (!value) return false
+  const words = value.split(/\s+/).filter((word) => word.length >= 4)
+  if (!words.length) return normalizeIdentityText(text).includes(value)
+  const haystack = normalizeIdentityText(text)
+  return words.some((word) => haystack.includes(word))
+}
+
+function reconcileSetting(settingTags, sourceText, rememberedSetting) {
+  const tags = animaTagList(settingTags)
+  if (!tags.length) {
+    return { setting: animaTagList(rememberedSetting || []), note: rememberedSetting && rememberedSetting.length ? 'no setting offered; kept the established location' : '' }
+  }
+  const supported = tags.filter((tag) => settingTagSupported(tag, sourceText))
+  if (supported.length) {
+    // Some of it is grounded. Drop only the generic rooms that nothing backs —
+    // those are the invented ones.
+    const kept = tags.filter((tag) => supported.includes(tag) || !GENERIC_INDOOR_SETTING_RE.test(tag))
+    const dropped = tags.filter((tag) => !kept.includes(tag))
+    return {
+      setting: kept,
+      note: dropped.length ? `dropped unsupported generic setting: ${dropped.join(', ')}` : '',
+    }
+  }
+  // Nothing is grounded at all. Prefer the location the story already had.
+  const remembered = animaTagList(rememberedSetting || [])
+  if (remembered.length) {
+    return { setting: remembered, note: `no offered setting was supported by the text (${tags.join(', ')}); kept the established location (${remembered.join(', ')})` }
+  }
+  return { setting: tags, note: '' }
+}
+
+// --- camera repair ----------------------------------------------------------
+//
+// A framing tag is a promise about what the viewer can see. When the parser
+// picks "close-up" for a scene whose meaning lives at the hips, or "from
+// behind" for a moment defined by a facial expression, the prompt contradicts
+// itself and the image loses the thing it was drawn for. Instructing the
+// parser to "choose framing wide enough" is unreliable; checking it here is
+// deterministic.
+//
+// Framing tags are ordered by how much of the body they reveal. The scene's
+// required regions are derived from what it actually depicts, and the framing
+// is widened to the narrowest tag that shows all of them.
+
+const FRAMING_LEVELS = [
+  { level: 0, canonical: 'portrait', covers: ['face'],
+    match: /^(?:portrait|close-up|closeup|extreme close-up|face focus|headshot|head shot)$/ },
+  { level: 1, canonical: 'upper body', covers: ['face', 'upper', 'hands'],
+    match: /^(?:upper body|bust|bust shot|chest up|chest-up)$/ },
+  { level: 2, canonical: 'cowboy shot', covers: ['face', 'upper', 'hands', 'hips'],
+    match: /^(?:cowboy shot|waist up|waist-up|medium shot|half body)$/ },
+  { level: 3, canonical: 'full body', covers: ['face', 'upper', 'hands', 'hips', 'legs', 'feet'],
+    match: /^(?:full body|full shot|wide shot|long shot|establishing shot|full-length)$/ },
+]
+
+const REGION_CUES = [
+  ['face', /\b(?:smil\w*|laugh\w*|cry\w*|tears?|blush\w*|frown\w*|grin\w*|scowl\w*|snarl\w*|open mouth|closed eyes|half-closed eyes|eyes? \w+|looking at viewer|looking up|looking down|looking back|expression\w*|kiss\w*|bite[s]? the \w*(?:lip|jaw|neck)|gaze|glare|pout\w*|fang\w*|tongue)\b/],
+  ['hands', /\b(?:hand|hands|finger|fingers|grip\w*|grab\w*|hold\w*|holding|clutch\w*|point\w*|touch\w*|wrist|palm|claw\w*|braces? (?:both )?hands?|reach\w*)\b/],
+  ['hips', /\b(?:hip|hips|lap|waist|straddl\w*|grind\w*|thrust\w*|penetrat\w*|pelvis|groin|crotch|buttocks|ass|anal|vaginal|sex|riding|mounted|bent over|from behind)\b/],
+  ['legs', /\b(?:leg|legs|thigh|thighs|knee|knees|kneel\w*|calf|calves|spread legs|crossed legs|sitting|squat\w*|crouch\w*)\b/],
+  ['feet', /\b(?:foot|feet|barefoot|toes?|heel|heels|boots?|shoes?|sandals?|socks?|stockings?)\b/],
+]
+
+function framingLevelForTag(tag) {
+  const value = animaTag(tag)
+  return FRAMING_LEVELS.find((entry) => entry.match.test(value)) || null
+}
+
+// Everything the scene claims to show, as one searchable blob.
+function sceneVisibleText(scene, descriptors) {
+  const parts = []
+  for (const item of descriptors) {
+    parts.push(...(item.pose || []), ...(item.expression || []), ...(item.action || []),
+      ...(item.outfit || []), ...(item.anatomy || []), item.subject.support || '')
+  }
+  for (const relation of scene.relations || []) {
+    parts.push(relation.action || '', ...(relation.details || []))
+  }
+  parts.push(scene.coreAction || '', scene.sceneStatement || '')
+  return normalizeIdentityText(parts.filter(Boolean).join(' '))
+}
+
+function requiredVisibleRegions(scene, descriptors) {
+  const text = sceneVisibleText(scene, descriptors)
+  const regions = new Set()
+  for (const [region, cue] of REGION_CUES) {
+    if (cue.test(text)) regions.add(region)
+  }
+  // Exposed anatomy is meaningless unless the frame reaches it.
+  if (descriptors.some((item) => (item.anatomy || []).length) && ['nsfw', 'explicit'].includes(scene.safety)) {
+    regions.add('hips')
+  }
+  return regions
+}
+
+function repairCameraTags(cameraTags, scene, descriptors) {
+  const required = requiredVisibleRegions(scene, descriptors)
+  if (!required.size) return { tags: cameraTags, note: '' }
+
+  const tags = [...cameraTags]
+  const notes = []
+
+  const framingIndex = tags.findIndex((tag) => framingLevelForTag(tag))
+  const current = framingIndex >= 0 ? framingLevelForTag(tags[framingIndex]) : null
+  const covered = new Set(current ? current.covers : [])
+  const missing = [...required].filter((region) => !covered.has(region))
+
+  if (current && missing.length) {
+    const widened = FRAMING_LEVELS.find((entry) => [...required].every((region) => entry.covers.includes(region)))
+    if (widened && widened.level > current.level) {
+      notes.push(`framing "${animaTag(tags[framingIndex])}" widened to "${widened.canonical}" (needs ${missing.join(', ')})`)
+      tags[framingIndex] = widened.canonical
+    }
+  } else if (!current) {
+    // No framing at all: only supply one when the scene needs more than a
+    // default headshot would give, so ordinary shots keep their freedom.
+    const needsBody = required.has('hips') || required.has('legs') || required.has('feet')
+    if (needsBody) {
+      const widened = FRAMING_LEVELS.find((entry) => [...required].every((region) => entry.covers.includes(region)))
+      if (widened) {
+        notes.push(`added framing "${widened.canonical}" (scene needs ${[...required].join(', ')})`)
+        tags.push(widened.canonical)
+      }
+    }
+  }
+
+  // A face-defining moment shot from behind: keep the author's angle and add
+  // the booru tag that turns the head toward the viewer, rather than
+  // overriding the intended composition.
+  if (required.has('face') && tags.some((tag) => /^from behind$/.test(animaTag(tag)))) {
+    if (!tags.some((tag) => /^(?:looking back|looking at viewer)$/.test(animaTag(tag)))) {
+      tags.push('looking back')
+      notes.push('added "looking back" so the face is visible in a from-behind shot')
+    }
+  }
+
+  return { tags, note: notes.join('; ') }
+}
+
+function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '' } = {}) {
   let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
     ...item,
     appearance: cleanAppearanceForNoun(item.appearance, item.noun),
@@ -3169,10 +3370,20 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     ].join(' ').toLowerCase()
     return /\b(?:viewer|first[- ]person|pov body|body only|face out of frame|faceless|hands? in foreground|visible hands?|visible arms?|forearms? only|lower body only)\b/.test(cueText)
   })
-  const cameraTags = animaTagList(scene.camera).filter((tag) => {
+  const povFiltered = animaTagList(scene.camera).filter((tag) => {
     if (/^(?:pov|first person view|first-person view)$/.test(tag) && !personaPovVisible) return false
     return true
   })
+  const repaired = repairCameraTags(povFiltered, scene, descriptors)
+  const cameraTags = animaTagList(repaired.tags)
+  if (repaired.note) spindle.log.info('[lumidraw] camera repair · ' + repaired.note)
+  const settingCheck = reconcileSetting(
+    scene.setting,
+    [sourcePassage, contextText].filter(Boolean).join('\n'),
+    rememberedSetting,
+  )
+  if (settingCheck.note) spindle.log.warn('[lumidraw] setting continuity · ' + settingCheck.note)
+
   // In multi-subject scenes, action-flavoured tags stay out of the tag run:
   // an unowned "grabbing a wrist" or "leaning in" conjures limbs that belong
   // to nobody. The relation sentences already carry that geometry, bound to
@@ -3181,7 +3392,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     ...(multi ? [] : relationDetails),
     ...(scene.coreAction && !(multi && crossRelationCount) ? [scene.coreAction] : []),
     ...(multi ? [] : supportTags(descriptors, scene)),
-    ...scene.setting,
+    ...settingCheck.setting,
     ...cameraTags,
     ...scene.lighting,
     ...scene.style,
@@ -3231,11 +3442,11 @@ Write every scene in the EXACT field order shown below. The order is a survival 
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw compiles it into one Danbooru/Gelbooru-style tag run followed by a short natural-language caption block, in the tag order Anima was trained on. Do not write the final image prompt yourself.
-TAG STYLE — every string you emit is destined for a booru-tag model. Lowercase, spaces instead of underscores, and the Gelbooru spelling whenever Danbooru and Gelbooru disagree. Use the plain tag ("sitting", "counter", "from side"), never hedged prose such as "clearly visible", "prominently shown", or "in full view", which the model was never trained on and which only dilutes the tag. Do not include quality tags, score tags, meta tags, year tags, or artist tags anywhere in this JSON — LumiDraw owns the header and the preset owns the artist.
+TAG STYLE — every string you emit is destined for a booru-tag model. Lowercase, spaces instead of underscores, and the Gelbooru spelling whenever Danbooru and Gelbooru disagree. Write plain booru tags rather than hedged prose: never "clearly visible", "prominently shown", or "in full view", which the model was never trained on and which only dilute the tag. Take every tag from what the passage actually describes; the formatting rules here are about SHAPE, never about content, and no word used to explain a rule may be copied into your answer as if it were part of the scene. Do not include quality tags, score tags, meta tags, year tags, or artist tags anywhere in this JSON — LumiDraw owns the header and the preset owns the artist.
 For a subject that is a recognisable published character, set "booru_character" to that character's booru tag and "booru_series" to the work it comes from. Leave both empty for original characters; a made-up name in those fields is worse than nothing.
 "style" is for the mood of this one scene at most (e.g. "backlit", "soft focus"). Never put a medium, an artist, or a rendering style there — those belong to the preset and must stay identical between images, or characters will drift in appearance from one generation to the next.
 SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "Rook is fighting bandits." "Sovi is casting a spell with great intensity." "Sovi and Rook are having anal sex." In an nsfw or explicit scene, name the act plainly — a euphemism here costs the image its subject. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
-ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
+ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag, and every setting tag must come from the CURRENT PASSAGE or, if the passage does not restate it, from the established location in PRIOR CONTEXT. NEVER invent a location, and never fall back on a generic room such as a kitchen, bedroom, office, or living room to satisfy this requirement. A story continues in the place it was already in unless the passage says the characters moved; if you cannot tell where they are, repeat the location from PRIOR CONTEXT verbatim. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
 Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 3 outfit items, 2 pose items, 2 expression items, and 1 subject action item. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 PARTIAL CHANGES ARE NOT STATE CHANGES. When a passage shows only SOME of a character's transformation — a single feature slipping, eyes changing, claws extending, "partly", "slightly", "a little", "just his eyes", "beginning to" — keep appearance_state at the form they are otherwise in and list the specific features in "partial_features" using the exact saved feature names listed below. Switching appearance_state transforms the WHOLE character, which is wrong for a partial change and produces a completely different creature than the passage describes. Use partial_features for anything short of a full, completed transformation. Select only names that are listed for that ref; never invent a feature name, and never put transformation words in appearance, outfit, pose, or expression.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
@@ -3257,7 +3468,9 @@ function joinPromptParts(parts) {
   return output
 }
 
-async function compileSceneWithPreset(sceneInput, preset, settings, userId, chatId, sourcePassage = '') {
+async function compileSceneWithPreset(sceneInput, preset, settings, userId, chatId, sourcePassage = '', contextText = '') {
+  const sceneMemory = await getSceneMemory()
+  const remembered = (sceneMemory[String(chatId || '')] || {}).setting || []
   const rawProfiles = await getStoryProfiles(preset, settings, userId, chatId)
   const filterProfile = (profile) => ({
     ...profile,
@@ -3288,9 +3501,20 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   const { artists, rest } = splitArtistTags(normalizeArtistTags(
     reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), scene.safety)
   ))
-  const core = compileStructuredScene(scene, profiles, sourcePassage, { artistTags: artists })
+  const core = compileStructuredScene(scene, profiles, sourcePassage, {
+    artistTags: artists,
+    rememberedSetting: remembered,
+    contextText,
+  })
+  // Remember whatever survived reconciliation as the story's location.
+  const establishedSetting = reconcileSetting(
+    scene.setting,
+    [sourcePassage, contextText].filter(Boolean).join('\n'),
+    remembered,
+  ).setting
+  await rememberSceneSetting(chatId, establishedSetting)
   const prompt = joinPromptParts([rest, core])
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v12' }
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v13' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -4022,7 +4246,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v12',
+          compiler: compiled.compiler || 'anima-hybrid-v13',
         })
         done++
       } catch (e) {
@@ -4132,7 +4356,7 @@ async function scanStoryCore(userId, options = {}) {
         parserImageIndex++
         assertStoryScanActive(scan)
         setStoryScanStage(scan, 'generating', `Sending image ${parserImageIndex} of ${acceptedParsed.length} to Draw Things.`)
-        const compiled = await compileSceneWithPreset(item.scene, preset, settings, userId, chatId, passage)
+        const compiled = await compileSceneWithPreset(item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '')
         const dims = aspectDims(preset.config, compiled.aspect)
         const parserAlt = compiled.core.slice(0, 100).replace(/[\[\]]/g, '')
         const entry = await generateAndUpload({
@@ -4148,7 +4372,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v12',
+          compiler: compiled.compiler || 'anima-hybrid-v13',
         })
       }
 
@@ -4406,7 +4630,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.25.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.26.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5363,4 +5587,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.25.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.26.0'))

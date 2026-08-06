@@ -1,7 +1,68 @@
-# LumiDraw Studio 0.25.0
+# LumiDraw Studio 0.26.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.26.0 — Setting continuity, camera repair, tighter captions
+
+### The story stays where it is
+
+A scene set for its entire length in a bioluminescent mushroom forest compiled
+with the setting **kitchen**. Two causes, both ours.
+
+The parser instruction demonstrated tag formatting with the words
+`"sitting", "counter", "from side"` — handing the model a piece of indoor
+furniture as an example — while simultaneously *requiring* at least one setting
+tag. An uncertain parser reached for the nearest primed word, and "counter" is
+one step from "kitchen". Format examples are now abstract, and the instruction
+states that a setting must come from the passage or the established location,
+that a story continues where it was unless it says otherwise, and that generic
+rooms are never an acceptable fallback.
+
+Prompt wording alone is not a guarantee, so there is now a **setting
+firewall**. A setting tag is trusted only when the text supports it:
+
+- When nothing offered is supported by the passage or recent context, the
+  scene keeps the location the chat already established.
+- A generic room riding along with genuine tags is dropped on its own.
+- A real move ("they crossed the stone bridge") is honoured normally.
+- The established location is remembered per chat, so continuity survives
+  across messages.
+
+This is the field-level inheritance Inlay Illustrator uses for character
+attributes, applied to place.
+
+### Camera repair
+
+A framing tag is a promise about what the viewer can see, and the parser
+frequently broke it — a close-up on a scene whose meaning is at the hips, or a
+from-behind angle on a moment defined by a facial expression. Instructing the
+parser to "choose framing wide enough" was unreliable.
+
+The compiler now derives which body regions the scene actually requires (face,
+hands, hips, legs, feet) from its poses, expressions, actions, relations, and
+visible anatomy, then compares them against what the chosen framing reveals.
+Framing is widened to the narrowest tag that shows everything required, and a
+face-defining moment shot from behind gains `looking back` — keeping the
+author's angle rather than overriding the composition. Scenes that need
+nothing special are left alone.
+
+### Captions read like captions
+
+Each subject was three narrative sentences: *"Sovi is an elf woman with… Sovi
+wears… Sovi is standing and laughing."* About a third of that is copulas and
+connectives carrying no visual information, and on a model that degrades with
+prompt length that is pure cost. Subjects now compile to a single appositive
+phrase — *"Sovi, an elf woman with…, wearing…, standing, laughing."* — matching
+the register of Anima's own documented example. A representative two-character
+caption drops from roughly 410 to 343 characters with no information lost.
+
+### Filler no longer reaches the model
+
+`unknown`, `unspecified`, `not specified`, `n/a`, `default clothing`, `none`,
+`tbd` and similar are dropped wherever they appear. A placeholder is the
+absence of a value, not a value; some of them are also real words Anima will
+try to draw.
 
 ## 0.25.0 — Partial features (anima-hybrid-v12)
 
