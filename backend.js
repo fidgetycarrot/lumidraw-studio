@@ -2488,6 +2488,131 @@ function animaTagList(list) {
 // lighting, posture, facial expression) plus the common general tags.
 // ---------------------------------------------------------------------------
 
+
+// --- creature grounding ----------------------------------------------------
+// A coined creature name carries no signal. Anima has never seen a "mycewolf";
+// it has seen ten thousand wolves. The coinage is almost always a real creature
+// noun with something welded to the front, so the real noun is recovered and
+// used in its place — which is exactly the edit that fixed the image by hand.
+const CREATURE_NOUNS = [
+  'wolf', 'dog', 'fox', 'cat', 'bear', 'lion', 'tiger', 'horse', 'deer', 'stag', 'boar',
+  'rat', 'mouse', 'bat', 'bird', 'crow', 'raven', 'owl', 'hawk', 'snake', 'serpent',
+  'lizard', 'dragon', 'drake', 'wyvern', 'spider', 'beetle', 'moth', 'fish', 'shark',
+  'squid', 'octopus', 'crab', 'frog', 'toad', 'goat', 'ram', 'bull', 'ape', 'monkey',
+  'rabbit', 'hare', 'elk', 'moose', 'whale', 'worm', 'slug', 'snail', 'insect',
+  'monster', 'creature', 'beast', 'demon', 'devil', 'angel', 'ghost', 'skeleton',
+  'zombie', 'golem', 'slime', 'elemental', 'fairy', 'goblin', 'orc', 'ogre', 'troll',
+  'giant', 'elf', 'dwarf', 'mermaid', 'centaur', 'harpy', 'gargoyle', 'wraith', 'spirit',
+]
+const CREATURE_SET = new Set(CREATURE_NOUNS)
+
+// Rewrites coined creature words wherever they appear in free text.
+function groundCreatureWords(text) {
+  return String(text || '').replace(/[A-Za-z][A-Za-z-]{4,}/g, (word) => {
+    const clean = word.toLowerCase()
+    if (CREATURE_SET.has(clean)) return word
+    const inner = CREATURE_NOUNS.find((noun) =>
+      noun.length >= 3 && clean.length > noun.length + 1 && clean.endsWith(noun))
+    if (!inner) return word
+    return /^[A-Z]/.test(word) ? inner.charAt(0).toUpperCase() + inner.slice(1) : inner
+  })
+}
+
+// Grounds a subject label, falling back to a creature noun the subject's own
+// appearance already names when the label contains no coinage to unpack.
+function groundCreatureName(label, appearance = []) {
+  const grounded = groundCreatureWords(String(label || '').trim())
+  if (!grounded) return grounded
+  const words = grounded.toLowerCase().split(/\s+/).map((w) => w.replace(/[^a-z-]/g, ''))
+  if (words.some((word) => CREATURE_SET.has(word))) return grounded
+  for (const tag of appearance || []) {
+    const found = String(tag || '').toLowerCase().split(/\s+/)
+      .map((w) => w.replace(/[^a-z-]/g, '')).find((w) => CREATURE_SET.has(w))
+    if (found) return `${grounded} ${found}`
+  }
+  return grounded
+}
+
+// --- appearance is for the body, not the scene -----------------------------
+// "a cracked bark nearby" reached a creature's appearance array and was
+// rendered as one of its physical features. Outfit has been validated since
+// 0.27.1; appearance never was.
+const SCENERY_NOUN_RE = /\b(?:bark|root|roots|trunk|branch|twig|leaf|leaves|foliage|canopy|rock|stone|boulder|pebble|ground|floor|wall|ceiling|sky|cloud|water|puddle|grass|dirt|soil|mud|sand|gravel|path|road|door|window|table|chair|bed|fence|post|pillar|column|debris|rubble|ruins|tree|bush|shrub|vine|log|stump|campfire|torch|lantern)\b/
+const POSITIONAL_CUE_RE = /\b(?:nearby|near ?by|in the background|in the distance|behind (?:them|him|her|it)|beside them|on the ground|to (?:one|the) side|around (?:them|him|her)|beyond|underfoot|overhead|in view|visible behind)\b/
+const CREATURE_TRAIT_RE = /\b(?:fur|hair|skin|scale|scales|eye|eyes|ear|ears|tail|tails|claw|claws|paw|paws|horn|horns|wing|wings|tooth|teeth|fang|fangs|snout|muzzle|mane|crest|hoof|hooves|antler|antlers|whisker|whiskers|beak|tongue|body|face|head|limb|limbs|build|frame|physique|marking|markings|pattern|spot|spots|stripe|stripes)\b/
+
+function isNotTrait(value) {
+  const text = normalizeIdentityText(value)
+  if (!text) return true
+  // A phrase naming a body feature is a trait even if scenery words appear in
+  // it — "moss-covered fur" belongs on the creature.
+  if (CREATURE_TRAIT_RE.test(text)) return false
+  if (POSITIONAL_CUE_RE.test(text)) return true
+  if (PLACE_WORD_RE.test(text)) { PLACE_WORD_RE.lastIndex = 0; return true }
+  PLACE_WORD_RE.lastIndex = 0
+  if (SCENERY_NOUN_RE.test(text)) return true
+  if (isPovStagingCue(text)) return true
+  return false
+}
+
+// --- one feature, one description ------------------------------------------
+// A profile and an active appearance state can each describe the same feature,
+// leaving "wolf ears, animal ears" and — worse — "black fur, dark brown fur".
+// Two colours for one coat is a coin flip the model re-tosses every generation,
+// which is one reason a character drifts between images.
+const MERGEABLE_TRAIT_HEADS = new Set([
+  'ears', 'tail', 'tails', 'fur', 'eyes', 'hair', 'horns', 'wings', 'claws', 'teeth',
+  'fangs', 'skin', 'scales', 'mane', 'snout', 'muzzle', 'paws', 'whiskers', 'antlers',
+])
+const TRAIT_COLOR_WORDS = new Set([
+  'black', 'white', 'red', 'blue', 'green', 'brown', 'blonde', 'blond', 'grey', 'gray',
+  'silver', 'gold', 'golden', 'amber', 'purple', 'violet', 'pink', 'orange', 'tan',
+  'auburn', 'crimson', 'scarlet', 'ivory', 'cream', 'ash', 'chestnut', 'dark', 'light',
+  'pale', 'bright', 'deep',
+])
+const GENERIC_TRAIT_MODIFIERS = new Set(['animal', 'creature', 'beast', 'monster', 'generic'])
+const TRAIT_SIZE_WORDS = new Set([
+  'large', 'big', 'huge', 'massive', 'small', 'little', 'tiny', 'long', 'short',
+  'thick', 'thin', 'broad', 'narrow',
+])
+
+function mergeTraitsByHead(tags) {
+  const groups = new Map()
+  const order = []
+  const passthrough = []
+  for (const tag of tags || []) {
+    const text = String(tag || '').trim().toLowerCase().replace(/^(?:a|an|the)\s+/, '')
+    const words = text.split(/\s+/).filter(Boolean)
+    const head = words[words.length - 1]
+    if (words.length < 2 || !MERGEABLE_TRAIT_HEADS.has(head)) { passthrough.push(tag); continue }
+    if (!groups.has(head)) { groups.set(head, []); order.push(head) }
+    groups.get(head).push(words.slice(0, -1))
+  }
+  const merged = []
+  for (const head of order) {
+    const sets = groups.get(head)
+    if (sets.length === 1) { merged.push([...sets[0], head].join(' ')); continue }
+    const flat = sets.flat()
+    // A specific sibling retires the generic one: "wolf ears" beats "animal ears".
+    const specific = flat.filter((word) => !GENERIC_TRAIT_MODIFIERS.has(word))
+    const pool = specific.length ? specific : flat
+    const out = []
+    let colorTaken = false
+    for (const word of pool) {
+      if (out.includes(word)) continue
+      if (TRAIT_COLOR_WORDS.has(word)) {
+        if (colorTaken) continue
+        colorTaken = true
+      }
+      out.push(word)
+    }
+    // Size reads first in English: "large wolf tail", not "wolf large tail".
+    out.sort((a, b) => (TRAIT_SIZE_WORDS.has(b) ? 1 : 0) - (TRAIT_SIZE_WORDS.has(a) ? 1 : 0))
+    merged.push([...out.slice(0, 3), head].join(' '))
+  }
+  return uniqueStrings([...merged, ...passthrough])
+}
+
 const BOORU_VOCAB = new Set([
   // view angle and framing
   'from above', 'from below', 'from side', 'from behind', 'from front', 'dutch angle',
@@ -2685,6 +2810,7 @@ function salvageBooruWords(phrase, maxTags = 2) {
 function partitionBooruTags(tags) {
   const kept = []
   const demoted = []
+  const orphans = []
   const rewritten = []
   for (const tag of Array.isArray(tags) ? tags : []) {
     const text = String(tag || '').trim()
@@ -2699,10 +2825,15 @@ function partitionBooruTags(tags) {
     if (salvaged.length) {
       kept.push(...salvaged)
       rewritten.push(`${text} ⊃ ${salvaged.join(' + ')}`)
+    } else {
+      // Nothing inside this phrase reached the tag run, so the caption is the
+      // only place its meaning survives. That makes it the first thing worth
+      // keeping when the caption has to be trimmed.
+      orphans.push(text)
     }
     demoted.push(text)
   }
-  return { kept: uniqueStrings(kept), demoted: uniqueStrings(demoted), rewritten }
+  return { kept: uniqueStrings(kept), demoted: uniqueStrings(demoted), orphans: uniqueStrings(orphans), rewritten }
 }
 
 const ANIMA_SAFETY_TAGS = ['safe', 'sensitive', 'nsfw', 'explicit']
@@ -3322,11 +3453,15 @@ function orderAdjectives(list) {
 }
 
 // Mass and inherently plural nouns take no article.
-const NO_ARTICLE_RE = /\b(?:hair|skin|stubble|fur|makeup|armou?r|clothing|lingerie|jewelry|hosiery|underwear|nudity)\b/
+const NO_ARTICLE_RE = /\b(?:hair|skin|stubble|fur|makeup|armou?r|clothing|lingerie|jewelry|hosiery|underwear|nudity|bark|blood|moss|dust|smoke|mist|sweat|dirt|grime|ash|flesh|foliage|bone|sand|mud|fog)\b/
+// Irregular plurals take no article either, and "a bared teeth" is the tell
+// that a purely /s$/ test is not enough.
+const IRREGULAR_PLURAL_HEADS = new Set(['teeth', 'feet', 'men', 'women', 'children', 'mice', 'geese', 'oxen', 'people'])
 const SINGULAR_S_WORDS = new Set(['dress', 'glass', 'harness', 'corset', 'bodice', 'blouse', 'chemise'])
 
 function isPluralPhrase(text) {
   const head = String(text || '').trim().split(/\s+/).pop() || ''
+  if (IRREGULAR_PLURAL_HEADS.has(head.toLowerCase())) return true
   if (!/s$/i.test(head)) return false
   return !SINGULAR_S_WORDS.has(head.toLowerCase())
 }
@@ -3407,6 +3542,23 @@ function stateClauses(tags) {
 // traits ordered so the bleed-prone signature ones survive the cut.
 const MAX_CAPTION_TRAITS = 7
 
+// A pose that names another subject is a relation in the wrong field. The
+// relation sentence already carries that geometry, bound to both names, so
+// rendering the pose too states the same contact twice — and the second
+// telling never words the contact point quite the same way.
+function poseBelongsToRelation(pose, item, scene, descriptors) {
+  const text = normalizeIdentityText(pose)
+  if (!text) return false
+  const hasRelation = (scene.relations || []).some((relation) => relation.actor === item.subject.ref && relation.target)
+  if (!hasRelation) return false
+  return (descriptors || []).some((other) => {
+    if (!other || other.subject.ref === item.subject.ref) return false
+    const anchor = normalizeIdentityText(other.anchor || '')
+    if (anchor.length < 3) return false
+    return anchor.split(/\s+/).some((word) => word.length >= 4 && new RegExp(`\\b${escapeRegExp(word)}\\b`).test(text))
+  })
+}
+
 function subjectIdentitySentences(item, scene, descriptors) {
   const name = displayName(item)
 
@@ -3448,7 +3600,7 @@ function subjectIdentitySentences(item, scene, descriptors) {
     if (/^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs)$/.test(tag)) stateWords.push(tag)
     else clothes.push(tag)
   }
-  const pose = poseClause(item, scene)
+  const pose = poseClause({ ...item, pose: item.pose.filter((entry) => !poseBelongsToRelation(entry, item, scene, descriptors)) }, scene)
   const actions = item.action
     .filter((part) => !actionDuplicatesRelation(part, item.subject.ref, scene.relations))
     .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
@@ -3519,11 +3671,21 @@ function resolveSceneStatement(scene, descriptors) {
 
 // A relation sentence that just restates the scene statement's action buys
 // length, not information.
-function relationCoveredByStatement(relation, statement) {
+function relationCoveredByStatement(relation, statement, byRef) {
   if (!statement) return false
   const action = comparableAction(relation.action)
   if (!action) return false
   const haystack = normalizeIdentityText(statement)
+  // A shared verb with both subjects already named is coverage, even when the
+  // contact point is worded differently. "pins ... head against the roots" and
+  // "pins the muzzle of" are one grapple; described twice, they ask for two.
+  const stem = (action.split(/\s+/)[0] || '').replace(/(?:ing|es|ed|s)$/, '')
+  if (stem.length >= 3 && haystack.includes(stem) && byRef) {
+    const nameOf = (ref) => normalizeIdentityText(((byRef.get(ref) || {}).anchor) || '')
+    const actor = nameOf(relation.actor)
+    const target = nameOf(relation.target)
+    if (actor && target && haystack.includes(actor) && haystack.includes(target)) return true
+  }
   const words = action.split(/\s+/).filter((word) => word.length > 3)
   if (!words.length) return false
   const hits = words.filter((word) => haystack.includes(word)).length
@@ -3752,7 +3914,15 @@ function repairCameraTags(cameraTags, scene, descriptors) {
 function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '' } = {}) {
   let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
     ...item,
-    appearance: cleanAppearanceForNoun(item.appearance, item.noun),
+    // An unprofiled subject's name comes straight from the story, so a coined
+    // creature gets grounded in a noun the model has actually been trained on.
+    anchor: item.named ? item.anchor : groundCreatureName(item.anchor, item.appearance),
+    noun: item.named ? item.noun : groundCreatureName(item.noun, item.appearance),
+    // Appearance is the body. Scenery that landed there would otherwise be
+    // rendered as a physical feature — "with ... a cracked bark nearby".
+    appearance: mergeTraitsByHead(
+      cleanAppearanceForNoun(item.appearance, item.noun).filter((tag) => !isNotTrait(tag))
+    ).map(groundCreatureWords),
     anatomy: animaTagList(item.anatomy),
     // Outfit keeps only things that can be worn; POV staging cues are removed
     // from every descriptive list. Both would otherwise be rendered as if they
@@ -3820,7 +3990,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   const prose = []
   // The thesis sentence leads the caption for BOTH solo and multi scenes:
   // "Sovi is casting a spell with great intensity." before any detail.
-  const statement = resolveSceneStatement(scene, descriptors)
+  const statement = groundCreatureWords(resolveSceneStatement(scene, descriptors))
   if (statement) prose.push(statement)
   let crossRelationCount = 0
   if (multi) {
@@ -3828,7 +3998,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
 
     for (const relation of scene.relations) {
       if (!relation.target || relation.target === relation.actor) continue
-      if (relationCoveredByStatement(relation, statement)) { crossRelationCount++; continue }
+      if (relationCoveredByStatement(relation, statement, byRef)) { crossRelationCount++; continue }
       const sentence = relationSentence(relation, byRef)
       if (sentence) { prose.push(sentence); crossRelationCount++ }
       if (crossRelationCount >= 2) break
@@ -3956,14 +4126,16 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   // and a stray scenery fragment is not reason enough to restructure the whole
   // prompt into two blocks; there the phrase stays where it was.
   const captionSaid = normalizeIdentityText(caption)
+  const orphanFirst = uniqueStrings([...(atmosphere.orphans || []), ...atmosphere.demoted])
   const scenery = caption
-    ? atmosphere.demoted.filter((phrase) => {
+    ? orphanFirst.filter((phrase) => {
       const value = normalizeIdentityText(phrase)
       return value && !captionSaid.includes(value)
     })
     : []
   if (scenery.length) {
-    const fragment = scenery.join(', ')
+    // A caption is a caption. Four leftover phrases set the scene; nine bury it.
+    const fragment = scenery.slice(0, 4).join(', ')
     caption = `${caption} ${fragment.charAt(0).toUpperCase()}${fragment.slice(1)}.`
   }
   // The caption LEADS. A sentence naming what is happening, read first, frames
@@ -5211,7 +5383,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.29.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.29.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6169,4 +6341,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.29.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.29.1'))

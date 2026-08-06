@@ -1,7 +1,96 @@
-# LumiDraw Studio 0.29.0
+# LumiDraw Studio 0.29.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.29.1 — Say it once, and say it in words the model knows
+
+Two hand edits to a generated prompt produced a better image. Both are now made
+by the compiler.
+
+### The grapple was described three times
+
+```text
+statement    pins the alpha mycewolf's head against a crystal tree's roots
+Rook's pose  pinning alpha's muzzle to tree root … gripping snout
+relation     Rook pins the muzzle of the alpha mycewolf.
+```
+
+One grapple, three accounts, and the contact point drifts each time — head,
+muzzle, snout — across two anchors, roots and tree root. Anima was being asked
+to draw three slightly different holds at once.
+
+`relationCoveredByStatement` exists to prevent exactly this, and missed by a
+hair: it required 60% of the relation's content words to appear in the
+statement, and `pins the muzzle of` against a statement saying `pins … head`
+scores 1 of 2. A shared verb with **both subjects already named** now counts as
+coverage regardless of how the contact point is worded.
+
+Separately, a pose that names another subject is a relation written in the wrong
+field. Those are now dropped from the pose clause — the relation sentence
+already carries that geometry, bound to both names.
+
+### "Mycewolf" meant nothing to anyone
+
+A coined creature name is a dead token. The model has never seen a mycewolf; it
+has seen ten thousand wolves. Coinages are almost always a real creature noun
+with something welded to the front, so the real noun is recovered and used
+throughout — labels, descriptions, and the scene statement alike.
+
+Where a label contains no coinage to unpack, a creature noun is borrowed from
+the subject's own appearance: `the alpha` + `large wolf` → `the alpha wolf`.
+
+### Scenery was being rendered as anatomy
+
+`and a cracked bark nearby` sat in the alpha's **appearance** array, so the
+compiler described the wolf as having cracked bark on its body. Outfit has been
+validated since 0.27.1; appearance never was. It is now — place words,
+positional cues (`nearby`, `in the background`), and scenery nouns are routed
+out, while anything naming a body feature stays put, so `moss-covered fur`
+survives intact.
+
+### One feature, one description
+
+A profile and an active appearance state can each describe the same feature:
+
+```text
+before  wolf ears, animal ears, a wolf tail, a large tail,
+        black fur, dark brown fur, and shaggy fur
+after   wolf ears, a large wolf tail, and black shaggy fur
+```
+
+Traits are merged by their head noun. A specific modifier retires a generic one
+(`wolf ears` beats `animal ears`), size and type combine rather than compete, and
+**only one colour survives per feature**. Two coat colours is a coin flip the
+model re-tosses every generation, which is one reason a character drifts between
+images.
+
+### The caption is a caption again
+
+The demoted-scenery tail is capped at four phrases, and the phrases that
+contributed nothing to the tag run are kept first — trimming should never delete
+the only surviving copy of something while keeping a phrase the tags already
+say.
+
+Also: `a bared teeth`. `isPluralPhrase` only tested for a trailing *s*, so
+irregular plurals and mass nouns got an article. `teeth`, `feet`, `bark`,
+`blood`, `moss`, `ash` and friends no longer do.
+
+### The same scene, compiled
+
+```text
+before  125 words, ending: … Rook pins the muzzle of the alpha mycewolf.
+        The alpha mycewolf is on the left. Mycetheric expanse, pheromone
+        grove, crystal trees, spore dust drifting, dynamic angle, pink
+        grove glow, glittering spore dust, tense, visceral action.
+
+after    88 words, ending: … head forced sideways and body writhing,
+        snarling, dazed. Rook is on the right and the alpha wolf is on
+        the left. Mycetheric expanse, dynamic angle, tense, visceral action.
+```
+
+37 new assertions; 518 across 22 suites.
+
 
 ## 0.29.0 — The tag run is made of real tags, and correct work stops being thrown away
 
