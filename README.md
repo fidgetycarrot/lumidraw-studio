@@ -1,7 +1,34 @@
-# LumiDraw Studio 0.22.3
+# LumiDraw Studio 0.22.4
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.22.4 — Alt-text matching survives the host's chat rebuild
+
+The 0.22.3 forensics identified the real cause of "image not found": the
+host's chat rebuild ("Surgically rebuilt chat … re-chunked") canonicalizes
+image markdown to `/api/v1/images/<uuid>` — with **freshly minted uuids**. The
+URL, filename, and upload id LumiDraw recorded at generation time no longer
+appear anywhere in the stored message text. No identifier-based match can
+survive that.
+
+One thing does survive the rebuild: the alt text, which LumiDraw itself wrote
+as the first 100 characters of the compiled prompt — and the full prompt is in
+History.
+
+- **Tier-2 lookup by alt text.** When no recorded identifier matches, the
+  lookup scans markdown images whose alt text appears verbatim inside the
+  recorded prompt (normalized, minimum lengths enforced). The replacement is
+  then applied to whatever URL that image currently carries — the canonical
+  `/api/v1/images/<uuid>` form included.
+- **Refuses to guess.** Prompt prefixes are similar across images from the
+  same preset, so an alt match that is ambiguous across several messages is
+  rejected rather than risking a wrong swap that would destroy a good image.
+  The recorded message id resolves the ambiguity when available (all images
+  generated on 0.22.0+). Multiple same-prefix images inside one message are
+  logged before the first is replaced.
+- Short prompts and short alts can never trigger alt matching, so generic
+  images ("Generated image") cannot false-positive.
 
 ## 0.22.3 — Encoded URLs, and forensics for the not-found case
 

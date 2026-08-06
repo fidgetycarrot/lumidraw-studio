@@ -908,6 +908,28 @@ function collectImageReferences(messages, limit = 8) {
   return refs.slice(0, limit)
 }
 
+// Tier-2 lookup: match by ALT TEXT. The host's chat rebuild canonicalizes
+// image URLs to /api/v1/images/<uuid> with freshly minted uuids, severing
+// every identifier LumiDraw recorded. But the alt text — which LumiDraw wrote
+// as the first 100 chars of the compiled prompt — survives the rebuild, and
+// the full prompt is in History. An alt that appears verbatim inside the
+// recorded prompt identifies the image regardless of what its URL became.
+function findImageCandidatesByAlt(messages, promptText) {
+  const prompt = normalizeIdentityText(promptText)
+  if (!prompt || prompt.length < 30) return []
+  const candidates = []
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const bits = messageBits(messages[i])
+    if (!bits.contentKey || typeof bits.content !== 'string') continue
+    for (const match of bits.content.matchAll(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g)) {
+      const alt = normalizeIdentityText(match[1])
+      if (alt.length < 20) continue
+      if (prompt.includes(alt)) candidates.push({ bits, url: match[2], alt })
+    }
+  }
+  return candidates
+}
+
 async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
   // The hinted chat first, then the active chat. '' means "let fetchMessages
   // resolve the active chat", and must survive here — uniqueStrings would drop
@@ -944,16 +966,41 @@ async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
       const matchedNeedle = needles.find((needle) => haystack.includes(needle))
       if (matchedNeedle) matches.push({ ...bits, matchedNeedle })
     }
-    if (!matches.length) continue
-    // Prefer the recorded message when the same image appears more than once.
-    const preferred = hint.messageId
-      ? matches.find((bits) => String(bits.id) === String(hint.messageId))
-      : null
-    const chosen = preferred || matches[0]
-    if (chosen.matchedNeedle !== imageUrl) {
-      spindle.log.info('[lumidraw] image located by "' + chosen.matchedNeedle + '" rather than its full URL')
+    if (matches.length) {
+      // Prefer the recorded message when the same image appears more than once.
+      const preferred = hint.messageId
+        ? matches.find((bits) => String(bits.id) === String(hint.messageId))
+        : null
+      const chosen = preferred || matches[0]
+      if (chosen.matchedNeedle !== imageUrl) {
+        spindle.log.info('[lumidraw] image located by "' + chosen.matchedNeedle + '" rather than its full URL')
+      }
+      return { ...chosen, chatId: resolvedChatId }
     }
-    return { ...chosen, chatId: resolvedChatId }
+
+    // Tier 2: the host rewrote the URL entirely — find the image by alt text.
+    const altCandidates = findImageCandidatesByAlt(messages, hint.promptText)
+    if (altCandidates.length) {
+      let pool = altCandidates
+      if (hint.messageId) {
+        const hinted = altCandidates.filter((c) => String(c.bits.id) === String(hint.messageId))
+        if (hinted.length) pool = hinted
+      }
+      const messageIds = new Set(pool.map((c) => String(c.bits.id)))
+      // Prompt prefixes are similar across images from the same preset, so an
+      // ambiguous match across several messages must not guess: a wrong swap
+      // silently destroys a good image.
+      if (messageIds.size > 1) {
+        spindle.log.warn('[lumidraw] alt-text match is ambiguous across ' + messageIds.size + ' messages; refusing to guess.')
+      } else {
+        if (pool.length > 1) {
+          spindle.log.warn('[lumidraw] ' + pool.length + ' images in the message share this prompt prefix; replacing the first. If the wrong one was swapped, regenerate the other from History.')
+        }
+        const chosen = pool[0]
+        spindle.log.info('[lumidraw] image located by alt text; its stored URL is now "' + chosen.url + '"')
+        return { ...chosen.bits, chatId: resolvedChatId, matchedNeedle: chosen.url, matchedBy: 'alt' }
+      }
+    }
   }
   const sampleRefs = uniqueStrings(scanned.flatMap((item) => item.sample || []))
   spindle.log.warn('[lumidraw] image not found in any message · needles=' + needles.join(' | ') +
@@ -4155,7 +4202,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.22.3',
+          version: (spindle.manifest && spindle.manifest.version) || '0.22.4',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4600,6 +4647,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           const target = await locateMessageByImageUrl(userId, imageUrl, {
             ...origin,
             imageId: sourceImage && sourceImage.id ? sourceImage.id : '',
+            promptText: source && source.prompt ? source.prompt : '',
           })
           if (!target || target.notFound) {
             const scanned = target && target.scanned ? target.scanned : []
@@ -5078,4 +5126,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.3'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.4'))
