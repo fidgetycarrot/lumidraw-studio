@@ -836,13 +836,62 @@ function replaceImageUrlInContent(content, oldUrl, newUrl) {
 // origin is a hint; a scan by URL is the ground truth and also covers images
 // generated before origins were recorded, and pregenerated ones whose message
 // did not exist yet at generation time.
+// An image can be referenced in message text by more than its exact URL: the
+// host may rewrite markdown, proxy the path, or strip a query string. Matching
+// also on the upload id and the filename makes the lookup survive all three.
+function imageMatchNeedles(imageUrl, imageId = '') {
+  const needles = []
+  const url = String(imageUrl || '').trim()
+  if (url) {
+    needles.push(url)
+    const withoutQuery = url.split('?')[0]
+    if (withoutQuery !== url) needles.push(withoutQuery)
+    const filename = withoutQuery.split('/').filter(Boolean).pop() || ''
+    if (filename.length >= 8) needles.push(filename)
+  }
+  const id = String(imageId || '').trim()
+  if (id.length >= 6) needles.push(id)
+  return uniqueStrings(needles)
+}
+
+async function listCandidateChatIds(userId, preferred = []) {
+  const ids = []
+  for (const value of preferred) {
+    const id = String(value || '').trim()
+    if (id && !ids.includes(id)) ids.push(id)
+  }
+  const chatsApi = spindle.chats
+  for (const fn of ['list', 'getAll', 'recent', 'all']) {
+    if (!chatsApi || typeof chatsApi[fn] !== 'function') continue
+    try {
+      let result
+      try { result = await withTimeout(chatsApi[fn](userId), 8000, 'chats.' + fn) }
+      catch { result = await withTimeout(chatsApi[fn](), 8000, 'chats.' + fn) }
+      const list = Array.isArray(result) ? result : (result && (result.chats || result.items)) || []
+      for (const chat of list.slice(0, 25)) {
+        const id = String((chat && (chat.id || chat.chatId)) || chat || '').trim()
+        if (id && !ids.includes(id)) ids.push(id)
+      }
+      if (ids.length) break
+    } catch { /* try the next documented/legacy shape */ }
+  }
+  return ids
+}
+
 async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
   // The hinted chat first, then the active chat. '' means "let fetchMessages
   // resolve the active chat", and must survive here — uniqueStrings would drop
   // it, which previously made this return null whenever there was no hint.
+  const needles = imageMatchNeedles(imageUrl, hint.imageId)
+  if (!needles.length) return null
   const hintedChat = String(hint.chatId || '').trim()
-  const chatIds = hintedChat ? [hintedChat, ''] : ['']
-  for (const requestedChatId of chatIds) {
+  // Hinted chat, then the active chat, then any other chat the host will list.
+  const searchOrder = hintedChat ? [hintedChat, ''] : ['']
+  const extraChats = await listCandidateChatIds(userId, [])
+  for (const id of extraChats) if (!searchOrder.includes(id)) searchOrder.push(id)
+
+  const scanned = []
+  for (const requestedChatId of searchOrder) {
     let messages = []
     let resolvedChatId = requestedChatId
     try {
@@ -854,21 +903,30 @@ async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
       // "Chat not found" for every remaining shape.
       resolvedChatId = String(result.chatId || requestedChatId || '')
     } catch { continue }
+    if (scanned.some((item) => item.chatId === resolvedChatId)) continue
+    scanned.push({ chatId: resolvedChatId, messages: messages.length })
 
     const matches = []
     for (let i = messages.length - 1; i >= 0; i--) {
       const bits = messageBits(messages[i])
       if (!bits.contentKey || typeof bits.content !== 'string') continue
-      if (bits.content.includes(imageUrl)) matches.push(bits)
+      const matchedNeedle = needles.find((needle) => bits.content.includes(needle))
+      if (matchedNeedle) matches.push({ ...bits, matchedNeedle })
     }
     if (!matches.length) continue
     // Prefer the recorded message when the same image appears more than once.
     const preferred = hint.messageId
       ? matches.find((bits) => String(bits.id) === String(hint.messageId))
       : null
-    return { ...(preferred || matches[0]), chatId: resolvedChatId }
+    const chosen = preferred || matches[0]
+    if (chosen.matchedNeedle !== imageUrl) {
+      spindle.log.info('[lumidraw] image located by "' + chosen.matchedNeedle + '" rather than its full URL')
+    }
+    return { ...chosen, chatId: resolvedChatId }
   }
-  return null
+  spindle.log.warn('[lumidraw] image not found in any message · needles=' + needles.join(' | ') +
+    ' · scanned=' + (scanned.map((item) => `${item.chatId || '(active)'}:${item.messages}`).join(', ') || 'nothing'))
+  return { notFound: true, scanned, needles }
 }
 
 async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, seed, origin }, userId, scan = null) {
@@ -4047,7 +4105,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.22.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.22.2',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4488,11 +4546,25 @@ spindle.onFrontendMessage(async (payload, userId) => {
         let replaced = false
         let note = ''
         try {
-          const target = await locateMessageByImageUrl(userId, imageUrl, origin)
-          if (!target) {
-            note = 'Generated, but the original image is no longer in any visible message — it is in History.'
+          const sourceImage = source && (source.images || []).find((image) => image && image.url === imageUrl)
+          const target = await locateMessageByImageUrl(userId, imageUrl, {
+            ...origin,
+            imageId: sourceImage && sourceImage.id ? sourceImage.id : '',
+          })
+          if (!target || target.notFound) {
+            const scanned = target && target.scanned ? target.scanned : []
+            const where = scanned.length
+              ? scanned.map((item) => `${item.chatId || 'active chat'} (${item.messages} messages)`).join(', ')
+              : 'no chat could be read'
+            note = `Generated and saved to History, but the original image was not found in any message. Searched: ${where}. If the image is still visible in your chat, the host may store its URL differently — send the Terminal line beginning "[lumidraw] image not found".`
           } else {
+            // Swap on whatever actually matched: the full URL, or the id /
+            // filename if the host rewrote the markdown.
             const swap = replaceImageUrlInContent(target.content, imageUrl, newUrl)
+            if (!swap.replaced && target.matchedNeedle && target.matchedNeedle !== imageUrl) {
+              const alt = replaceImageUrlInContent(target.content, target.matchedNeedle, newUrl)
+              if (alt.replaced) { swap.content = alt.content; swap.replaced = true }
+            }
             if (!swap.replaced) {
               note = 'Generated, but the original image markdown could not be matched — it is in History.'
             } else {
@@ -4948,4 +5020,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.2'))

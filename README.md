@@ -1,7 +1,29 @@
-# LumiDraw Studio 0.22.1
+# LumiDraw Studio 0.22.2
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.22.2 — Finding the image to replace
+
+Fixes `Generated, but the original image is no longer in any visible message`.
+
+Locating the image to replace relied on an exact, full-URL string match against
+message text, and searched only the recorded chat and the active one. That is
+brittle: the host may rewrite the markdown it stores, proxy the path, or drop a
+query string, and the image may live in a chat that is not currently open.
+
+- **Match on stable identifiers.** The lookup now also matches the URL without
+  its query string, the filename, and the upload id — any one of which is
+  enough to find the message. The replacement is then applied to whichever
+  identifier actually matched, so a rewritten URL is still swapped correctly.
+- **Search more chats.** After the recorded and active chats, any other chat
+  the host will list is searched too.
+- **Say what happened.** When the image genuinely cannot be found, the panel
+  now reports which chats were searched and how many messages each held,
+  instead of a bare "no longer visible", and the Terminal logs the exact
+  identifiers that were tried (`[lumidraw] image not found in any message`).
+  When a match is found by something other than the full URL, that is logged
+  too.
 
 ## 0.22.1 — Regeneration could not find the chat
 
