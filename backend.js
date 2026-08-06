@@ -3277,6 +3277,40 @@ function setStoryScanStage(scan, stage, note = '') {
   }
 }
 
+// Providers disagree about where the assistant's text lives. Only a non-empty
+// string counts: an empty `content` must fall through to the next candidate
+// rather than being treated as the answer.
+function extractParserText(res) {
+  const pick = (value) => (typeof value === 'string' && value.trim() ? value : '')
+  if (typeof res === 'string') return res.trim() ? res : ''
+  if (!res || typeof res !== 'object') return ''
+  const choice = Array.isArray(res.choices) ? res.choices[0] : null
+  return pick(res.content) ||
+    pick(res.text) ||
+    pick(res.message && res.message.content) ||
+    pick(choice && choice.text) ||
+    pick(choice && choice.message && choice.message.content) ||
+    ''
+}
+
+// Last resort for reasoning models that never emit final content: the JSON is
+// often sitting in the reasoning stream. Only used when it actually looks like
+// the contract's payload.
+function extractParserReasoning(res) {
+  if (!res || typeof res !== 'object') return ''
+  const parts = []
+  if (typeof res.reasoning === 'string') parts.push(res.reasoning)
+  if (Array.isArray(res.reasoning_details)) {
+    for (const detail of res.reasoning_details) {
+      if (typeof detail === 'string') parts.push(detail)
+      else if (detail && typeof detail === 'object') parts.push(detail.text || detail.content || detail.summary || '')
+    }
+  }
+  const text = parts.filter(Boolean).join('\n').trim()
+  if (!text) return ''
+  return /"images"\s*:|"scene"\s*:/.test(text) ? text : ''
+}
+
 async function quietLLM(system, user, settings, userId, structured = false, scan = null) {
   const generateApi = spindle.generate || spindle.generation || spindle.llm
   if (!generateApi || (typeof generateApi.quiet !== 'function' && typeof generateApi.raw !== 'function')) {
@@ -3375,13 +3409,7 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
       const res = await Promise.race([requestPromise, timeoutPromise])
       assertStoryScanActive(scan)
 
-      const responseText = (res && (res.content || res.text ||
-        (res.choices && res.choices[0] && (res.choices[0].text || (res.choices[0].message && res.choices[0].message.content))))) ||
-        (typeof res === 'string' ? res : null)
-      if (!responseText) {
-        throw new Error('Parser returned an unrecognized response shape: ' + (res ? Object.keys(res).join(',') : String(res)))
-      }
-
+      const responseText = extractParserText(res)
       const elapsed = Date.now() - parserStarted
       const usage = res && res.usage
       const usageText = usage
@@ -3389,6 +3417,27 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
         : ''
       const finishReason = res && (res.finish_reason || (res.choices && res.choices[0] && res.choices[0].finish_reason))
       const finishText = finishReason ? ' · finish=' + finishReason : ''
+
+      if (!responseText) {
+        // A reply CAN legitimately arrive with an empty content field: a
+        // reasoning model that spends its whole completion budget thinking
+        // returns content:"" alongside reasoning/reasoning_details. Calling
+        // that an "unrecognized response shape" hid the real cause, so the
+        // two cases are now distinguished and the reasoning text is searched
+        // for the JSON before giving up.
+        const known = res && typeof res === 'object' && ('content' in res || 'text' in res || 'choices' in res)
+        const salvaged = extractParserReasoning(res)
+        if (salvaged) {
+          spindle.log.warn('[lumidraw] parser returned no visible content; recovered the JSON from its reasoning output.')
+          return { text: salvaged, finishReason, usage, recoveredFromReasoning: true }
+        }
+        if (known) {
+          const spent = usage && usage.completion_tokens ? usage.completion_tokens : opts.parameters.max_tokens
+          return { text: '', finishReason: finishReason || 'empty', usage, empty: true, spent }
+        }
+        throw new Error('Parser returned an unrecognized response shape: ' + (res ? Object.keys(res).join(',') : String(res)))
+      }
+
       const cleanResponse = responseText.trim()
       spindle.log.info('[lumidraw] parser completed in ' + elapsed + 'ms via ' + methodName + usageText + finishText + ' · chars=' + cleanResponse.length + ' → raw reply: ' + cleanResponse.slice(0, 500))
       return { text: cleanResponse, finishReason, usage }
@@ -3401,23 +3450,45 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
     // not reliably suppress (observed: 3450 completion tokens, ~1000 visible
     // chars). One retry with a much larger allowance costs a second request
     // only in the truncation case and usually returns the full JSON.
-    if (structured && (result.finishReason === 'length' || result.finishReason === 'max_tokens')) {
+    // An empty reply is the same failure as a truncated one, taken to its
+    // extreme: the reasoning consumed the entire budget and nothing visible
+    // was left. Both retry the same way.
+    const needsMoreRoom = (value) => value && (value.empty ||
+      value.finishReason === 'length' || value.finishReason === 'max_tokens')
+
+    if (structured && needsMoreRoom(result)) {
       const visibleTokens = Math.ceil(result.text.length / 4)
       const completionTokens = (result.usage && result.usage.completion_tokens) || opts.parameters.max_tokens
       const hiddenTokens = Math.max(0, completionTokens - visibleTokens)
-      const retryLimit = Math.min(12000, opts.parameters.max_tokens + Math.max(2400, hiddenTokens * 2))
-      spindle.log.warn('[lumidraw] parser reply was truncated (visible≈' + visibleTokens + ' tokens, hidden≈' + hiddenTokens + '); retrying once with max_tokens=' + retryLimit)
-      setStoryScanStage(scan, 'parsing', 'Parser reply was truncated; retrying with a larger output allowance.')
+      // An empty reply proves reasoning ate everything, so give it markedly
+      // more room than a merely-truncated one.
+      const bump = result.empty
+        ? Math.max(4800, completionTokens * 2)
+        : Math.max(2400, hiddenTokens * 2)
+      const retryLimit = Math.min(16000, opts.parameters.max_tokens + bump)
+      spindle.log.warn('[lumidraw] parser reply was ' + (result.empty ? 'EMPTY (all output spent on reasoning)' : 'truncated') +
+        ' (visible≈' + visibleTokens + ' tokens, hidden≈' + hiddenTokens + '); retrying once with max_tokens=' + retryLimit)
+      setStoryScanStage(scan, 'parsing', result.empty
+        ? 'The parser model returned only reasoning; retrying with a much larger output allowance.'
+        : 'Parser reply was truncated; retrying with a larger output allowance.')
       opts.parameters.max_tokens = retryLimit
       try {
         const retry = await runOnce()
-        // Keep the retry only if it actually finished (or produced more text).
-        if (retry.finishReason !== 'length' && retry.finishReason !== 'max_tokens') result = retry
+        if (!needsMoreRoom(retry)) result = retry
         else if (retry.text.length > result.text.length) result = retry
       } catch (retryError) {
         if (retryError && (retryError.name === 'ParserTimeoutError' || retryError.name === 'StoryScanCancelledError')) throw retryError
-        spindle.log.warn('[lumidraw] parser retry failed (' + retryError.message + '); using the truncated first reply.')
+        spindle.log.warn('[lumidraw] parser retry failed (' + retryError.message + '); using the first reply.')
       }
+    }
+
+    if (!result.text) {
+      const spent = (result.usage && result.usage.completion_tokens) || result.spent || opts.parameters.max_tokens
+      throw new Error(
+        `The parser model returned no text — it spent its entire ${spent}-token output budget on internal reasoning. ` +
+        `LumiDraw already retried with a larger budget. Fix this on the connection: turn reasoning off for ` +
+        `"${modelLabel}" in its Lumiverse connection, or pick a non-reasoning model for the parser in LumiDraw's Settings tab.`
+      )
     }
 
     if (result.finishReason === 'length' || result.finishReason === 'max_tokens') {
@@ -4263,7 +4334,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.24.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.24.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5220,4 +5291,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.24.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.24.1'))

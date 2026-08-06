@@ -1,7 +1,35 @@
-# LumiDraw Studio 0.24.0
+# LumiDraw Studio 0.24.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.24.1 — "Unrecognized response shape" was a lie
+
+Fixes `Parser returned an unrecognized response shape:
+content,reasoning,finish_reason,tool_calls,reasoning_details,usage`.
+
+The shape was recognised perfectly well — `content` is the first field
+LumiDraw reads. It was **empty**. The reasoning model had spent its entire
+completion budget thinking and emitted no visible text, and a truthiness check
+(`res.content || res.text || …`) skipped the empty string and fell through to
+"nothing matched". The message blamed the wrong thing and hid a cause we had
+already met twice, in its most extreme form: 3,450 completion tokens spent,
+zero characters returned.
+
+- **Empty is no longer confused with unknown.** Text extraction accepts only a
+  non-empty string, so an empty `content` correctly falls through to later
+  candidates, and a reply that genuinely has a known shape but no text is
+  reported as such instead of as an unrecognised shape.
+- **Reasoning is searched before giving up.** Reasoning models sometimes leave
+  the JSON in `reasoning` / `reasoning_details` without ever emitting final
+  content. If that text contains the contract's payload it is used.
+- **An empty reply retries like a truncated one**, with a markedly larger
+  allowance (double the observed spend, minimum +4,800, capped at 16,000),
+  since an empty reply proves reasoning consumed everything.
+- **The final error names the real fix.** If it still returns nothing, the
+  message states how many tokens were spent on reasoning and says to turn
+  reasoning off for that model on its Lumiverse connection, or choose a
+  non-reasoning parser model in Settings.
 
 ## 0.24.0 — Every Draw Things setting, edited in Studio
 
