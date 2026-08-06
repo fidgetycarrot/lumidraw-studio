@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS = {
   parserConnection: '',   // optional connection name/id for the parser LLM
   parserModel: '',        // optional model override for the parser LLM
   parserRequestOverrides: '', // JSON merged into the parser request — the escape hatch for provider-specific reasoning keys
+  parserMaxTokens: 12000, // first-attempt output budget; sized to survive a reasoning model rather than fight it
   parserInstruction: '',  // selected engine instruction (blank = that engine's built-in default)
   parserEngine: 'legacy',  // 'legacy' (v0.13 instruction-only) | 'anima' (structured JSON compiler)
   parserContextMessages: 2, // Anima only: number of immediately preceding chat messages used as reference context
@@ -4386,8 +4387,17 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
   const method = useRawOverride ? generateApi.raw.bind(generateApi) : generateApi.quiet.bind(generateApi)
 
   const structuredImageCount = Math.max(1, Math.min(4, Number(settings.maxImages) || 2))
+  // Sized to survive a reasoning model, not to fight one. When the provider
+  // ignores every "reasoning off" key, a 4,100-token budget buys 4,100 tokens
+  // of thinking and an empty reply — 49 seconds for nothing, and then a retry
+  // that pays the input cost a second time. Starting with room for both the
+  // thinking and the JSON gets the same answer in one request.
+  //
+  // Drop this to ~4000 if you ever confirm reasoning is genuinely off; it is
+  // roughly 3x the budget the JSON alone needs.
+  const configuredBudget = Math.max(1200, Math.min(32000, Number(settings.parserMaxTokens) || 12000))
   const parserTokenLimit = structured
-    ? Math.min(4800, 2800 + ((structuredImageCount - 1) * 650))
+    ? configuredBudget + ((structuredImageCount - 1) * 650)
     : 1200
   const opts = {
     // Operator-scoped extensions must pass the active user explicitly in the
@@ -4446,7 +4456,7 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
     ' · provider=' + providerLabel +
     ' · model=' + modelLabel +
     (connectionId ? ' · connection_id=' + connectionId : '') +
-    ' · reasoning=off · max_tokens=' + opts.parameters.max_tokens)
+    ' · reasoning=' + JSON.stringify(opts.reasoning) + ' · max_tokens=' + opts.parameters.max_tokens)
 
   if (requestedModel && !useRawOverride && connectionModel && requestedModel !== connectionModel) {
     spindle.log.warn('[lumidraw] parser model override could not be applied because the selected connection did not expose a raw provider route; using connection model ' + connectionModel)
@@ -5431,7 +5441,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.29.3',
+          version: (spindle.manifest && spindle.manifest.version) || '0.29.4',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6389,4 +6399,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.29.3'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.29.4'))

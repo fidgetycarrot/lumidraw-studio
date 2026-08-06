@@ -1,7 +1,38 @@
-# LumiDraw Studio 0.29.3
+# LumiDraw Studio 0.29.4
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.29.4 — Stop fighting the reasoning; budget for it
+
+`effort: "none"` did not take. A scan on 0.29.3:
+
+```text
+attempt 1   max_tokens=4100    →  EMPTY, 4100 tokens, 49s
+retry       max_tokens=12300   →  finish=stop, 5715 tokens (~730 visible), 61s
+total       110 seconds
+```
+
+`reasoning_tokens=not reported`, so the provider will not even say. Whatever
+LumiDraw sends, the reasoning stays on — that is Lumiverse's side of the call
+and nothing in this extension can reach it.
+
+But the reasoning was never the expensive part. **The first attempt was.** It
+burned 49 seconds producing nothing, then the retry paid the 6,651-token input
+cost a second time. Given room to finish, one request returns the same JSON.
+
+The first-attempt budget now defaults to **12,000 tokens** and is configurable
+in Settings. The retry stays as a safety net and should rarely fire.
+
+Expected: ~110s → ~60s, and one request instead of two.
+
+The request log no longer claims `reasoning=off` regardless of truth; it prints
+the object actually sent.
+
+**If you ever confirm reasoning is genuinely off**, drop the budget to ~4000.
+The JSON alone needs about 700 tokens, so that is still ample, and the call
+should land near 12 seconds.
+
 
 ## 0.29.3 — Correcting 0.29.2 against the actual spec
 
