@@ -40,6 +40,7 @@ const DEFAULT_SETTINGS = {
   bridgeHost: '127.0.0.1', // native LumiDraw Bridge runs on the Lumiverse Mac
   bridgePort: 7863,
   protocol: '',           // tag guidance for Inline mode (blank = pre-0.17 default)
+  stripImageDirectives: true, // remove dead ![...](/…/gen) image-request directives from the prompt context
 }
 
 const LEGACY_DEFAULT_PROTOCOL = `[Illustration protocol] You may illustrate key visual moments. When a scene deserves an image, include on its own line:
@@ -413,6 +414,45 @@ const pregenCache = new Map()   // fingerprint -> generated entry
 const pregenInflight = new Set()
 const tagFingerprint = (body) => String(body || '').trim().toLowerCase().replace(/\s+/g, ' ')
 const TAG_RE = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/g
+
+// --- foreign image-directive scrubbing --------------------------------------
+//
+// Other image integrations teach the model to REQUEST an image by writing
+// markdown whose href is a fixed endpoint rather than a stored file, e.g.
+// "![tags](/api/v1/images/gen)". Those never render, and — worse — every one
+// left in the history is a few-shot example teaching the model to emit
+// another, so they breed. Stripping them from the model's view of the
+// conversation breaks that loop.
+//
+// Deliberately narrow: a real image (LumiDraw's own, an upload, a data URL, an
+// external link) carries an identifying segment and is always left alone, so a
+// working SwarmUI-style setup in another chat is not sabotaged.
+const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)/g
+const DIRECTIVE_ENDPOINT_RE = /(?:^|\/)(?:gen|generate|generation|create|new|render|txt2img|image)\/?$/i
+
+function looksLikeImageDirective(url) {
+  const href = String(url || '').trim()
+  if (!href) return true
+  if (/^data:/i.test(href)) return false          // inline image data is real
+  const path = href.split('?')[0].split('#')[0]
+  if (DIRECTIVE_ENDPOINT_RE.test(path)) return true
+  // A stored image always carries an id-like segment; a bare endpoint does not.
+  const hasIdSegment = path.split('/').some((segment) => /[a-z0-9]{8,}/i.test(segment))
+  return !hasIdSegment
+}
+
+function stripForeignImageDirectives(text) {
+  const value = String(text || '')
+  if (!value.includes('![')) return { text: value, count: 0 }
+  let count = 0
+  const next = value.replace(MARKDOWN_IMAGE_RE, (match, href) => {
+    if (!looksLikeImageDirective(href)) return match
+    count++
+    return ''
+  })
+  if (!count) return { text: value, count: 0 }
+  return { text: next.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim(), count }
+}
 const PARSER_TRIGGER_TAG = '<lumidraw-parse request="generate"></lumidraw-parse>'
 const PARSER_TRIGGER_RE = /<lumidraw-parse\b[^>]*><\/lumidraw-parse>|<lumidraw-parse\b[^>]*>[\s\S]*?<\/lumidraw-parse>|<lumidraw-parse\b[^>]*\/>/gi
 const LOOM_LEDGER_RE = /<loomledger\b[^>]*>[\s\S]*?<\/loomledger>/gi
@@ -4216,7 +4256,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.22.6',
+          version: (spindle.manifest && spindle.manifest.version) || '0.23.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4236,6 +4276,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
         if (payload.useLoomLedger !== undefined) settings.useLoomLedger = !!payload.useLoomLedger
+        if (payload.stripImageDirectives !== undefined) settings.stripImageDirectives = !!payload.stripImageDirectives
         if (payload.parserContextMessages !== undefined) settings.parserContextMessages = Math.max(0, Math.min(4, Number(payload.parserContextMessages) || 0))
         if (!['legacy', 'anima'].includes(settings.parserEngine)) settings.parserEngine = 'legacy'
         settings.subjectBinding = settings.parserEngine === 'anima'
@@ -5027,7 +5068,7 @@ if (typeof spindle.registerInterceptor === 'function') {
       // Shape-agnostic: hosts may pass (messagesArray, ctx) or a single
       // wrapper object holding .messages. Mirror back whatever we got.
       const wrapped = !Array.isArray(a) && a && Array.isArray(a.messages)
-      const messages = Array.isArray(a) ? a : (wrapped ? a.messages : null)
+      let messages = Array.isArray(a) ? a : (wrapped ? a.messages : null)
       const settings = await getSettings()
       if (!messages) {
         spindle.log.warn('[lumidraw] interceptor invoked with unrecognized arg shape: ' +
@@ -5036,6 +5077,28 @@ if (typeof spindle.registerInterceptor === 'function') {
       }
       spindle.log.info(`[lumidraw] interceptor invoked (mode=${settings.mode}, msgs=${messages.length}, wrapped=${wrapped})`)
       if (settings.mode !== 'inline' && settings.mode !== 'parser') return a
+
+      // Scrub dead image-request directives from the model's view of the
+      // conversation. This edits only the copy being sent for this generation;
+      // the stored chat is untouched.
+      let working = messages
+      if (settings.stripImageDirectives !== false) {
+        let stripped = 0
+        working = messages.map((message) => {
+          if (!message || typeof message !== 'object') return message
+          const key = typeof message.content === 'string' ? 'content'
+            : (typeof message.text === 'string' ? 'text' : null)
+          if (!key) return message
+          const result = stripForeignImageDirectives(message[key])
+          if (!result.count) return message
+          stripped += result.count
+          return { ...message, [key]: result.text }
+        })
+        if (stripped) {
+          spindle.log.info('[lumidraw] removed ' + stripped + ' dead image-request directive(s) from the prompt context (stored messages unchanged)')
+        }
+      }
+      messages = working
       if (settings.mode === 'inline') {
         let protocolText = (settings.protocol || DEFAULT_PROTOCOL)
           .replaceAll('{{max_images}}', String(settings.maxImages || 2))
@@ -5145,4 +5208,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.6'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.23.0'))

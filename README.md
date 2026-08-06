@@ -1,7 +1,36 @@
-# LumiDraw Studio 0.22.6
+# LumiDraw Studio 0.23.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.23.0 — Hide dead image-request directives from the model
+
+Other image integrations teach the model to *request* a picture by writing
+markdown whose href is a fixed endpoint rather than a stored file — for
+example `![tags](/api/v1/images/gen)`. Those never render, and each one left
+in the history is a few-shot example teaching the model to write another, so
+they breed. When such a preset is active alongside LumiDraw the model also
+blends the two conventions, taking LumiDraw's danbooru tag vocabulary and the
+other integration's markdown wrapper.
+
+A new Settings option, **Hide dead image-request directives from the model**
+(on by default), removes them from the conversation sent for each generation.
+
+- **Stored messages are never modified** — this edits only the copy handed to
+  the model for that request.
+- **Deliberately narrow.** A markdown image is removed only when its URL is a
+  bare endpoint. Anything carrying an identifying segment — LumiDraw's own
+  images, uploads, `data:` URLs, external links — is always left alone, so a
+  working SwarmUI-style setup in another chat is not sabotaged.
+- Removals are logged (`removed N dead image-request directive(s)`).
+- Turn it off in Settings if you want the raw history passed through.
+
+LumiDraw's parser input already stripped markdown images, so these directives
+were never reaching scene extraction; this addresses the prompt side only.
+
+**A host regex script is the stronger fix** if the directives are still being
+generated: a Find & Replace rule on the **Response** pipeline stops them being
+saved at all, where this setting only hides what is already there.
 
 ## 0.22.6 — The viewer no longer implies an accept step
 
