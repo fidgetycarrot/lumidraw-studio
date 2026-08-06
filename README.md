@@ -1,7 +1,32 @@
-# LumiDraw Studio 0.28.1
+# LumiDraw Studio 0.28.2
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.28.2 — Alt text broke the markdown (0.28.0 regression)
+
+An image appeared in a story as loose text rather than a picture:
+
+```text
+![A pack of Mycewolves crouches in a loose arc among the crystal trees, watching.
+sensitive, 1other, ](/api/v1/images/3ad352e9-…)
+```
+
+There is a **newline inside the alt text**. Markdown alt text must be a single
+line, so the `![…]` never closes and the image cannot render.
+
+Caused directly by 0.28.0. Alt text is the first 100 characters of the compiled
+prompt. Before the reorder that prompt began with the single-line tag run and
+100 characters could never reach a line break. Now it begins with the caption
+and runs through the paragraph break — at exactly 100 characters, straight into
+it.
+
+Alt text is now flattened wherever markdown is built: newlines become spaces,
+brackets are stripped, whitespace runs collapse, and the cap is applied after.
+All four insertion paths share one helper.
+
+Existing broken images stay broken — the markdown is already stored. Click one
+and use **Fix this image…**, or delete it; new images render normally.
 
 ## 0.28.1 — A duplicate key was throwing away complete replies
 

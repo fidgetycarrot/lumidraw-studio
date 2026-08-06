@@ -911,6 +911,21 @@ async function updateMessageContent(messageId, contentKey, newContent, userId, c
 
 // Swaps one image URL for another inside a markdown image, leaving the alt
 // text and every other character of the message untouched.
+// Markdown alt text must be a single line. Since 0.28.0 the compiled prompt
+// begins with the caption and contains a paragraph break, so slicing the first
+// 100 characters could land past that break and put a literal newline inside
+// ![...], which never closes — the image silently fails to render and the
+// prompt text shows in the story instead. Alt text is now always flattened.
+function markdownAltText(value, maxChars = 100) {
+  return String(value || '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[\[\]]/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, maxChars)
+    .trim()
+}
+
 function replaceImageUrlInContent(content, oldUrl, newUrl) {
   const text = String(content || '')
   if (!text || !oldUrl) return { content: text, replaced: false }
@@ -4392,7 +4407,7 @@ async function scanStoryCore(userId, options = {}) {
         const compiled = await compileInlineBody(body, preset, settings, userId, chatId)
         const tagAspect = (/aspect\s*=\s*"([^"]+)"/.exec(attrs) || [])[1]
         const dims = aspectDims(preset.config, tagAspect || compiled.aspect)
-        const inlineAlt = compiled.core.slice(0, 100).replace(/[\[\]]/g, '')
+        const inlineAlt = markdownAltText(compiled.core)
         const fp = tagFingerprint(body)
         // wait up to 90s for a streaming pregeneration already underway
         for (let w = 0; w < 90 && pregenInflight.has(fp); w++) {
@@ -4543,7 +4558,7 @@ async function scanStoryCore(userId, options = {}) {
         setStoryScanStage(scan, 'generating', `Sending image ${parserImageIndex} of ${acceptedParsed.length} to Draw Things.`)
         const compiled = await compileSceneWithPreset(item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '')
         const dims = aspectDims(preset.config, compiled.aspect)
-        const parserAlt = compiled.core.slice(0, 100).replace(/[\[\]]/g, '')
+        const parserAlt = markdownAltText(compiled.core)
         const entry = await generateAndUpload({
           prompt: compiled.prompt,
           negativePrompt: preset.negativePrompt,
@@ -4660,7 +4675,7 @@ async function scanStoryCore(userId, options = {}) {
         extra: preset.extra,
         origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'legacy-parser' },
       }, userId, scan)
-      mds.push(`![${line.slice(0, 100).replace(/[\[\]]/g, '')}](${entry.images[0].url})`)
+      mds.push(`![${markdownAltText(line)}](${entry.images[0].url})`)
     }
     assertStoryScanActive(scan)
     setStoryScanStage(scan, 'inserting', 'Adding generated images to the story message.')
@@ -4815,7 +4830,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.28.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.28.2',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5408,7 +5423,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // appending a new assistant message if in-place editing fails.
         const { imageUrl, alt, chatId } = payload
         if (!imageUrl) throw new Error('No image URL to add.')
-        const md = `![${(alt || 'Generated image').replace(/[\[\]]/g, '')}](${imageUrl})`
+        const md = `![${markdownAltText(alt || 'Generated image', 120)}](${imageUrl})`
 
         const chatApi = spindle.chat || spindle.chats
         if (!chatApi) {
@@ -5773,4 +5788,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.28.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.28.2'))
