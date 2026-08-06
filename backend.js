@@ -842,24 +842,31 @@ async function locateMessageByImageUrl(userId, imageUrl, hint = {}) {
   // it, which previously made this return null whenever there was no hint.
   const hintedChat = String(hint.chatId || '').trim()
   const chatIds = hintedChat ? [hintedChat, ''] : ['']
-  for (const chatId of chatIds) {
+  for (const requestedChatId of chatIds) {
     let messages = []
-    try { ({ messages } = await fetchMessages(userId, chatId)) } catch { continue }
+    let resolvedChatId = requestedChatId
+    try {
+      const result = await fetchMessages(userId, requestedChatId)
+      messages = result.messages
+      // fetchMessages resolves '' to the active chat and reports which one it
+      // used. Discarding that returned an empty chatId to updateMessage, whose
+      // chat-scoped call shapes were then skipped entirely — the host answered
+      // "Chat not found" for every remaining shape.
+      resolvedChatId = String(result.chatId || requestedChatId || '')
+    } catch { continue }
+
+    const matches = []
     for (let i = messages.length - 1; i >= 0; i--) {
       const bits = messageBits(messages[i])
       if (!bits.contentKey || typeof bits.content !== 'string') continue
-      if (!bits.content.includes(imageUrl)) continue
-      if (hint.messageId && String(bits.id) !== String(hint.messageId)) {
-        // Same URL in a different message is still a valid target, but prefer
-        // the hinted one if we meet it later in this sweep.
-        const hinted = messages.find((message) => String(messageBits(message).id) === String(hint.messageId))
-        const hintedBits = hinted ? messageBits(hinted) : null
-        if (hintedBits && typeof hintedBits.content === 'string' && hintedBits.content.includes(imageUrl)) {
-          return { ...hintedBits, chatId: chatId || null }
-        }
-      }
-      return { ...bits, chatId: chatId || null }
+      if (bits.content.includes(imageUrl)) matches.push(bits)
     }
+    if (!matches.length) continue
+    // Prefer the recorded message when the same image appears more than once.
+    const preferred = hint.messageId
+      ? matches.find((bits) => String(bits.id) === String(hint.messageId))
+      : null
+    return { ...(preferred || matches[0]), chatId: resolvedChatId }
   }
   return null
 }
@@ -4040,7 +4047,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.22.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.22.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4489,7 +4496,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
             if (!swap.replaced) {
               note = 'Generated, but the original image markdown could not be matched — it is in History.'
             } else {
-              await updateMessageContent(target.id, target.contentKey, swap.content, userId, target.chatId || origin.chatId || '')
+              // A chat id is required for the chat-scoped updateMessage shapes;
+              // without one the host rejects every attempt with "Chat not found".
+              let chatId = String(target.chatId || origin.chatId || '').trim()
+              if (!chatId) chatId = String((await resolveActiveChatId(userId)) || '')
+              if (!chatId) throw new Error('could not determine which chat this message belongs to.')
+              await updateMessageContent(target.id, target.contentKey, swap.content, userId, chatId)
               replaced = true
               note = 'Replaced the image in the story message.'
             }
@@ -4936,4 +4948,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.22.1'))

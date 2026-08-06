@@ -1,7 +1,27 @@
-# LumiDraw Studio 0.22.0
+# LumiDraw Studio 0.22.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.22.1 — Regeneration could not find the chat
+
+Fixes `Generated, but replacing it in the message failed: updateMessage failed:
+Chat not found | Chat not found | Chat not found`.
+
+When the image lookup searched the active chat, it passed an empty chat id to
+`fetchMessages`, which resolves it to the real one and reports which it used —
+but that resolved id was discarded. The empty value then reached
+`updateMessage`, whose three chat-scoped call shapes are guarded by
+`if (chatId)` and were skipped entirely; the three remaining chat-less shapes
+each answered "Chat not found", producing exactly the three errors above.
+
+- The resolved chat id is now carried back from the lookup and used for the
+  update.
+- As a backstop, a missing chat id is resolved from the active chat before
+  updating, and a genuinely unresolvable one now reports that plainly instead
+  of failing three times over.
+- When the same image appears in more than one message, the recorded message
+  is preferred rather than whichever was found first.
 
 ## 0.22.0 — Fix a failed image instead of deleting it
 
