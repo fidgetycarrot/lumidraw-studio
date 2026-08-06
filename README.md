@@ -1,7 +1,47 @@
-# LumiDraw Studio 0.24.1
+# LumiDraw Studio 0.25.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.25.0 — Partial features (anima-hybrid-v12)
+
+A passage said a werewolf character "slightly changed" — one feature, not a
+transformation — and the image came back as a full hybrid werewolf.
+
+That was not a parser mistake. Appearance states are all-or-nothing: exactly
+one is active and it defines the whole look. Asked to represent a partial
+change, the parser's only options were the fully human state (no wolf at all)
+or the hybrid state (ears, muzzle, furred arms, claws, tail). It chose the
+closest available option, which was far too much. The data model had no way to
+express the truth.
+
+### Partial features
+
+Character and persona profiles gain **Partial features**: a vocabulary of
+atomic, named traits that can show *without* changing state.
+
+```text
+wolf eyes = yellow eyes, slit pupils
+claws = claws, elongated nails
+fangs = fangs, sharp teeth
+```
+
+The parser may switch these on per subject while leaving `appearance_state`
+alone, so a character shows wolf eyes while remaining, in every other respect,
+the human man his state describes. Its instructions now say plainly that a
+partial change — "slightly", "partly", "just his eyes", "beginning to" — must
+use these rather than a state switch, and that switching state transforms the
+whole character.
+
+- **Only saved names resolve.** A feature the parser invents is dropped, and
+  anatomy terms cannot be smuggled in through this route; the profile is the
+  only source of truth.
+- **Several features can be active together**, layered onto whichever state is
+  current.
+- Active feature tags are treated as legitimately present, so the form
+  firewall never scrubs them as inactive-form vocabulary.
+- A full, completed transformation still uses `appearance_state` exactly as
+  before.
 
 ## 0.24.1 — "Unrecognized response shape" was a lie
 

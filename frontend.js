@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.24.1'
+const EXTENSION_VERSION = '0.25.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -494,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.24.1" aria-label="LumiDraw Studio v0.24.1">
+    <button class="ld-launcher" title="LumiDraw Studio v0.25.0" aria-label="LumiDraw Studio v0.25.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.24.1</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.25.0</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -746,6 +746,8 @@ function realSetup(ctx) {
             <div><span class="ld-label">Appearance states / forms</span><textarea class="ld-persona-ed-states" style="min-height:92px" placeholder="Casual | casual clothes => t-shirt, jeans
 Armored [outfit=omit; subject=armored man] | armor, battle gear => heavy plate armor"></textarea></div>
             <div class="ld-help">One per line: <code>Name [count=1boy; outfit=inherit|omit; subject=optional phrase] | recognition phrases =&gt; appearance tags</code>. Only the selected state is injected.</div>
+            <div><span class="ld-label">Partial features</span><textarea class="ld-persona-ed-features" style="min-height:48px" placeholder="wolf eyes = yellow eyes, slit pupils"></textarea></div>
+            <div class="ld-help">Optional, one per line: <code>name = tags</code>. A feature is one piece of a transformation that can show on its own — <code>wolf eyes = yellow eyes, slit pupils</code>. The parser turns these on for a partial change ("only his eyes shifted") instead of switching the whole appearance state, which would transform the entire character.</div>
             <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-persona-ed-aliases" style="min-height:48px" placeholder="Named weapon = visual description"></textarea></div>
             <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-persona-ed-anatomy" style="min-height:48px"></textarea></div>
             <div><span class="ld-label">Conditional anatomy rule</span><select class="ld-persona-ed-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Include in every NSFW/explicit scene</option><option value="manual">Never include automatically</option></select></div>
@@ -793,6 +795,10 @@ Armored [outfit=omit; subject=armored man] | armor, battle gear => heavy plate a
 Hybrid [count=1boy; outfit=inherit; subject=humanoid werewolf] | hybrid form, half-shifted => wolf ears, partial muzzle, furred arms, claws, tail
 Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wolf form, fully shifted, on four paws => dark brown fur, amber eyes, quadruped"></textarea></div>
                 <div class="ld-help">Optional, one per line: <code>Name [count=...; outfit=inherit|omit; appearance=inherit|replace; subject=...] | recognition phrases =&gt; appearance tags</code>. Shared traits stay under Permanent appearance; only one saved state is injected at a time. Use <code>appearance=replace</code> for a transformation that should drop the permanent traits entirely — a fully shifted werewolf otherwise keeps its human hair and eye colour alongside its fur.</div>
+                <div><span class="ld-label">Partial features</span><textarea class="ld-ed-char-features" style="min-height:48px" placeholder="wolf eyes = yellow eyes, slit pupils
+claws = claws, elongated nails
+fangs = fangs, sharp teeth"></textarea></div>
+                <div class="ld-help">Optional, one per line: <code>name = tags</code>. A feature is one piece of a transformation that can show on its own — <code>wolf eyes = yellow eyes, slit pupils</code>. The parser turns these on for a partial change ("only his eyes shifted") instead of switching the whole appearance state, which would transform the entire character.</div>
                 <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-ed-char-aliases" style="min-height:48px" placeholder="Aegis-fang = single massive warhammer"></textarea></div>
                 <div class="ld-help">Optional, one per line: <code>proper name = visual description</code>. The description is injected only when that prop appears in this character's parsed scene.</div>
                 <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-ed-char-anatomy" style="min-height:48px" placeholder="penis"></textarea></div>
@@ -815,6 +821,8 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
                 <div><span class="ld-label">Default appearance state</span><input class="ld-ed-persona-default-state" placeholder="Default" /></div>
                 <div><span class="ld-label">Appearance states / forms</span><textarea class="ld-ed-persona-states" style="min-height:92px"></textarea></div>
                 <div class="ld-help">Optional, one per line: <code>Name [count=...; outfit=inherit|omit; subject=...] | recognition phrases =&gt; appearance tags</code>.</div>
+                <div><span class="ld-label">Partial features</span><textarea class="ld-ed-persona-features" style="min-height:48px" placeholder="wolf eyes = yellow eyes, slit pupils"></textarea></div>
+                <div class="ld-help">Optional, one per line: <code>name = tags</code>. A feature is one piece of a transformation that can show on its own — <code>wolf eyes = yellow eyes, slit pupils</code>. The parser turns these on for a partial change ("only his eyes shifted") instead of switching the whole appearance state, which would transform the entire character.</div>
                 <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-ed-persona-aliases" style="min-height:48px" placeholder="Named weapon = visual description"></textarea></div>
                 <div class="ld-help">Optional, one per line: <code>proper name = visual description</code>. The description is injected only when that prop appears in this persona's parsed scene.</div>
                 <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-ed-persona-anatomy" style="min-height:48px"></textarea></div>
@@ -1677,6 +1685,15 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     setStatus('.ld-draft-status', 'Workspace modified. Manual Generate uses these temporary settings.' + source)
   }
 
+  function partialFeaturesToText(value) {
+    if (Array.isArray(value)) {
+      return value.map((item) => item && typeof item === 'object'
+        ? `${item.name || ''} = ${(Array.isArray(item.tags) ? item.tags.join(', ') : item.tags || '')}`.trim()
+        : String(item || '').trim()).filter((line) => line && line !== '=').join('\n')
+    }
+    return String(value || '')
+  }
+
   function visualAliasesToText(value) {
     if (Array.isArray(value)) {
       return value.map((item) => item && typeof item === 'object'
@@ -1730,6 +1747,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
       appearanceTags: $(appearanceSelector).value.trim(),
       defaultOutfitTags: $(`.ld-ed-${prefix}-outfit`).value.trim(),
       visualAliases: $(`.ld-ed-${prefix}-aliases`).value.trim(),
+      partialFeatures: $(`.ld-ed-${prefix}-features`).value.trim(),
       anatomyTags: $(`.ld-ed-${prefix}-anatomy`).value.trim(),
       anatomyMode: $(`.ld-ed-${prefix}-anatomy-mode`).value || 'relevant',
       appearanceStates: $(`.ld-ed-${prefix}-states`).value.trim(),
@@ -1747,6 +1765,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     $(appearanceSelector).value = value.appearanceTags || ''
     $(`.ld-ed-${prefix}-outfit`).value = value.defaultOutfitTags || ''
     $(`.ld-ed-${prefix}-aliases`).value = visualAliasesToText(value.visualAliases)
+    $(`.ld-ed-${prefix}-features`).value = partialFeaturesToText(value.partialFeatures)
     $(`.ld-ed-${prefix}-anatomy`).value = value.anatomyTags || ''
     $(`.ld-ed-${prefix}-anatomy-mode`).value = value.anatomyMode || 'relevant'
     $(`.ld-ed-${prefix}-states`).value = appearanceStatesToText(value.appearanceStates || value.forms)
@@ -1779,7 +1798,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     const selectors = [
       '.ld-ed-char-anchor', '.ld-ed-char-count', '.ld-ed-char-subject', '.ld-ed-chartags',
       '.ld-ed-char-outfit', '.ld-ed-char-default-state', '.ld-ed-char-states',
-      '.ld-ed-char-aliases', '.ld-ed-char-anatomy', '.ld-ed-char-anatomy-mode',
+      '.ld-ed-char-aliases', '.ld-ed-char-features', '.ld-ed-char-anatomy', '.ld-ed-char-anatomy-mode',
     ]
     for (const selector of selectors) {
       const control = $(selector)
@@ -1850,7 +1869,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     const selectors = [
       '.ld-ed-persona-anchor', '.ld-ed-persona-count', '.ld-ed-persona-subject', '.ld-ed-personatags',
       '.ld-ed-persona-outfit', '.ld-ed-persona-default-state', '.ld-ed-persona-states',
-      '.ld-ed-persona-aliases', '.ld-ed-persona-anatomy', '.ld-ed-persona-anatomy-mode',
+      '.ld-ed-persona-aliases', '.ld-ed-persona-features', '.ld-ed-persona-anatomy', '.ld-ed-persona-anatomy-mode',
     ]
     for (const selector of selectors) {
       const control = $(selector)
@@ -1875,6 +1894,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
       defaultAppearanceState: $('.ld-persona-ed-default-state').value.trim(),
       appearanceStates: $('.ld-persona-ed-states').value.trim(),
       visualAliases: $('.ld-persona-ed-aliases').value.trim(),
+      partialFeatures: $('.ld-persona-ed-features').value.trim(),
       anatomyTags: $('.ld-persona-ed-anatomy').value.trim(),
       anatomyMode: $('.ld-persona-ed-anatomy-mode').value || 'relevant',
     }
@@ -1890,6 +1910,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     $('.ld-persona-ed-default-state').value = value.defaultAppearanceState || value.defaultForm || ''
     $('.ld-persona-ed-states').value = appearanceStatesToText(value.appearanceStates || value.forms)
     $('.ld-persona-ed-aliases').value = visualAliasesToText(value.visualAliases)
+    $('.ld-persona-ed-features').value = partialFeaturesToText(value.partialFeatures)
     $('.ld-persona-ed-anatomy').value = value.anatomyTags || ''
     $('.ld-persona-ed-anatomy-mode').value = value.anatomyMode || 'relevant'
   }

@@ -1291,6 +1291,61 @@ function normalizeVisualAliases(value, label = 'visual alias') {
   return out
 }
 
+// --- partial features -------------------------------------------------------
+//
+// Appearance states are all-or-nothing: exactly one is active and it replaces
+// or layers over the whole look. That leaves no way to say "only his eyes went
+// wolf" — the parser is forced to choose between the fully human state and the
+// full hybrid one, and picks the hybrid, transforming the entire character for
+// a change to one feature.
+//
+// A partial feature is an atomic, named piece of a transformation that can be
+// switched on WITHOUT changing state: "wolf eyes = yellow eyes, slit pupils".
+// The parser may only select names the profile defines, so it can neither
+// invent features nor smuggle in anatomy.
+function normalizePartialFeatures(value, label = 'partial feature') {
+  const raw = Array.isArray(value)
+    ? value
+    : String(value || '').split(/[\r\n;]+/).map((line) => line.trim()).filter(Boolean)
+  const out = []
+  const seen = new Set()
+  for (const entry of raw.slice(0, 16)) {
+    let name = ''
+    let tags = ''
+    if (entry && typeof entry === 'object') {
+      name = String(entry.name || entry.key || '').trim()
+      tags = Array.isArray(entry.tags) ? entry.tags.join(', ') : String(entry.tags || entry.value || '').trim()
+    } else {
+      const match = String(entry || '').match(/^\s*([^=]{1,64}?)\s*=\s*(.{1,120})\s*$/)
+      if (!match) continue
+      name = match[1].trim()
+      tags = match[2].trim()
+    }
+    name = shortPhrase(name, `${label} name`, 6, 64, true)
+    const tagList = shortList(tags, `${label} tags`, { maxItems: 8, maxWords: 7, maxChars: 72 })
+    if (!name || !tagList.length) continue
+    const key = normalizeIdentityText(name)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push({ name, tags: tagList })
+    if (out.length >= 12) break
+  }
+  return out
+}
+
+// Resolves the names the parser selected against the profile's saved list.
+// Unknown names are dropped: the profile is the only source of truth.
+function resolvePartialFeatures(profile, requested) {
+  const defined = (profile && profile.partialFeatures) || []
+  if (!defined.length || !Array.isArray(requested) || !requested.length) return []
+  const wanted = requested.map((name) => normalizeIdentityText(name)).filter(Boolean)
+  const chosen = []
+  for (const feature of defined) {
+    if (wanted.includes(normalizeIdentityText(feature.name))) chosen.push(feature)
+  }
+  return chosen
+}
+
 function normalizeIdentityText(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
@@ -1491,6 +1546,7 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
     appearance: shortList(appearance, `${fallbackRef} appearance`, { maxItems: 32, maxWords: 7, maxChars: 72 }),
     defaultOutfit: shortList(source.defaultOutfitTags || '', `${fallbackRef} default outfit`, { maxItems: 12, maxWords: 7, maxChars: 72 }),
     visualAliases: normalizeVisualAliases(source.visualAliases || source.namedVisualAliases || '', `${fallbackRef} visual alias`),
+    partialFeatures: normalizePartialFeatures(source.partialFeatures || source.partialTraits || '', `${fallbackRef} partial feature`),
     anatomy: normalizeConditionalAnatomy(shortList(source.anatomyTags || '', `${fallbackRef} conditional anatomy`, { maxItems: 12, maxWords: 7, maxChars: 72 })),
     anatomyMode: normalizeAnatomyMode(source.anatomyMode),
     appearanceStates,
@@ -1520,6 +1576,10 @@ async function resolveProfile(profile, userId, chatId) {
       description: await resolveMacros(alias.description, userId, chatId),
     }))), `${profile.ref} visual alias`),
     anatomy: normalizeConditionalAnatomy(await resolveMany(profile.anatomy, `${profile.ref} conditional anatomy`)),
+    partialFeatures: normalizePartialFeatures(await Promise.all((profile.partialFeatures || []).map(async (feature) => ({
+      name: await resolveMacros(feature.name, userId, chatId),
+      tags: await resolveMany(feature.tags, `${profile.ref} partial feature`),
+    }))), `${profile.ref} partial feature`),
     appearanceStates: await Promise.all((profile.appearanceStates || []).map(async (state) => ({
       ...state,
       name: await resolveOne(state.name),
@@ -1796,6 +1856,7 @@ function normalizeSceneSubject(raw, index) {
     action: shortList(source.action || [], `subject ${index + 1} action`, { maxItems: 10, maxWords: 8, maxChars: 80 }),
     support: shortPhrase(source.support || source.support_surface || source.supportSurface || '', `subject ${index + 1} support surface`, 7, 72, true),
     appearanceState: shortPhrase(source.appearance_state || source.appearanceState || source.form || '', `subject ${index + 1} appearance state`, 6, 64, true),
+    partialFeatures: shortList(source.partial_features || source.partialFeatures || [], `subject ${index + 1} partial features`, { maxItems: 6, maxWords: 6, maxChars: 64 }),
     anatomyVisible: source.anatomy_visible === true || source.anatomyVisible === true,
   }
 }
@@ -2136,6 +2197,10 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
       ? uniqueStrings(state.appearance)
       : uniqueStrings([...(profile.appearance || []), ...((state && state.appearance) || [])]))
     : subject.appearance
+  // Partial features layer on top of whichever state is active, so a character
+  // can show wolf eyes while remaining, in every other respect, a human man.
+  const activeFeatures = resolvePartialFeatures(profile, subject.partialFeatures)
+  const featureTags = activeFeatures.flatMap((feature) => feature.tags || [])
   const inheritedOutfit = profile && (!state || state.outfitPolicy !== 'omit') ? profile.defaultOutfit : []
   const outfit = subject.outfit.length ? subject.outfit : inheritedOutfit
   const anatomyAllowed = profile && (
@@ -2146,7 +2211,12 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   const countTag = state && state.countTag ? state.countTag : (profile ? profile.countTag : subject.countTag)
   // `named` distinguishes "Ilsa" (a proper name that can head a sentence) from
   // "cloaked stranger" (a label that needs an article: "the cloaked stranger").
-  return { subject, profile, appearanceState: state, anchor, noun, appearance, outfit, anatomy, countTag, named: !!profile }
+  return {
+    subject, profile, appearanceState: state, anchor, noun,
+    appearance: featureTags.length ? uniqueStrings([...appearance, ...featureTags]) : appearance,
+    outfit, anatomy, countTag, named: !!profile,
+    partialFeatures: activeFeatures,
+  }
 }
 
 
@@ -3144,7 +3214,8 @@ function profileSchemaHints(profiles) {
       const form = state.appearancePolicy === 'replace' ? ', a distinct physical form' : ''
       return `${state.name}${recognition ? ` (recognize: ${recognition}${form})` : form ? ` (${form.replace(/^, /, '')})` : ''}`
     }).join('; ')
-    hints.push(`- ref "${ref}" means ${label || ref}. Do not output permanent appearance for this ref.${states ? ` Appearance states: ${states}. Use appearance_state with the exact state name only when the CURRENT PASSAGE shows that transformation happening or already in effect; otherwise omit it and LumiDraw uses the default “${profile.defaultAppearanceState || (profile.appearanceStates[0] && profile.appearanceStates[0].name) || ''}”. Never mix states. A passage that merely calls this character by their species, mentions a past or future transformation, or uses a figure of speech is NOT a transformation — keep the default state. When a state is not active, never describe this character with that form's vocabulary anywhere in the JSON, including scene_statement.` : ''}${aliases ? ` Named visual aliases: ${aliases}. Use the exact prop name when it is present.` : ''}`)
+    const features = (profile.partialFeatures || []).map((feature) => feature.name).join('; ')
+    hints.push(`- ref "${ref}" means ${label || ref}. Do not output permanent appearance for this ref.${features ? ` Partial features available (use partial_features, NOT a state change, when only some of these are showing): ${features}.` : ''}${states ? ` Appearance states: ${states}. Use appearance_state with the exact state name only when the CURRENT PASSAGE shows that transformation happening or already in effect; otherwise omit it and LumiDraw uses the default “${profile.defaultAppearanceState || (profile.appearanceStates[0] && profile.appearanceStates[0].name) || ''}”. Never mix states. A passage that merely calls this character by their species, mentions a past or future transformation, or uses a figure of speech is NOT a transformation — keep the default state. When a state is not active, never describe this character with that form's vocabulary anywhere in the JSON, including scene_statement.` : ''}${aliases ? ` Named visual aliases: ${aliases}. Use the exact prop name when it is present.` : ''}`)
   }
   return hints.join('\n')
 }
@@ -3156,7 +3227,7 @@ function structuredParserSchema(maxImages, profiles) {
 STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
 Return ONLY one compact JSON object, no markdown and no prose.
 Write every scene in the EXACT field order shown below. The order is a survival order: if your reply is ever cut off, everything already written must still form a usable scene, so the mandatory core (safety, core_action, setting, subjects) comes FIRST and droppable refinements (camera, lighting, style) come LAST:
-{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","partial_features":["exact saved feature names currently showing, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw compiles it into one Danbooru/Gelbooru-style tag run followed by a short natural-language caption block, in the tag order Anima was trained on. Do not write the final image prompt yourself.
@@ -3166,6 +3237,7 @@ For a subject that is a recognisable published character, set "booru_character" 
 SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "Rook is fighting bandits." "Sovi is casting a spell with great intensity." "Sovi and Rook are having anal sex." In an nsfw or explicit scene, name the act plainly — a euphemism here costs the image its subject. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
 ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
 Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 3 outfit items, 2 pose items, 2 expression items, and 1 subject action item. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
+PARTIAL CHANGES ARE NOT STATE CHANGES. When a passage shows only SOME of a character's transformation — a single feature slipping, eyes changing, claws extending, "partly", "slightly", "a little", "just his eyes", "beginning to" — keep appearance_state at the form they are otherwise in and list the specific features in "partial_features" using the exact saved feature names listed below. Switching appearance_state transforms the WHOLE character, which is wrong for a partial change and produces a completely different creature than the passage describes. Use partial_features for anything short of a full, completed transformation. Select only names that are listed for that ref; never invent a feature name, and never put transformation words in appearance, outfit, pose, or expression.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
 For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible. Use the camera tag "pov" only when ref "persona" is visibly represented from the viewer's body/eye position. In that persona subject's pose or action, include a concrete cue such as "viewer hands visible", "hands in foreground", or "face out of frame". Never use "pov" merely because two characters are interacting.
 For a solo scene, do not invent a relation merely to create prose; keep the visual skeleton tag-oriented. Natural-language anchors are reserved for cross-subject geometry.
@@ -3218,7 +3290,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   ))
   const core = compileStructuredScene(scene, profiles, sourcePassage, { artistTags: artists })
   const prompt = joinPromptParts([rest, core])
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v11' }
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v12' }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -3950,7 +4022,7 @@ async function scanStoryCore(userId, options = {}) {
           raw: body,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v11',
+          compiler: compiled.compiler || 'anima-hybrid-v12',
         })
         done++
       } catch (e) {
@@ -4076,7 +4148,7 @@ async function scanStoryCore(userId, options = {}) {
           anchor: item.anchor,
           scene: compiled.scene,
           compiledPrompt: compiled.prompt,
-          compiler: compiled.compiler || 'anima-hybrid-v11',
+          compiler: compiled.compiler || 'anima-hybrid-v12',
         })
       }
 
@@ -4334,7 +4406,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.24.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.25.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5291,4 +5363,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.24.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.25.0'))
