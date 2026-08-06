@@ -1,7 +1,142 @@
-# LumiDraw Studio 0.28.2
+# LumiDraw Studio 0.29.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.29.0 — The tag run is made of real tags, and correct work stops being thrown away
+
+A field run: **82.9 seconds, 22,676 tokens, zero images.** The parser had
+understood the scene correctly — a partially-shifted Rook between a naked Sovi
+and a circling wolf pack, setting carried forward, three subjects placed at
+correct depth. Both images were then discarded by the compiler.
+
+### Word counts were fatal; now they are repaired
+
+- **Image 1** died because its scene statement was 19 words against a limit of
+  16. Three words.
+- **Image 2** died in a chain: a relation action was 10 words against a limit of
+  9, so the relation was dropped, which left the image with no relations, which
+  failed `missing cross-subject relation/action`. One word, via a cascade.
+
+Counting to sixteen is not what a language model is for, and killing its correct
+output when it miscounts is the worst use of tokens already spent. `shortPhrase`
+now repairs in three escalating steps instead of throwing:
+
+```text
+19 words → cut at the last clause boundary that fits
+           "Rook, in partial wolf form, stands between Sovi and a circling Mycewolf pack"
+10 words → drop articles, which carry no visual information
+           "grips fur at the small of the back of"
+still over → truncate, last resort
+```
+
+The boundary chosen is the **longest** prefix that fits, not the first — the
+first comma in that statement yields "Rook".
+
+Two related floors:
+
+- **A dropped relation can no longer kill an image.** A multi-subject scene left
+  with none gets one rebuilt from the subject positions the parser already
+  supplied — derived from its own data, not invented.
+- **One over-long tag can no longer kill a list.** `setting` and friends now
+  repair or skip a bad entry instead of throwing the whole scene away.
+
+### The tag run was prose wearing a costume
+
+Anima is trained on Danbooru tags. Sonnet has never been trained on which
+strings *are* Danbooru tags, so asked for tags it writes plausible English. From
+that same run:
+
+```text
+lighting: pink grove glow, glittering spore dust, dim undergrowth
+style:    tense standoff, backlit spores
+camera:   front view, wide shot
+```
+
+`backlighting` is a tag; `backlit spores` is not. `from front` is a tag; `front
+view` is not. Roughly a quarter of the run was real. Since 0.28.0 put the prose
+caption first, the prompt had **two prose blocks and no tag run** — the second
+half was not doing the job the reorder was made for.
+
+This is not a smartness problem and no prompt fixes it. Tags are now resolved
+against a vocabulary drawn from Danbooru's own tag groups:
+
+- **Exact match** passes through.
+- **A known near-miss is rewritten** — `front view → from front`, `low crouch →
+  crouching`, `snarling → clenched teeth`, `trousers → pants`. Better than
+  demoting: the concept survives *and* lands in the model's vocabulary.
+- **A miss is mined for the real tags inside it** — `dim undergrowth` yields
+  `dim lighting` and `grass`; `backlit spores` yields `backlighting`.
+- **The phrase itself moves to the caption**, where prose is understood, so your
+  worldbuilding is never deleted. `mycetheric expanse` and `pheromone grove` are
+  not booru tags and never will be; they belong in the sentence.
+
+The same scene, before and after:
+
+```text
+before  sensitive, 2boys, 1other, mycetheric expanse, pheromone grove,
+        crystal trees, spore dust drifting, front view, wide shot,
+        pink grove glow, glittering spore dust, dim undergrowth,
+        tense standoff, backlit spores
+
+after   sensitive, 2boys, 1other, forest, crystal, tree, dust, from front,
+        wide shot, glowing, dim lighting, grass, backlighting
+```
+
+A solo scene is deliberately tag-only and has no caption to demote into, so
+there the phrase stays in the run — the weaker slot beats no slot.
+
+### The instruction lost the rules the compiler already enforces
+
+10,260 → **8,907 characters**, about 340 tokens per call. Nine rules were cut,
+each one something code decides mechanically: casing and underscores
+(`animaTag`), the quality/artist ban (the compiler owns that slot), hedged
+prose (`normalizeVisualPhrase`), the generic-room ban (`reconcileSetting`), item
+and word caps (`shortList`, and now the repair above), framing width
+(`repairCameraTags`), and the anatomy field ban (`removeInventedAnatomy`).
+
+One rule marked CUT in the audit was kept as a trim on review: `personaPovVisible`
+*gates* on the POV staging cue, so a model never asked for one could never
+produce a surviving `pov` tag. Cutting it would have removed POV entirely.
+
+What remains is either enforced in code or irreducibly semantic. **A future
+prompt edit can now only break a judgement call, never a guarantee.**
+
+### Safety is the picture, not the mood
+
+New, because the same run rated a wolf-pack standoff `sensitive`. Anima reads
+the rating as an intensity dial, so that nudges an atmospheric scene toward skin
+and suggestive framing for no reason. The four Danbooru ratings are now defined
+explicitly, with the note that a tense, frightening, or violent scene carrying no
+suggestive content is `safe`.
+
+### The prompt has tests now
+
+Every regression in this file's history came from editing the instruction. The
+compiler had 400 assertions; the prompt had none. It now has 43:
+
+- every semantic rule is still present, by distinctive phrase
+- the instruction stays under a **9,000-character ceiling**, so growth must
+  displace something rather than accumulate
+- no real cast name appears in a worked example (the `counter` → kitchen class
+  of priming bug)
+- every "do not copy" rule is scoped and never reaches `scene_statement` — the
+  exact 0.26.0 regression that deleted the thesis sentence for three versions
+- no rule both forbids and requires the same field
+- worked examples keep their WRONG/RIGHT shape
+- each cut rule **stays** cut, so it cannot drift back and contradict the code
+
+481 assertions across 21 suites. The original instruction is preserved at
+`prompt-baseline/parser-instruction.0.27.2.txt`.
+
+### Still worth fixing on your side
+
+The same log shows 86% then 80% of each completion spent on hidden reasoning
+that `reasoning: {source:'off'}` is not suppressing through OpenRouter. The JSON
+needs ~700 tokens. Turning reasoning off on the connection — or choosing a
+non-reasoning parser model — should take that call from 83 seconds to roughly
+12, and the truncation retry would stop firing at all.
+
 
 ## 0.28.2 — Alt text broke the markdown (0.28.0 regression)
 

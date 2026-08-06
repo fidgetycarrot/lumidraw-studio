@@ -1467,7 +1467,51 @@ function tagsFrom(value, maxItems = 40) {
   return uniqueStrings(raw.map((v) => String(v || '').trim()).filter(Boolean)).slice(0, maxItems)
 }
 
-function shortPhrase(value, label, maxWords = 10, maxChars = 96, allowEmpty = true) {
+// Where a long value can honestly be cut down. Commas and subordinating
+// conjunctions mark the end of a self-contained clause, so a prefix ending at
+// one is still a whole statement rather than a severed fragment.
+const CLAUSE_BREAK_RE = /,\s+|\s+(?:as|while|when|before|after|because|since|during|seeking|though|although|so|with|and)\s+/gi
+
+// Counting to sixteen is not what a language model is for, and throwing away a
+// correct scene because it produced nineteen words is the worst possible use of
+// the tokens already spent. Repair in three escalating steps, each of which
+// keeps more meaning than the next: cut at a clause boundary, drop articles,
+// and only then truncate.
+function trimToLimits(text, maxWords, maxChars) {
+  const value = String(text || '').trim()
+  const wordsIn = (s) => s.split(/\s+/).filter(Boolean)
+  const fits = (s) => wordsIn(s).length <= maxWords && s.length <= maxChars
+  if (fits(value)) return value
+
+  // 1. Longest prefix ending on a clause boundary. Longest, not first — the
+  //    first comma in "Rook, in partial wolf form, stands…" yields "Rook".
+  const cuts = []
+  let match
+  CLAUSE_BREAK_RE.lastIndex = 0
+  while ((match = CLAUSE_BREAK_RE.exec(value))) cuts.push(match.index)
+  for (let i = cuts.length - 1; i >= 0; i--) {
+    const candidate = value.slice(0, cuts[i]).replace(/[,;:]+$/, '').trim()
+    // A four-word floor keeps a subject-and-verb; below that a truncation of
+    // the original says more than a tidy fragment.
+    if (wordsIn(candidate).length >= 4 && fits(candidate)) return candidate
+  }
+
+  // 2. Articles carry no visual information — "grips the fur at the small of
+  //    the back of" loses one "the" and fits without losing a single concept.
+  let stripped = value
+  while (!fits(stripped) && /\b(?:the|a|an)\s+/i.test(stripped)) {
+    stripped = stripped.replace(/\b(?:the|a|an)\s+/i, '')
+  }
+  if (fits(stripped)) return stripped
+
+  // 3. Hard truncation, last resort.
+  const words = wordsIn(stripped).slice(0, maxWords)
+  let out = words.join(' ')
+  while (out.length > maxChars && words.length > 1) { words.pop(); out = words.join(' ') }
+  return out.replace(/[,;:]+$/, '').trim()
+}
+
+function shortPhrase(value, label, maxWords = 10, maxChars = 96, allowEmpty = true, repair = false) {
   let text = String(value || '').trim().replace(/^['"`]+|['"`]+$/g, '').trim()
   // An optional field filled with filler is an empty field. Required fields
   // still reject it loudly rather than silently becoming blank.
@@ -1475,6 +1519,22 @@ function shortPhrase(value, label, maxWords = 10, maxChars = 96, allowEmpty = tr
   if (!text && allowEmpty) return ''
   if (!text) throw new Error(`${label} is required.`)
   text = text.replace(/[.!?]+$/g, '').trim()
+
+  if (repair) {
+    // Shape problems are cleaned rather than fatal; only an empty result on a
+    // required field still throws.
+    text = text.replace(/[\r\n]+/g, ' ').replace(/[{}<>]/g, '').replace(/\s{2,}/g, ' ').trim()
+    const repaired = trimToLimits(text, maxWords, maxChars)
+    if (!repaired) {
+      if (allowEmpty) return ''
+      throw new Error(`${label} is required.`)
+    }
+    if (repaired !== text) {
+      spindle.log.info(`[lumidraw] trimmed ${label} to fit (${text.split(/\s+/).filter(Boolean).length} words → ${repaired.split(/\s+/).filter(Boolean).length}): ${repaired}`)
+    }
+    return repaired
+  }
+
   if (text.length > maxChars) throw new Error(`${label} is too long (${text.length}/${maxChars} characters).`)
   if (/\r|\n/.test(text)) throw new Error(`${label} must be one short phrase, not prose.`)
   if (/[{}<>]/.test(text)) throw new Error(`${label} contains unsupported markup.`)
@@ -1487,7 +1547,15 @@ function shortList(value, label, { maxItems = 12, maxWords = 7, maxChars = 72 } 
   const raw = Array.isArray(value) ? value : tagsFrom(value, maxItems)
   const out = []
   for (const item of raw.slice(0, maxItems)) {
-    const cleaned = shortPhrase(item, label, maxWords, maxChars, true)
+    // One over-long entry used to throw and take the whole image with it. A
+    // list is a bag of independent values: repair what can be repaired, skip
+    // what cannot, and never let a single tag be fatal.
+    let cleaned = ''
+    try {
+      cleaned = shortPhrase(item, label, maxWords, maxChars, true, true)
+    } catch {
+      continue
+    }
     // Filler is dropped at the boundary so no downstream field has to know
     // about it — a placeholder is the absence of a value, not a value.
     if (cleaned && !isPlaceholderTag(cleaned)) out.push(cleaned)
@@ -1955,7 +2023,10 @@ function normalizeScene(raw) {
     let details = []
     try {
       actor = shortPhrase(item.actor || '', `relation ${index + 1} actor`, 3, 32, false).toLowerCase().replace(/[^a-z0-9_]/g, '_')
-      action = shortPhrase(item.action || item.verb || '', `relation ${index + 1} action`, 9, 84, false)
+      // A well-formed relation reads as a clause — "grips the fur at the small
+      // of the back of" is ten words and entirely visual. Trim it rather than
+      // lose the only relation the image has.
+      action = shortPhrase(item.action || item.verb || '', `relation ${index + 1} action`, 9, 84, false, true)
       target = shortPhrase(item.target || '', `relation ${index + 1} target`, 3, 32, true).toLowerCase().replace(/[^a-z0-9_]/g, '_')
       details = shortList(item.details || [], `relation ${index + 1} details`, { maxItems: 6, maxWords: 7, maxChars: 72 })
     } catch (error) {
@@ -1973,11 +2044,25 @@ function normalizeScene(raw) {
     return [{ actor, target, action, details }]
   })
   const aspectRaw = String(source.aspect || '').trim()
+  const sceneStatement = shortPhrase(source.scene_statement || source.sceneStatement || '', 'scene statement', 16, 150, true, true)
+  const coreAction = shortPhrase(source.core_action || source.coreAction || '', 'core action', 10, 96, true, true)
+  // Dropping a relation must never cascade into dropping the image. A
+  // multi-subject scene with no surviving relation gets one rebuilt from the
+  // positions the parser already gave us — an arrangement derived from its own
+  // data, not invented — so the scene stays renderable.
+  if (subjects.length > 1 && !relations.length) {
+    const rebuilt = synthesizeRelation(subjects)
+    if (rebuilt) {
+      relations.push(rebuilt)
+      spindle.log.warn('[lumidraw] no relation survived validation; rebuilt one from subject positions: ' +
+        `${rebuilt.actor} ${rebuilt.action} ${rebuilt.target}`)
+    }
+  }
   return {
     subjects,
     relations,
-    sceneStatement: shortPhrase(source.scene_statement || source.sceneStatement || '', 'scene statement', 16, 150, true),
-    coreAction: shortPhrase(source.core_action || source.coreAction || '', 'core action', 10, 96, true),
+    sceneStatement,
+    coreAction,
     setting: shortList(source.setting || [], 'setting', { maxItems: 14, maxWords: 7, maxChars: 72 }),
     camera: shortList(source.camera || [], 'camera', { maxItems: 10, maxWords: 7, maxChars: 72 }),
     lighting: shortList(source.lighting || [], 'lighting', { maxItems: 10, maxWords: 7, maxChars: 72 }),
@@ -1987,6 +2072,31 @@ function normalizeScene(raw) {
       : '',
     aspect: VALID_ASPECTS.has(aspectRaw) ? aspectRaw : '',
   }
+}
+
+// Depth order, nearest first. Used only to decide who is arranged against whom
+// when every stated relation has been lost.
+const POSITION_DEPTH = { foreground: 0, center: 1, left: 2, right: 2, background: 3 }
+
+function synthesizeRelation(subjects) {
+  if (!Array.isArray(subjects) || subjects.length < 2) return null
+  const depth = (subject) => {
+    const value = POSITION_DEPTH[String(subject && subject.position || '').toLowerCase()]
+    return Number.isFinite(value) ? value : 2
+  }
+  const ordered = subjects
+    .map((subject, index) => ({ subject, index }))
+    .sort((a, b) => depth(a.subject) - depth(b.subject) || a.index - b.index)
+  const actor = ordered[0].subject
+  const target = ordered[1].subject
+  if (!actor || !target || !actor.ref || !target.ref || actor.ref === target.ref) return null
+  const actorPos = String(actor.position || '').toLowerCase()
+  const targetPos = String(target.position || '').toLowerCase()
+  let action = 'stands with'
+  if (targetPos === 'background' && (actorPos === 'foreground' || actorPos === 'center')) action = 'stands in front of'
+  else if ((actorPos === 'left' && targetPos === 'right') || (actorPos === 'right' && targetPos === 'left')) action = 'faces'
+  else if (actorPos === 'foreground' && targetPos === 'center') action = 'stands in front of'
+  return { actor: actor.ref, target: target.ref, action, details: [], synthesized: true }
 }
 
 function assessStructuredScene(scene) {
@@ -2360,6 +2470,239 @@ function animaTag(value) {
 
 function animaTagList(list) {
   return uniqueStrings((Array.isArray(list) ? list : []).map(animaTag).filter(Boolean))
+}
+
+
+// ---------------------------------------------------------------------------
+// Danbooru vocabulary
+//
+// Anima is trained on Danbooru tags. A language model asked for tags returns
+// plausible English instead, because it has never been trained on which strings
+// are real tags — "backlit spores" and "pink grove glow" read like tags and are
+// not tags. Emitting them buys nothing: the model has no embedding for them, so
+// they act as loose text while occupying the slot reserved for booru control.
+//
+// This is a vocabulary check, not a filter. Anything unrecognised is demoted
+// into the caption, where prose belongs and is understood, rather than dropped.
+// Membership is drawn from Danbooru's own tag groups (image composition,
+// lighting, posture, facial expression) plus the common general tags.
+// ---------------------------------------------------------------------------
+
+const BOORU_VOCAB = new Set([
+  // view angle and framing
+  'from above', 'from below', 'from side', 'from behind', 'from front', 'dutch angle',
+  'straight-on', 'three-quarter view', 'upside-down', 'sideways', 'multiple views', 'pov',
+  'close-up', 'portrait', 'upper body', 'cowboy shot', 'full body', 'wide shot',
+  'very wide shot', 'lower body', 'head out of frame', 'feet out of frame',
+  'foot out of frame', 'knees out of frame', 'eyes out of frame', 'out of frame',
+  'cropped legs', 'cropped torso', 'cropped arms', 'cropped shoulders', 'cropped head',
+  'profile', 'cut-in', 'depth of field', 'perspective', 'foreshortening', 'fisheye',
+  'panorama', 'atmospheric perspective', 'vanishing point', 'symmetry', 'negative space',
+  'scenery', 'landscape', 'cityscape', 'nature', 'no humans', 'still life', 'group picture',
+  // focus
+  'solo focus', 'eye focus', 'hand focus', 'back focus', 'foot focus', 'male focus',
+  'animal focus', 'monster focus', 'object focus', 'weapon focus', 'plant focus',
+  // gaze
+  'looking at viewer', 'looking away', 'looking back', 'looking down', 'looking up',
+  'looking to the side', 'looking ahead', 'facing viewer', 'facing away', 'eye contact',
+  // lighting
+  'backlighting', 'sidelighting', 'underlighting', 'overlighting', 'rim lighting',
+  'dim lighting', 'dramatic lighting', 'cinematic lighting', 'sunlight', 'sunbeam',
+  'moonlight', 'candlelight', 'firelight', 'lantern', 'neon lights', 'bioluminescence',
+  'glowing', 'glowing eyes', 'light rays', 'lens flare', 'bloom', 'chiaroscuro',
+  'high contrast', 'silhouette', 'shadow', 'cast shadow', 'drop shadow', 'vignetting',
+  'caustics', 'subsurface scattering', 'dappled sunlight', 'light particles', 'sparkle',
+  'overexposure', 'spotlight', 'god rays', 'diffraction spikes',
+  // time and weather
+  'night', 'evening', 'morning', 'day', 'sunset', 'sunrise', 'dusk', 'twilight',
+  'starry sky', 'full moon', 'moon', 'sky', 'cloud', 'cloudy sky', 'overcast', 'rain',
+  'snow', 'fog', 'mist', 'wind', 'storm', 'lightning',
+  // style, medium, technique
+  'sketch', 'lineart', 'realistic', 'photorealistic', 'painterly', 'impressionism',
+  'minimalism', 'abstract', 'surreal', 'art nouveau', 'art deco', 'ukiyo-e', 'sumi-e',
+  'nihonga', 'ligne claire', 'traditional media', 'monochrome', 'greyscale', 'sepia',
+  'limited palette', 'film grain', 'chromatic aberration', 'motion blur', 'motion lines',
+  'speed lines', 'emphasis lines', 'screentones', 'halftone', 'blurry', 'blurry background',
+  'bokeh', 'gradient', 'glitch', 'scanlines', 'pixel art', 'official art', 'colorful',
+  'muted color', 'pale color', 'dark', 'bright', 'crosshatching', 'stippling',
+  // setting and background
+  'outdoors', 'indoors', 'forest', 'tree', 'bamboo forest', 'grass', 'field', 'flower',
+  'flower field', 'petals', 'falling petals', 'leaf', 'fallen leaves', 'moss', 'vines',
+  'roots', 'mushroom', 'crystal', 'rock', 'cliff', 'mountain', 'valley', 'meadow', 'swamp',
+  'desert', 'jungle', 'cave', 'water', 'river', 'lake', 'ocean', 'beach', 'waterfall',
+  'pond', 'puddle', 'ruins', 'castle', 'church', 'temple', 'shrine', 'city', 'street',
+  'alley', 'rooftop', 'road', 'path', 'bridge', 'fence', 'garden', 'courtyard', 'forest path',
+  'room', 'bedroom', 'bathroom', 'kitchen', 'living room', 'classroom', 'library', 'office',
+  'hallway', 'stairs', 'window', 'door', 'bed', 'chair', 'table', 'wall', 'floor', 'ceiling',
+  'tent', 'campfire', 'fire', 'smoke', 'dust', 'debris', 'spider web', 'simple background',
+  'transparent background', 'gradient background', 'white background', 'black background',
+  'dark background', 'outdoor', 'clearing',
+  // posture
+  'standing', 'sitting', 'kneeling', 'lying', 'on back', 'on stomach', 'on side',
+  'crouching', 'squatting', 'all fours', 'leaning forward', 'leaning back', 'bent over',
+  'arched back', 'arms up', 'arms behind back', 'arms behind head', 'crossed arms',
+  'hands up', 'hand on own hip', 'hand on own chest', 'hand on another’s shoulder',
+  'head tilt', 'spread legs', 'crossed legs', 'legs up', 'knees together', 'fetal position',
+  'straddling', 'sitting on lap', 'carrying', 'princess carry', 'hug', 'hugging',
+  'arm around shoulder', 'arm around waist', 'holding hands', 'back-to-back',
+  'outstretched arm', 'outstretched hand', 'reaching', 'clenched hand', 'clenched hands',
+  'walking', 'running', 'jumping', 'falling', 'floating', 'flying', 'swimming', 'dancing',
+  'bowing', 'crawling', 'top-down bottom-up', 'seiza', 'wariza', 'indian style',
+  // expression
+  'smile', 'grin', 'smirk', 'frown', 'scowl', 'glare', 'blush', 'embarrassed', 'crying',
+  'tears', 'teary eyes', 'crying with eyes open', 'surprised', 'shocked', 'angry', 'sad',
+  'happy', 'closed eyes', 'half-closed eyes', 'wide-eyed', 'open mouth', 'closed mouth',
+  'parted lips', 'clenched teeth', 'gritted teeth', 'tongue out', 'drooling', 'sweat',
+  'sweatdrop', 'nervous', 'worried', 'scared', 'fear', 'determined', 'serious',
+  'expressionless', 'empty eyes', 'pout', 'sleepy', 'tired', 'confused', 'annoyed',
+  'light smile', 'evil smile', 'sad smile', 'forced smile', 'trembling', 'shaking',
+  // body and creature features
+  'animal ears', 'wolf ears', 'fox ears', 'cat ears', 'animal ear fluff', 'tail',
+  'wolf tail', 'fox tail', 'cat tail', 'fangs', 'sharp teeth', 'claws', 'fur', 'body fur',
+  'furry', 'horns', 'wings', 'pointy ears', 'elf', 'slit pupils', 'vertical pupils',
+  'colored sclera', 'muscular', 'muscular male', 'scar', 'blood', 'wound', 'dirty',
+  'sweaty', 'wet', 'veins', 'toned',
+  // clothing and bare states
+  'nude', 'completely nude', 'topless', 'bottomless', 'partially undressed', 'undressing',
+  'torn clothes', 'tattered clothes', 'wet clothes', 'open shirt', 'open clothes', 'shirt',
+  'dress', 'robe', 'cloak', 'cape', 'coat', 'jacket', 'armor', 'boots', 'gloves', 'hat',
+  'hood', 'scarf', 'belt', 'pants', 'shorts', 'skirt', 'thighhighs', 'socks', 'barefoot',
+  'bare shoulders', 'bare back', 'bare arms', 'bare legs', 'collar', 'jewelry', 'necklace',
+  'earrings', 'glasses', 'round eyewear', 'hair ornament', 'ribbon', 'bandages',
+])
+
+// Near-misses a language model reliably produces for a tag that does exist.
+// Rewriting is strictly better than demoting: the concept survives *and* lands
+// in the vocabulary the model was trained on.
+const BOORU_ALIASES = {
+  'front view': 'from front', 'frontal view': 'from front', 'facing forward': 'from front',
+  'side view': 'from side', 'profile view': 'from side',
+  'rear view': 'from behind', 'back view': 'from behind', 'view from behind': 'from behind',
+  'top-down': 'from above', 'top down': 'from above', 'overhead': 'from above',
+  'overhead view': 'from above', 'high angle': 'from above', 'bird’s eye view': 'from above',
+  'birds eye view': 'from above', 'aerial view': 'from above', 'looking down at': 'from above',
+  'low angle': 'from below', 'worm’s eye view': 'from below', 'upward angle': 'from below',
+  'closeup': 'close-up', 'close up': 'close-up', 'extreme close-up': 'close-up',
+  'tight shot': 'close-up', 'headshot': 'portrait', 'head shot': 'portrait',
+  'full-body': 'full body', 'full body shot': 'full body', 'upper-body': 'upper body',
+  'wide angle': 'wide shot', 'long shot': 'wide shot', 'establishing shot': 'wide shot',
+  'medium shot': 'cowboy shot', 'three quarter view': 'three-quarter view',
+  'backlit': 'backlighting', 'back lighting': 'backlighting', 'back-lit': 'backlighting',
+  'rim light': 'rim lighting', 'side lighting': 'sidelighting', 'under lighting': 'underlighting',
+  'dim light': 'dim lighting', 'low light': 'dim lighting', 'dim': 'dim lighting',
+  'low lighting': 'dim lighting', 'moody lighting': 'dramatic lighting',
+  'moon light': 'moonlight', 'sun light': 'sunlight', 'candle light': 'candlelight',
+  'fire light': 'firelight', 'firelit': 'firelight', 'glowing eye': 'glowing eyes',
+  'bioluminescent': 'bioluminescence', 'luminescence': 'bioluminescence',
+  'sun rays': 'light rays', 'sunbeams': 'sunbeam', 'lens flares': 'lens flare',
+  'night time': 'night', 'nighttime': 'night', 'day time': 'day', 'daytime': 'day',
+  'out doors': 'outdoors', 'outside': 'outdoors', 'in doors': 'indoors', 'inside': 'indoors',
+  'trees': 'tree', 'flowers': 'flower', 'clouds': 'cloud', 'rocks': 'rock',
+  'mushrooms': 'mushroom', 'crystals': 'crystal', 'roots': 'roots',
+  'forest floor': 'grass', 'undergrowth': 'grass', 'woods': 'forest',
+  'grove': 'forest', 'thicket': 'forest', 'glade': 'clearing', 'canopy': 'tree',
+  'naked': 'nude', 'fully nude': 'completely nude', 'unclothed': 'nude',
+  'bare feet': 'barefoot', 'ripped clothes': 'torn clothes', 'torn clothing': 'torn clothes',
+  'tattered clothing': 'tattered clothes', 'trousers': 'pants', 'spectacles': 'glasses',
+  'round glasses': 'round eyewear', 'jewellery': 'jewelry',
+  'low crouch': 'crouching', 'crouched': 'crouching', 'crouched low': 'crouching',
+  'crouching low': 'crouching', 'kneeling down': 'kneeling', 'lying down': 'lying',
+  'on all fours': 'all fours', 'bent forward': 'bent over', 'leaning over': 'bent over',
+  'arms raised': 'arms up', 'hands raised': 'hands up', 'legs spread': 'spread legs',
+  'arms crossed': 'crossed arms', 'hand on hip': 'hand on own hip',
+  'standing firm': 'standing', 'standing still': 'standing', 'stands': 'standing',
+  'tilted head': 'head tilt', 'head tilted': 'head tilt',
+  'blushing': 'blush', 'smiling': 'smile', 'grinning': 'grin', 'smirking': 'smirk',
+  'frowning': 'frown', 'scowling': 'scowl', 'glaring': 'glare', 'sweating': 'sweat',
+  'drool': 'drooling', 'tearful': 'teary eyes', 'teary-eyed': 'teary eyes',
+  'tear-streaked': 'teary eyes', 'in tears': 'crying', 'eyes closed': 'closed eyes',
+  'eyes shut': 'closed eyes', 'mouth open': 'open mouth', 'mouth opening': 'open mouth',
+  'open-mouthed': 'open mouth', 'wide eyed': 'wide-eyed', 'eyes wide': 'wide-eyed',
+  'bared teeth': 'clenched teeth', 'baring teeth': 'clenched teeth',
+  'snarling': 'clenched teeth', 'snarl': 'clenched teeth', 'growling': 'clenched teeth',
+  'focused': 'serious', 'focussed': 'serious', 'resolute': 'determined',
+  'frightened': 'scared', 'afraid': 'scared', 'terrified': 'scared',
+  'aggressive': 'angry', 'predatory': 'glare', 'furious': 'angry',
+  'looking at the viewer': 'looking at viewer', 'looks at viewer': 'looking at viewer',
+  'fang': 'fangs', 'claw': 'claws', 'wolf ear': 'wolf ears', 'animal ear': 'animal ears',
+  'pointed ears': 'pointy ears', 'wolf-like ears': 'wolf ears', 'sharp claws': 'claws',
+  'muscled': 'muscular', 'toned muscles': 'toned', 'scarred': 'scar',
+  'glow': 'glowing', 'glowed': 'glowing', 'aglow': 'glowing', 'luminous': 'glowing',
+  'grayscale': 'greyscale', 'black and white': 'greyscale', 'monochromatic': 'monochrome',
+  'oil painting': 'traditional media', 'watercolor': 'traditional media',
+  'photo realistic': 'photorealistic', 'photo-realistic': 'photorealistic',
+}
+
+// Resolve a parser tag to a real Danbooru tag. Returns the canonical tag and
+// how it was reached, so the caller can decide what to do with a miss.
+function resolveBooruTag(value) {
+  const raw = String(value || '').trim().toLowerCase().replace(/_/g, ' ').replace(/\s{2,}/g, ' ')
+  if (!raw) return { tag: '', match: 'none' }
+  if (BOORU_VOCAB.has(raw)) return { tag: raw, match: 'exact' }
+  if (BOORU_ALIASES[raw]) return { tag: BOORU_ALIASES[raw], match: 'alias' }
+  // Cheap morphology, in place of enumerating every inflection: a trailing
+  // plural or a gerund is the same concept to Danbooru.
+  const candidates = [
+    raw.replace(/ies$/, 'y'), raw.replace(/es$/, ''), raw.replace(/s$/, ''), `${raw}s`,
+    raw.replace(/ing$/, ''), raw.replace(/ing$/, 'e'),
+  ]
+  for (const candidate of candidates) {
+    if (candidate === raw || candidate.length < 3) continue
+    if (BOORU_VOCAB.has(candidate)) return { tag: candidate, match: 'morphology' }
+    if (BOORU_ALIASES[candidate]) return { tag: BOORU_ALIASES[candidate], match: 'alias' }
+  }
+  return { tag: '', match: 'none' }
+}
+
+const SALVAGE_STOPWORDS = new Set([
+  'a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'and', 'or', 'with', 'from', 'into',
+  'over', 'under', 'his', 'her', 'its', 'their', 'this', 'that', 'is', 'are', 'be',
+])
+
+// "dim undergrowth" is not a tag, but "dim lighting" and "grass" both are, and
+// both are inside it. Rather than lose the whole phrase, mine it for the real
+// tags it contains — the phrase still goes to the caption, so nothing is lost
+// and a booru anchor is gained.
+function salvageBooruWords(phrase, maxTags = 2) {
+  const words = String(phrase || '').toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter(Boolean)
+  const found = []
+  // Two-word spans first: "crystal tree" beats "crystal" alone where both exist.
+  for (let size = 2; size >= 1 && found.length < maxTags; size--) {
+    for (let i = 0; i + size <= words.length && found.length < maxTags; i++) {
+      const span = words.slice(i, i + size)
+      if (span.every((word) => SALVAGE_STOPWORDS.has(word))) continue
+      if (size === 1 && SALVAGE_STOPWORDS.has(span[0])) continue
+      const { tag } = resolveBooruTag(span.join(' '))
+      if (tag && !found.includes(tag)) found.push(tag)
+    }
+  }
+  return found
+}
+
+// Split parser tags into real Danbooru tags and prose. A miss is never simply
+// deleted: it is mined for any real tag inside it, and the original phrase is
+// returned for the caption, where natural language is what Anima expects.
+function partitionBooruTags(tags) {
+  const kept = []
+  const demoted = []
+  const rewritten = []
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    const text = String(tag || '').trim()
+    if (!text) continue
+    const { tag: resolved, match } = resolveBooruTag(text)
+    if (resolved) {
+      kept.push(resolved)
+      if (match !== 'exact') rewritten.push(`${text} → ${resolved}`)
+      continue
+    }
+    const salvaged = salvageBooruWords(text)
+    if (salvaged.length) {
+      kept.push(...salvaged)
+      rewritten.push(`${text} ⊃ ${salvaged.join(' + ')}`)
+    }
+    demoted.push(text)
+  }
+  return { kept: uniqueStrings(kept), demoted: uniqueStrings(demoted), rewritten }
 }
 
 const ANIMA_SAFETY_TAGS = ['safe', 'sensitive', 'nsfw', 'explicit']
@@ -3564,14 +3907,33 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   // an unowned "grabbing a wrist" or "leaning in" conjures limbs that belong
   // to nobody. The relation sentences already carry that geometry, bound to
   // names. core_action is kept only when no relation sentence covered it.
-  const generalTags = animaTagList([
-    ...(multi ? [] : safeRelationDetails),
-    ...(scene.coreAction && !(multi && crossRelationCount) ? [scene.coreAction] : []),
-    ...(multi ? [] : supportTags(descriptors, scene)),
+  // The atmosphere fields are where invented tags concentrate: a model asked
+  // for a lighting tag writes "pink grove glow", which Anima has no embedding
+  // for. Everything here is resolved against the real Danbooru vocabulary;
+  // what survives is a tag, what does not becomes caption prose.
+  const atmosphere = partitionBooruTags(animaTagList([
     ...settingCheck.setting,
     ...safeCamera,
     ...safeLighting,
     ...safeStyle,
+  ]))
+  if (atmosphere.rewritten.length) {
+    spindle.log.info('[lumidraw] booru vocabulary · ' + atmosphere.rewritten.join(' · '))
+  }
+  if (atmosphere.demoted.length) {
+    spindle.log.info('[lumidraw] booru vocabulary · not real tags, moved to the caption: ' + atmosphere.demoted.join(', '))
+  }
+
+  // A tag-only scene has no caption to demote into, so unrecognised phrases
+  // stay in the run rather than being dropped — the weaker of two slots beats
+  // no slot at all.
+  const tagOnly = !prose.filter(Boolean).length
+  const generalTags = animaTagList([
+    ...(multi ? [] : safeRelationDetails),
+    ...(scene.coreAction && !(multi && crossRelationCount) ? [scene.coreAction] : []),
+    ...(multi ? [] : supportTags(descriptors, scene)),
+    ...atmosphere.kept,
+    ...(tagOnly ? atmosphere.demoted : []),
   ])
 
   // Anima saw newlines almost exclusively in its dataset-tagged captions
@@ -3585,7 +3947,25 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     headerTags.join(', '),
     collapseRedundantTags([...subjectTags, ...generalTags]).join(', '),
   ])
-  const caption = prose.filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim()
+  let caption = prose.filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim()
+  // Demoted atmosphere joins the caption as a closing scene fragment — the same
+  // words, in the register Anima can actually read. Anything the sentences
+  // above already said is skipped rather than repeated.
+  //
+  // Only when a caption already exists. A solo scene is deliberately tag-only,
+  // and a stray scenery fragment is not reason enough to restructure the whole
+  // prompt into two blocks; there the phrase stays where it was.
+  const captionSaid = normalizeIdentityText(caption)
+  const scenery = caption
+    ? atmosphere.demoted.filter((phrase) => {
+      const value = normalizeIdentityText(phrase)
+      return value && !captionSaid.includes(value)
+    })
+    : []
+  if (scenery.length) {
+    const fragment = scenery.join(', ')
+    caption = `${caption} ${fragment.charAt(0).toUpperCase()}${fragment.slice(1)}.`
+  }
   // The caption LEADS. A sentence naming what is happening, read first, frames
   // everything the tags then specify — and it matches the model card's own
   // example shape, where quality tags are followed by prose. The tag run that
@@ -3622,17 +4002,18 @@ Write every scene in the EXACT field order shown below. The order is a survival 
 Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw compiles it into one Danbooru/Gelbooru-style tag run followed by a short natural-language caption block, in the tag order Anima was trained on. Do not write the final image prompt yourself.
-TAG STYLE — every string you emit is destined for a booru-tag model. Lowercase, spaces instead of underscores, and the Gelbooru spelling whenever Danbooru and Gelbooru disagree. Write plain booru tags rather than hedged prose: never "clearly visible", "prominently shown", or "in full view", which the model was never trained on and which only dilute the tag. Take every tag from what the passage actually describes. Words used in these rules to illustrate TAG FORMAT are examples of shape only and must never appear among your tags as if they were part of the scene. This restriction applies to tags; it does not apply to scene_statement, whose examples below you SHOULD imitate closely. Do not include quality tags, score tags, meta tags, year tags, or artist tags anywhere in this JSON — LumiDraw owns the header and the preset owns the artist.
+TAG STYLE — every string you emit is destined for a booru-tag model, so prefer common Danbooru tags and take every one from what the passage actually describes. Words used in these rules to illustrate TAG FORMAT are examples of shape only and must never appear among your tags as if they were part of the scene. This restriction applies to tags; it does not apply to scene_statement, whose examples below you SHOULD imitate closely.
 For a subject that is a recognisable published character, set "booru_character" to that character's booru tag and "booru_series" to the work it comes from. Leave both empty for original characters; a made-up name in those fields is worse than nothing.
-"style" is for the mood of this one scene at most (e.g. "backlit", "soft focus"). Never put a medium, an artist, or a rendering style there — those belong to the preset and must stay identical between images, or characters will drift in appearance from one generation to the next.
+"style" is the mood of this one scene only (e.g. "backlit", "soft focus"). A medium, artist, or rendering style belongs to the preset and must stay identical between images, or characters drift between generations.
 SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "[name] is fighting three bandits." "[name] is casting a large spell." "[name] is performing oral sex on [name]." (Write the characters' real names in place of [name].) ONGOING ACT BEATS MOMENTARY GESTURE. A passage is usually one beat inside a continuing act, and the continuing act is what the image is of. Name that act, even when it began in an earlier message and the current passage only shows a small movement within it. A hand, a glance, a shift of weight, or a change of expression during an act is a detail of that act, never a replacement for it — put those in pose, expression, or action, not here. WRONG: "[name] tips [name]'s chin up." RIGHT: "[name] is performing oral sex on [name], chin tipped up." If you cannot tell what the continuing act is from the CURRENT PASSAGE alone, read PRIOR CONTEXT and the ESTABLISHED SCENE STATE to find it before falling back to the gesture. In an nsfw or explicit scene, name the act plainly and anatomically — a euphemism, or a literary substitute such as "forcing eye contact" in place of the act being performed, costs the image its subject. Write it as flatly as a caption in a reference book. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
-ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag, and every setting tag must come from the CURRENT PASSAGE or, if the passage does not restate it, from the established location in PRIOR CONTEXT. NEVER invent a location, and never fall back on a generic room such as a kitchen, bedroom, office, or living room to satisfy this requirement. A story continues in the place it was already in unless the passage says the characters moved; if you cannot tell where they are, repeat the location from PRIOR CONTEXT verbatim. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
-Keep each image object compact: one core_action; no more than 4 setting items, 3 camera items, 3 lighting items, 3 style items, 2 relation details, 3 outfit items, 2 pose items, 2 expression items, and 1 subject action item. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Every array value must be a terse image tag or visual phrase of at most 7 words. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
+SAFETY is the Danbooru rating of the picture, not the mood of the story around it: safe = nothing suggestive; sensitive = suggestive but not sexual (swimwear, underwear, a suggestive pose); nsfw = nudity or overt sexual context; explicit = a sexual act or visible genitals. A tense, frightening, or violent scene with no suggestive content is safe.
+ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag, taken from the CURRENT PASSAGE or the established location in PRIOR CONTEXT. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
+Keep each image object compact — short arrays, and omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 PARTIAL CHANGES ARE NOT STATE CHANGES. When a passage shows only SOME of a character's transformation — a single feature slipping, eyes changing, claws extending, "partly", "slightly", "a little", "just his eyes", "beginning to" — keep appearance_state at the form they are otherwise in and list the specific features in "partial_features" using the exact saved feature names listed below. Switching appearance_state transforms the WHOLE character, which is wrong for a partial change and produces a completely different creature than the passage describes. Use partial_features for anything short of a full, completed transformation. Select only names that are listed for that ref; never invent a feature name, and never put transformation words in appearance, outfit, pose, or expression.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
-For seated, leaning, lying, or kneeling poses, provide the visible support surface in "support". When lower-body contact or a sexual position is central, choose framing wide enough to show the relevant geometry; do not choose close-up unless the contact remains clearly visible. Use the camera tag "pov" only when ref "persona" is visibly represented from the viewer's body/eye position. In that persona subject's pose or action, include a concrete cue such as "viewer hands visible", "hands in foreground", or "face out of frame". Never use "pov" merely because two characters are interacting.
+For seated, leaning, lying, or kneeling poses, name the visible support surface in "support". Use the camera tag "pov" only when ref "persona" is seen from the viewer's own eye position, and in that subject's pose include a cue such as "viewer hands visible" or "face out of frame".
 For a solo scene, do not invent a relation merely to create prose; keep the visual skeleton tag-oriented. Natural-language anchors are reserved for cross-subject geometry.
-Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Set anatomy_visible false for safe or sensitive scenes. Never place genital/anatomy terms in appearance, outfit, pose, support, expression, action, relation action, or details. LumiDraw alone controls saved anatomy.
+Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Set anatomy_visible false for safe or sensitive scenes. LumiDraw alone controls saved anatomy.
 Known subject refs:
 ${profileSchemaHints(profiles)}`
 }
@@ -4830,7 +5211,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.28.2',
+          version: (spindle.manifest && spindle.manifest.version) || '0.29.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5788,4 +6169,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.28.2'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.29.0'))
