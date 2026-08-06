@@ -200,35 +200,44 @@ function extractDtError(res) {
   return res.text || `HTTP ${res.status}`
 }
 
+// Draw Things answers an unknown payload key with
+// {"detail":"Unrecognized keys: [foo, bar]"}. Surfacing those names verbatim,
+// with where to remove them, turns a dead generation into a one-step fix.
+function describeDtRejection(message) {
+  const text = String(message || '')
+  const match = /Unrecognized keys:\s*\[([^\]]*)\]/i.exec(text)
+  if (!match) return text
+  const keys = match[1].split(',').map((key) => key.trim()).filter(Boolean)
+  if (!keys.length) return text
+  return `Draw Things does not accept ${keys.length === 1 ? 'this setting' : 'these settings'}: ` +
+    keys.join(', ') +
+    `. Remove ${keys.length === 1 ? 'it' : 'them'} in Studio → Draw Things settings (or clear the value) and generate again. ` +
+    `This usually means the setting exists in Draw Things' interface but not in its generation API, or your Draw Things version is older than the setting.`
+}
+
+// Keys LumiDraw sets per request. A config or extras block may not override
+// them, or a preset would silently re-prompt or re-seed the generation.
+const RESERVED_PAYLOAD_KEYS = new Set(['prompt', 'negative_prompt', 'seed', 'batch_count'])
+
 function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   const payload = {}
 
-  // Power-user extras are allowed only for keys that are not controlled by
-  // the visible preset editor. Older presets may contain stale hidden copies
-  // of model / LoRA / sampler values; those must never override what the UI
-  // currently shows.
-  const protectedKeys = new Set([
-    ...PRESET_KEYS,
-    'prompt',
-    'negative_prompt',
-    'seed',
-    'batch_count',
-  ])
-  if (extra && typeof extra === 'object') {
-    for (const [k, v] of Object.entries(extra)) {
-      if (!protectedKeys.has(k) && v !== undefined && v !== null && v !== '') {
-        payload[k] = v
-      }
-    }
-  }
-
-  // The visible preset is authoritative.
-  for (const key of PRESET_KEYS) {
-    const value = config ? config[key] : undefined
-    if (value !== undefined && value !== null && value !== '') {
+  // Every Draw Things setting the workspace holds is sent, not a fixed
+  // whitelist. The config originates from Draw Things' own GET / response, so
+  // its key names are DT's rather than anything guessed here — that is what
+  // makes full pass-through safe enough to prefer over a curated subset.
+  const assign = (source) => {
+    if (!source || typeof source !== 'object') return
+    for (const [key, value] of Object.entries(source)) {
+      if (RESERVED_PAYLOAD_KEYS.has(key)) continue
+      if (value === undefined || value === null || value === '') continue
       payload[key] = value
     }
   }
+
+  // Extras first so the visible workspace/preset always wins on conflict.
+  assign(extra)
+  assign(config)
 
   payload.prompt = prompt || ''
   if (negativePrompt) payload.negative_prompt = negativePrompt
@@ -242,17 +251,11 @@ function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
 }
 
 async function dtGenerate(settings, payload) {
+  spindle.log.info('[lumidraw] Draw Things payload keys: ' + Object.keys(payload).sort().join(', '))
   spindle.log.info('[lumidraw] Draw Things payload: ' + JSON.stringify({
-    model: payload.model,
-    sampler: payload.sampler,
-    steps: payload.steps,
-    guidance_scale: payload.guidance_scale,
-    width: payload.width,
-    height: payload.height,
-    loras: payload.loras,
-    clip_skip: payload.clip_skip,
-    shift: payload.shift,
-    batch_count: payload.batch_count,
+    ...payload,
+    prompt: String(payload.prompt || '').slice(0, 160),
+    negative_prompt: String(payload.negative_prompt || '').slice(0, 80),
   }))
   const res = await dtFetch(settings, '/sdapi/v1/txt2img', {
     method: 'POST',
@@ -260,7 +263,7 @@ async function dtGenerate(settings, payload) {
     body: JSON.stringify(payload),
   }, 600000) // generations can be slow on-device; 10 min budget
   if (!res.ok || !res.json || !Array.isArray(res.json.images) || res.json.images.length === 0) {
-    throw new Error(`Draw Things rejected the generation: ${extractDtError(res)}`)
+    throw new Error(`Draw Things rejected the generation: ${describeDtRejection(extractDtError(res))}`)
   }
   if (res.json.images.length > 1) {
     spindle.log.warn(`[lumidraw] Draw Things returned ${res.json.images.length} images despite batch_count=1; keeping only the first.`)
@@ -4260,7 +4263,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.23.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.24.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -4568,9 +4571,14 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // slice plus the full config for reference.
         const settings = await getSettings()
         const config = await dtCurrentConfig(settings)
+        // Capture every setting Draw Things reports, not a fixed slice. The
+        // keys are DT's own, so Studio can offer all of them without guessing
+        // names, and a preset saved from Studio pins the complete recipe.
         const captured = {}
-        for (const key of PRESET_KEYS) {
-          if (config[key] !== undefined) captured[key] = config[key]
+        for (const [key, value] of Object.entries(config || {})) {
+          if (RESERVED_PAYLOAD_KEYS.has(key)) continue
+          if (value === undefined || value === null) continue
+          captured[key] = value
         }
         try { await rememberModels(captured) } catch { /* best-effort */ }
         reply = ok(payload, requestId, { captured, fullConfig: config })
@@ -5212,4 +5220,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.23.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.24.0'))

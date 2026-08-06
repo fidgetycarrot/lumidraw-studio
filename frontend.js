@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.23.1'
+const EXTENSION_VERSION = '0.24.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -410,6 +410,9 @@ function realSetup(ctx) {
     .ld-lightbox-regen { flex:0 0 auto; max-height:46%; overflow-y:auto; padding:10px 12px; border-top:1px solid var(--lumiverse-border, #3d4050); background:#15161c; }
     .ld-lightbox-regen textarea { width:100%; box-sizing:border-box; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; line-height:1.4; }
     .ld-chat-image-fixable { cursor:zoom-in; }
+    .ld-dt-field { display:flex; flex-direction:column; gap:3px; margin-top:7px; }
+    .ld-dt-field:first-child { margin-top:0; }
+    .ld-dt-settings .ld-profile-block { margin-top:7px; }
 
     .ld-story-picker { position:fixed; inset:0; z-index:9200; display:none; align-items:center; justify-content:center; padding:14px; background:var(--lumiverse-modal-backdrop, rgba(0,0,0,.62)); }
     .ld-story-picker.ld-open { display:flex; }
@@ -491,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.23.1" aria-label="LumiDraw Studio v0.23.1">
+    <button class="ld-launcher" title="LumiDraw Studio v0.24.0" aria-label="LumiDraw Studio v0.24.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -500,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.23.1</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.24.0</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -552,6 +555,11 @@ function realSetup(ctx) {
                     <div><span class="ld-label">Width</span><input class="ld-draft-w" type="number" step="64" min="256" /></div>
                     <div><span class="ld-label">Height</span><input class="ld-draft-h" type="number" step="64" min="256" /></div>
                   </div>
+                </div>
+                <div class="ld-card">
+                  <div class="ld-subtitle">Draw Things settings</div>
+                  <div class="ld-help">Everything Draw Things reported on the last Sync, editable here. Generate uses these directly — no round-trip through Draw Things. Save them to a preset with the buttons below.</div>
+                  <div class="ld-dt-settings" style="margin-top:8px"></div>
                 </div>
                 <div class="ld-card">
                   <div class="ld-subtitle">Workspace</div>
@@ -1290,6 +1298,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     setStatus('.ld-bridge-status', message, kind)
     renderHeaderState()
     renderLoraLibrary()
+    refreshDtSettingsOptions()
   }
 
   function ensureDraftModelOption(value) {
@@ -1353,6 +1362,12 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     setStatus('.ld-draft-status', `Added “${value}” to the temporary Studio stack.`, 'good')
   }
 
+  function refreshDtSettingsOptions() {
+    // Catalog arrives after first paint, so any select fed by it is rebuilt
+    // once the model/LoRA lists are known.
+    if ($('.ld-dt-settings')) renderDtSettings()
+  }
+
   function renderLoraLibrary() {
     const grid = $('.ld-lora-grid')
     const count = $('.ld-lora-count')
@@ -1393,6 +1408,204 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
     }
   }
 
+  // --- full Draw Things settings editor --------------------------------------
+  //
+  // Controls are generated from the synced config rather than a hard-coded
+  // list, so the key names are always Draw Things' own and a DT update adds
+  // its new settings here automatically. The table below only supplies nicer
+  // labels, grouping, and dropdown sources for the settings worth curating.
+
+  const DT_CORE_KEYS = new Set(['model', 'sampler', 'steps', 'guidance_scale', 'width', 'height', 'loras'])
+
+  const DT_FIELD_META = {
+    shift: { group: 'Sampling', label: 'Shift', step: 0.1 },
+    clip_skip: { group: 'Sampling', label: 'CLIP skip', step: 1, min: 1 },
+    strength: { group: 'Sampling', label: 'Denoising strength', step: 0.05, min: 0, max: 1 },
+    seed_mode: { group: 'Sampling', label: 'Seed mode', options: ['Legacy', 'TorchCPU Compatible', 'Scale Alike', 'NVIDIA GPU Compatible'] },
+    resolution_dependent_shift: { group: 'Sampling', label: 'Resolution-dependent shift' },
+    sampler_timesteps: { group: 'Sampling', label: 'Sampler timesteps' },
+    stochastic_sampling_gamma: { group: 'Sampling', label: 'Stochastic sampling gamma', step: 0.05 },
+
+    refiner_model: { group: 'Refiner', label: 'Refiner model', source: 'models', allowEmpty: true },
+    refiner_start: { group: 'Refiner', label: 'Refiner start', step: 0.05, min: 0, max: 1 },
+
+    hires_fix: { group: 'High-res fix', label: 'High-res fix' },
+    hires_fix_width: { group: 'High-res fix', label: 'First-pass width', step: 64, min: 128 },
+    hires_fix_height: { group: 'High-res fix', label: 'First-pass height', step: 64, min: 128 },
+    hires_fix_strength: { group: 'High-res fix', label: 'High-res strength', step: 0.05, min: 0, max: 1 },
+
+    upscaler: { group: 'Upscaling', label: 'Upscaler', source: 'models', allowEmpty: true },
+    upscaler_scale: { group: 'Upscaling', label: 'Upscaler scale', step: 1, min: 0 },
+
+    tiled_decoding: { group: 'Tiling', label: 'Tiled decoding' },
+    tiled_diffusion: { group: 'Tiling', label: 'Tiled diffusion' },
+
+    image_guidance: { group: 'Guidance', label: 'Image guidance', step: 0.1 },
+    guidance_embed: { group: 'Guidance', label: 'Guidance embed', step: 0.1 },
+    speed_up_with_guidance_embed: { group: 'Guidance', label: 'Speed up with guidance embed' },
+    negative_guidance_scale: { group: 'Guidance', label: 'Negative guidance scale', step: 0.5 },
+    clip_weight: { group: 'Guidance', label: 'CLIP weight', step: 0.05 },
+
+    mask_blur: { group: 'Masking', label: 'Mask blur', step: 0.5, min: 0 },
+    mask_blur_outset: { group: 'Masking', label: 'Mask blur outset', step: 1 },
+    preserve_original_after_inpaint: { group: 'Masking', label: 'Preserve original after inpaint' },
+  }
+
+  const DT_GROUP_ORDER = ['Sampling', 'Refiner', 'High-res fix', 'Upscaling', 'Guidance', 'Tiling', 'Masking', 'Other Draw Things settings']
+
+  function dtFieldMeta(key) {
+    const meta = DT_FIELD_META[key] || {}
+    return {
+      group: meta.group || 'Other Draw Things settings',
+      label: meta.label || key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()),
+      // Any *_model key is a checkpoint reference; offer the catalog.
+      source: meta.source || (/(^|_)model$/.test(key) ? 'models' : ''),
+      ...meta,
+    }
+  }
+
+  function dtControlKind(key, value) {
+    const meta = dtFieldMeta(key)
+    if (meta.options) return 'select'
+    if (meta.source) return 'select'
+    if (typeof value === 'boolean') return 'bool'
+    if (typeof value === 'number') return 'number'
+    if (value && typeof value === 'object') return 'json'
+    return 'text'
+  }
+
+  function dtSelectValues(meta) {
+    if (meta.options) return meta.options
+    if (meta.source === 'models') return catalog.models || []
+    if (meta.source === 'samplers') return catalog.samplers || []
+    if (meta.source === 'loras') return (catalog.loras || []).map((l) => l.file || l.name || l)
+    return []
+  }
+
+  function buildDtField(key, value) {
+    const meta = dtFieldMeta(key)
+    const kind = dtControlKind(key, value)
+    const wrap = document.createElement('div')
+    wrap.className = 'ld-dt-field'
+
+    if (kind === 'bool') {
+      const label = document.createElement('label')
+      label.style.cssText = 'display:flex;align-items:center;gap:7px;font-size:12px'
+      const input = document.createElement('input')
+      input.type = 'checkbox'
+      input.style.width = 'auto'
+      input.checked = !!value
+      input.setAttribute('data-dt-key', key)
+      input.setAttribute('data-dt-kind', 'bool')
+      input.addEventListener('change', onDraftControlChange)
+      label.appendChild(input)
+      label.appendChild(document.createTextNode(' ' + meta.label))
+      wrap.appendChild(label)
+      return wrap
+    }
+
+    const caption = document.createElement('span')
+    caption.className = 'ld-label'
+    caption.textContent = meta.label
+    caption.title = key
+    wrap.appendChild(caption)
+
+    let input
+    if (kind === 'select') {
+      input = document.createElement('select')
+      const values = dtSelectValues(meta)
+      const current = value === undefined || value === null ? '' : String(value)
+      const all = [...values]
+      if (current && !all.some((v) => String(v) === current)) all.unshift(current)
+      input.innerHTML = (meta.allowEmpty !== false ? '<option value="">— none —</option>' : '') +
+        all.map((v) => {
+          const option = document.createElement('option')
+          option.value = String(v)
+          option.textContent = String(v)
+          return option.outerHTML
+        }).join('')
+      input.value = current
+    } else if (kind === 'json') {
+      input = document.createElement('textarea')
+      input.style.minHeight = '52px'
+      input.value = JSON.stringify(value, null, 0)
+    } else if (kind === 'number') {
+      input = document.createElement('input')
+      input.type = 'number'
+      if (meta.step !== undefined) input.step = String(meta.step)
+      if (meta.min !== undefined) input.min = String(meta.min)
+      if (meta.max !== undefined) input.max = String(meta.max)
+      input.value = value === undefined || value === null ? '' : String(value)
+    } else {
+      input = document.createElement('input')
+      input.type = 'text'
+      input.value = value === undefined || value === null ? '' : String(value)
+    }
+    input.setAttribute('data-dt-key', key)
+    input.setAttribute('data-dt-kind', kind)
+    input.addEventListener('change', onDraftControlChange)
+    wrap.appendChild(input)
+    return wrap
+  }
+
+  function renderDtSettings() {
+    const box = $('.ld-dt-settings')
+    if (!box) return
+    box.innerHTML = ''
+    const config = draftConfig || {}
+    const keys = Object.keys(config)
+      .filter((key) => !DT_CORE_KEYS.has(key))
+      .sort((a, b) => a.localeCompare(b))
+    if (!keys.length) {
+      box.innerHTML = '<div class="ld-status">Press <strong>Sync ⟳</strong> to read every setting Draw Things currently has. They all become editable here.</div>'
+      return
+    }
+    const grouped = new Map()
+    for (const key of keys) {
+      const group = dtFieldMeta(key).group
+      if (!grouped.has(group)) grouped.set(group, [])
+      grouped.get(group).push(key)
+    }
+    const order = [...DT_GROUP_ORDER.filter((g) => grouped.has(g)), ...[...grouped.keys()].filter((g) => !DT_GROUP_ORDER.includes(g))]
+    for (const group of order) {
+      const details = document.createElement('details')
+      details.className = 'ld-profile-block'
+      details.open = group !== 'Other Draw Things settings'
+      const summary = document.createElement('summary')
+      summary.textContent = `${group} (${grouped.get(group).length})`
+      details.appendChild(summary)
+      const body = document.createElement('div')
+      body.className = 'ld-profile-fields'
+      for (const key of grouped.get(group)) body.appendChild(buildDtField(key, config[key]))
+      details.appendChild(body)
+      box.appendChild(details)
+    }
+  }
+
+  function readDtSettingsFromControls(config) {
+    for (const el of dom.queryAll('.ld-dt-settings [data-dt-key]')) {
+      const key = el.getAttribute('data-dt-key')
+      const kind = el.getAttribute('data-dt-kind')
+      if (!key) continue
+      if (kind === 'bool') { config[key] = el.checked; continue }
+      const raw = el.value
+      if (raw === '') { delete config[key]; continue }
+      if (kind === 'number') {
+        const num = Number(raw)
+        if (Number.isFinite(num)) config[key] = num
+        else delete config[key]
+        continue
+      }
+      if (kind === 'json') {
+        try { config[key] = JSON.parse(raw) }
+        catch { /* keep the previous value rather than writing malformed JSON */ }
+        continue
+      }
+      config[key] = raw
+    }
+    return config
+  }
+
   function readDraftConfigFromControls() {
     const config = cloneJson(draftConfig) || {}
     const model = $('.ld-draft-model').value || ''
@@ -1417,6 +1630,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
       file: row.querySelector('.ld-lora-file').value.trim(),
       weight: parseFloat(row.querySelector('.ld-lora-weight').value) || 1,
     })).filter((lora) => lora.file)
+    readDtSettingsFromControls(config)
     return config
   }
 
@@ -1435,6 +1649,7 @@ Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wol
       loraBox.appendChild(draftLoraRow(lora.file || lora.name || '', lora.weight))
     }
     if (!(config.loras || []).length) loraBox.appendChild(draftLoraRow('', 1))
+    renderDtSettings()
   }
 
   function hydrateDraftFromSource(source, { force = false } = {}) {
@@ -2376,7 +2591,8 @@ ${entry.prompt || ''}`.trim()
       setStatus('.ld-draft-status', 'Draw Things state captured. Your temporary workspace was kept; use Reset workspace to load the new sync.')
       renderChips()
     }
-    setStatus(statusSel, `Captured ${res.captured.model || '(no model)'}`, 'good')
+    const settingCount = Object.keys(res.captured || {}).length
+    setStatus(statusSel, `Captured ${res.captured.model || '(no model)'} · ${settingCount} setting${settingCount === 1 ? '' : 's'}`, 'good')
   }
 
   async function doGenerate() {

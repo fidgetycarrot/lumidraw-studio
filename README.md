@@ -1,7 +1,54 @@
-# LumiDraw Studio 0.23.1
+# LumiDraw Studio 0.24.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.24.0 — Every Draw Things setting, edited in Studio
+
+Studio previously exposed six settings — model, sampler, steps, CFG, width,
+height — plus LoRAs. Everything else (shift, high-res fix, refiner, upscaler,
+seed mode, tiling…) could only reach LumiDraw by being changed inside Draw
+Things and re-synced, and a fixed ten-key whitelist silently dropped most of
+it on the way to generation.
+
+Studio is now the full workbench: generate freely with every setting, then save
+the result to a preset.
+
+### All settings, edited in place
+
+A **Draw Things settings** card in the Tune pane generates a control for every
+setting the last Sync reported, grouped into Sampling, Refiner, High-res fix,
+Upscaling, Guidance, Tiling, Masking, and everything else.
+
+Controls are generated *from the synced config* rather than a hard-coded list.
+That matters twice over: the key names are always Draw Things' own rather than
+guesses, and a Draw Things update that adds a setting makes it appear here
+automatically. Curated entries add friendly labels, sensible steps and ranges,
+and dropdowns; anything uncurated is typed from its value — checkbox for
+booleans, number input for numbers, JSON editor for structures.
+
+Any `*_model` setting (refiner, upscaler…) gets a dropdown from the Bridge
+catalog, so no more typing case-sensitive checkpoint filenames.
+
+### Nothing is dropped on the way out
+
+- **Sync captures the whole config**, not a ten-key slice.
+- **Generation sends the whole workspace.** The payload builder no longer
+  filters against a whitelist.
+- `prompt`, `negative_prompt`, `seed`, and `batch_count` stay owned by
+  LumiDraw and cannot be overridden by a config or extras block — a preset
+  cannot silently re-prompt or re-seed a story image, and `batch_count` stays
+  pinned at 1.
+- `0` and `false` are real values and are sent; only empty strings and nulls
+  are omitted.
+
+### Rejected settings say what and where
+
+Draw Things refuses unknown payload keys by name. That error is now translated:
+it lists the exact settings refused, says to clear them in Studio → Draw Things
+settings, and notes the usual cause — a setting that exists in the Draw Things
+interface but not in its generation API, or a Draw Things older than the
+setting. The generation fails rather than silently dropping the value.
 
 ## 0.23.1 — Directive detection made conservative
 
