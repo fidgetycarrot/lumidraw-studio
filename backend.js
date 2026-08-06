@@ -428,17 +428,21 @@ const TAG_RE = /<dt-image([^>]*)>([\s\S]*?)<\/dt-image>/g
 // external link) carries an identifying segment and is always left alone, so a
 // working SwarmUI-style setup in another chat is not sabotaged.
 const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)/g
-const DIRECTIVE_ENDPOINT_RE = /(?:^|\/)(?:gen|generate|generation|create|new|render|txt2img|image)\/?$/i
+const DIRECTIVE_ENDPOINT_RE = /(?:^|\/)(?:gen|generate|generation|create|new|render|txt2img)$/i
 
+// Conservative by design. A missed directive is harmless; a real image wrongly
+// classified would be hidden from the model, so anything that could plausibly
+// be a stored file is kept. Only a URL whose path ENDS at a bare verb counts —
+// a folder named "gen" or "create" further up the path is not enough.
 function looksLikeImageDirective(url) {
   const href = String(url || '').trim()
   if (!href) return true
-  if (/^data:/i.test(href)) return false          // inline image data is real
-  const path = href.split('?')[0].split('#')[0]
-  if (DIRECTIVE_ENDPOINT_RE.test(path)) return true
-  // A stored image always carries an id-like segment; a bare endpoint does not.
-  const hasIdSegment = path.split('/').some((segment) => /[a-z0-9]{8,}/i.test(segment))
-  return !hasIdSegment
+  if (/^data:/i.test(href)) return false                  // inline image data
+  const path = href.split('?')[0].split('#')[0].replace(/\/+$/, '')
+  const last = path.split('/').pop() || ''
+  if (/\.[a-z0-9]{2,5}$/i.test(last)) return false        // a filename
+  if (DIRECTIVE_ENDPOINT_RE.test(path)) return true       // ends at a bare verb
+  return false                                            // unknown → leave alone
 }
 
 function stripForeignImageDirectives(text) {
@@ -4256,7 +4260,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.23.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.23.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5208,4 +5212,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.23.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.23.1'))

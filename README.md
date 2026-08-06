@@ -1,7 +1,23 @@
-# LumiDraw Studio 0.23.0
+# LumiDraw Studio 0.23.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.23.1 — Directive detection made conservative
+
+The 0.23.0 classifier could misjudge a real image as a directive. It required
+an "id-like" segment of eight or more consecutive alphanumerics, which ordinary
+filenames do not have (`scene.png`), and it accepted a verb anywhere in the
+path, so a file stored under a folder named `gen`, `new`, or `create` was
+condemned by its parent directory (`/media/gen/render-4471.webp`).
+
+Such an image was never deleted — stored messages are untouched — but it would
+have been hidden from the model, which is the wrong outcome.
+
+Detection is now conservative: a URL ending in a filename is always a real
+image, only a path that ENDS at a bare verb is a directive, and anything
+unrecognised is left alone. A missed directive is harmless; a real image
+wrongly classified is not.
 
 ## 0.23.0 — Hide dead image-request directives from the model
 
