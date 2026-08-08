@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.30.1'
+const EXTENSION_VERSION = '0.30.4'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -494,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.30.1" aria-label="LumiDraw Studio v0.30.1">
+    <button class="ld-launcher" title="LumiDraw Studio v0.30.4" aria-label="LumiDraw Studio v0.30.4">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.30.1</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.30.4</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -1142,9 +1142,20 @@ fangs = fangs, sharp teeth"></textarea></div>
     $('.ld-lightbox-regen-seedval').textContent = seedKnown ? `(${entry.seed})` : '(the original seed was random and was not recorded)'
     box.style.display = 'block'
     setStatus('.ld-lightbox-regen-status', 'Edit the prompt, then press “Regenerate & replace now”. That one button does everything: it generates the new image AND swaps it into the story message in place. There is no separate accept step.')
+    // The panel scrolls, and scrolling the prompt box into view pushed
+    // everything above it — including "Re-run parser" — off the top, where on a
+    // phone it is invisible until you think to scroll up. Open at the top and
+    // let the panel show its own controls first.
+    box.scrollTop = 0
     const prompt = $('.ld-lightbox-regen-prompt')
-    prompt.focus()
-    if (prompt.scrollIntoView) prompt.scrollIntoView({ block: 'nearest' })
+    // Focusing pops the on-screen keyboard, which on a narrow screen covers
+    // most of the panel before the user has read any of it.
+    const narrow = typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia('(max-width: 840px)').matches
+      : false
+    if (!narrow) {
+      try { prompt.focus({ preventScroll: true }) } catch { prompt.focus() }
+    }
   }
 
   function openLightbox(imageUrl) {
@@ -2920,6 +2931,8 @@ ${entry.prompt || ''}`.trim()
           row.appendChild(revert)
         }
         picker.appendChild(row)
+        const box = $('.ld-lightbox-regen')
+        if (box) box.scrollTop = 0
       }
       const rejected = results.length - usable.length
       if (!res.overrideNote) setStatus('.ld-lightbox-regen-status',

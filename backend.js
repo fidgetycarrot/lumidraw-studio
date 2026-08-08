@@ -3420,15 +3420,20 @@ function isPovStagingCue(value) {
 const GARMENT_RE = /\b(?:shirt|blouse|dress|skirt|trousers|pants|jeans|shorts|coat|jacket|cloak|cape|capelet|robe|gown|tunic|sweater|hoodie|vest|corset|bodice|apron|uniform|armou?r|helmet|hood|hat|cap|scarf|tie|belt|glove|gloves|mitten|sock|socks|stocking|stockings|pantyhose|tights|shoe|shoes|boot|boots|sandal|sandals|heels|lingerie|bra|panties|underwear|briefs|thong|swimsuit|bikini|kimono|yukata|haori|sash|obi|collar|choker|necklace|earring|earrings|bracelet|ring|glasses|goggles|mask|veil|crown|tiara|headband|ribbon|bow|jewelry|clothes|clothing|outfit|garment|leotard|bodysuit|overalls|jumpsuit|nightgown|pyjamas|pajamas|towel|blanket|harness|strap|straps)\b/i
 
 // Bare-state words are legitimate outfit values even though no garment is named.
-const BARE_STATE_RE = /^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs|bare shoulders|undressed|clothed|fully clothed|partially clothed|disheveled clothes|torn clothes|open shirt)$/i
+const BARE_STATE_RE = /^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs|bare shoulders|undressed|dressed|clothed|fully clothed|partially clothed|disheveled clothes|torn clothes|open shirt|wet clothes|bloody clothes)$/i
 
-const BODY_PART_RE = /\b(?:hand|hands|thumb|finger|fingers|palm|wrist|arm|arms|elbow|shoulder|shoulders|jaw|chin|face|cheek|cheeks|eye|eyes|mouth|lip|lips|neck|throat|chest|torso|back|waist|hip|hips|thigh|thighs|knee|knees|leg|legs|foot|feet|toe|toes|head|hair|skin|tail|ear|ears)\b/i
+const BODY_PART_RE = /\b(?:hand|hands|thumb|finger|fingers|palm|wrist|arm|arms|forearm|forearms|upper arm|elbow|shoulder|shoulders|jaw|chin|face|cheek|cheeks|eye|eyes|mouth|lip|lips|neck|throat|chest|torso|abdomen|stomach|back|waist|hip|hips|thigh|thighs|calf|shin|knee|knees|leg|legs|ankle|foot|feet|toe|toes|head|forehead|hair|skin|tail|ear|ears|muzzle|snout|fur|claw|claws|paw|paws|wound|scar|bite|bruise)\b/i
 
 // True when an outfit entry does not actually describe something worn.
+// A condition is not a garment. "blood-covered" describes the wearer, and
+// rendering it as "wearing blood-covered" asks the model for a thing.
+const WORN_CONDITION_RE = /^(?:blood[- ]?(?:covered|soaked|stained)|bloodied|bloody|soaked|drenched|muddy|dirty|filthy|singed|burnt|scorched|frayed|ragged|tattered|torn|ruined|wet|damp|dusty|ash[- ]?covered)$/i
+
 function isNotClothing(value) {
   const text = normalizeIdentityText(value)
   if (!text) return true
   if (BARE_STATE_RE.test(text)) return false
+  if (WORN_CONDITION_RE.test(text)) return true
   if (GARMENT_RE.test(text)) return false
   if (isPovStagingCue(text)) return true
   if (BODY_PART_RE.test(text)) return true
@@ -3599,7 +3604,7 @@ function subjectIdentitySentences(item, scene, descriptors) {
   for (const value of item.outfit || []) {
     const tag = animaTag(value)
     if (!tag) continue
-    if (/^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs)$/.test(tag)) stateWords.push(tag)
+    if (/^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs|dressed|clothed|undressed|fully clothed|partially clothed)$/.test(tag)) stateWords.push(tag)
     else clothes.push(tag)
   }
   const pose = poseClause({ ...item, pose: item.pose.filter((entry) => !poseBelongsToRelation(entry, item, scene, descriptors)) }, scene)
@@ -3853,12 +3858,48 @@ function requiredVisibleRegions(scene, descriptors) {
   return regions
 }
 
+// The camera stands in exactly one place. "from side, from behind, slightly
+// above" is three cameras, and asking for three is how a shot ends up with no
+// coherent viewpoint at all. Horizontal and vertical are independent, so one of
+// each survives; within an axis the first stated wins, because that is the one
+// the parser thought of first.
+const VIEW_AXES = [
+  ['horizontal', /^(?:from front|from side|from behind|from above and behind|straight-on|three-quarter view)$/],
+  ['vertical', /^(?:from above|from below)$/],
+]
+
+function dropConflictingViewAngles(tags) {
+  const seen = new Set()
+  const dropped = []
+  const kept = []
+  for (const tag of tags) {
+    // Compare canonical forms: the parser writes "side view", the vocabulary
+    // later rewrites it to "from side", and checking before that rewrite let
+    // "side view" and "from behind" both survive as one horizontal angle each.
+    const raw = animaTag(tag)
+    const resolved = resolveBooruTag(raw)
+    const value = resolved.tag || raw
+    const axis = VIEW_AXES.find(([, match]) => match.test(value))
+    if (!axis) { kept.push(tag); continue }
+    if (seen.has(axis[0])) { dropped.push(tag); continue }
+    seen.add(axis[0])
+    kept.push(tag)
+  }
+  return { kept, dropped }
+}
+
 function repairCameraTags(cameraTags, scene, descriptors) {
   const required = requiredVisibleRegions(scene, descriptors)
-  if (!required.size) return { tags: cameraTags, note: '' }
+  const angles = dropConflictingViewAngles(cameraTags)
+  const preNotes = angles.dropped.length
+    ? [`dropped conflicting view angle(s) ${angles.dropped.join(', ')} — the camera can only stand in one place`]
+    : []
+  if (!required.size) {
+    return { tags: angles.kept, note: preNotes.join('; ') }
+  }
 
-  const tags = [...cameraTags]
-  const notes = []
+  const tags = [...angles.kept]
+  const notes = [...preNotes]
 
   // A POV shot is the viewer's own eyeline. "pov, full body, from above" asks
   // for three incompatible cameras at once, and widening a POV frame is how
@@ -4165,7 +4206,7 @@ function profileSchemaHints(profiles) {
   return hints.join('\n')
 }
 
-function structuredParserSchema(maxImages, profiles) {
+function structuredParserSchema(maxImages, profiles, minImages = 0) {
   const knownRefList = allKnownProfiles(profiles).map((profile) => profile.ref).join('|')
   return `
 
@@ -4173,16 +4214,18 @@ STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request abo
 Return ONLY one compact JSON object, no markdown and no prose.
 Write every scene in the EXACT field order shown below. The order is a survival order: if your reply is ever cut off, everything already written must still form a usable scene, so the mandatory core (safety, core_action, setting, subjects) comes FIRST and droppable refinements (camera, lighting, style) come LAST:
 {"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","partial_features":["exact saved feature names currently showing, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
-Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.
+${minImages > 0
+  ? `Return between ${minImages} and ${maxImages} image objects. ${minImages} is a FLOOR, not a suggestion: find that many distinct visual moments in the passage even when one seems dominant — a second character's reaction, a change of position, or a detail shown close are all separate images. Each needs its own anchor quoting a different part of the passage.`
+  : `Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.`}
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw compiles it into one Danbooru/Gelbooru-style tag run followed by a short natural-language caption block, in the tag order Anima was trained on. Do not write the final image prompt yourself.
-TAG STYLE — every string you emit is destined for a booru-tag model, so prefer common Danbooru tags and take every one from what the passage actually describes. Words used in these rules to illustrate TAG FORMAT are examples of shape only and must never appear among your tags as if they were part of the scene. This restriction applies to tags; it does not apply to scene_statement, whose examples below you SHOULD imitate closely.
+TAG STYLE — every string you emit is destined for a booru-tag model, so prefer common Danbooru tags and take every one from what the passage actually describes. Every value must name something an artist could draw: "clinical focus releasing" and "heat radiating" are not visible, and neither is a hedge like "clearly visible" or "prominently shown". Words used in these rules to illustrate TAG FORMAT are examples of shape only and must never appear among your tags as if they were part of the scene. This restriction applies to tags; it does not apply to scene_statement, whose examples below you SHOULD imitate closely.
 For a subject that is a recognisable published character, set "booru_character" to that character's booru tag and "booru_series" to the work it comes from. Leave both empty for original characters; a made-up name in those fields is worse than nothing.
 "style" is the mood of this one scene only (e.g. "backlit", "soft focus"). A medium, artist, or rendering style belongs to the preset and must stay identical between images, or characters drift between generations.
 SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "[name] is fighting three bandits." "[name] is casting a large spell." "[name] is performing oral sex on [name]." (Write the characters' real names in place of [name].) ONGOING ACT BEATS MOMENTARY GESTURE. A passage is usually one beat inside a continuing act, and the continuing act is what the image is of. Name that act, even when it began in an earlier message and the current passage only shows a small movement within it. A hand, a glance, a shift of weight, or a change of expression during an act is a detail of that act, never a replacement for it — put those in pose, expression, or action, not here. WRONG: "[name] tips [name]'s chin up." RIGHT: "[name] is performing oral sex on [name], chin tipped up." If you cannot tell what the continuing act is from the CURRENT PASSAGE alone, read PRIOR CONTEXT and the ESTABLISHED SCENE STATE to find it before falling back to the gesture. In an nsfw or explicit scene, name the act plainly and anatomically — a euphemism, or a literary substitute such as "forcing eye contact" in place of the act being performed, costs the image its subject. Write it as flatly as a caption in a reference book. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
 SAFETY is the Danbooru rating of the picture, not the mood of the story around it: safe = nothing suggestive; sensitive = suggestive but not sexual (swimwear, underwear, a suggestive pose); nsfw = nudity or overt sexual context; explicit = a sexual act or visible genitals. A tense, frightening, or violent scene with no suggestive content is safe.
 ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag, taken from the CURRENT PASSAGE or the established location in PRIOR CONTEXT. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
-Keep each image object compact — short arrays, and omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
+Keep each image object compact: at most 4 setting, 3 camera, 3 lighting, 3 style, 3 outfit, 2 pose, 2 expression, 2 relation details, and 1 action item, each a terse visual tag of at most 7 words. These are choices, not truncation points — pick the strongest few rather than listing everything true. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 PARTIAL CHANGES ARE NOT STATE CHANGES. When a passage shows only SOME of a character's transformation — a single feature slipping, eyes changing, claws extending, "partly", "slightly", "a little", "just his eyes", "beginning to" — keep appearance_state at the form they are otherwise in and list the specific features in "partial_features" using the exact saved feature names listed below. Switching appearance_state transforms the WHOLE character, which is wrong for a partial change and produces a completely different creature than the passage describes. Use partial_features for anything short of a full, completed transformation. Select only names that are listed for that ref; never invent a feature name, and never put transformation words in appearance, outfit, pose, or expression.
 For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
 For seated, leaning, lying, or kneeling poses, name the visible support surface in "support". Use the camera tag "pov" only when ref "persona" is seen from the viewer's own eye position, and in that subject's pose include a cue such as "viewer hands visible" or "face out of frame".
@@ -5109,6 +5152,7 @@ async function scanStoryCore(userId, options = {}) {
       const profiles = await getStoryProfiles(preset, settings, userId, chatId)
       const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
         .replaceAll('{{max_images}}', String(settings.maxImages || 2))
+        .replaceAll('{{min_images}}', String(settings.minImages || 0))
       const resolvedGuidance = await resolveMacros(guidance, userId, chatId)
       const instruction = resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles)
       const instrLabel = usingCustom ? `custom guidance + structured compiler (${instruction.length} chars)` : 'structured subject compiler'
@@ -5461,7 +5505,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.30.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.30.4',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -5912,8 +5956,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const profiles = await getStoryProfiles(preset, settings, userId, chatId)
         const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
           .replaceAll('{{max_images}}', String(settings.maxImages || 2))
+          .replaceAll('{{min_images}}', String(settings.minImages || 0))
         const instruction = (await resolveMacros(guidance, userId, chatId)) +
-          structuredParserSchema(settings.maxImages || 2, profiles)
+          structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0)
 
         const startedAt = Date.now()
         const report = {}
@@ -6537,4 +6582,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.30.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.30.4'))

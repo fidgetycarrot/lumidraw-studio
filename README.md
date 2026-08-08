@@ -1,7 +1,118 @@
-# LumiDraw Studio 0.30.1
+# LumiDraw Studio 0.30.4
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.30.4 — The fix panel opens at the top
+
+**Re-run parser** was invisible on a phone. Not missing — above the fold.
+
+Opening the panel focused the prompt box and scrolled it into view, which pushed
+everything above it off the top. On a desktop the panel is tall enough that this
+costs nothing; on a phone it is capped at 46% of the screen, so the first
+control ended up somewhere you had to know to scroll up to find.
+
+The panel now opens scrolled to the top, and the re-parse chips scroll back to
+the top when they appear.
+
+Focus is also skipped below 840px. Focusing a textarea on a phone raises the
+keyboard, which covered most of the panel before any of it had been read.
+
+
+## 0.30.3 — Undoing part of the 0.29.0 prompt audit
+
+The rules are not being followed. They are not being followed because I removed
+them, and the reasoning I removed them with had a hole in it.
+
+The audit marked nine rules CUT on the grounds that "the compiler enforces this
+mechanically, so the instruction buys nothing." That is true of the *guarantee*
+and false of the *outcome*. A compiler enforcing a limit means bad output gets
+truncated or dropped — it does not mean good output gets produced. Cutting
+"no more than 4 setting items" does not yield four well-chosen tags; it yields
+seven sprawling ones and an arbitrary subset surviving.
+
+The spring-pool run shows exactly that:
+
+```text
+setting     7 items   (old cap: 4)
+pose        3 items   (old cap: 2)
+expression  3 items   (old cap: 2) — including "clinical focus releasing"
+lighting    4 items   (old cap: 3)
+```
+
+`clinical focus releasing` is not a thing an artist can draw. The rule banning
+non-visual and hedged values was cut in the same pass.
+
+There is a second, larger mistake underneath. **The audit was calibrated on
+Sonnet**, which followed the compactness rules implicitly, so removing them cost
+nothing measurable at the time. A smaller, faster parser model needs them
+stated. A cut list is a property of a specific model, not of the instruction.
+
+Restored, tersely:
+
+- item caps, restated as **choices rather than truncation points** — "pick the
+  strongest few rather than listing everything true"
+- the seven-word cap on array values
+- values must name something an artist could draw, with `clinical focus
+  releasing` and `heat radiating` named as counter-examples alongside the old
+  hedges
+
+Genuinely mechanical rules stay cut: casing and underscores, the quality/artist
+ban, the generic-room ban, framing width, the anatomy field ban. Those the
+compiler decides outright.
+
+The invariant suite's char ceiling moves 9,000 → 9,600, and its comment now says
+plainly that the number is a function of the parser model rather than a
+universal truth. Five assertions were flipped from "stays cut" to "is present",
+so a future audit cannot quietly remove them again.
+
+
+## 0.30.2 — The minimum image count was never sent
+
+Set to 2–3 images, one image produced. Not a compiler rejection — the parser
+genuinely returned a single image object and stopped cleanly.
+
+**`{{min_images}}` was never substituted on the Anima path.** Only
+`{{max_images}}` was replaced, so a custom instruction reading *"Include between
+{{min_images}} and {{max_images}} tag(s)"* reached the model with a literal
+`{{min_images}}` still in it. The inline path had always substituted both; the
+structured path never did.
+
+The built-in schema was no better. It said only:
+
+> Return at most 3 image object(s).
+
+"At most" never asks for a second image. With a minimum set, it now reads:
+
+> Return between 2 and 3 image objects. 2 is a FLOOR, not a suggestion: find
+> that many distinct visual moments in the passage even when one seems dominant
+> — a second character's reaction, a change of position, or a detail shown close
+> are all separate images. Each needs its own anchor quoting a different part of
+> the passage.
+
+With no minimum set, the wording is unchanged.
+
+### Three defects from the same compiled prompt
+
+**`wearing a dressed`.** "dressed" is a state, not a garment — the same family
+as 0.27.1's `wearing a bare hand`. It now renders alongside `nude` as a state
+word. `wet clothes`, `clothed` and `undressed` join it.
+
+**`wearing blood-covered and a bitten forearm`.** Two failures at once: a
+condition is not a garment, and `\barm\b` never matched "forearm". Conditions
+(`blood-covered`, `soaked`, `singed`, `tattered`…) are now rejected as clothing,
+and the body-part list gained forearm, calf, shin, ankle, forehead, abdomen,
+muzzle, snout, wound, scar and bite.
+
+**`from side, from behind, full body, looking back`.** The camera stands in one
+place. Horizontal angles (front / side / behind) and vertical angles (above /
+below) are independent, so one of each survives and the first stated wins.
+Comparison happens on canonical tags, so the parser's "side view" is recognised
+as the same angle as "from side" *before* the vocabulary rewrites it — checking
+after was how both survived.
+
+20 new assertions; 538 across 23 suites.
+
 
 ## 0.30.1 — Re-parse now uses the model you just picked, and says which one ran
 
