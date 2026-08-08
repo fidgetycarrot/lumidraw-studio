@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.32.1'
+const EXTENSION_VERSION = '0.33.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -494,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.32.1" aria-label="LumiDraw Studio v0.32.1">
+    <button class="ld-launcher" title="LumiDraw Studio v0.33.0" aria-label="LumiDraw Studio v0.33.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.32.1</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.33.0</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -691,6 +691,14 @@ function realSetup(ctx) {
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Connection</span><div style="display:flex;gap:6px;align-items:center"><select class="ld-parser-conn" style="flex:1"><option value="">— default connection —</option></select><button class="ld-btn ld-compact" data-act="refresh-parser-sources" title="Reload available parser connections">↻</button></div></div>
               <div><span class="ld-label">Model override (optional)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="e.g. your Kimi deployment" /><button class="ld-btn ld-compact" data-act="use-conn-model" title="Copy the selected connection's current model into the override field">Use connection model</button></div></div>
+              <div>
+                <span class="ld-label">Settings Draw Things refused</span>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <span class="ld-rejected-keys" style="flex:1;font-size:12px;opacity:.8">none</span>
+                  <button class="ld-btn ld-compact" data-act="clear-rejected-keys">Clear</button>
+                </div>
+                <div class="ld-hint">Draw Things refuses an entire generation if one setting is not in its API, so refused settings are remembered and omitted. Clear this after updating Draw Things to try them again.</div>
+              </div>
               <div><span class="ld-label">Parser output budget (tokens)</span><input class="ld-parser-maxtokens" type="number" min="1200" max="32000" step="500" placeholder="12000" /><div class="ld-hint">First-attempt <code>max_tokens</code>. The JSON needs ~700; the rest is headroom for a provider that will not turn reasoning off. Lower it to ~4000 only once the log shows reasoning is genuinely off.</div></div>
               <div><span class="ld-label">Parser request overrides (JSON, advanced)</span><textarea class="ld-parser-overrides" style="min-height:64px;font-family:ui-monospace,monospace;font-size:12px" placeholder='{"reasoning":{"enabled":false}}'></textarea><div class="ld-hint">Merged into the parser request. Use this to force a provider-specific setting — most often turning reasoning off. Check the Spindle log for <code>reasoning_tokens=</code> after a scan to see whether it worked.</div></div>
             </div>
@@ -2983,6 +2991,26 @@ ${entry.prompt || ''}`.trim()
       button.textContent = label
     }
   })
+  async function refreshRejectedKeys(clear = false) {
+    const label = $('.ld-rejected-keys')
+    if (!label) return
+    try {
+      const res = await call('dt_rejected_keys', clear ? { clear: true } : {})
+      const keys = Array.isArray(res.keys) ? res.keys : []
+      label.textContent = keys.length ? keys.join(', ') : 'none'
+      label.style.opacity = keys.length ? '1' : '.6'
+    } catch (error) {
+      label.textContent = error.message
+    }
+  }
+  const clearRejected = $('[data-act="clear-rejected-keys"]')
+  if (clearRejected) {
+    clearRejected.addEventListener('click', async () => {
+      await refreshRejectedKeys(true)
+      setStatus('.ld-settings-status', 'Cleared. Draw Things will be offered every setting again on the next generation.', 'good')
+    })
+  }
+
   $('.ld-lightbox-regen-cancel').addEventListener('click', closeRegenPanel)
   $('.ld-lightbox-regen-run').addEventListener('click', async () => {
     const item = lightboxItems[lightboxIndex]
@@ -3855,6 +3883,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-parser-model').value = settings.parserModel || ''
       if ($('.ld-parser-overrides')) $('.ld-parser-overrides').value = settings.parserRequestOverrides || ''
       if ($('.ld-parser-maxtokens')) $('.ld-parser-maxtokens').value = settings.parserMaxTokens || 12000
+      refreshRejectedKeys()
       $('.ld-parser-instr').value = settings.parserInstruction || parserDefaultFor(settings.parserEngine || 'legacy')
       $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
       await loadCatalog()

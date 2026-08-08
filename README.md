@@ -1,7 +1,50 @@
-# LumiDraw Studio 0.32.1
+# LumiDraw Studio 0.33.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.33.0 — Studio survives a setting Draw Things will not accept
+
+Exposing every Draw Things setting was the right call for control and the wrong
+one for reliability. **Draw Things refuses the entire generation if a single key
+is not in its API**, so one unsupported setting does not degrade Studio — it
+breaks it completely, and finding the offender meant clearing fields by hand
+until something worked.
+
+Draw Things already names the offenders:
+
+```json
+{"detail":"Unrecognized keys: [tiled_decoding, refiner_start]"}
+```
+
+That is now acted on rather than merely reported.
+
+- **A rejection is learned and immediately retried.** The offending keys are
+  dropped and the same generation is sent again, so the request that meets a new
+  unsupported setting still produces an image.
+- **The keys are remembered.** Later generations omit them before sending, so
+  each unsupported setting costs one retry ever rather than one failure per
+  attempt.
+- **Reserved keys are never dropped** — prompt, negative prompt, seed and batch
+  count are not settings and are exempt.
+
+Settings shows the list, with a **Clear** button:
+
+```text
+Settings Draw Things refused
+  tiled_decoding, refiner_start                              [Clear]
+```
+
+Clear it after updating Draw Things and every setting is offered again. If it
+still refuses, the list rebuilds itself on the next generation at no cost.
+
+I considered building the allowlist from Sync instead — only sending keys that
+`GET /` returns. Learning from rejections is better: it needs no assumption
+about whether every settable key appears in that response, and a wrong
+allowlist would silently drop settings that *do* work.
+
+12 new assertions; 584 across 25 suites.
+
 
 ## 0.32.1 — The model may be left blank
 

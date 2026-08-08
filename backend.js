@@ -284,7 +284,59 @@ function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   return payload
 }
 
-async function dtGenerate(settings, payload) {
+
+// --- rejected-key memory ------------------------------------------------------
+// Full pass-through was the right call for exposing every Draw Things setting,
+// and the wrong call for reliability: Draw Things refuses the ENTIRE request if
+// one key is not in its generation API, so a single unsupported setting breaks
+// Studio completely.
+//
+// Draw Things names the offenders in its error. Remembering them turns "Studio
+// is broken until you find the bad key by hand" into one failure per key, ever.
+const REJECTED_KEYS_FILE = 'rejected_dt_keys.json'
+let rejectedKeyCache = null
+
+async function getRejectedKeys() {
+  if (rejectedKeyCache) return rejectedKeyCache
+  try {
+    const raw = await spindle.storage.get(REJECTED_KEYS_FILE)
+    const parsed = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null
+    rejectedKeyCache = new Set(Array.isArray(parsed) ? parsed : (parsed && parsed.keys) || [])
+  } catch { rejectedKeyCache = new Set() }
+  return rejectedKeyCache
+}
+
+async function rememberRejectedKeys(keys) {
+  const set = await getRejectedKeys()
+  let added = 0
+  for (const key of keys || []) {
+    const value = String(key || '').trim()
+    if (value && !set.has(value)) { set.add(value); added++ }
+  }
+  if (!added) return false
+  try { await spindle.storage.set(REJECTED_KEYS_FILE, JSON.stringify([...set])) }
+  catch (error) { spindle.log.warn('[lumidraw] could not persist rejected keys: ' + error.message) }
+  return true
+}
+
+async function forgetRejectedKeys() {
+  rejectedKeyCache = new Set()
+  try { await spindle.storage.set(REJECTED_KEYS_FILE, JSON.stringify([])) } catch { /* best effort */ }
+}
+
+function rejectedKeysIn(message) {
+  const match = /Unrecognized keys:\s*\[([^\]]*)\]/i.exec(String(message || ''))
+  if (!match) return []
+  return match[1].split(',').map((key) => key.trim().replace(/^["']|["']$/g, '')).filter(Boolean)
+}
+
+async function dtGenerate(settings, payload, attempt = 0) {
+  const rejected = await getRejectedKeys()
+  const dropped = Object.keys(payload).filter((key) => rejected.has(key) && !RESERVED_PAYLOAD_KEYS.has(key))
+  if (dropped.length) {
+    for (const key of dropped) delete payload[key]
+    spindle.log.info('[lumidraw] omitted setting(s) Draw Things has rejected before: ' + dropped.join(', '))
+  }
   spindle.log.info('[lumidraw] Draw Things payload keys: ' + Object.keys(payload).sort().join(', '))
   spindle.log.info('[lumidraw] Draw Things payload: ' + JSON.stringify({
     ...payload,
@@ -297,7 +349,20 @@ async function dtGenerate(settings, payload) {
     body: JSON.stringify(payload),
   }, 600000) // generations can be slow on-device; 10 min budget
   if (!res.ok || !res.json || !Array.isArray(res.json.images) || res.json.images.length === 0) {
-    throw new Error(`Draw Things rejected the generation: ${describeDtRejection(extractDtError(res))}`)
+    const raw = extractDtError(res)
+    const offenders = rejectedKeysIn(raw)
+    // Learn and retry once. The first generation that meets a new unsupported
+    // setting still succeeds, and no later one meets it again.
+    if (offenders.length && attempt === 0) {
+      await rememberRejectedKeys(offenders)
+      spindle.log.warn('[lumidraw] Draw Things refused ' + offenders.join(', ') +
+        ' — dropping ' + (offenders.length === 1 ? 'it' : 'them') + ' and retrying once. ' +
+        'These settings will be omitted from now on; clear the list in Settings if Draw Things is updated.')
+      const retry = { ...payload }
+      for (const key of offenders) delete retry[key]
+      return dtGenerate(settings, retry, attempt + 1)
+    }
+    throw new Error(`Draw Things rejected the generation: ${describeDtRejection(raw)}`)
   }
   if (res.json.images.length > 1) {
     spindle.log.warn(`[lumidraw] Draw Things returned ${res.json.images.length} images despite batch_count=1; keeping only the first.`)
@@ -5690,7 +5755,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.32.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.33.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6101,6 +6166,19 @@ spindle.onFrontendMessage(async (payload, userId) => {
       // The point is comparison: swap the parser model, press the button, and
       // read the two prompts side by side for the cost of one parser call and
       // no Draw Things time.
+      // Lets the user see and reset what Draw Things has refused, so a DT
+      // update that adds support for a setting is one button away from being
+      // usable again.
+      case 'dt_rejected_keys': {
+        if (payload.clear) {
+          await forgetRejectedKeys()
+          spindle.log.info('[lumidraw] cleared the rejected Draw Things settings list')
+        }
+        const keys = [...(await getRejectedKeys())].sort()
+        reply = ok(payload, requestId, { keys })
+        break
+      }
+
       case 'reparse_image': {
         const imageUrl = String(payload.imageUrl || '').trim()
         if (!imageUrl) throw new Error('Re-parsing needs to know which image to work from.')
@@ -6775,4 +6853,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.32.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.33.0'))
