@@ -1,7 +1,36 @@
-# LumiDraw Studio 0.32.0
+# LumiDraw Studio 0.32.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.32.1 — The model may be left blank
+
+Draw Things refuses Cloud Compute for a model named by local filename, even when
+that same model is a Community one and runs on cloud fine when generated from
+the app itself. The documented behaviour of `/sdapi/v1/txt2img` is to run on
+**the model currently selected in the Draw Things UI** — so sending no `model`
+key at all is worth testing, since it is the configuration that already works
+by hand.
+
+`buildPayload` has always dropped empty values, so a blank model already sent no
+key. Five separate guards refused to let it get that far:
+
+- `generateAndUpload` threw *"Active preset has no model."*
+- Preset save threw *"Preset has no model — sync from Draw Things first."*
+- Studio generation threw *"No model set."*
+- The Studio button refused before calling the backend.
+- Save-as-new-preset refused too.
+
+All five now allow it and say what blank means rather than treating it as a
+mistake. The model field is also free text with autocomplete instead of a
+dropdown limited to installed models.
+
+**This is a test, not a fix.** If it works, Cloud Compute is reachable and the
+model key was the obstacle. If Draw Things still refuses, the HTTP API path is
+local-only and nothing in this extension can change that — the question for
+Draw Things is whether a generation submitted through the API server honours
+Server Offload, and their answer decides whether this is worth pursuing.
+
 
 ## 0.32.0 — Knowing which moment you are looking at
 

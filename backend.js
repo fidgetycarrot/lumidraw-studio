@@ -1153,7 +1153,13 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
   const settings = await getSettings()
   const merged = dims ? { ...config, ...dims } : config
   const payloadOut = buildPayload({ prompt, negativePrompt, seed, config: merged, extra })
-  if (!payloadOut.model) throw new Error('Active preset has no model.')
+  // A blank model is deliberate, not an error: with no `model` key in the
+  // request, Draw Things uses whatever is selected in its own UI. That is the
+  // only configuration that can reach Cloud Compute, which refuses a model
+  // named by local filename.
+  if (!payloadOut.model) {
+    spindle.log.info('[lumidraw] no model in the payload — Draw Things will use the model selected in its own UI')
+  }
   const started = Date.now()
   const images = await dtGenerate(settings, payloadOut)
   assertStoryScanActive(scan)
@@ -5684,7 +5690,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.32.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.32.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6009,8 +6015,11 @@ spindle.onFrontendMessage(async (payload, userId) => {
       case 'save_preset': {
         const name = String(payload.name || '').trim()
         if (!name) throw new Error('Preset needs a name.')
-        if (!payload.config || !payload.config.model) {
-          throw new Error('Preset has no model — sync from Draw Things first.')
+        if (!payload.config) {
+          throw new Error('Preset has no configuration — sync from Draw Things first.')
+        }
+        if (!payload.config.model) {
+          spindle.log.info(`[lumidraw] preset "${name}" saved with no model — Draw Things will use the model selected in its own UI`)
         }
         const presets = await getPresets()
         const preset = {
@@ -6347,7 +6356,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           extra: null,
         })
         if (!payloadOut.model) {
-          throw new Error('No model set — sync from Draw Things or pick a preset first.')
+          spindle.log.info('[lumidraw] Studio generation sent with no model — Draw Things will use the model selected in its own UI')
         }
         const started = Date.now()
         const images = await dtGenerate(settings, payloadOut)
@@ -6766,4 +6775,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.32.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.32.1'))

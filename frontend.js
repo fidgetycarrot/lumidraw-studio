@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.32.0'
+const EXTENSION_VERSION = '0.32.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -494,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.32.0" aria-label="LumiDraw Studio v0.32.0">
+    <button class="ld-launcher" title="LumiDraw Studio v0.32.1" aria-label="LumiDraw Studio v0.32.1">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.32.0</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.32.1</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -543,7 +543,7 @@ function realSetup(ctx) {
                 <div class="ld-card">
                   <div class="ld-subtitle">Core generation</div>
                   <span class="ld-label">Model</span>
-                  <select class="ld-draft-model"><option value="">— choose model —</option></select>
+                  <input class="ld-draft-model" list="ld-model-catalog" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog"></datalist>
                   <div class="ld-row" style="margin-top:7px">
                     <div><span class="ld-label">Sampler</span><select class="ld-draft-sampler"><option value="">— choose sampler —</option></select></div>
                   </div>
@@ -766,7 +766,7 @@ Armored [outfit=omit; subject=armored man] | armor, battle gear => heavy plate a
           <div class="ld-editor ld-card" style="display:none">
             <div class="ld-subtitle">Preset editor</div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
-            <span class="ld-label" style="margin-top:7px">Model</span><select class="ld-ed-model"></select>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><div class="ld-hint">Installed models autocomplete. For Draw Things Cloud Compute, type a model from its Official or Community channel — cloud refuses local merges, and the model need not be installed here.</div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div style="flex:0 0 82px"><span class="ld-label">Steps</span><input class="ld-ed-steps" type="number" min="1" max="150" /></div>
@@ -1349,14 +1349,24 @@ fangs = fangs, sharp teeth"></textarea></div>
     refreshDtSettingsOptions()
   }
 
+  // A free-text field needs no option injected; a value simply IS the value.
   function ensureDraftModelOption(value) {
-    const select = $('.ld-draft-model')
-    if (!select || !value) return
-    if (![...select.options].some((option) => option.value === value)) {
+    const field = $('.ld-draft-model')
+    if (field && value && !field.value) field.value = value
+  }
+
+  function populateDatalist(id, values) {
+    const list = document.getElementById(id)
+    if (!list) return
+    list.innerHTML = ''
+    const seen = new Set()
+    for (const raw of values || []) {
+      const value = String(raw || '').trim()
+      if (!value || seen.has(value.toLowerCase())) continue
+      seen.add(value.toLowerCase())
       const option = document.createElement('option')
       option.value = value
-      option.textContent = value
-      select.insertBefore(option, select.firstChild)
+      list.appendChild(option)
     }
   }
 
@@ -2659,9 +2669,12 @@ ${entry.prompt || ''}`.trim()
   async function doGenerate() {
     if (busy) return
     draftConfig = readDraftConfigFromControls()
-    if (!draftConfig || !draftConfig.model) {
-      setStatus('.ld-gen-status', 'No model set in the workspace — choose a preset, press Sync, or pick a model.', 'err')
+    if (!draftConfig) {
+      setStatus('.ld-gen-status', 'No workspace settings yet — choose a preset or press Sync.', 'err')
       return
+    }
+    if (!draftConfig.model) {
+      setStatus('.ld-gen-status', 'No model set — Draw Things will use whatever is selected in its own UI.')
     }
     busy = true
     const btn = $('[data-act="generate"]')
@@ -3089,9 +3102,11 @@ ${entry.prompt || ''}`.trim()
         currentRecipe: res.currentRecipe || null,
       }
       const editorModelValue = $('.ld-ed-model') ? $('.ld-ed-model').value : ''
-      populateSelect($('.ld-ed-model'), catalog.models.map((model) => model.file), editorModelValue, '— choose model —')
+      populateDatalist('ld-model-catalog-ed', catalog.models.map((model) => model.file))
+      if ($('.ld-ed-model') && editorModelValue) $('.ld-ed-model').value = editorModelValue
       const draftModelValue = (draftConfig && draftConfig.model) || ($('.ld-draft-model') && $('.ld-draft-model').value) || ''
-      populateSelect($('.ld-draft-model'), catalog.models.map((model) => model.file), draftModelValue, '— choose model —')
+      populateDatalist('ld-model-catalog', catalog.models.map((model) => model.file))
+      if ($('.ld-draft-model') && draftModelValue) $('.ld-draft-model').value = draftModelValue
       const editorSamplerValue = $('.ld-ed-sampler') ? $('.ld-ed-sampler').value : ''
       populateSelect($('.ld-ed-sampler'), catalog.samplers, editorSamplerValue, '— choose sampler —')
       if (draftConfig) renderDraftControls()
@@ -3133,12 +3148,7 @@ ${entry.prompt || ''}`.trim()
     editorExtra = p ? (p.extra || null) : (seed ? (seed.extra || null) : null)
     const c = p ? (p.config || {}) : (seed ? (seed.config || {}) : (syncedConfig || {}))
     $('.ld-ed-name').value = p ? p.name : ''
-    const msel = $('.ld-ed-model')
-    if (c.model && ![...msel.options].some((o) => o.value === c.model)) {
-      const o = document.createElement('option'); o.value = c.model; o.textContent = c.model
-      msel.insertBefore(o, msel.firstChild)
-    }
-    msel.value = c.model || ''
+    $('.ld-ed-model').value = c.model || ''
     populateSelect($('.ld-ed-sampler'), catalog.samplers, c.sampler || '', '— choose sampler —')
     $('.ld-ed-steps').value = c.steps !== undefined ? c.steps : ''
     $('.ld-ed-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''
@@ -3285,8 +3295,8 @@ ${entry.prompt || ''}`.trim()
 
   $('[data-act="draft-save-new"]').addEventListener('click', () => {
     const bundle = currentDraftBundle()
-    if (!bundle.config || !bundle.config.model) {
-      setStatus('.ld-draft-status', 'Choose a model in the workspace first.', 'err')
+    if (!bundle.config) {
+      setStatus('.ld-draft-status', 'No workspace settings to save yet — press Sync first.', 'err')
       return
     }
     openEditor(null, bundle)
