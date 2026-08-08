@@ -1,7 +1,45 @@
-# LumiDraw Studio 0.31.1
+# LumiDraw Studio 0.31.2
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.31.2 — Count tags: the profile decides, unless it has nothing to say
+
+**Gender presentation is not implemented.** 0.30.5 added only the *vocabulary* —
+`trap` and its aliases, `futanari`, `androgynous`, `crossdressing (mtf)` and the
+rest. The profile field that would drive count tag and appearance tags is still
+just a sketch.
+
+That said, the parser writing `1girl` for a femboy should already have been
+harmless, because a profile's count tag outranks the parser's guess for any
+known ref. Reading that code closely turned up a real fault beside it:
+
+```js
+const countTag = state?.countTag ? state.countTag : (profile ? profile.countTag : subject.countTag)
+```
+
+When a profile exists but its count tag is **blank**, that yields `''` — and the
+subject's own count tag is discarded rather than used. A blank field is *no
+opinion*, not a veto. The effect was a subject silently contributing no count at
+all, so a two-person scene could compile as `1boy` with the second person
+uncounted.
+
+Precedence is now: appearance state → profile → parser → nothing.
+
+Both outcomes are traced, because a silent override is exactly the thing that is
+impossible to notice:
+
+```text
+✓ count tag · Sovi — parser said "1girl", profile says "1boy" — the profile wins
+! count tag · Sovi — no count tag saved on the profile, so the parser's "1girl"
+  is being used. Set one on the character to lock it.
+```
+
+The `!` line is the actionable one. If Sovi is coming out as `1girl`, that trace
+line will say so and name the fix: save a count tag on his character entry.
+
+5 new assertions; 563 across 24 suites.
+
 
 ## 0.31.1 — Re-parse never replied, and anchors were killing images
 

@@ -2435,7 +2435,21 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
     (profile.anatomyMode === 'relevant' && subject.anatomyVisible && anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, profile.anchor, requireAnatomyOwner))
   )
   const anatomy = anatomyAllowed ? profile.anatomy : []
-  const countTag = state && state.countTag ? state.countTag : (profile ? profile.countTag : subject.countTag)
+  // A profile's count tag is locked identity and outranks whatever the parser
+  // guessed — this is what stops a femboy being rendered as 1girl because the
+  // prose read feminine. But an EMPTY profile field is no opinion, not a veto:
+  // returning '' there silently dropped the subject's count tag altogether, so
+  // a two-person scene could compile as "1boy" with the second person having no
+  // count at all.
+  const countTag = (state && state.countTag) || (profile && profile.countTag) || subject.countTag || ''
+  if (profile && profile.countTag && subject.countTag &&
+      animaTag(profile.countTag) !== animaTag(subject.countTag)) {
+    trace(`count tag · ${profile.anchor || subject.ref}`, 'applied',
+      `parser said "${subject.countTag}", profile says "${profile.countTag}" — the profile wins`)
+  } else if (profile && !profile.countTag && subject.countTag) {
+    trace(`count tag · ${profile.anchor || subject.ref}`, 'warn',
+      `no count tag saved on the profile, so the parser's "${subject.countTag}" is being used. Set one on the character to lock it.`)
+  }
   // `named` distinguishes "Ilsa" (a proper name that can head a sentence) from
   // "cloaked stranger" (a label that needs an article: "the cloaked stranger").
   return {
@@ -5599,7 +5613,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.31.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.31.2',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6680,4 +6694,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.31.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.31.2'))
