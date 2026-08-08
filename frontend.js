@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.33.0'
+const EXTENSION_VERSION = '0.33.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -494,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.33.0" aria-label="LumiDraw Studio v0.33.0">
+    <button class="ld-launcher" title="LumiDraw Studio v0.33.1" aria-label="LumiDraw Studio v0.33.1">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.33.0</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.33.1</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -3011,6 +3011,16 @@ ${entry.prompt || ''}`.trim()
     })
   }
 
+  // Lumiverse listens for arrow keys on the document to swipe messages. Even
+  // with the handler above, the event keeps travelling — so typing in the fix
+  // panel is contained at its own boundary.
+  const regenBox = $('.ld-lightbox-regen')
+  if (regenBox) {
+    regenBox.addEventListener('keydown', (event) => {
+      if (isTextEntry(event.target) && event.key !== 'Escape') event.stopPropagation()
+    }, true)
+  }
+
   $('.ld-lightbox-regen-cancel').addEventListener('click', closeRegenPanel)
   $('.ld-lightbox-regen-run').addEventListener('click', async () => {
     const item = lightboxItems[lightboxIndex]
@@ -3463,15 +3473,34 @@ ${entry.prompt || ''}`.trim()
   $('.ld-story-picker').addEventListener('click', (event) => {
     if (event.target === $('.ld-story-picker')) closeStoryPicker()
   })
+  // Arrow keys mean "move the cursor" inside a text field and nothing else.
+  // Treating them as image navigation there made the prompt box unusable — and
+  // the keystroke also reached Lumiverse underneath, swiping the message.
+  const isTextEntry = (node) => {
+    if (!node) return false
+    if (node.isContentEditable) return true
+    const tag = String(node.tagName || '').toUpperCase()
+    return tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT'
+  }
+
   const onStoryPickerKeyDown = (event) => {
+    const typing = isTextEntry(event.target)
     if (lightbox.classList.contains('ld-open')) {
-      if (event.key === 'Escape') closeLightbox()
-      else if (event.key === 'ArrowLeft') moveLightbox(-1)
+      // Escape still closes from anywhere; a text field swallows the rest.
+      if (event.key === 'Escape') {
+        if (typing) { event.target.blur(); event.stopPropagation(); return }
+        closeLightbox()
+      } else if (typing) {
+        // Stop it here so the host does not treat the keystroke as a swipe.
+        event.stopPropagation()
+        return
+      } else if (event.key === 'ArrowLeft') moveLightbox(-1)
       else if (event.key === 'ArrowRight') moveLightbox(1)
       else return
       event.preventDefault()
       return
     }
+    if (typing) return
     if (event.key !== 'Escape') return
     if (textEditor.classList.contains('ld-open')) {
       closeTextEditor(false)

@@ -1,7 +1,27 @@
-# LumiDraw Studio 0.33.0
+# LumiDraw Studio 0.33.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.33.1 — Arrow keys move the cursor
+
+Editing a prompt in **Fix this image…** was close to impossible. Pressing left
+or right flipped to the previous or next image, and the same keystroke carried
+on into Lumiverse underneath and swiped the message.
+
+Two causes, both fixed.
+
+The lightbox key handler claimed the arrow keys unconditionally. It now checks
+what has focus: inside a textarea, input, select, or anything contenteditable,
+arrows do what arrows do. Outside one, they still page through images.
+
+And the keystroke did not stop there — Lumiverse listens on the document, so
+even a handled event kept travelling. Keys typed inside the fix panel are now
+contained at the panel's own boundary.
+
+Escape keeps working from anywhere: in a text field it drops focus, so a second
+press closes the lightbox as before.
+
 
 ## 0.33.0 — Studio survives a setting Draw Things will not accept
 
