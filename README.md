@@ -1,7 +1,54 @@
-# LumiDraw Studio 0.33.1
+# LumiDraw Studio 0.33.2
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.33.2 — Hair was being cut, so characters converged
+
+Sovi's hair kept disappearing from prompts, and he came out with Rook's.
+
+The caption keeps at most seven appearance traits, ordered by
+`signaturePriority`. Hair scored **99** — it appeared in no tier at all, so it
+sorted last and was the first thing cut:
+
+```js
+if (/glasses|eyewear|goggles/.test(value)) return 1
+if (/elf ears|animal ears|horns?|tails?|fur/.test(value)) return 2
+if (/tattoo|scar|birthmark/.test(value)) return 3
+if (/piercing/.test(value)) return 4
+return 99                    // ← hair, eyes
+```
+
+That has the ranking close to backwards. Hair and eye colour are how a
+booru-trained model tells two characters apart — they lead almost every
+character tag set on Danbooru. Glasses are an accessory. And a character with no
+stated hair does not get *no* hair; the model borrows from whatever hair the
+prompt does mention, which in a two-hander is the other character. Two people
+converge on one look.
+
+New order: **hair → eyes → species markers → eyewear → scars → piercings →
+everything else.**
+
+Ordering alone was not enough. A character with several identity traits could
+still crowd itself out, so the cap is now filled from identity traits *before*
+anything incidental is considered. Whatever gets dropped is traced:
+
+```text
+✓ caption traits · Sovi — kept 7 of 9; dropped slender build, pale skin
+```
+
+Sovi now compiles as:
+
+```text
+Sovi, a trap elf femboy with blonde long hair with light blue tips, gold eyes,
+pointed elf ears, round glasses, pale skin, a feminine body, and freckles
+```
+
+Hair first, eyes second, and nothing identity-bearing lost — while Rook keeps
+his own `dark messy facial hair`.
+
+12 new assertions; 596 across 26 suites.
+
 
 ## 0.33.1 — Arrow keys move the cursor
 

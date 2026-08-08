@@ -3256,12 +3256,21 @@ function filterAppearanceByVisibility(appearance, outfit) {
   return (appearance || []).filter((tag) => appearanceTraitVisible(tag, outfit))
 }
 
+// Hair and eye colour are how a booru-trained model tells two characters apart —
+// they are the first thing in almost every character tag set. Scoring hair 99
+// sent it to the end of the list, where the caption cap cut it off, and a
+// character with no stated hair borrows whatever hair the prompt does mention.
+// That is exactly how two characters end up with the same hair.
+const IDENTITY_TRAIT_RE = /\b(?:hair|bun|braids?|ponytails?|twintails?|bangs|sidelocks?|ahoge|eyes?|heterochromia)\b/
+
 function signaturePriority(tag) {
   const value = animaTag(tag)
-  if (/\b(?:round glasses|glasses|eyewear|goggles|monocle|eyepatch)\b/.test(value)) return 1
-  if (/\b(?:pointed elf ears|elf ears|animal ears|wolf ears|cat ears|fox ears|horns?|wings?|tails?|fangs?|claws?|snout|muzzle|fur)\b/.test(value)) return 2
-  if (/\b(?:tattoo|scar|birthmark|body marking)\b/.test(value)) return 3
-  if (/\bpiercing\b/.test(value)) return 4
+  if (/\bhair\b|\b(?:bun|braids?|ponytails?|twintails?|bangs|sidelocks?|ahoge)\b/.test(value)) return 1
+  if (/\beyes?\b|\bheterochromia\b/.test(value)) return 2
+  if (/\b(?:pointed elf ears|elf ears|animal ears|wolf ears|cat ears|fox ears|horns?|wings?|tails?|fangs?|claws?|snout|muzzle|fur)\b/.test(value)) return 3
+  if (/\b(?:round glasses|glasses|eyewear|goggles|monocle|eyepatch)\b/.test(value)) return 4
+  if (/\b(?:tattoo|scar|birthmark|body marking)\b/.test(value)) return 5
+  if (/\bpiercing\b/.test(value)) return 6
   return 99
 }
 
@@ -3705,7 +3714,18 @@ function subjectIdentitySentences(item, scene, descriptors) {
     .filter((tag) => !normalizeIdentityText(nounPhrase).includes(normalizeIdentityText(tag)))
   const { modifiers, nouns } = splitTraitWords(visible)
   const orderedNouns = [...nouns].sort((a, b) => signaturePriority(a) - signaturePriority(b))
-  const traits = withArticleList(orderedNouns).slice(0, MAX_CAPTION_TRAITS)
+  // Identity traits are never traded away for incidental ones. Sorting puts
+  // them first, but a subject with several could still crowd itself out, so the
+  // cap is filled from identity traits before anything else is considered.
+  const identity = orderedNouns.filter((tag) => IDENTITY_TRAIT_RE.test(animaTag(tag)))
+  const rest = orderedNouns.filter((tag) => !IDENTITY_TRAIT_RE.test(animaTag(tag)))
+  const chosen = [...identity.slice(0, MAX_CAPTION_TRAITS), ...rest].slice(0, MAX_CAPTION_TRAITS)
+  const cut = orderedNouns.filter((tag) => !chosen.includes(tag))
+  if (cut.length) {
+    trace(`caption traits · ${item.anchor || item.subject.ref}`, 'applied',
+      `kept ${chosen.length} of ${orderedNouns.length}; dropped ${cut.join(', ')}`)
+  }
+  const traits = withArticleList(chosen)
   const leadModifiers = modifiers.slice(0, 2)
 
   // An unprofiled subject's label doubles as its noun ("cloaked stranger"), so
@@ -5755,7 +5775,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.33.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.33.2',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6853,4 +6873,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.33.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.33.2'))
