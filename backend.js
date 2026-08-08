@@ -2277,13 +2277,18 @@ function profileForSubject(subject, profiles) {
   return ((profiles && profiles.cast) || []).find((profile) => profile.ref === subject.ref) || null
 }
 
-function selectAppearanceState(profile, subject, sourcePassage = '') {
+function selectAppearanceState(profile, subject, sourcePassage = '', report = null) {
+  const note = (state, reason) => {
+    if (report) { report.state = state ? state.name : ''; report.reason = reason }
+    return state
+  }
   const states = profile && Array.isArray(profile.appearanceStates) ? profile.appearanceStates : []
-  if (!states.length) return null
+  if (!states.length) return note(null, 'no states defined')
   const requested = String(subject && subject.appearanceState || '').trim().toLowerCase()
   if (requested) {
     const direct = states.find((state) => state.name.toLowerCase() === requested || (state.recognition || []).some((value) => value.toLowerCase() === requested))
-    if (direct) return direct
+    if (direct) return note(direct, `parser asked for "${requested}"`)
+    if (report) report.unmatchedRequest = requested
   }
   const passage = String(sourcePassage || '').toLowerCase()
   const candidates = []
@@ -2295,15 +2300,26 @@ function selectAppearanceState(profile, subject, sourcePassage = '') {
       // full wolf form whenever the prose merely said "werewolf" or "wolfish",
       // because the state named "Wolf" matched inside those words.
       if (!new RegExp(`\\b${escapeRegExp(value)}\\b`).test(passage)) continue
-      candidates.push({ state, length: value.length, words: value.split(/\s+/).length })
+      candidates.push({ state, cue: value, length: value.length, words: value.split(/\s+/).length })
     }
   }
   // A multi-word cue ("wolf form", "fully shifted") is far stronger evidence
   // than a bare one-word state name, so it wins regardless of length.
   candidates.sort((a, b) => (b.words - a.words) || (b.length - a.length))
-  if (candidates.length) return candidates[0].state
+  if (candidates.length) return note(candidates[0].state, `passage says "${candidates[0].cue}"`)
   const defaultName = String(profile.defaultAppearanceState || '').toLowerCase()
-  return states.find((state) => state.name.toLowerCase() === defaultName) || states[0]
+  const fallback = defaultName ? states.find((state) => state.name.toLowerCase() === defaultName) : null
+  if (fallback) return note(fallback, `no cue in the passage; using the declared default "${fallback.name}"`)
+  // NEVER states[0]. An appearance state is a departure from the character's
+  // base form, so "no cue and no declared default" means the base form — not
+  // whichever state happens to sit first in the list. Falling through to
+  // states[0] put a human character in a transformed state in every passage
+  // that failed to mention shifting, and no amount of re-parsing could fix it
+  // because the choice was made after the parser had already finished.
+  if (defaultName) {
+    spindle.log.warn(`[lumidraw] ${profile.anchor || 'a profile'} declares default appearance state "${profile.defaultAppearanceState}" but no state by that name exists; using the base form.`)
+  }
+  return note(null, 'no cue in the passage and no declared default — base form')
 }
 
 // --- form firewall ----------------------------------------------------------
@@ -2391,7 +2407,14 @@ function scrubFormTermsFromTags(list, terms) {
 
 function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false) {
   const profile = profileForSubject(subject, profiles)
-  const state = profile ? selectAppearanceState(profile, subject, sourcePassage) : null
+  const stateReport = {}
+  const state = profile ? selectAppearanceState(profile, subject, sourcePassage, stateReport) : null
+  if (profile && Array.isArray(profile.appearanceStates) && profile.appearanceStates.length) {
+    trace(`appearance state · ${profile.anchor || subject.ref}`,
+      state ? 'applied' : 'clean',
+      `${state ? state.name : 'base form'} — ${stateReport.reason || 'no reason recorded'}` +
+      (stateReport.unmatchedRequest ? ` (parser asked for "${stateReport.unmatchedRequest}", which is not a saved state)` : ''))
+  }
   const anchor = profile ? profile.anchor : (subject.label || subject.ref.replace(/_/g, ' '))
   const noun = state && state.subject ? state.subject : (profile ? profile.subject : subject.label)
   // A transformation state marked appearance=replace stands on its own tags;
@@ -3968,18 +3991,62 @@ function repairCameraTags(cameraTags, scene, descriptors) {
   return { tags, note: notes.join('; ') }
 }
 
+
+// --- compile trace -----------------------------------------------------------
+// "Is our rule being followed?" was previously unanswerable without adding
+// console.log by hand. A rule that silently does not fire looks exactly like a
+// rule that fired and had nothing to do. The trace records both, so the
+// question is answered by reading rather than by instrumenting.
+let LAST_COMPILE_TRACE = []
+
+function traceReset() { LAST_COMPILE_TRACE = [] }
+function trace(rule, outcome, detail = '') {
+  LAST_COMPILE_TRACE.push({ rule, outcome, detail: String(detail || '') })
+}
+function traceSnapshot() { return LAST_COMPILE_TRACE.slice() }
+
+// Human-readable, for the Spindle log and the debug panel.
+function formatCompileTrace(steps) {
+  const mark = { applied: '✓', clean: '·', skipped: '–', warn: '!' }
+  return (steps || []).map((step) =>
+    `  ${mark[step.outcome] || '?'} ${step.rule}${step.detail ? ' — ' + step.detail : ''}`).join('\n')
+}
+
+
+
+function traceAppearance(item, after) {
+  const before = cleanAppearanceForNoun(item.appearance, item.noun)
+  const scenery = before.filter((tag) => isNotTrait(tag))
+  const name = item.anchor || (item.subject && item.subject.ref) || 'subject'
+  if (scenery.length) trace(`scenery out of appearance · ${name}`, 'applied', scenery.join(', '))
+  if (before.length - scenery.length !== after.length) {
+    trace(`trait merge · ${name}`, 'applied', `${before.length - scenery.length} → ${after.length}: ${after.join(', ')}`)
+  } else {
+    trace(`trait merge · ${name}`, 'clean', 'no duplicate or conflicting traits')
+  }
+  return after
+}
+
+function traceGrounding(before, after) {
+  if (String(before || '') !== String(after || '')) {
+    trace('creature grounding', 'applied', `"${before}" → "${after}"`)
+  }
+  return after
+}
+
 function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '' } = {}) {
+  traceReset()
   let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
     ...item,
     // An unprofiled subject's name comes straight from the story, so a coined
     // creature gets grounded in a noun the model has actually been trained on.
-    anchor: item.named ? item.anchor : groundCreatureName(item.anchor, item.appearance),
+    anchor: item.named ? item.anchor : traceGrounding(item.anchor, groundCreatureName(item.anchor, item.appearance)),
     noun: item.named ? item.noun : groundCreatureName(item.noun, item.appearance),
     // Appearance is the body. Scenery that landed there would otherwise be
     // rendered as a physical feature — "with ... a cracked bark nearby".
-    appearance: mergeTraitsByHead(
+    appearance: traceAppearance(item, mergeTraitsByHead(
       cleanAppearanceForNoun(item.appearance, item.noun).filter((tag) => !isNotTrait(tag))
-    ).map(groundCreatureWords),
+    ).map(groundCreatureWords)),
     anatomy: animaTagList(item.anatomy),
     // Outfit keeps only things that can be worn; POV staging cues are removed
     // from every descriptive list. Both would otherwise be rendered as if they
@@ -4019,6 +4086,9 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
       })).filter((relation) => relation.action),
     }
     spindle.log.info('[lumidraw] form firewall scrubbed inactive-form vocabulary: ' + formTerms.slice(0, 12).join(', '))
+    trace('form firewall', 'applied', `scrubbed ${formTerms.length} inactive-form term(s): ${formTerms.slice(0, 8).join(', ')}`)
+  } else {
+    trace('form firewall', 'clean', 'no inactive-form vocabulary to remove')
   }
 
   const multi = descriptors.length > 1
@@ -4055,7 +4125,11 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
 
     for (const relation of scene.relations) {
       if (!relation.target || relation.target === relation.actor) continue
-      if (relationCoveredByStatement(relation, statement, byRef)) { crossRelationCount++; continue }
+      if (relationCoveredByStatement(relation, statement, byRef)) {
+        trace('relation dedup', 'applied', `"${relation.action}" suppressed — the scene statement already says it`)
+        crossRelationCount++
+        continue
+      }
       const sentence = relationSentence(relation, byRef)
       if (sentence) { prose.push(sentence); crossRelationCount++ }
       if (crossRelationCount >= 2) break
@@ -4112,9 +4186,11 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   const repaired = repairCameraTags(povFiltered, scene, descriptors)
   const cameraTags = animaTagList(repaired.tags)
   if (repaired.note) spindle.log.info('[lumidraw] camera repair · ' + repaired.note)
+  trace('camera repair', repaired.note ? 'applied' : 'clean', repaired.note || 'framing and view angles already consistent')
   const groundingText = [sourcePassage, contextText].filter(Boolean).join('\n')
   const settingCheck = reconcileSetting(scene.setting, groundingText, rememberedSetting)
   if (settingCheck.note) spindle.log.warn('[lumidraw] setting continuity · ' + settingCheck.note)
+  trace('setting continuity', settingCheck.note ? 'applied' : 'clean', settingCheck.note || `kept: ${settingCheck.setting.join(', ') || '(none)'}`)
 
   // A location can arrive through any atmosphere field, not just `setting`.
   const placeChecks = [
@@ -4150,6 +4226,8 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   if (atmosphere.demoted.length) {
     spindle.log.info('[lumidraw] booru vocabulary · not real tags, moved to the caption: ' + atmosphere.demoted.join(', '))
   }
+  trace('booru vocabulary', atmosphere.rewritten.length || atmosphere.demoted.length ? 'applied' : 'clean',
+    `${atmosphere.kept.length} real tag(s) kept, ${atmosphere.rewritten.length} rewritten, ${atmosphere.demoted.length} moved to the caption`)
 
   // A tag-only scene has no caption to demote into, so unrecognised phrases
   // stay in the run rather than being dropped — the weaker of two slots beats
@@ -4314,7 +4392,9 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   const prompt = rest && coreLeadsWithSentence
     ? `${rest.replace(/[\s,]+$/g, '')}. ${core}`
     : joinPromptParts([rest, core])
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v14' }
+  const compileTrace = traceSnapshot()
+  spindle.log.info('[lumidraw] compile trace (' + compileTrace.length + ' rules)\n' + formatCompileTrace(compileTrace))
+  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v14', trace: compileTrace }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -5519,7 +5599,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.30.5',
+          version: (spindle.manifest && spindle.manifest.version) || '0.31.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6016,6 +6096,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
             aspect: compiled.aspect || '',
             negativePrompt: preset.negativePrompt || '',
             warnings: assessment.warnings,
+            trace: compiled.trace || [],
           })
         }
 
@@ -6596,4 +6677,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.30.5'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.31.0'))

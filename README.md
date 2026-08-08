@@ -1,7 +1,78 @@
-# LumiDraw Studio 0.30.5
+# LumiDraw Studio 0.31.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.31.0 — A human character was being transformed, and now the compiler shows its work
+
+### The bug
+
+Rook is human. LumiDraw kept describing him as transformed, and re-parsing never
+helped — because the decision was not the parser's. `selectAppearanceState`
+ended:
+
+```js
+return states.find((s) => s.name.toLowerCase() === defaultName) || states[0]
+```
+
+When no cue matched the passage and `defaultAppearanceState` was unset — or named
+a state that had since been renamed or deleted — it fell through to
+**`states[0]`**, whichever state happened to sit first in the list. A character
+with a transformed state first was transformed in every passage that failed to
+mention shifting.
+
+An appearance state is a *departure* from a character's base form. "No cue and no
+declared default" means the base form, not an arbitrary state. It now returns
+none, and a default naming a state that no longer exists logs a warning by name
+instead of silently picking something else.
+
+This was deterministic, which is why re-parsing could not shake it: the parser
+had already finished before the choice was made.
+
+### The compile trace
+
+"Is our rule being followed?" had no answer short of adding `console.log` by
+hand, because **a rule that silently does not fire looks exactly like a rule that
+fired and had nothing to do.**
+
+Every compile now records both. The log carries a block like:
+
+```text
+[lumidraw] compile trace (6 rules)
+  · appearance state · Rook — base form — no cue in the passage and no declared default
+  · trait merge · Rook — no duplicate or conflicting traits
+  ✓ form firewall — scrubbed 13 inactive-form term(s): partial shift, wolf ears, …
+  ✓ camera repair — added framing "full body" (scene needs legs)
+  · setting continuity — kept: forest
+  · booru vocabulary — 3 real tag(s) kept, 0 rewritten, 0 moved to the caption
+```
+
+`✓` fired and changed something. `·` ran and found nothing to do. The second mark
+is the one that was missing: it distinguishes "the rule is working" from "the
+rule never executed".
+
+Traced: appearance-state selection **with its reason**, per-subject trait merge,
+scenery removed from appearance, creature grounding, the form firewall, camera
+repair, setting continuity, relation dedup, and the vocabulary partition. The
+trace is attached to each story-debug entry as well as logged.
+
+For an appearance-state problem the first line now answers it outright — which
+state, and why that one.
+
+### On the debugging guide
+
+Several steps in it chase things that do not exist. There is no `v8`/`v14`
+compiler switch — the string is a single constant, not a loaded module, so it
+cannot be stale. There are no `backend(1).js` variants; Spindle loads what
+`spindle.json` names. There is no vitest; the suites are plain Node files run
+directly. And its expected output puts count tags before the scene statement,
+which is the pre-0.28.0 layout.
+
+Its instinct was right, though — trace which repairs run — and that is what this
+release builds, as a permanent part of the app rather than a temporary flag.
+
+17 new assertions; 555 across 24 suites.
+
 
 ## 0.30.5 — Gender-presentation tags, verified against Danbooru
 
