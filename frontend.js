@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.31.2'
+const EXTENSION_VERSION = '0.32.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -494,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.31.2" aria-label="LumiDraw Studio v0.31.2">
+    <button class="ld-launcher" title="LumiDraw Studio v0.32.0" aria-label="LumiDraw Studio v0.32.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.31.2</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.32.0</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -1129,7 +1129,10 @@ fangs = fangs, sharp teeth"></textarea></div>
     if (!box) return
     $('.ld-lightbox-regen-prompt').value = entry.prompt || ''
     reparseOriginalPrompt = ''
-    if ($('.ld-lightbox-reparse-info')) $('.ld-lightbox-reparse-info').textContent = ''
+    if ($('.ld-lightbox-reparse-info')) {
+      $('.ld-lightbox-reparse-info').textContent = ''
+      $('.ld-lightbox-reparse-info').style.color = ''
+    }
     if ($('.ld-lightbox-reparse-picker')) {
       $('.ld-lightbox-reparse-picker').style.display = 'none'
       $('.ld-lightbox-reparse-picker').innerHTML = ''
@@ -1142,6 +1145,15 @@ fangs = fangs, sharp teeth"></textarea></div>
     $('.ld-lightbox-regen-seedval').textContent = seedKnown ? `(${entry.seed})` : '(the original seed was random and was not recorded)'
     box.style.display = 'block'
     setStatus('.ld-lightbox-regen-status', 'Edit the prompt, then press “Regenerate & replace now”. That one button does everything: it generates the new image AND swaps it into the story message in place. There is no separate accept step.')
+    // Say which of the message's moments this image was. Opened later, one
+    // image out of three is otherwise unidentifiable.
+    const info = $('.ld-lightbox-reparse-info')
+    const origin = entry.origin || {}
+    if (info && origin.sceneCount > 1 && origin.sceneIndex) {
+      info.textContent = `moment ${origin.sceneIndex} of ${origin.sceneCount}`
+      info.title = origin.sceneStatement || ''
+    }
+
     // The panel scrolls, and scrolling the prompt box into view pushed
     // everything above it — including "Re-run parser" — off the top, where on a
     // phone it is invisible until you think to scroll up. Open at the top and
@@ -2888,7 +2900,9 @@ ${entry.prompt || ''}`.trim()
       const results = Array.isArray(res.results) ? res.results : []
       const usable = results.filter((entry) => entry && entry.ok)
       const tokenNote = res.reasoningTokens != null && res.reasoningTokens > 0 ? ` · ${res.reasoningTokens} reasoning tokens` : ''
-      info.textContent = `${res.model || 'parser'} · ${((res.parserMs || 0) / 1000).toFixed(1)}s${tokenNote}`
+      const org = item.entry.origin || {}
+      const moment = org.sceneCount > 1 && org.sceneIndex ? `moment ${org.sceneIndex} of ${org.sceneCount} · ` : ''
+      info.textContent = `${moment}${res.model || 'parser'} · ${((res.parserMs || 0) / 1000).toFixed(1)}s${tokenNote}`
       info.title = res.requestedModel && res.requestedModel !== res.model
         ? `Requested "${res.requestedModel}" but the request resolved to "${res.model}".`
         : ''
@@ -2909,16 +2923,27 @@ ${entry.prompt || ''}`.trim()
       applyResult(usable[0])
       // Several scenes usually come back; let the user flip between them and
       // back to what was there before, since comparison is the point.
-      if (usable.length > 1 || reparseOriginalPrompt) {
+      if (usable.length >= 1) {
         picker.style.display = 'block'
         const row = document.createElement('div')
         row.className = 'ld-row'
         row.style.flexWrap = 'wrap'
+        const originIndex = Number((item.entry.origin || {}).sceneIndex || 0)
         usable.forEach((entry, index) => {
           const chip = document.createElement('button')
           chip.className = 'ld-btn ld-compact'
-          chip.textContent = usable.length > 1 ? `Scene ${index + 1}` : 'New prompt'
-          chip.title = entry.anchor ? `Anchored at: ${entry.anchor}` : ''
+          // "Scene 2" says nothing. A few words of what is happening lets you
+          // choose by meaning instead of by counting.
+          const gist = String(entry.sceneStatement || '').replace(/\s+/g, ' ').trim()
+          const short = gist.length > 34 ? gist.slice(0, 33).replace(/[\s,]+\S*$/, '') + '…' : gist
+          const marker = originIndex && originIndex === index + 1 ? '● ' : ''
+          chip.textContent = short ? `${marker}${index + 1}. ${short}` : `${marker}Scene ${index + 1}`
+          chip.title = [
+            gist,
+            entry.anchor ? `Anchored at: "${entry.anchor}"` : '',
+            originIndex && originIndex === index + 1 ? 'Same position in the reply as the image you are fixing.' : '',
+          ].filter(Boolean).join('\n')
+          chip.style.textAlign = 'left'
           chip.addEventListener('click', () => applyResult(entry))
           row.appendChild(chip)
         })

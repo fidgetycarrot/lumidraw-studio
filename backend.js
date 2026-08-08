@@ -2623,7 +2623,10 @@ function mergeTraitsByHead(tags) {
     const text = String(tag || '').trim().toLowerCase().replace(/^(?:a|an|the)\s+/, '')
     const words = text.split(/\s+/).filter(Boolean)
     const head = words[words.length - 1]
-    if (words.length < 2 || !MERGEABLE_TRAIT_HEADS.has(head)) { passthrough.push(tag); continue }
+    // A bare "claws" used to bypass merging entirely, so it could never combine
+    // with "sharp claws" and both reached the prompt. A single-word trait whose
+    // head is mergeable is just that group with no modifiers.
+    if (!MERGEABLE_TRAIT_HEADS.has(head)) { passthrough.push(tag); continue }
     if (!groups.has(head)) { groups.set(head, []); order.push(head) }
     groups.get(head).push(words.slice(0, -1))
   }
@@ -4028,6 +4031,62 @@ function formatCompileTrace(steps) {
 
 
 
+
+// --- outfit ownership -------------------------------------------------------
+// A parser reading a two-hander can attach the wrong person's clothes to the
+// wrong body: Rook came out "wearing a ruined dress" and cracked glasses, both
+// of which are Sovi's. Anima will render exactly what it is told, so a man in a
+// dress is not a subtle error.
+//
+// Profiles already declare what each character owns. A garment that belongs to
+// someone ELSE in the scene, and not to the wearer, is bleed — dropped, and
+// traced so the decision is visible rather than mysterious.
+function stripBorrowedOutfit(descriptors) {
+  const owned = new Map()
+  for (const item of descriptors) {
+    const profile = item.profile
+    if (!profile) continue
+    const mine = new Set()
+    for (const garment of [...(profile.defaultOutfit || []), ...(profile.appearance || [])]) {
+      const key = normalizeIdentityText(garment)
+      if (key) mine.add(key)
+    }
+    owned.set(item.subject.ref, mine)
+  }
+  if (owned.size < 2) return descriptors
+
+  return descriptors.map((item) => {
+    if (!item.profile) return item
+    const mine = owned.get(item.subject.ref) || new Set()
+    const kept = []
+    const borrowed = []
+    for (const garment of item.outfit || []) {
+      const key = normalizeIdentityText(garment)
+      // Owned by this character, or by nobody in particular — keep it. Only a
+      // garment demonstrably belonging to another cast member is refused.
+      const mineHasIt = [...mine].some((value) => value.includes(key) || key.includes(value))
+      if (mineHasIt) { kept.push(garment); continue }
+      let ownerRef = ''
+      for (const [ref, theirs] of owned.entries()) {
+        if (ref === item.subject.ref) continue
+        if ([...theirs].some((value) => value.includes(key) || key.includes(value))) { ownerRef = ref; break }
+      }
+      if (ownerRef) borrowed.push({ garment, ownerRef })
+      else kept.push(garment)
+    }
+    if (borrowed.length) {
+      const names = borrowed.map((entry) => {
+        const owner = descriptors.find((other) => other.subject.ref === entry.ownerRef)
+        return `"${entry.garment}" belongs to ${owner && owner.anchor ? owner.anchor : entry.ownerRef}`
+      })
+      trace(`outfit ownership · ${item.anchor || item.subject.ref}`, 'applied', names.join('; '))
+      spindle.log.warn(`[lumidraw] outfit bleed · removed from ${item.anchor || item.subject.ref}: ${names.join('; ')}`)
+      return { ...item, outfit: kept }
+    }
+    return item
+  })
+}
+
 function traceAppearance(item, after) {
   const before = cleanAppearanceForNoun(item.appearance, item.noun)
   const scenery = before.filter((tag) => isNotTrait(tag))
@@ -4070,6 +4129,8 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     expression: animaTagList(item.subject.expression).filter((tag) => !isPovStagingCue(tag)),
     action: animaTagList(item.subject.action).filter((tag) => !isPovStagingCue(tag)),
   }))
+
+  descriptors = stripBorrowedOutfit(descriptors)
 
   // Form firewall: strip every trace of a shapeshifter's inactive forms from
   // the whole scene. Scene-wide, not per-subject — "wolf ears" loose anywhere
@@ -5348,7 +5409,17 @@ async function scanStoryCore(userId, options = {}) {
           config: preset.config,
           extra: preset.extra,
           dims,
-          origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'parser', alt: parserAlt },
+          // Which of the message's moments this is. A story message can yield
+          // several images and, opened later out of context, they are
+          // indistinguishable — including to the person deciding which one to
+          // re-parse.
+          origin: {
+            messageId: String(target.id || ''), chatId: String(chatId || ''),
+            contentKey: target.contentKey || '', presetName: preset.name || '',
+            mode: 'parser', alt: parserAlt,
+            sceneIndex: parserImageIndex, sceneCount: acceptedParsed.length,
+            sceneStatement: (item.scene && item.scene.sceneStatement) || '',
+          },
         }, userId, scan)
         mds.push(`![${parserAlt}](${entry.images[0].url})`)
         debugEntries.push({
@@ -5613,7 +5684,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.31.2',
+          version: (spindle.manifest && spindle.manifest.version) || '0.32.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6107,6 +6178,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           results.push({
             ok: true,
             anchor: item.anchor || '',
+            sceneStatement: (compiled.scene && compiled.scene.sceneStatement) || '',
             prompt: compiled.prompt,
             core: compiled.core,
             aspect: compiled.aspect || '',
@@ -6694,4 +6766,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.31.2'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.32.0'))

@@ -1,7 +1,112 @@
-# LumiDraw Studio 0.31.2
+# LumiDraw Studio 0.32.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.32.0 — Knowing which moment you are looking at
+
+A story message can produce several images. Opened later out of context they are
+indistinguishable, including to the person deciding which one to re-parse, and
+`Scene 1 / Scene 2 / Scene 3` on the chips said nothing at all.
+
+### Images remember which moment they were
+
+Parser-generated images now record their position, so the fix panel opens with
+
+```text
+moment 2 of 3 · deepseek-v4-flash · 9.9s
+```
+
+and the tooltip carries that moment's scene statement. Scales to any count; no
+change needed if the maximum goes up.
+
+Older images have no recorded position and simply omit the label rather than
+guessing.
+
+### Chips say what the scene is
+
+```text
+before   Scene 1        Scene 2        Scene 3
+after    1. Rook rinses blood from…   ● 2. Sovi seals the bandage…   3. …
+```
+
+Each chip carries a few words of that scene's statement, so a scene is chosen by
+meaning rather than by counting. The tooltip has the full statement plus the
+anchor it was taken from.
+
+The **●** marks the scene occupying the same position in the reply as the image
+being fixed. Deliberately worded as position rather than identity — a fresh
+parse may order or choose its moments differently, and claiming "this is the
+same scene" would sometimes be a lie.
+
+The picker also appears for a single result now, since a labelled chip is worth
+reading even when there is only one, and **Original** sits alongside it.
+
+
+## 0.31.3 — Rook was wearing Sovi's dress
+
+One line of a re-parsed prompt, three separate faults:
+
+```text
+Rook, a therianthrope adult male werewolf with a large wolf tail, black shaggy
+body fur, sharp claws, a short muzzle, claws, fangs, and dark messy facial
+hair, wearing a ruined dress, cracked …
+```
+
+### Outfit bleed
+
+`a ruined dress` and `cracked glasses` are **Sovi's**. The parser attached them
+to Rook, and nothing checked. Anima renders what it is told, so a man in a dress
+is not a subtle error.
+
+Profiles already declare what each character owns. A garment belonging to
+another cast member in the same scene — and not to the wearer — is now refused:
+
+```text
+✓ outfit ownership · Rook — "ruined dress" belongs to Sovi; "cracked glasses"
+  belongs to Sovi
+```
+
+Deliberately narrow. A garment owned by nobody in particular is left alone, so a
+borrowed cloak or an improvised bandage still works; only demonstrably
+misattributed clothing is removed. The rule needs at least two profiled subjects
+before it does anything.
+
+### `sharp claws, … claws`
+
+The trait merge skipped single-word traits:
+
+```js
+if (words.length < 2 || !MERGEABLE_TRAIT_HEADS.has(head)) { passthrough.push(tag); continue }
+```
+
+A bare `claws` went straight to passthrough, so it could never combine with
+`sharp claws` and both reached the prompt. A single-word trait is just its group
+with no modifiers, and is now merged like any other.
+
+```text
+before  a large wolf tail, black shaggy body fur, sharp claws, a short muzzle,
+        claws, fangs, dark messy facial hair
+after   large wolf tail, black shaggy body fur, sharp claws, short muzzle,
+        fangs, dark messy facial hair
+```
+
+### The werewolf, still
+
+Rook being described as a therianthrope werewolf is **not** the 0.31.0 bug
+returning — that fallback is fixed and tested. Two possibilities remain, and the
+compile trace distinguishes them in one line:
+
+- `✓ appearance state · Rook — Hybrid — parser asked for "hybrid"` — the parser
+  chose it, so the fix is upstream in the passage or the parser.
+- `✓ appearance state · Rook — Hybrid — passage says "half shifted"` — a
+  recognition cue matched, so the cue is too loose for that state.
+
+Either way it is now a stated decision with a stated reason rather than a
+silent one.
+
+9 new assertions; 572 across 24 suites.
+
 
 ## 0.31.2 — Count tags: the profile decides, unless it has nothing to say
 
