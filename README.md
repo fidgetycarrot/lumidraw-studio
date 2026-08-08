@@ -1,7 +1,35 @@
-# LumiDraw Studio 0.30.4
+# LumiDraw Studio 0.30.5
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.30.5 — Gender-presentation tags, verified against Danbooru
+
+Checked directly against Danbooru's own tag pages, because I had previously told
+Eric the opposite and been wrong.
+
+**`trap` is the canonical tag.** `femboy`, `otoko_no_ko` and `otokonoko` are all
+aliased *to* it. `trap` carries roughly 73,000 posts; the aliases carry none.
+Anima trained on the canonical tag, so the aliases are dead strings occupying a
+slot in the prompt.
+
+A profile listing both `a trap` and `an otoko no ko` therefore had one live tag
+and one inert one. Both now resolve to `trap`, and the duplicate collapses.
+
+Added to the vocabulary, all verified: `trap`, `androgynous`, `bishounen`,
+`girly boy`, `reverse trap`, `crossdressing`, `crossdressing (mtf)`,
+`crossdressing (ftm)`, `futanari`, `male futanari`, `futa without pussy`,
+`cuntboy`, `male focus`, `female focus`, `bulge`, `flat chest`.
+
+With aliases: `femboy`/`otoko no ko`/`otokonoko`/`tomgirl`/`feminine male` →
+`trap`; `futa`/`dickgirl`/`hermaphrodite` → `futanari`; `androgyne` →
+`androgynous`; `crossdresser` → `crossdressing`.
+
+Terms that are **not** Danbooru tags and are demoted to the caption rather than
+emitted: `transgender`, `female_presentation`, `soft features`, `slim build`,
+`feminine`. They are not wrong as description — they simply have no embedding to
+activate, so the caption is where they can do work.
+
 
 ## 0.30.4 — The fix panel opens at the top
 

@@ -2689,6 +2689,11 @@ const BOORU_VOCAB = new Set([
   'furry', 'horns', 'wings', 'pointy ears', 'elf', 'slit pupils', 'vertical pupils',
   'colored sclera', 'muscular', 'muscular male', 'scar', 'blood', 'wound', 'dirty',
   'sweaty', 'wet', 'veins', 'toned',
+  // gender presentation — all verified against Danbooru's own tag pages
+  'trap', 'androgynous', 'bishounen', 'girly boy', 'reverse trap', 'crossdressing',
+  'crossdressing (mtf)', 'crossdressing (ftm)', 'futanari', 'male futanari',
+  'futa without pussy', 'cuntboy', 'male focus', 'female focus', 'bulge',
+  'flat chest',
   // clothing and bare states
   'nude', 'completely nude', 'topless', 'bottomless', 'partially undressed', 'undressing',
   'torn clothes', 'tattered clothes', 'wet clothes', 'open shirt', 'open clothes', 'shirt',
@@ -2754,6 +2759,15 @@ const BOORU_ALIASES = {
   'fang': 'fangs', 'claw': 'claws', 'wolf ear': 'wolf ears', 'animal ear': 'animal ears',
   'pointed ears': 'pointy ears', 'wolf-like ears': 'wolf ears', 'sharp claws': 'claws',
   'muscled': 'muscular', 'toned muscles': 'toned', 'scarred': 'scar',
+  // Danbooru aliases femboy, otoko_no_ko and otokonoko all TO "trap" — that is
+  // the canonical tag with ~73k posts, so it is the one Anima trained on. The
+  // others are dead strings that occupy a slot and do nothing.
+  'femboy': 'trap', 'otoko no ko': 'trap', 'otokonoko': 'trap', 'otoko-no-ko': 'trap', 'tomgirl': 'trap',
+  'feminine male': 'trap', 'feminine boy': 'trap', 'girly male': 'girly boy',
+  'futa': 'futanari', 'hermaphrodite': 'futanari', 'dickgirl': 'futanari',
+  'crossdresser': 'crossdressing', 'crossdressed': 'crossdressing',
+  'mtf crossdressing': 'crossdressing (mtf)', 'ftm crossdressing': 'crossdressing (ftm)',
+  'androgyne': 'androgynous', 'androgynous male': 'androgynous',
   'glow': 'glowing', 'glowed': 'glowing', 'aglow': 'glowing', 'luminous': 'glowing',
   'grayscale': 'greyscale', 'black and white': 'greyscale', 'monochromatic': 'monochrome',
   'oil painting': 'traditional media', 'watercolor': 'traditional media',
@@ -5505,7 +5519,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.30.4',
+          version: (spindle.manifest && spindle.manifest.version) || '0.30.5',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6582,4 +6596,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.30.4'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.30.5'))
