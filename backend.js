@@ -1676,7 +1676,7 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
   const appearanceStates = normalizeAppearanceStates(source.appearanceStates || source.forms || '', `${fallbackRef} appearance state`)
   return {
     ref: fallbackRef,
-    anchor: shortPhrase(source.anchor || '', `${fallbackRef} anchor`, 6, 64, true) || fallbackRef,
+    anchor: shortPhrase(source.anchor || '', `${fallbackRef} anchor`, 6, 64, true, true) || fallbackRef,
     countTag,
     subject: shortPhrase(source.subject || '', `${fallbackRef} subject phrase`, 8, 72, true),
     appearance: shortList(appearance, `${fallbackRef} appearance`, { maxItems: 32, maxWords: 7, maxChars: 72 }),
@@ -2156,7 +2156,7 @@ function parseParserScenes(text, maxImages) {
   for (const [index, item] of items.slice(0, maxImages).entries()) {
     try {
       scenes.push({
-        anchor: shortPhrase(item.anchor || '', `image ${index + 1} anchor`, 14, 120, false),
+        anchor: shortPhrase(item.anchor || '', `image ${index + 1} anchor`, 14, 120, false, true),
         scene: normalizeScene(item.scene || item),
       })
     } catch (error) {
@@ -5599,7 +5599,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.31.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.31.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6063,17 +6063,19 @@ spindle.onFrontendMessage(async (payload, userId) => {
         try {
           parsed = parseParserScenes(raw, settings.maxImages || 2)
         } catch (error) {
-          return {
-            ok: false,
+          reply = ok(payload, requestId, {
+            reparsed: false,
             note: `Parser returned invalid structured data: ${error.message}`,
             parserMs,
             model: report.model || '',
             overrideNote: report.overrideNote || '',
             raw: String(raw || '').slice(0, 600),
-          }
+          })
+          break
         }
         if (!parsed.length) {
-          return { ok: false, note: 'The parser judged this passage to have no visual moment.', parserMs, model: report.model || '', overrideNote: report.overrideNote || '', raw: String(raw || '').slice(0, 600) }
+          reply = ok(payload, requestId, { reparsed: false, note: 'The parser judged this passage to have no visual moment.', parserMs, model: report.model || '', overrideNote: report.overrideNote || '', raw: String(raw || '').slice(0, 600) })
+          break
         }
 
         // Compile every scene the parser returned, keeping the rejects visible
@@ -6102,8 +6104,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
         const usable = results.filter((item) => item.ok).length
         spindle.log.info(`[lumidraw] re-parsed message ${messageId} in ${parserMs}ms · ${usable}/${results.length} scene(s) usable`)
-        return {
-          ok: usable > 0,
+        reply = ok(payload, requestId, {
+          reparsed: usable > 0,
           results,
           parserMs,
           // The model actually used, not the one asked for. Those differ more
@@ -6119,7 +6121,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           note: usable
             ? `Parsed in ${(parserMs / 1000).toFixed(1)}s — ${usable} of ${results.length} scene(s) usable.`
             : 'The parser ran but produced no usable scene.',
-        }
+        })
+        break
       }
 
       case 'regenerate_image': {
@@ -6677,4 +6680,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.31.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.31.1'))

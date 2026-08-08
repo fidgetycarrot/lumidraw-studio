@@ -1,7 +1,65 @@
-# LumiDraw Studio 0.31.0
+# LumiDraw Studio 0.31.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.31.1 — Re-parse never replied, and anchors were killing images
+
+### The reply was never sent
+
+Re-run parser did the work and the prompt box never changed. The backend log was
+unambiguous:
+
+```text
+[lumidraw] re-parsed message 0bbdbe91… in 9109ms · 1/1 scene(s) usable
+```
+
+Every other RPC case assigns `reply = ok(payload, requestId, {…})` and breaks,
+after which the dispatcher calls `spindle.sendToFrontend(reply)`. The
+`reparse_image` case used a bare `return`, which exits the whole handler — so
+`reply` stayed undefined and nothing was ever sent. The frontend waited out its
+300-second timeout in silence.
+
+All three exit paths now use the envelope. The response field was also renamed
+`ok` → `reparsed`, because the envelope already carries an `ok` and two of them
+in one object is a trap for whoever reads it next.
+
+### Anchors were rejected instead of trimmed
+
+From the same run:
+
+```text
+skipped 2 unusable image object(s)
+  image 1: anchor must stay under 14 words; prose is rejected.
+  image 2: anchor must stay under 14 words; prose is rejected.
+```
+
+Two of three images destroyed by the length of a *quotation*. 0.29.0 taught
+`shortPhrase` to repair rather than throw, and this field was missed.
+
+The anchor exists only to locate a moment in the passage, and a trimmed quote
+locates it exactly as well as a complete one. The parser is asked for 5–12
+words; it naturally quotes a whole sentence, because that is what quoting is.
+It is now trimmed like every other over-long field.
+
+This compounded directly with the 0.30.2 minimum-image fix: asking for 2–3
+images is pointless if two of them are then discarded over the length of a
+quote.
+
+### Confirmed working from the same log
+
+- `appearance state · Rook — Human — parser asked for "human"` — the 0.31.0 fix
+  holds, and the trace says why in one line.
+- `trait merge · Rook — 24 → 17` — seven duplicate or conflicting traits removed.
+- Reasoning genuinely off: 997 completion tokens for 3,727 characters, 9.1s.
+
+### Worth a look
+
+The parser tagged Sovi `1girl`. He is an elf femboy, so the intended tags are
+`1boy` + `trap` (see 0.30.5). That is a parser judgement rather than a compiler
+fault, and the gender-presentation work sketched for next session is the proper
+fix.
+
 
 ## 0.31.0 — A human character was being transformed, and now the compiler shows its work
 
