@@ -545,14 +545,25 @@ const DIRECTIVE_ENDPOINT_RE = /(?:^|\/)(?:gen|generate|generation|create|new|ren
 // classified would be hidden from the model, so anything that could plausibly
 // be a stored file is kept. Only a URL whose path ENDS at a bare verb counts —
 // a folder named "gen" or "create" further up the path is not enough.
+// A generated image is for the reader, not for the story model. Left in the
+// context it teaches the model the pattern — and models imitate patterns they
+// keep seeing. The result is invented markdown with plausible-looking UUIDs
+// pointing at images that were never generated, which is precisely the failure
+// that produced four orphaned tags in one message.
+//
+// This only ever edits the copy sent for a generation; the stored chat keeps
+// its images.
+const HOSTED_IMAGE_PATH_RE = /\/(?:api\/v\d+\/)?images?\/[0-9a-f-]{8,}/i
+
 function looksLikeImageDirective(url) {
   const href = String(url || '').trim()
   if (!href) return true
   if (/^data:/i.test(href)) return false                  // inline image data
   const path = href.split('?')[0].split('#')[0].replace(/\/+$/, '')
   const last = path.split('/').pop() || ''
-  if (/\.[a-z0-9]{2,5}$/i.test(last)) return false        // a filename
   if (DIRECTIVE_ENDPOINT_RE.test(path)) return true       // ends at a bare verb
+  if (HOSTED_IMAGE_PATH_RE.test(path)) return true        // an image we inserted
+  if (/\.[a-z0-9]{2,5}$/i.test(last)) return false        // a filename
   return false                                            // unknown → leave alone
 }
 
@@ -4340,7 +4351,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.36.0 ranks presentation first, a stray one now survives every cap
+// and since 0.36.1 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -6158,7 +6169,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.36.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.36.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7143,7 +7154,7 @@ if (typeof spindle.registerInterceptor === 'function') {
           return { ...message, [key]: result.text }
         })
         if (stripped) {
-          spindle.log.info('[lumidraw] removed ' + stripped + ' dead image-request directive(s) from the prompt context (stored messages unchanged)')
+          spindle.log.info('[lumidraw] removed ' + stripped + ' image reference(s) from the prompt context so the story model does not learn to imitate them (stored messages unchanged)')
         }
       }
       messages = working
@@ -7256,4 +7267,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.36.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.36.1'))

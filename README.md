@@ -1,7 +1,66 @@
-# LumiDraw Studio 0.36.0
+# LumiDraw Studio 0.36.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.36.1 — The story model had learned to fake our markdown
+
+Image markdown appeared in the roleplay again, and the images behind it did not
+exist — not broken, not deleted, **never generated**. Five tags in one message,
+three real and two with nothing behind them.
+
+That rules out every rendering explanation. Markdown with no image means
+somebody wrote markdown without generating an image, and LumiDraw only ever
+writes one after a successful upload.
+
+### The loop
+
+`looksLikeImageDirective` decided what to remove from the prompt context, and
+only recognised URLs ending in a bare verb:
+
+```js
+const DIRECTIVE_ENDPOINT_RE = /(?:^|\/)(?:gen|generate|create|render|txt2img)$/i
+```
+
+A real image ends in a **UUID**. So `/api/v1/images/facd6bb2-…` was not a
+directive, not a filename, and fell through to "leave alone" — meaning every
+image LumiDraw inserted stayed in the context sent to the story model on every
+following turn.
+
+Two or three examples per message, turn after turn, is a demonstration. The
+model learned the pattern and started producing it: correct syntax, ~100
+character alt text copied from ours, and a UUID it invented.
+
+It got worse tonight because **0.35.2 made the minimum image count work**. More
+images meant more examples meant faster imitation.
+
+### The fix
+
+Any URL on the host's image endpoint is now removed from the prompt context
+alongside the directive shapes. External images, `data:` URIs and user
+attachments are untouched, and this only ever edits the copy sent for a
+generation — the stored chat keeps its images.
+
+### An assertion inverted on purpose
+
+`directives.mjs` asserted *"a message of only real images is untouched"*. That
+encoded the exact behaviour that caused this. It now asserts the opposite, with
+the reasoning written next to it, because a test that documents a bug as
+intended behaviour is worse than no test.
+
+### One tradeoff
+
+A vision-capable story model can no longer see previously generated images in
+its text context. Lumiverse passes attachments separately so this should not
+affect them, and the behaviour is controlled by **Settings → Hide generated
+images and image-request directives from the story model** if you want it back.
+
+Also cleared: **Persona Paths is not involved.** It only injects its own card
+after the message bubble and writes with `textContent`; it never reads or
+rewrites message content.
+
+11 new assertions; 680 across 28 suites.
+
 
 ## 0.36.0 — Why only Sovi's clothes drift
 
