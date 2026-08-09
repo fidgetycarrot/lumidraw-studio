@@ -1,7 +1,34 @@
-# LumiDraw Studio 0.35.1
+# LumiDraw Studio 0.35.2
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.35.2 — The minimum reached only half the app
+
+Set to 2–3 images, still one per message — while **Re-run parser** on the same
+passage returned three. That difference was the clue: two code paths, and 0.30.2
+fixed one of them.
+
+```text
+auto-scan   structuredParserSchema(settings.maxImages || 2, profiles)
+re-parse    structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0)
+```
+
+Without the third argument the schema falls back to its no-minimum wording —
+*"Return at most 3 image object(s)"* — which never asks for a second image. The
+`{{min_images}}` substitution was applied to both paths in 0.30.2; the schema
+call was not.
+
+Four structural assertions now check the source itself: every
+`structuredParserSchema` invocation passes a minimum, both paths are present,
+and every guidance path substitutes the placeholder. A half-applied fix of this
+shape fails the suite rather than shipping.
+
+That is the second time this session a fix landed on one of two identical call
+sites — the other put a variable in the solo rendering path where it did not
+exist. Worth a general lesson: in this file, a matched string is not a matched
+location.
+
 
 ## 0.35.1 — Clothes the story gave you now have an owner
 

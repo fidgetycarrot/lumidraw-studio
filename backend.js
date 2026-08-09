@@ -4322,7 +4322,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.35.1 ranks presentation first, a stray one now survives every cap
+// and since 0.35.2 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -5721,7 +5721,7 @@ async function scanStoryCore(userId, options = {}) {
         .replaceAll('{{max_images}}', String(settings.maxImages || 2))
         .replaceAll('{{min_images}}', String(settings.minImages || 0))
       const resolvedGuidance = await resolveMacros(guidance, userId, chatId)
-      const instruction = resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles)
+      const instruction = resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0)
       const instrLabel = usingCustom ? `custom guidance + structured compiler (${instruction.length} chars)` : 'structured subject compiler'
       setStoryScanStage(scan, 'parsing', 'Waiting for the selected parser model.')
       spindle.log.info('[lumidraw] Anima parser context · previous_messages=' + parserInput.contextMessageCount + ' · loom_ledger=' + (parserInput.ledgerFound ? 'found' : 'none'))
@@ -6082,7 +6082,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.35.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.35.2',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7180,4 +7180,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.35.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.35.2'))
