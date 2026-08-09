@@ -1,7 +1,71 @@
-# LumiDraw Studio 0.34.0
+# LumiDraw Studio 0.34.2
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.34.2 — One presentation per character
+
+Presentation tags describe mutually exclusive bodies. Danbooru's own wiki:
+`futanari` is "both male and female genitals, but **female body**", with
+`male futanari` as the separate male-bodied tag, and `trap` a male body that
+reads feminine. Two of them on one character is the same coin flip as two coat
+colours, except it decides the entire figure.
+
+This mattered more after 0.34.1. Ranking presentation above everything else
+means a stray tag now survives every cap that used to quietly remove it — the
+change that protects the right tag protects a wrong one just as well.
+
+A second presentation tag on a subject is now dropped and reported:
+
+```text
+! presentation · Sovi — "futanari" dropped — "trap" already sets this
+  character's presentation, and the two describe different bodies
+```
+
+First stated wins, matching every other conflict rule here. A character with
+exactly one is untouched, so a genuinely futanari character is unaffected.
+
+6 new assertions; 631 across 27 suites.
+
+
+## 0.34.1 — The presentation tag was being cut, unweighted, and duplicated
+
+One line of a compile trace, three faults:
+
+```text
+✓ caption traits · Sovi — kept 7 of 10; dropped (trap 1.4), feminine body, flat chest
+```
+
+**`(trap 1.4)` is not a weight.** Anima's syntax is `(tag:1.4)`; without the
+colon it is a parenthesised phrase and the emphasis silently does nothing —
+indistinguishable from a weight set too low to notice. The colon is now
+inserted.
+
+**Presentation was scoring 99 and being cut.** 0.33.2 ranked hair and eyes as
+identity, but `trap`, `futanari`, `androgynous`, `flat chest` and the rest sat
+with incidental traits at the bottom, so the seven-trait cap discarded the tag
+that decides how the whole figure reads. Presentation now ranks **above hair**.
+
+**Profile traits never met the vocabulary.** The alias table added in 0.30.5 ran
+only on setting, camera, lighting and style — so a saved `otoko no ko` stayed a
+dead alias instead of becoming the canonical `trap`. Profile traits now go
+through alias rewriting. Nothing is demoted there, because those traits *are*
+the caption.
+
+That last fix exposed a fourth: a profile holding both `otoko no ko` and
+`(trap 1.4)` produced `a trap, (trap:1.4)` once the alias resolved. Same tag,
+twice, once weighted. They now collapse, and the weighted form wins because it
+is the one the author meant.
+
+```text
+before  Sovi, a trap, girly adult elf femboy with round glasses, …, an otoko no ko,
+        a feminine body, and blonde long hair…      ← weight absent, tag duplicated
+after   Sovi, a (trap:1.4) adult elf femboy with a flat chest, blonde long hair
+        with light blue tips, bangs, gold eyes, pointed elf ears, …
+```
+
+12 new assertions; 625 across 27 suites.
+
 
 ## 0.34.0 — The action funnel
 

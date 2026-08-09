@@ -3300,10 +3300,13 @@ function filterAppearanceByVisibility(appearance, outfit) {
 // sent it to the end of the list, where the caption cap cut it off, and a
 // character with no stated hair borrows whatever hair the prompt does mention.
 // That is exactly how two characters end up with the same hair.
-const IDENTITY_TRAIT_RE = /\b(?:hair|bun|braids?|ponytails?|twintails?|bangs|sidelocks?|ahoge|eyes?|heterochromia)\b/
+const IDENTITY_TRAIT_RE = /\b(?:hair|bun|braids?|ponytails?|twintails?|bangs|sidelocks?|ahoge|eyes?|heterochromia|trap|otoko no ko|femboy|futanari|androgynous|bishounen|girly boy|reverse trap|flat chest|crossdressing)\b/
 
 function signaturePriority(tag) {
   const value = animaTag(tag)
+  // Presentation first: whether the figure reads male, female or otoko no ko
+  // governs everything else about it, and it was scoring 99 and being cut.
+  if (/\b(?:trap|otoko no ko|femboy|futanari|androgynous|bishounen|girly boy|reverse trap|flat chest|crossdressing)\b/.test(value)) return 0
   if (/\bhair\b|\b(?:bun|braids?|ponytails?|twintails?|bangs|sidelocks?|ahoge)\b/.test(value)) return 1
   if (/\beyes?\b|\bheterochromia\b/.test(value)) return 2
   if (/\b(?:pointed elf ears|elf ears|animal ears|wolf ears|cat ears|fox ears|horns?|wings?|tails?|fangs?|claws?|snout|muzzle|fur)\b/.test(value)) return 3
@@ -4254,6 +4257,75 @@ function stripBorrowedOutfit(descriptors) {
   })
 }
 
+
+// Anima weights as "(tag:1.4)". Written "(tag 1.4)" the colon is missing and the
+// weight silently does nothing, which looks identical to a weight that is too
+// low to notice. Repair rather than ignore.
+function repairTagWeight(tag) {
+  return String(tag || '').replace(/\(([^():]+?)\s+(\d+(?:\.\d+)?)\)/g, '($1:$2)')
+}
+
+// Profile traits never passed through the booru vocabulary, so a saved
+// "otoko no ko" stayed a dead alias instead of becoming the canonical "trap".
+// Only aliases are rewritten here — nothing is demoted, because these ARE the
+// caption.
+
+// Presentation tags are mutually exclusive readings of one body. "trap" is a
+// male body read feminine; "futanari" is a female body with both sets; "male
+// futanari" is the male-bodied version of that. Two of them on one character is
+// the same coin-flip as two coat colours, except it decides the whole figure —
+// and since 0.34.2 ranks presentation first, a stray one now survives every cap
+// that used to quietly remove it.
+const PRESENTATION_TAGS = [
+  'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
+  'androgynous', 'bishounen', 'girly boy', 'reverse trap',
+]
+
+function enforceOnePresentation(tags, name = '') {
+  const seen = []
+  const out = []
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    const bare = normalizeIdentityText(String(tag).replace(/^\((.+):[\d.]+\)$/, '$1'))
+    const hit = PRESENTATION_TAGS.find((value) => bare === value)
+    if (!hit) { out.push(tag); continue }
+    if (seen.length) {
+      trace(`presentation · ${name || 'subject'}`, 'warn',
+        `"${hit}" dropped — "${seen[0]}" already sets this character's presentation, and the two describe different bodies`)
+      spindle.log.warn(`[lumidraw] ${name || 'a subject'} carries conflicting presentation tags (${seen[0]} + ${hit}); keeping ${seen[0]}`)
+      continue
+    }
+    seen.push(hit)
+    out.push(tag)
+  }
+  return out
+}
+
+function rewriteKnownAliases(tags) {
+  const out = []
+  const seen = new Map()   // bare tag → index in `out`
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    const value = repairTagWeight(tag)
+    const weighted = /^\((.+):([\d.]+)\)$/.exec(value)
+    const bareIn = weighted ? weighted[1] : value
+    const resolved = resolveBooruTag(bareIn)
+    const bare = resolved.match === 'alias' ? resolved.tag : bareIn
+    const final = weighted ? `(${bare}:${weighted[2]})` : bare
+    const key = normalizeIdentityText(bare)
+    if (!key) { out.push(final); continue }
+    // A profile holding both "otoko no ko" and "(trap 1.4)" collapses to one
+    // tag once the alias is resolved — and the weighted form is the one the
+    // author meant, so it wins.
+    if (seen.has(key)) {
+      const at = seen.get(key)
+      if (weighted) out[at] = final
+      continue
+    }
+    seen.set(key, out.length)
+    out.push(final)
+  }
+  return out
+}
+
 function traceAppearance(item, after) {
   const before = cleanAppearanceForNoun(item.appearance, item.noun)
   const scenery = before.filter((tag) => isNotTrait(tag))
@@ -4284,9 +4356,9 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     noun: item.named ? item.noun : groundCreatureName(item.noun, item.appearance),
     // Appearance is the body. Scenery that landed there would otherwise be
     // rendered as a physical feature — "with ... a cracked bark nearby".
-    appearance: traceAppearance(item, mergeTraitsByHead(
+    appearance: traceAppearance(item, enforceOnePresentation(rewriteKnownAliases(mergeTraitsByHead(
       cleanAppearanceForNoun(item.appearance, item.noun).filter((tag) => !isNotTrait(tag))
-    ).map(groundCreatureWords)),
+    ).map(groundCreatureWords)), item.anchor)),
     anatomy: animaTagList(item.anatomy),
     // Outfit keeps only things that can be worn; POV staging cues are removed
     // from every descriptive list. Both would otherwise be rendered as if they
@@ -5851,7 +5923,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.34.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.34.2',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6949,4 +7021,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.34.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.34.2'))
