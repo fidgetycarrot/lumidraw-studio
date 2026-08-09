@@ -3806,13 +3806,27 @@ function subjectIdentitySentences(item, scene, descriptors) {
       `${held.objects.join(', ')} bound to the name; ${held.consumed.length} loose mention(s) consumed`)
   }
 
+  // Clothing binds the same way a held object does — by sitting next to the
+  // name. In a solo scene the garment is a tag beside the count tag and holds
+  // fine; in a multi-subject caption it was forty words downstream, which on a
+  // model whose prior says 1boy wears trousers is not enough to win.
+  const wornEarly = []
+  for (const value of item.outfit || []) {
+    const tag = animaTag(value)
+    if (!tag) continue
+    if (/^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs|dressed|clothed|undressed|fully clothed|partially clothed)$/.test(tag)) continue
+    wornEarly.push(tag)
+  }
+  const wearClause = wornEarly.length ? `in ${naturalList(withArticleList(wornEarly.slice(0, 2)))}` : ''
+  const leadExtras = [holdClause, wearClause].filter(Boolean)
+
   const parts = []
   if (redundantNoun) {
-    parts.push(holdClause ? `${name}, ${holdClause}` : name)
+    parts.push(leadExtras.length ? `${name}, ${leadExtras.join(', ')}` : name)
     if (leadModifiers.length) parts.push(naturalList(leadModifiers))
     if (traits.length) parts.push(`with ${naturalList(traits)}`)
   } else {
-    const lead = holdClause ? `${name}, ${holdClause}` : name
+    const lead = leadExtras.length ? `${name}, ${leadExtras.join(', ')}` : name
     parts.push(traits.length ? `${lead}, ${described} with ${naturalList(traits)}` : `${lead}, ${described}`)
   }
 
@@ -3836,7 +3850,9 @@ function subjectIdentitySentences(item, scene, descriptors) {
     .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
   const { doing, having, looking } = stateClauses([...item.expression, ...actions])
 
-  if (clothes.length) parts.push(`wearing ${naturalList(withArticleList(clothes))}`)
+  // Anything beyond the two garments already bound to the name.
+  const remainingClothes = clothes.filter((tag) => !wornEarly.slice(0, 2).includes(animaTag(tag)))
+  if (remainingClothes.length) parts.push(`wearing ${naturalList(withArticleList(remainingClothes))}`)
   const bare = uniqueStrings(stateWords)
   if (bare.length) parts.push(naturalList(bare))
   if (pose) parts.push(pose)
@@ -4215,13 +4231,15 @@ function repairCameraTags(cameraTags, scene, descriptors) {
 // question is answered by reading rather than by instrumenting.
 let LAST_COMPILE_TRACE = []
 let LAST_COMPILE_OUTFITS = {}
+let LAST_COMPILE_NEGATIVES = []
 
-function traceReset() { LAST_COMPILE_TRACE = []; LAST_COMPILE_OUTFITS = {} }
+function traceReset() { LAST_COMPILE_TRACE = []; LAST_COMPILE_OUTFITS = {}; LAST_COMPILE_NEGATIVES = [] }
 function trace(rule, outcome, detail = '') {
   LAST_COMPILE_TRACE.push({ rule, outcome, detail: String(detail || '') })
 }
 function traceSnapshot() { return LAST_COMPILE_TRACE.slice() }
 function outfitSnapshot() { return { ...LAST_COMPILE_OUTFITS } }
+function negativeSnapshot() { return LAST_COMPILE_NEGATIVES.slice() }
 
 // Human-readable, for the Spindle log and the debug panel.
 function formatCompileTrace(steps) {
@@ -4322,7 +4340,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.35.2 ranks presentation first, a stray one now survives every cap
+// and since 0.36.0 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -4462,6 +4480,43 @@ function promoteCrossSubjectPoses(descriptors, scene) {
   return { descriptors: next, promoted }
 }
 
+
+// --- garment defence ---------------------------------------------------------
+// Anima's training says 1boy wears trousers. Asking for 1boy in a dress fights
+// that prior, and the prior usually wins — which is why Sovi drifts into a tunic
+// and Rook never drifts into a dress. Naming the substitute in the negative
+// prompt is the direct remedy: it does not argue with the prior, it removes the
+// thing the prior reaches for.
+const GARMENT_SUBSTITUTES = {
+  'dress': ['pants', 'trousers', 'shorts', 'tunic'],
+  'gown': ['pants', 'trousers', 'shorts', 'tunic'],
+  'robe': ['pants', 'trousers'],
+  'robes': ['pants', 'trousers'],
+  'skirt': ['pants', 'trousers', 'shorts'],
+  'kimono': ['pants', 'trousers'],
+  'thighhighs': ['pants', 'trousers'],
+  'leotard': ['pants', 'trousers'],
+}
+
+function garmentDefence(descriptors) {
+  const worn = new Set()
+  for (const item of descriptors || []) {
+    for (const garment of item.outfit || []) {
+      const head = animaTag(garment).split(/\s+/).pop()
+      if (head) worn.add(head)
+    }
+  }
+  const negatives = []
+  for (const head of worn) {
+    for (const rival of GARMENT_SUBSTITUTES[head] || []) {
+      // Never negate something somebody in this scene is actually wearing.
+      if (worn.has(rival) || negatives.includes(rival)) continue
+      negatives.push(rival)
+    }
+  }
+  return negatives.slice(0, 6)
+}
+
 function traceAppearance(item, after) {
   const before = cleanAppearanceForNoun(item.appearance, item.noun)
   const scenery = before.filter((tag) => isNotTrait(tag))
@@ -4509,6 +4564,11 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   for (const item of descriptors) {
     const worn = (item.outfit || []).filter((tag) => !isNotClothing(tag))
     if (worn.length) LAST_COMPILE_OUTFITS[item.subject.ref] = worn
+  }
+  LAST_COMPILE_NEGATIVES = garmentDefence(descriptors)
+  if (LAST_COMPILE_NEGATIVES.length) {
+    trace('garment defence', 'applied',
+      `negating ${LAST_COMPILE_NEGATIVES.join(', ')} — nobody in this scene wears them and the model's prior reaches for them`)
   }
 
   // A pose naming another subject is a relation in the wrong field. Promoting
@@ -4803,6 +4863,18 @@ function joinPromptParts(parts) {
   return output
 }
 
+
+// Merge the compile's garment defence into the preset's negative prompt without
+// repeating anything the preset already lists.
+function negativeWith(presetNegative, extras) {
+  const base = String(presetNegative || '')
+  if (!extras || !extras.length) return base
+  const have = new Set(base.split(',').map((part) => normalizeIdentityText(part)).filter(Boolean))
+  const add = extras.filter((tag) => !have.has(normalizeIdentityText(tag)))
+  if (!add.length) return base
+  return base ? `${base.replace(/[\s,]+$/, '')}, ${add.join(', ')}` : add.join(', ')
+}
+
 async function compileSceneWithPreset(sceneInput, preset, settings, userId, chatId, sourcePassage = '', contextText = '') {
   const sceneMemory = await getSceneMemory()
   const memoryEntry = sceneMemory[String(chatId || '')] || {}
@@ -4867,7 +4939,11 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
     : joinPromptParts([rest, core])
   const compileTrace = traceSnapshot()
   spindle.log.info('[lumidraw] compile trace (' + compileTrace.length + ' rules)\n' + formatCompileTrace(compileTrace))
-  return { prompt, core, scene, profiles, aspect: scene.aspect, compiler: 'anima-hybrid-v14', trace: compileTrace }
+  return {
+    prompt, core, scene, profiles, aspect: scene.aspect,
+    compiler: 'anima-hybrid-v14', trace: compileTrace,
+    garmentNegatives: negativeSnapshot(),
+  }
 }
 
 async function compileInlineBody(body, preset, settings, userId, chatId) {
@@ -5803,7 +5879,7 @@ async function scanStoryCore(userId, options = {}) {
         const parserAlt = markdownAltText(compiled.core)
         const entry = await generateAndUpload({
           prompt: compiled.prompt,
-          negativePrompt: preset.negativePrompt,
+          negativePrompt: negativeWith(preset.negativePrompt, compiled.garmentNegatives),
           config: preset.config,
           extra: preset.extra,
           dims,
@@ -6082,7 +6158,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.35.2',
+          version: (spindle.manifest && spindle.manifest.version) || '0.36.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6596,7 +6672,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
             prompt: compiled.prompt,
             core: compiled.core,
             aspect: compiled.aspect || '',
-            negativePrompt: preset.negativePrompt || '',
+            negativePrompt: negativeWith(preset.negativePrompt, compiled.garmentNegatives),
             warnings: assessment.warnings,
             trace: compiled.trace || [],
           })
@@ -7180,4 +7256,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.35.2'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.36.0'))

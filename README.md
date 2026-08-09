@@ -1,7 +1,56 @@
-# LumiDraw Studio 0.35.2
+# LumiDraw Studio 0.36.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.36.0 — Why only Sovi's clothes drift
+
+Sovi keeps ending up in a tunic and trousers. Rook never ends up in a dress.
+The asymmetry is the whole clue, and there are two causes stacked on each other.
+
+### The model's prior
+
+Anima is trained on Danbooru, where `1boy` co-occurs overwhelmingly with tunics
+and trousers, and `dress` co-occurs overwhelmingly with `1girl`. `1boy` in a
+dress is a rare combination, so the model regresses toward its dominant mode.
+Nothing pulls Rook toward a dress, so nothing does.
+
+Arguing with a prior rarely works; removing what it reaches for does. When
+somebody wears a dress, gown, robe or skirt and **nobody in the scene wears
+trousers**, the substitutes are added to the negative prompt:
+
+```text
+✓ garment defence — negating pants, trousers, shorts, tunic — nobody in this
+  scene wears them and the model's prior reaches for them
+```
+
+Never a garment somebody is actually wearing, so a mixed scene stays intact.
+
+### The binding problem, again
+
+This is the more interesting half. In a **solo** scene the garment is a tag,
+sitting in the tag run beside `(trap:1.4)` — which is why your solo images have
+been correct. In a **multi-subject** scene clothing is prose, and it sat about
+forty words after the name:
+
+```text
+before  Sovi, [7 traits], wearing a ruined dress, standing behind rook, …
+after   Sovi, in a ruined dress, an adult elf femboy with blonde long hair …
+```
+
+Identical to the staff in 0.35.0, and I fixed that without noticing clothing had
+the same shape. Two garments bind to the name; anything beyond that still
+trails as `wearing …`.
+
+### Test wording
+
+Six assertions matched `Name, a species…` with nothing between. The identity
+text is unchanged, one clause later, so the patterns now allow a lead clause.
+Behaviour was correct in every failing case — worth stating, since "update the
+test" is exactly what a real regression sounds like.
+
+18 new assertions; 669 across 28 suites.
+
 
 ## 0.35.2 — The minimum reached only half the app
 
