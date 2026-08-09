@@ -2075,7 +2075,7 @@ function normalizeSceneSubject(raw, index) {
   }
 }
 
-function normalizeScene(raw) {
+function normalizeScene(raw, profiles = null) {
   const source = raw && raw.scene && typeof raw.scene === 'object' ? raw.scene : raw
   if (!source || typeof source !== 'object' || Array.isArray(source)) throw new Error('Scene must be a JSON object.')
   const subjectsRaw = Array.isArray(source.subjects) ? source.subjects : []
@@ -2106,13 +2106,45 @@ function normalizeScene(raw) {
       spindle.log.warn(`[lumidraw] dropping incomplete relation ${index + 1}: ${error.message}`)
       return []
     }
-    if (!refs.has(actor)) {
+    // The parser is asked for refs and sometimes writes labels — "the alpha"
+    // rather than "other_1". Dropping those cost the scene its only real
+    // relation, which synthesizeRelation then replaced with "stands with".
+    const resolveRef = (value) => {
+      if (!value) return ''
+      if (refs.has(value)) return value
+      const needle = normalizeIdentityText(String(value).replace(/_/g, ' '))
+      if (!needle) return ''
+      const hit = subjects.find((subject) => {
+        const label = normalizeIdentityText(subject.label || '')
+        const refWords = normalizeIdentityText(String(subject.ref || '').replace(/_/g, ' '))
+        if (label && (label.includes(needle) || needle.includes(label))) return true
+        return !!refWords && refWords === needle
+      })
+      if (hit) return hit.ref
+      // "Rook" rather than "persona" — the parser reaches for the name it has
+      // been using all along. Only the profiles know that mapping.
+      const named = allKnownProfiles(profiles).find((profile) => {
+        const anchor = normalizeIdentityText(profile && profile.anchor)
+        return anchor && (anchor === needle || anchor.split(/\s+/).includes(needle))
+      })
+      if (named && refs.has(named.ref)) return named.ref
+      return ''
+    }
+    const actorRef = resolveRef(actor)
+    if (!actorRef) {
       spindle.log.warn(`[lumidraw] dropping relation ${index + 1}: actor “${actor}” is not one of the scene subjects.`)
       return []
     }
-    if (target && !refs.has(target)) {
-      spindle.log.warn(`[lumidraw] dropping relation ${index + 1}: target “${target}” is not one of the scene subjects.`)
-      return []
+    if (actorRef !== actor) spindle.log.info(`[lumidraw] relation ${index + 1} actor “${actor}” matched subject ref “${actorRef}”`)
+    actor = actorRef
+    if (target) {
+      const targetRef = resolveRef(target)
+      if (!targetRef) {
+        spindle.log.warn(`[lumidraw] dropping relation ${index + 1}: target “${target}” is not one of the scene subjects.`)
+        return []
+      }
+      if (targetRef !== target) spindle.log.info(`[lumidraw] relation ${index + 1} target “${target}” matched subject ref “${targetRef}”`)
+      target = targetRef
     }
     return [{ actor, target, action, details }]
   })
@@ -2210,7 +2242,7 @@ function parseInlineScene(body) {
   return normalizeScene(parseJsonObject(body, 'inline scene'))
 }
 
-function parseParserScenes(text, maxImages) {
+function parseParserScenes(text, maxImages, profiles = null) {
   const root = parseJsonObject(text, 'parser reply')
   if (root && root._lumidrawRecovered) {
     spindle.log.warn('[lumidraw] recovered structured parser data from a truncated reply · mode=' + root._lumidrawRecovered + ' · complete_images=' + (Array.isArray(root.images) ? root.images.length : 0))
@@ -2228,7 +2260,7 @@ function parseParserScenes(text, maxImages) {
     try {
       scenes.push({
         anchor: shortPhrase(item.anchor || '', `image ${index + 1} anchor`, 14, 120, false, true),
-        scene: normalizeScene(item.scene || item),
+        scene: normalizeScene(item.scene || item, profiles),
       })
     } catch (error) {
       failures.push(`image ${index + 1}: ${error.message}`)
@@ -2800,6 +2832,13 @@ const BOORU_VOCAB = new Set([
   'furry', 'horns', 'wings', 'pointy ears', 'elf', 'slit pupils', 'vertical pupils',
   'colored sclera', 'muscular', 'muscular male', 'scar', 'blood', 'wound', 'dirty',
   'sweaty', 'wet', 'veins', 'toned',
+  // conflict — a fight had no booru vocabulary at all, so every tag describing
+  // one was demoted to the caption
+  'fighting', 'battle', 'fighting stance', 'clenched hand', 'punching', 'kicking',
+  'biting', 'grabbing', 'holding another\'s wrist', 'restrained', 'pinned down',
+  'straddling', 'wrestling', 'chasing', 'fleeing', 'blood on face', 'injury',
+  'bleeding', 'bruise', 'torn clothes', 'weapon', 'sword', 'knife', 'claw pose',
+  'aiming', 'guarding', 'shielding', 'protecting', 'baring teeth', 'growling',
   // gender presentation — all verified against Danbooru's own tag pages
   'trap', 'androgynous', 'bishounen', 'girly boy', 'reverse trap', 'crossdressing',
   'crossdressing (mtf)', 'crossdressing (ftm)', 'futanari', 'male futanari',
@@ -3692,12 +3731,19 @@ function poseBelongsToRelation(pose, item, scene, descriptors) {
   if (!text) return false
   const hasRelation = (scene.relations || []).some((relation) => relation.actor === item.subject.ref && relation.target)
   if (!hasRelation) return false
-  return (descriptors || []).some((other) => {
+  const namesAnother = (descriptors || []).some((other) => {
     if (!other || other.subject.ref === item.subject.ref) return false
     const anchor = normalizeIdentityText(other.anchor || '')
     if (anchor.length < 3) return false
     return anchor.split(/\s+/).some((word) => word.length >= 4 && new RegExp(`\\b${escapeRegExp(word)}\\b`).test(text))
   })
+  if (!namesAnother) return false
+  // Only drop when a relation actually carries THIS pose's action. Dropping on
+  // the mere existence of a relation deleted "pinning the alpha's muzzle"
+  // because a bland "faces" relation existed elsewhere — and the pose was the
+  // only place that hold was described.
+  return (scene.relations || []).some((relation) =>
+    relation.actor === item.subject.ref && verbStemsMatch(relation.action, text))
 }
 
 function subjectIdentitySentences(item, scene, descriptors) {
@@ -3770,6 +3816,23 @@ function subjectIdentitySentences(item, scene, descriptors) {
   return caption ? [caption + '.'] : []
 }
 
+
+// "pinning" stems to "pinn" and "pins" to "pin", so an equality test says they
+// are different verbs. Comparing on the shorter stem's length says they are the
+// same, which is what a reader would say.
+function verbStem(text) {
+  const first = String(text || '').trim().split(/\s+/)[0] || ''
+  return first.replace(/(?:ing|es|ed|s)$/, '')
+}
+
+function verbStemsMatch(a, b) {
+  const sa = verbStem(a)
+  const sb = verbStem(b)
+  const min = Math.min(sa.length, sb.length)
+  if (min < 3) return false
+  return sa.slice(0, min) === sb.slice(0, min)
+}
+
 function relationSentence(relation, byRef) {
   const actor = byRef.get(relation.actor)
   const target = relation.target ? byRef.get(relation.target) : null
@@ -3779,6 +3842,13 @@ function relationSentence(relation, byRef) {
   if (!action) return ''
   let sentence = `${actorName} ${action}`
   if (targetName && !sentence.toLowerCase().includes(targetName.toLowerCase())) sentence += ` ${targetName}`
+  // Relation details are the modifiers that make a hold specific — "claws
+  // hooked into the nose", "knuckles against muscle". In a multi-subject scene
+  // they reached nothing at all: the tag run excludes them by design, and the
+  // sentence never looked at them. The contact was described in the vaguest
+  // available terms and the detail the parser found was discarded.
+  const extras = (relation.details || []).map(normalizeVisualPhrase).filter(Boolean).slice(0, 2)
+  if (extras.length) sentence += `, ${naturalList(extras)}`
   return sentence.replace(/\s+([,.])/g, '$1').replace(/\s{2,}/g, ' ').trim() + '.'
 }
 
@@ -3831,12 +3901,18 @@ function relationCoveredByStatement(relation, statement, byRef) {
   // A shared verb with both subjects already named is coverage, even when the
   // contact point is worded differently. "pins ... head against the roots" and
   // "pins the muzzle of" are one grapple; described twice, they ask for two.
-  const stem = (action.split(/\s+/)[0] || '').replace(/(?:ing|es|ed|s)$/, '')
-  if (stem.length >= 3 && haystack.includes(stem) && byRef) {
-    const nameOf = (ref) => normalizeIdentityText(((byRef.get(ref) || {}).anchor) || '')
-    const actor = nameOf(relation.actor)
-    const target = nameOf(relation.target)
-    if (actor && target && haystack.includes(actor) && haystack.includes(target)) return true
+  const hayWords = haystack.split(/\s+/).filter(Boolean)
+  const verbInStatement = hayWords.some((word) => verbStemsMatch(word, action))
+  if (verbInStatement && byRef) {
+    // One distinctive word from each name is enough. Requiring the whole anchor
+    // meant "the alpha wolf" went unrecognised in a statement that had grounded
+    // it to "the alpha fantasy wolf".
+    const namePresent = (ref) => {
+      const anchor = normalizeIdentityText(((byRef.get(ref) || {}).anchor) || '')
+      if (!anchor) return false
+      return anchor.split(/\s+/).some((word) => word.length >= 4 && hayWords.includes(word))
+    }
+    if (namePresent(relation.actor) && namePresent(relation.target)) return true
   }
   const words = action.split(/\s+/).filter((word) => word.length > 3)
   if (!words.length) return false
@@ -4285,7 +4361,8 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   // "Sovi is casting a spell with great intensity." before any detail.
   const statement = groundCreatureWords(resolveSceneStatement(scene, descriptors))
   if (statement) prose.push(statement)
-  let crossRelationCount = 0
+  let crossRelationCount = 0   // relations carried by prose OR already in the statement
+  let renderedRelations = 0    // sentences actually written — this is the budget
   if (multi) {
     for (const item of descriptors) prose.push(...subjectIdentitySentences(item, scene, descriptors))
 
@@ -4297,8 +4374,8 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
         continue
       }
       const sentence = relationSentence(relation, byRef)
-      if (sentence) { prose.push(sentence); crossRelationCount++ }
-      if (crossRelationCount >= 2) break
+      if (sentence) { prose.push(sentence); crossRelationCount++; renderedRelations++ }
+      if (renderedRelations >= 2) break
     }
 
     // Named-prop ownership only. Signature exclusivity sentences are dropped:
@@ -4485,9 +4562,8 @@ SAFETY is the Danbooru rating of the picture, not the mood of the story around i
 ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag, taken from the CURRENT PASSAGE or the established location in PRIOR CONTEXT. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
 Keep each image object compact: at most 4 setting, 3 camera, 3 lighting, 3 style, 3 outfit, 2 pose, 2 expression, 2 relation details, and 1 action item, each a terse visual tag of at most 7 words. These are choices, not truncation points — pick the strongest few rather than listing everything true. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 PARTIAL CHANGES ARE NOT STATE CHANGES. When a passage shows only SOME of a character's transformation — a single feature slipping, eyes changing, claws extending, "partly", "slightly", "a little", "just his eyes", "beginning to" — keep appearance_state at the form they are otherwise in and list the specific features in "partial_features" using the exact saved feature names listed below. Switching appearance_state transforms the WHOLE character, which is wrong for a partial change and produces a completely different creature than the passage describes. Use partial_features for anything short of a full, completed transformation. Select only names that are listed for that ref; never invent a feature name, and never put transformation words in appearance, outfit, pose, or expression.
-For multi-subject scenes, relations are mandatory. The FIRST relation must establish the visible base body arrangement or orientation, such as "straddles the lap of", "stands between the knees of", "leans over", "faces", or "sits beside". Do not use motion or intensity as the base relation. Additional relations should identify the clearest physical contact points, such as "grips the hips of" or "braces both hands on the shoulders of". Avoid vague central verbs such as "pounds", "thrusts", "moves against", or "presses into" unless the base pose has already been established by an earlier relation.
+RELATIONS ARE THE ONLY CHANNEL FOR CONTACT — anything two subjects do to each other that is not written as a relation will not be drawn, so they are mandatory in a multi-subject scene. The FIRST relation establishes the base body arrangement: "straddles the lap of", "stands between the knees of", "leans over", "faces", "sits beside". Later ones name the clearest contact points, always as a visible hold plus the body part it takes: "pins the shoulders of", "grips the snout of", "bites the neck of", "braces both hands on the shoulders of". Verbs of motion or intensity — "fights", "attacks", "struggles with", "pounds", "thrusts", "presses into" — describe nothing an artist could draw; use the hold instead. Put the specifics in details: "claws hooked into the nose", "knuckles white".
 For seated, leaning, lying, or kneeling poses, name the visible support surface in "support". Use the camera tag "pov" only when ref "persona" is seen from the viewer's own eye position, and in that subject's pose include a cue such as "viewer hands visible" or "face out of frame".
-For a solo scene, do not invent a relation merely to create prose; keep the visual skeleton tag-oriented. Natural-language anchors are reserved for cross-subject geometry.
 Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Set anatomy_visible false for safe or sensitive scenes. LumiDraw alone controls saved anatomy.
 Known subject refs:
 ${profileSchemaHints(profiles)}`
@@ -5423,7 +5499,7 @@ async function scanStoryCore(userId, options = {}) {
       setStoryScanStage(scan, 'compiling', 'Parser returned structured JSON; compiling the Anima prompt.')
       let parsed
       try {
-        parsed = parseParserScenes(out, settings.maxImages || 2)
+        parsed = parseParserScenes(out, settings.maxImages || 2, profiles)
       } catch (error) {
         const storyDebug = await saveStoryDebug({
           mode: 'parser',
@@ -5775,7 +5851,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.33.2',
+          version: (spindle.manifest && spindle.manifest.version) || '0.34.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6253,7 +6329,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
         let parsed = []
         try {
-          parsed = parseParserScenes(raw, settings.maxImages || 2)
+          parsed = parseParserScenes(raw, settings.maxImages || 2, profiles)
         } catch (error) {
           reply = ok(payload, requestId, {
             reparsed: false,
@@ -6873,4 +6949,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.33.2'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.34.0'))

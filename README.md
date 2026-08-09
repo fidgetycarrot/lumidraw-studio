@@ -1,7 +1,66 @@
-# LumiDraw Studio 0.33.2
+# LumiDraw Studio 0.34.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.34.0 — The action funnel
+
+In a multi-subject scene, contact between characters reaches the prompt through
+exactly one channel: relations. Subject tags are excluded from the tag run by
+design (an unowned "grabbing a wrist" conjures a spare arm), so if a relation is
+lost the action is simply not in the image. That funnel leaked at five points,
+all fixed here.
+
+**Details never rendered.** `relationSentence` used `relation.action` and
+ignored `relation.details` entirely, while the tag run excludes them in
+multi-subject scenes. So `["claws hooked into the nose", "knuckles white"]` —
+the modifiers that make a hold specific — reached nothing at all. They now close
+the sentence.
+
+**A suppressed relation ate a sentence slot.** One counter did two jobs: capping
+prose at two relation sentences, and recording whether the action was already
+carried. A relation deduped against the scene statement incremented it, so a
+scene whose first relation was covered could render only one more. Split into
+two counters — one for sentences written, one for relations accounted for.
+
+**A pose was deleted by any relation at all.** `poseBelongsToRelation` dropped
+"pinning the alpha's muzzle" whenever the actor had *any* relation with a
+target, even a bland "faces". The pose was often the only place that hold was
+described. It is now dropped only when a relation actually carries the same
+verb.
+
+**A relation naming a subject by name was thrown away.** The parser is asked for
+refs and reasonably writes "Rook" or "the alpha". Those failed a strict
+`refs.has()` check, were dropped, and `synthesizeRelation` replaced the specific
+hold with "stands with". Refs now resolve against subject labels and profile
+anchors before anything is discarded.
+
+**"pinning" and "pins" counted as different verbs.** The stemmer takes `-ing`
+before `-s`, so "pinning" became `pinn` and "pins" became `pin`, and an equality
+test said they disagreed. Comparison is now on the shorter stem's length. The
+same test also demanded a subject's *full* anchor appear in the statement, which
+"the alpha wolf" failed once grounded to "the alpha fantasy wolf" — one
+distinctive word from each name is now enough.
+
+### Two supporting changes
+
+**Conflict vocabulary.** There was none, so every tag describing a fight was
+demoted to the caption. Added `fighting`, `battle`, `fighting stance`,
+`pinned down`, `restrained`, `wrestling`, `biting`, `grabbing`, `baring teeth`,
+`blood on face`, `injury`, `bleeding`, `weapon`, `sword` and others.
+
+**The instruction now says relations are load-bearing.** It described *how* to
+write one and never *why* they matter, with examples drawn entirely from
+intimacy. It now opens: relations are the only channel for contact, name the
+visible hold and the body part it takes, and motion verbs — "fights", "attacks",
+"struggles with", "pounds" — describe nothing an artist could draw.
+
+To stay near the character ceiling this replaced the old solo-scene rule, which
+`multi` already enforces in code, and merged two overlapping relation
+paragraphs. 9,603 characters against a 9,650 ceiling.
+
+17 new assertions; 613 across 27 suites.
+
 
 ## 0.33.2 — Hair was being cut, so characters converged
 
