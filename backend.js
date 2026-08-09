@@ -156,17 +156,26 @@ async function getSceneMemory() {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
 
-async function rememberSceneState(chatId, { setting = [], lighting = [] } = {}) {
+async function rememberSceneState(chatId, { setting = [], lighting = [], outfits = null } = {}) {
   const key = String(chatId || '').trim()
   const tags = uniqueStrings(setting || []).slice(0, 6)
   const light = uniqueStrings(lighting || []).slice(0, 4)
-  if (!key || (!tags.length && !light.length)) return
+  const wardrobe = outfits && typeof outfits === 'object' ? outfits : null
+  if (!key || (!tags.length && !light.length && !wardrobe)) return
   try {
     const memory = await getSceneMemory()
     const previous = memory[key] || {}
+    // Merged, not replaced: a character absent from this scene keeps whatever
+    // they were last seen wearing, which is the whole point of remembering.
+    const mergedOutfits = { ...(previous.outfits || {}) }
+    for (const [ref, worn] of Object.entries(wardrobe || {})) {
+      const items = uniqueStrings(worn || []).slice(0, 6)
+      if (items.length) mergedOutfits[ref] = items
+    }
     memory[key] = {
       setting: tags.length ? tags : (previous.setting || []),
       lighting: light.length ? light : (previous.lighting || []),
+      outfits: mergedOutfits,
       at: Date.now(),
     }
     const keys = Object.keys(memory)
@@ -3497,7 +3506,10 @@ function subjectOwnershipAnchors(item, scene, exclusive = false, { includeSignat
 // "black hair" out of the same undifferentiated tag run is the whole point.
 function subjectTagLine(item, scene, descriptors, { includeAppearance = true } = {}) {
   const poses = poseWithSupport(item, scene).map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
+  const held = heldObjectsFor(item)
+  const consumed = new Set(held.consumed)
   const actions = item.action
+    .filter((part) => !consumed.has(part))
     .filter((part) => !actionDuplicatesRelation(part, item.subject.ref, scene.relations))
     .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
   const aliases = activeAliasesForSubject(item, scene)
@@ -3784,13 +3796,24 @@ function subjectIdentitySentences(item, scene, descriptors) {
     ? `${articleFor(leadModifiers[0])} ${leadModifiers.join(', ')} ${nounPhrase.replace(/^(?:a|an|the)\s+/, '')}`
     : nounPhrase
 
+  // The prop sits second, right after the name — "Sovi, holding a staff, an elf
+  // femboy with…". Two words from its owner rather than forty, with no other
+  // character named in between.
+  const held = heldObjectsFor(item)
+  const holdClause = held.objects.length ? `holding ${naturalList(held.objects.map(withArticle))}` : ''
+  if (holdClause) {
+    trace(`held object · ${item.anchor || item.subject.ref}`, 'applied',
+      `${held.objects.join(', ')} bound to the name; ${held.consumed.length} loose mention(s) consumed`)
+  }
+
   const parts = []
   if (redundantNoun) {
-    parts.push(name)
+    parts.push(holdClause ? `${name}, ${holdClause}` : name)
     if (leadModifiers.length) parts.push(naturalList(leadModifiers))
     if (traits.length) parts.push(`with ${naturalList(traits)}`)
   } else {
-    parts.push(traits.length ? `${name}, ${described} with ${naturalList(traits)}` : `${name}, ${described}`)
+    const lead = holdClause ? `${name}, ${holdClause}` : name
+    parts.push(traits.length ? `${lead}, ${described} with ${naturalList(traits)}` : `${lead}, ${described}`)
   }
 
   const clothes = []
@@ -3801,8 +3824,14 @@ function subjectIdentitySentences(item, scene, descriptors) {
     if (/^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs|dressed|clothed|undressed|fully clothed|partially clothed)$/.test(tag)) stateWords.push(tag)
     else clothes.push(tag)
   }
-  const pose = poseClause({ ...item, pose: item.pose.filter((entry) => !poseBelongsToRelation(entry, item, scene, descriptors)) }, scene)
+  const consumedHold = new Set(held.consumed)
+  const pose = poseClause({
+    ...item,
+    pose: item.pose.filter((entry) =>
+      !consumedHold.has(entry) && !poseBelongsToRelation(entry, item, scene, descriptors)),
+  }, scene)
   const actions = item.action
+    .filter((part) => !consumedHold.has(part))
     .filter((part) => !actionDuplicatesRelation(part, item.subject.ref, scene.relations))
     .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
   const { doing, having, looking } = stateClauses([...item.expression, ...actions])
@@ -4185,12 +4214,14 @@ function repairCameraTags(cameraTags, scene, descriptors) {
 // rule that fired and had nothing to do. The trace records both, so the
 // question is answered by reading rather than by instrumenting.
 let LAST_COMPILE_TRACE = []
+let LAST_COMPILE_OUTFITS = {}
 
-function traceReset() { LAST_COMPILE_TRACE = [] }
+function traceReset() { LAST_COMPILE_TRACE = []; LAST_COMPILE_OUTFITS = {} }
 function trace(rule, outcome, detail = '') {
   LAST_COMPILE_TRACE.push({ rule, outcome, detail: String(detail || '') })
 }
 function traceSnapshot() { return LAST_COMPILE_TRACE.slice() }
+function outfitSnapshot() { return { ...LAST_COMPILE_OUTFITS } }
 
 // Human-readable, for the Spindle log and the debug panel.
 function formatCompileTrace(steps) {
@@ -4211,13 +4242,21 @@ function formatCompileTrace(steps) {
 // Profiles already declare what each character owns. A garment that belongs to
 // someone ELSE in the scene, and not to the wearer, is bleed — dropped, and
 // traced so the decision is visible rather than mysterious.
-function stripBorrowedOutfit(descriptors) {
+// A garment declared on a profile is owned outright. A garment the story
+// introduced is owned by whoever has been seen wearing it — "Sovi's ruined
+// dress" and "Rook's ruined tunic" are established by the chat, not by any
+// profile, and until now nothing in the compiler knew that.
+function stripBorrowedOutfit(descriptors, rememberedOutfits = null) {
   const owned = new Map()
   for (const item of descriptors) {
     const profile = item.profile
     if (!profile) continue
     const mine = new Set()
     for (const garment of [...(profile.defaultOutfit || []), ...(profile.appearance || [])]) {
+      const key = normalizeIdentityText(garment)
+      if (key) mine.add(key)
+    }
+    for (const garment of (rememberedOutfits && rememberedOutfits[item.subject.ref]) || []) {
       const key = normalizeIdentityText(garment)
       if (key) mine.add(key)
     }
@@ -4230,16 +4269,25 @@ function stripBorrowedOutfit(descriptors) {
     const mine = owned.get(item.subject.ref) || new Set()
     const kept = []
     const borrowed = []
+    // "ruined tunic" and "travel-worn tunic" are the same garment wearing a
+    // different adjective, so comparison is on the head noun. Substring
+    // matching saw two unrelated strings and let the swap through.
+    const sameGarment = (a, b) => {
+      if (a.includes(b) || b.includes(a)) return true
+      const headA = a.split(/\s+/).pop()
+      const headB = b.split(/\s+/).pop()
+      return !!headA && headA.length > 2 && headA === headB
+    }
     for (const garment of item.outfit || []) {
       const key = normalizeIdentityText(garment)
       // Owned by this character, or by nobody in particular — keep it. Only a
-      // garment demonstrably belonging to another cast member is refused.
-      const mineHasIt = [...mine].some((value) => value.includes(key) || key.includes(value))
-      if (mineHasIt) { kept.push(garment); continue }
+      // garment demonstrably belonging to another cast member is refused, and
+      // only when that member is actually in this scene.
+      if ([...mine].some((value) => sameGarment(value, key))) { kept.push(garment); continue }
       let ownerRef = ''
       for (const [ref, theirs] of owned.entries()) {
         if (ref === item.subject.ref) continue
-        if ([...theirs].some((value) => value.includes(key) || key.includes(value))) { ownerRef = ref; break }
+        if ([...theirs].some((value) => sameGarment(value, key))) { ownerRef = ref; break }
       }
       if (ownerRef) borrowed.push({ garment, ownerRef })
       else kept.push(garment)
@@ -4274,7 +4322,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.34.2 ranks presentation first, a stray one now survives every cap
+// and since 0.35.1 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -4326,6 +4374,94 @@ function rewriteKnownAliases(tags) {
   return out
 }
 
+
+// --- held objects -----------------------------------------------------------
+// A prop reaches the prompt as a pose phrase at the far end of a long clause:
+//   "Sovi, [7 traits], wearing [2 garments], standing behind rook, staff
+//    planted, ... and gripping staff, fire-flat ears."
+// Forty words separate "Sovi" from "staff", and the other character is named
+// twice in between. A diffusion model binds the object to the nearest salient
+// figure, which is whoever was named last — so Rook ends up holding the staff.
+//
+// The object is hoisted to sit immediately after the name, where proximity does
+// the binding, and repeated mentions collapse to one.
+const HOLD_VERB_RE = /\b(?:holding|held|holds|gripping|grips|grasping|grasps|clutching|clutches|carrying|carries|wielding|wields|brandishing|brandishes|planted|raised|resting on|leaning on|shouldering|balancing)\b/i
+const HOLD_STOPWORDS = new Set([
+  'holding', 'held', 'holds', 'gripping', 'grips', 'grasping', 'grasps', 'clutching',
+  'clutches', 'carrying', 'carries', 'wielding', 'wields', 'brandishing', 'brandishes',
+  'planted', 'raised', 'resting', 'leaning', 'shouldering', 'balancing', 'on', 'in',
+  'a', 'an', 'the', 'his', 'her', 'their', 'its', 'both', 'one', 'two', 'hands', 'hand',
+  'tightly', 'loosely', 'firmly', 'lightly',
+])
+
+function heldObjectsFor(item) {
+  const found = []
+  const seen = new Set()
+  const consumed = []
+  for (const phrase of [...(item.pose || []), ...(item.action || [])]) {
+    const text = animaTag(phrase)
+    if (!text || !HOLD_VERB_RE.test(text)) continue
+    // A phrase naming another body part is contact, not a held object.
+    if (BODY_PART_RE.test(text) && !/\b(?:staff|sword|blade|knife|dagger|bow|spear|axe|shield|lantern|torch|book|tome|cup|mug|bottle|flask|rope|reins|bag|pack|satchel|weapon|wand|orb|crystal)\b/i.test(text)) continue
+    const noun = text.split(/\s+/)
+      .map((word) => word.replace(/[^a-z0-9-]/gi, ''))
+      .filter((word) => word && !HOLD_STOPWORDS.has(word.toLowerCase()))
+      .pop()
+    if (!noun) continue
+    const key = noun.toLowerCase()
+    if (seen.has(key)) { consumed.push(phrase); continue }
+    seen.add(key)
+    found.push(noun)
+    consumed.push(phrase)
+  }
+  return { objects: found.slice(0, 2), consumed }
+}
+
+// --- cross-subject poses ------------------------------------------------------
+// "standing behind rook" inside SOVI's clause names Rook where Sovi is being
+// described, which is the other half of why the staff drifts. It is also a
+// relation written in the wrong field, so promote it rather than delete it: the
+// geometry survives, and the foreign name leaves the clause.
+function promoteCrossSubjectPoses(descriptors, scene) {
+  const promoted = []
+  const next = descriptors.map((item) => {
+    const kept = []
+    for (const phrase of item.pose || []) {
+      const text = normalizeIdentityText(phrase)
+      const other = descriptors.find((candidate) => {
+        if (!candidate || candidate.subject.ref === item.subject.ref) return false
+        const anchor = normalizeIdentityText(candidate.anchor || '')
+        if (anchor.length < 3) return false
+        return anchor.split(/\s+/).some((word) =>
+          word.length >= 4 && new RegExp(`\\b${escapeRegExp(word)}\\b`).test(text))
+      })
+      if (!other) { kept.push(phrase); continue }
+      const covered = (scene.relations || []).some((relation) =>
+        relation.actor === item.subject.ref && verbStemsMatch(relation.action, text))
+      if (covered) {
+        trace(`pose → relation · ${item.anchor || item.subject.ref}`, 'clean',
+          `"${phrase}" dropped — a relation already carries it`)
+        continue
+      }
+      // Strip the other name and trailing preposition off the tail, leaving an
+      // action the relation renderer can complete with the real target.
+      const anchorWords = normalizeIdentityText(other.anchor || '').split(/\s+/).filter(Boolean)
+      let action = animaTag(phrase)
+      for (const word of anchorWords) {
+        action = action.replace(new RegExp(`\\b${escapeRegExp(word)}\\b`, 'gi'), '').trim()
+      }
+      action = action.replace(/\s{2,}/g, ' ').replace(/\s+'s\b/g, "'s").trim()
+      if (!action || action.split(/\s+/).length > 9) { kept.push(phrase); continue }
+      promoted.push({ actor: item.subject.ref, target: other.subject.ref, action, details: [], promoted: true })
+      trace(`pose → relation · ${item.anchor || item.subject.ref}`, 'applied',
+        `"${phrase}" became a relation, so ${other.anchor || 'the other subject'} is no longer named inside this character's own description`)
+      continue
+    }
+    return { ...item, pose: kept }
+  })
+  return { descriptors: next, promoted }
+}
+
 function traceAppearance(item, after) {
   const before = cleanAppearanceForNoun(item.appearance, item.noun)
   const scenery = before.filter((tag) => isNotTrait(tag))
@@ -4346,7 +4482,7 @@ function traceGrounding(before, after) {
   return after
 }
 
-function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '' } = {}) {
+function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null } = {}) {
   traceReset()
   let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
     ...item,
@@ -4369,7 +4505,22 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     action: animaTagList(item.subject.action).filter((tag) => !isPovStagingCue(tag)),
   }))
 
-  descriptors = stripBorrowedOutfit(descriptors)
+  descriptors = stripBorrowedOutfit(descriptors, rememberedOutfits)
+  for (const item of descriptors) {
+    const worn = (item.outfit || []).filter((tag) => !isNotClothing(tag))
+    if (worn.length) LAST_COMPILE_OUTFITS[item.subject.ref] = worn
+  }
+
+  // A pose naming another subject is a relation in the wrong field. Promoting
+  // it keeps the geometry and takes the foreign name out of the clause where a
+  // held object is trying to bind.
+  if (descriptors.length > 1) {
+    const lifted = promoteCrossSubjectPoses(descriptors, scene)
+    descriptors = lifted.descriptors
+    if (lifted.promoted.length) {
+      scene = { ...scene, relations: [...(scene.relations || []), ...lifted.promoted] }
+    }
+  }
 
   // Form firewall: strip every trace of a shapeshifter's inactive forms from
   // the whole scene. Scene-wide, not per-subject — "wolf ears" loose anywhere
@@ -4694,12 +4845,20 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
     artistTags: artists,
     rememberedSetting: remembered,
     contextText,
+    rememberedOutfits: memoryEntry.outfits || null,
   })
   // Remember whatever survived reconciliation as the story's location.
   const groundingForMemory = [sourcePassage, contextText].filter(Boolean).join('\n')
   const establishedSetting = reconcileSetting(scene.setting, groundingForMemory, remembered).setting
   const establishedLighting = scrubUnsupportedPlaces(animaTagList(scene.lighting), groundingForMemory, 'lighting').tags
-  await rememberSceneState(chatId, { setting: establishedSetting, lighting: establishedLighting })
+  // Record the wardrobe as compiled — after the ownership check, so a rejected
+  // garment is never learned as belonging to the wrong character.
+  const establishedOutfits = outfitSnapshot()
+  await rememberSceneState(chatId, {
+    setting: establishedSetting,
+    lighting: establishedLighting,
+    outfits: Object.keys(establishedOutfits).length ? establishedOutfits : null,
+  })
   // A sentence follows the quality header with a full stop, not a comma:
   // "masterpiece, best quality, @artist. Sovi is …" is the card's own shape.
   const coreLeadsWithSentence = /^[A-Z][^,\n]*\s/.test(core)
@@ -5923,7 +6082,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.34.2',
+          version: (spindle.manifest && spindle.manifest.version) || '0.35.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7021,4 +7180,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.34.2'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.35.1'))

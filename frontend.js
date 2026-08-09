@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.34.2'
+const EXTENSION_VERSION = '0.35.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -494,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.34.2" aria-label="LumiDraw Studio v0.34.2">
+    <button class="ld-launcher" title="LumiDraw Studio v0.35.1" aria-label="LumiDraw Studio v0.35.1">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.34.2</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.35.1</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>

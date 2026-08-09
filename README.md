@@ -1,7 +1,107 @@
-# LumiDraw Studio 0.34.2
+# LumiDraw Studio 0.35.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.35.1 — Clothes the story gave you now have an owner
+
+Sovi wears a ruined dress; Rook wears a ruined tunic. The prompt put a
+travel-worn tunic on Sovi.
+
+0.31.3 already refuses a garment belonging to another character — but only when
+a **profile** declares it. `ruined tunic` was established by the story, so no
+profile owned it, and the rule deliberately leaves unowned garments alone (that
+is what lets a borrowed cloak work). Story clothing had no ownership check at
+all.
+
+### Scene memory now remembers the wardrobe
+
+Alongside setting and lighting, each chat records what each character was last
+seen wearing. That is real evidence: six messages of Rook in a tunic makes the
+parser putting it on Sovi both detectable and correctable.
+
+Merged rather than replaced, so a character absent from a scene keeps their
+wardrobe. Recorded **after** the ownership check, so a garment just taken off
+the wrong character is never learned as theirs.
+
+### Matching on the head noun
+
+The first version did not fire: `ruined tunic` and `travel-worn tunic` share no
+substring. They are the same garment wearing a different adjective, so
+comparison is now on the head noun — the same rule that merges `black fur` with
+`shaggy fur`.
+
+### Where this is deliberately conservative
+
+- **A garment you own always wins.** If both characters have been seen in
+  cloaks, neither loses one.
+- **The other owner must be in the scene.** Rook absent, Sovi may wear a tunic
+  freely.
+- **A cold start strips nothing.** With no memory yet, the parser's attribution
+  stands — and is then learned, so the first scene in a chat can still be wrong.
+
+The honest cost: if a character genuinely puts on another's clothes while both
+are present, it will be refused. The trace names it, so you can see it happen:
+
+```text
+✓ outfit ownership · Sovi — "travel-worn tunic" belongs to Rook
+```
+
+7 new assertions; 651 across 28 suites.
+
+
+## 0.35.0 — Rook was holding Sovi's staff
+
+Character identity is holding up well. What the characters are *doing* is not,
+and a three-hander at a campfire showed why. In the story Sovi holds the staff
+and Rook rests a hand on his calf; in the image Rook holds the staff.
+
+The compiled clause explains it:
+
+```text
+Sovi, [7 traits], wearing a travel-worn tunic and a cloak, standing behind rook,
+staff planted, and calf pressed into rook's palm, controlled breathing and
+gripping staff, fire-flat ears.
+```
+
+**Rook is named twice inside Sovi's own sentence**, and the staff is mentioned
+twice, forty words downstream of "Sovi" and immediately beside "rook". A
+diffusion model binds an object to the nearest salient figure; that was Rook.
+
+### The object sits beside its owner
+
+Held objects are lifted out of the trailing pose list and placed immediately
+after the name, and repeated mentions collapse:
+
+```text
+Sovi, holding a staff, an adult elf femboy with blonde long hair and gold eyes,
+wearing a travel-worn tunic, controlled breathing.
+```
+
+Two words from its owner instead of forty, with nobody else named in between.
+Contact phrases are excluded — "gripping the wrist" is not a prop — unless the
+phrase also names a real object.
+
+### A pose naming another character becomes a relation
+
+"standing behind rook" was Sovi's *pose*, so Rook's name sat inside Sovi's
+description. It is a relation written in the wrong field. 0.29.1 dropped such
+poses when a relation covered them and otherwise left them in place; they are
+now **promoted** — the geometry survives as `Sovi standing behind Rook`, and the
+foreign name leaves the clause where the staff is trying to bind.
+
+Also fixed: `resolveCrossSubjectPronouns` returned early unless there were
+exactly two subjects, so in a three-character scene it did nothing at all.
+
+### A bug I introduced and caught
+
+The first version of this put the held-object filter in `subjectTagLine` — the
+**solo** path — where `consumedHold` does not exist. Every solo scene would have
+thrown a ReferenceError. Two functions in this file open with the same line;
+the edit matched the wrong one. Both are correct now, each with its own scope.
+
+13 new assertions; 644 across 28 suites.
+
 
 ## 0.34.2 — One presentation per character
 
