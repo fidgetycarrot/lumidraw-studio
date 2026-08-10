@@ -336,10 +336,17 @@ let rejectedKeyCache = null
 async function getRejectedKeys() {
   if (rejectedKeyCache) return rejectedKeyCache
   try {
-    const raw = await spindle.storage.get(REJECTED_KEYS_FILE)
-    const parsed = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null
+    // getJson/setJson are what every other store in this file uses; the plain
+    // get/set pair used here originally appears nowhere else, and the silent
+    // catch below meant a failed write was indistinguishable from a successful
+    // one — the list would have been relearned on every restart, forever.
+    const parsed = await spindle.storage.getJson(REJECTED_KEYS_FILE)
     rejectedKeyCache = new Set(Array.isArray(parsed) ? parsed : (parsed && parsed.keys) || [])
-  } catch { rejectedKeyCache = new Set() }
+  } catch (error) {
+    rejectedKeyCache = new Set()
+    spindle.log.warn('[lumidraw] could not read the rejected-settings list (' + error.message +
+      '); Draw Things settings will be relearned this session.')
+  }
   return rejectedKeyCache
 }
 
@@ -351,14 +358,21 @@ async function rememberRejectedKeys(keys) {
     if (value && !set.has(value)) { set.add(value); added++ }
   }
   if (!added) return false
-  try { await spindle.storage.set(REJECTED_KEYS_FILE, JSON.stringify([...set])) }
-  catch (error) { spindle.log.warn('[lumidraw] could not persist rejected keys: ' + error.message) }
+  try {
+    await spindle.storage.setJson(REJECTED_KEYS_FILE, [...set], { indent: 2 })
+    spindle.log.info('[lumidraw] remembered ' + added + ' refused Draw Things setting(s); ' +
+      set.size + ' total. This survives restarts and updates — clear it in Settings after a Draw Things update.')
+  } catch (error) {
+    spindle.log.warn('[lumidraw] COULD NOT SAVE the rejected-settings list (' + error.message +
+      '). Draw Things will refuse the same settings again after a restart. This is worth reporting.')
+  }
   return true
 }
 
 async function forgetRejectedKeys() {
   rejectedKeyCache = new Set()
-  try { await spindle.storage.set(REJECTED_KEYS_FILE, JSON.stringify([])) } catch { /* best effort */ }
+  try { await spindle.storage.setJson(REJECTED_KEYS_FILE, [], { indent: 2 }) }
+  catch (error) { spindle.log.warn('[lumidraw] could not clear the rejected-settings list: ' + error.message) }
 }
 
 // Draw Things refuses a payload in two different ways, and only one of them was
@@ -1853,6 +1867,9 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
   return {
     ref: fallbackRef,
     anchor: shortPhrase(source.anchor || '', `${fallbackRef} anchor`, 6, 64, true, true) || fallbackRef,
+    // What the image prompt should call this character, when their name reads
+    // as something else to a booru-trained model. Blank means use the anchor.
+    promptName: shortPhrase(source.promptName || '', `${fallbackRef} prompt name`, 6, 64, true, true),
     countTag,
     subject: shortPhrase(source.subject || '', `${fallbackRef} subject phrase`, 8, 72, true),
     appearance: shortList(appearance, `${fallbackRef} appearance`, { maxItems: 32, maxWords: 7, maxChars: 72 }),
@@ -2613,8 +2630,59 @@ function scrubFormTermsFromTags(list, terms) {
   })
 }
 
+
+// --- names that read as something else ---------------------------------------
+// Anima is trained on booru tags, so a character name that happens to BE a tag
+// is read as that tag. "Fanny" is booru-adjacent slang for a body part, and the
+// model draws the body part. The same trap waits for Rose, Lily, Amber, Jade,
+// Ruby, Iris, Violet, Holly, Ivy, Crystal, Robin, Hunter and plenty more —
+// most of which are already in our vocabulary, so the vocabulary can detect it.
+const NAME_SLANG_RE = /^(?:fanny|minge|muff|bush|cherry|dick|willy|johnson|todger|knob|beaver|clunge|growler|tush|keister|booty|melons|jugs|rack)$/i
+
+// Given names that are also strong VISUAL nouns. The model does not know these
+// are names; it draws the thing. A character called Rose gets roses, Ivy gets
+// ivy, Raven gets a bird. Only names that would visibly change the picture are
+// listed — a name that merely happens to be a word is harmless.
+const NAME_NOUN_RE = /^(?:rose|lily|iris|violet|jade|ruby|pearl|amber|holly|ivy|daisy|poppy|heather|olive|jasmine|crystal|opal|coral|hazel|willow|fern|sage|clover|dahlia|magnolia|robin|wren|jay|raven|dove|hawk|falcon|fox|wolf|bear|kitty|bunny|star|sky|river|brook|rain|storm|summer|autumn|winter|dawn|aurora|ginger|honey|candy|angel|blade|bell|arrow|hunter|archer|forest|meadow|ash|briar|thorn|rowan|linden|juniper|marigold)$/i
+
+// A text encoder matches TOKENS, not words. "Fanny Price" still contains the
+// token that caused the problem, and it contributes just as much as it did
+// alone — adding a surname does not neutralise it. Every word is checked, not
+// just the whole string.
+function nameReadsAsTag(name) {
+  const text = normalizeIdentityText(name)
+  if (!text) return ''
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    if (word.length < 3) continue
+    if (NAME_SLANG_RE.test(word)) return `"${word}" is booru slang for a body part`
+    if (NAME_NOUN_RE.test(word)) return `"${word}" is also an object the model will draw`
+    const resolved = resolveBooruTag(word)
+    if (resolved.tag) return `"${word}" is also the booru tag "${resolved.tag}"`
+  }
+  return ''
+}
+
 function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false) {
   const profile = profileForSubject(subject, profiles)
+  if (profile) {
+    if (profile.promptName) {
+      const stillClashes = nameReadsAsTag(profile.promptName)
+      if (stillClashes) {
+        trace(`prompt name · ${profile.anchor}`, 'warn',
+          `"${profile.promptName}" does not fix it — ${stillClashes}. A text encoder reads tokens, not words, so adding a surname leaves the problem word contributing exactly as before. Use a name that does not contain it at all.`)
+        spindle.log.warn(`[lumidraw] prompt name "${profile.promptName}" still contains the problem: ${stillClashes}. Adding words around it does not help; pick a name without it.`)
+      } else {
+        trace(`prompt name · ${profile.anchor}`, 'applied', `written as "${profile.promptName}" in the image prompt`)
+      }
+    } else {
+      const clash = nameReadsAsTag(profile.anchor)
+      if (clash) {
+        trace(`prompt name · ${profile.anchor}`, 'warn',
+          `${clash}, so the model may draw that instead of the character. Set a prompt name on this character — a full name usually fixes it.`)
+        spindle.log.warn(`[lumidraw] ${profile.anchor}: ${clash}. Set "Name in prompts" on the character to something unambiguous.`)
+      }
+    }
+  }
   const stateReport = {}
   const state = profile ? selectAppearanceState(profile, subject, sourcePassage, stateReport) : null
   if (profile && Array.isArray(profile.appearanceStates) && profile.appearanceStates.length) {
@@ -2623,7 +2691,7 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
       `${state ? state.name : 'base form'} — ${stateReport.reason || 'no reason recorded'}` +
       (stateReport.unmatchedRequest ? ` (parser asked for "${stateReport.unmatchedRequest}", which is not a saved state)` : ''))
   }
-  const anchor = profile ? profile.anchor : (subject.label || subject.ref.replace(/_/g, ' '))
+  const anchor = profile ? (profile.promptName || profile.anchor) : (subject.label || subject.ref.replace(/_/g, ' '))
   const noun = state && state.subject ? state.subject : (profile ? profile.subject : subject.label)
   // A transformation state marked appearance=replace stands on its own tags;
   // otherwise the form's tags are layered over the profile's permanent ones.
@@ -4436,7 +4504,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.37.0 ranks presentation first, a stray one now survives every cap
+// and since 0.38.0 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -4633,6 +4701,26 @@ function traceGrounding(before, after) {
   return after
 }
 
+
+// The identity clauses are built from the descriptor, so they pick up a prompt
+// name automatically. The scene statement is the PARSER's prose and uses the
+// real name — leaving the exact token we were trying to avoid at the very front
+// of the prompt, which is the strongest position in it.
+function applyPromptNames(text, profiles) {
+  let value = String(text || '')
+  if (!value) return value
+  for (const profile of allKnownProfiles(profiles)) {
+    if (!profile || !profile.promptName || !profile.anchor) continue
+    if (normalizeIdentityText(profile.promptName) === normalizeIdentityText(profile.anchor)) continue
+    for (const word of String(profile.anchor).split(/\s+/).filter((part) => part.length >= 3)) {
+      value = value.replace(new RegExp(`\\b${escapeRegExp(word)}\\b`, 'gi'), profile.promptName)
+    }
+    // Replacing each word of a multi-word anchor can repeat the substitute.
+    value = value.replace(new RegExp(`(?:\\b${escapeRegExp(profile.promptName)}\\b[\\s,]*){2,}`, 'gi'), `${profile.promptName} `)
+  }
+  return value.replace(/\s{2,}/g, ' ').trim()
+}
+
 function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null } = {}) {
   traceReset()
   let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
@@ -4738,7 +4826,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   const prose = []
   // The thesis sentence leads the caption for BOTH solo and multi scenes:
   // "Sovi is casting a spell with great intensity." before any detail.
-  const statement = groundCreatureWords(resolveSceneStatement(scene, descriptors))
+  const statement = applyPromptNames(groundCreatureWords(resolveSceneStatement(scene, descriptors)), profiles)
   if (statement) prose.push(statement)
   let crossRelationCount = 0   // relations carried by prose OR already in the statement
   let renderedRelations = 0    // sentences actually written — this is the budget
@@ -6287,7 +6375,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.37.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.38.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7385,4 +7473,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.37.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.38.0'))

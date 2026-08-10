@@ -1,7 +1,106 @@
-# LumiDraw Studio 0.37.0
+# LumiDraw Studio 0.38.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.38.0 — When a character's name is also a thing
+
+A character called Fanny produced nonsense, because `fanny` is booru slang for a
+body part and Anima drew the body part. Changing the name to **Fanny Price** did
+not help, and `Fanny_Price` would not either.
+
+**A text encoder matches tokens, not words.** The `fanny` token is still there
+in "Fanny Price", contributing exactly as much as it did alone. Putting another
+word beside it neutralises nothing, and an underscore is converted to a space
+before the model ever sees it.
+
+The only fix is not to send that token.
+
+### Name in prompts
+
+Characters and personas gain an optional **Name in prompts**. Blank means use
+the real name. Set it to anything unambiguous — `Price` on its own works — and
+the image prompt uses that throughout while your story keeps the real name. The
+prompt name exists only to bind traits to one subject consistently; the model
+never needed the real one.
+
+### Detection, so you are told rather than left guessing
+
+A name is checked word by word against booru slang, the tag vocabulary, and a
+list of given names that are strong visual nouns:
+
+> rose · lily · iris · violet · jade · ruby · pearl · amber · holly · ivy ·
+> daisy · poppy · willow · robin · raven · wren · fox · wolf · star · river ·
+> dawn · summer · ginger · honey · angel · hunter · ash · briar · thorn …
+
+A character called Rose gets roses in the picture. The trace says so:
+
+```text
+! prompt name · Rose — "rose" is also an object the model will draw, so the
+  model may draw that instead of the character. Set a prompt name on this
+  character — a full name usually fixes it.
+```
+
+And a prompt name that keeps the problem is refused rather than trusted:
+
+```text
+! prompt name · Fanny — "Fanny Price" does not fix it — "fanny" is booru slang
+  for a body part. A text encoder reads tokens, not words, so adding a surname
+  leaves the problem word contributing exactly as before.
+```
+
+### The statement had to be rewritten too
+
+The first version substituted the name in the identity clauses and missed the
+**scene statement**, which is the parser's own prose — leaving `Fanny` at the
+very front of the prompt, its strongest position. Caught by a test asserting the
+name appears nowhere in the output, not merely that the substitute appears
+somewhere. Worth the distinction: the first assertion passed.
+
+29 suites · 735 assertions.
+
+
+## 0.37.1 — The learned list was probably not being saved
+
+"Will it do the self-healing after every update and restart?" It should not, and
+it very likely would have.
+
+The rejected-settings list was written with `spindle.storage.get` and
+`spindle.storage.set`. Those calls appear **nowhere else** in a file that uses
+`getJson` and `setJson` thirteen times each — and they sat inside a silent
+`try {} catch {}`, so a write that never happened looked exactly like one that
+did.
+
+The only symptom would have been the retry rounds reappearing after every
+restart, which is precisely the question that prompted this.
+
+Now on `getJson`/`setJson` like every other store here, and no longer silent:
+
+```text
+remembered 3 refused Draw Things setting(s); 3 total. This survives restarts
+and updates — clear it in Settings after a Draw Things update.
+```
+
+A failure to save says so loudly instead of pretending:
+
+```text
+COULD NOT SAVE the rejected-settings list (…). Draw Things will refuse the
+same settings again after a restart. This is worth reporting.
+```
+
+### What to expect
+
+- **Once per setting, ever** — not once per restart.
+- **A new Sync can add more**, but only genuinely new ones.
+- **Settings → Settings Draw Things refused** shows the list. If it still lists
+  keys after restarting Lumiverse, persistence is working.
+
+Six assertions check the source directly: no plain `get`/`set` remain, the list
+round-trips through `getJson`/`setJson`, and both failure paths report rather
+than swallow.
+
+**28 suites · 711 assertions.**
+
 
 ## 0.37.0 — Sync converges in one generation, not four
 
