@@ -1,7 +1,38 @@
-# LumiDraw Studio 0.42.1
+# LumiDraw Studio 0.42.2
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.42.2 — Every connection reported as Sonnet 5
+
+Two parser paths handled a typed model differently.
+
+The **legacy** path set `opts.model` unconditionally whenever the field had a
+value. The **Anima** path set it only when `useRawOverride` was true, which
+requires the connection to expose a raw provider route. Without one, the
+override was dropped and the request ran on the connection's own model.
+
+And `modelLabel` reported `connectionModel` in that case — so the log named the
+connection's model no matter what was typed. Every connection came out looking
+like Sonnet 5.
+
+That is the worst possible failure for what this was being used for: comparing
+parser models against each other. An A/B test where the label is wrong compares
+nothing.
+
+- **A typed model is now sent on both paths**, raw route or not. The provider
+  decides whether to honour it; that is its call, not ours to pre-empt.
+- **The log reports what was sent**, and names a mismatch outright:
+  `model=claude-fable-5 (asked for claude-fable-5) · connection model=claude-sonnet-5`
+- The old note claimed the override "could NOT be applied", which was a
+  guess stated as fact. It now says what to check.
+
+If the reply still does not look like the model you asked for after this, the
+provider is ignoring the override and it belongs on the Lumiverse connection
+itself — but you will be able to see that rather than infer it.
+
+**36 suites · 945 assertions.**
+
 
 ## 0.42.0 — Eight hand edits, three of them ours
 

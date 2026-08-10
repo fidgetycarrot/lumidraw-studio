@@ -4690,7 +4690,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.42.1 ranks presentation first, a stray one now survives every cap
+// and since 0.42.2 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -5561,6 +5561,13 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
   if (useRawOverride) {
     opts.provider = connection.provider
     opts.model = requestedModel
+  } else if (requestedModel) {
+    // The legacy path has always set this unconditionally. The Anima path only
+    // set it when a raw provider route existed, so a typed model was silently
+    // dropped and the request ran on the connection's own model — while the
+    // Settings field went on showing what you asked for. Two paths, two
+    // behaviours, one of them wrong.
+    opts.model = requestedModel
   }
 
   // User-supplied overrides win over everything above — the escape hatch for a
@@ -5583,7 +5590,9 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
 
   const parserStarted = Date.now()
   const providerLabel = connection && connection.provider ? connection.provider : 'connection default'
-  const modelLabel = useRawOverride ? requestedModel : (connectionModel || requestedModel || 'connection default')
+  // Report what was SENT. Reporting the connection's model while overriding it
+  // is how an A/B test between models silently compares nothing.
+  const modelLabel = opts.model || connectionModel || requestedModel || 'connection default'
   if (report) {
     report.model = modelLabel
     report.requestedModel = requestedModel
@@ -5591,18 +5600,21 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
     report.connectionModel = connectionModel || ''
     report.overrideApplied = useRawOverride
     if (requestedModel && !useRawOverride && connectionModel && requestedModel !== connectionModel) {
-      report.overrideNote = `The model override "${requestedModel}" could NOT be applied — this connection exposes no raw provider route, so the connection's own model "${connectionModel}" was used instead. Change the model on the Lumiverse connection itself to switch it.`
+      report.overrideNote = `Sending model "${requestedModel}" on a connection whose own model is "${connectionModel}". If the provider ignores the override, the connection's model is what actually runs — compare this line against the one in the Spindle log after the request completes.`
     }
   }
   spindle.log.info('[lumidraw] parser request started' +
     ' · api=' + methodName +
     ' · provider=' + providerLabel +
     ' · model=' + modelLabel +
+    (requestedModel && requestedModel !== modelLabel ? ' (asked for ' + requestedModel + ')' : '') +
+    (connectionModel && connectionModel !== modelLabel ? ' · connection model=' + connectionModel : '') +
     (connectionId ? ' · connection_id=' + connectionId : '') +
     ' · reasoning=' + JSON.stringify(opts.reasoning) + ' · max_tokens=' + opts.parameters.max_tokens)
 
   if (requestedModel && !useRawOverride && connectionModel && requestedModel !== connectionModel) {
-    spindle.log.warn('[lumidraw] parser model override could not be applied because the selected connection did not expose a raw provider route; using connection model ' + connectionModel)
+    spindle.log.info('[lumidraw] model override "' + requestedModel + '" sent on a connection whose own model is "' + connectionModel +
+      '" (no raw provider route). If the reply does not look like the model you asked for, set it on the Lumiverse connection instead.')
   }
 
   let timer
@@ -6810,7 +6822,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.42.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.42.2',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7808,4 +7820,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.42.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.42.2'))
