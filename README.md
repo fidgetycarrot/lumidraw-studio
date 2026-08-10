@@ -1,7 +1,36 @@
-# LumiDraw Studio 0.38.0
+# LumiDraw Studio 0.38.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.38.1 — The field's own hint gave the wrong advice
+
+0.38.0 shipped **Name in prompts** with the placeholder `Fanny Price` and the
+hint *"A full name usually fixes it."* Both are the thing that does not work,
+written before I understood why.
+
+Placeholder is now `Price`, and the hint says what is actually true:
+
+> Only needed when the name means something to the image model. "Fanny" is booru
+> slang for a body part, "Rose" draws roses. Adding a surname does NOT help —
+> the model matches tokens, not words, so "Fanny Price" still contains "fanny".
+> Use a name with no trace of it: Price, or anything neutral. Leave blank
+> otherwise.
+
+The trace warning carried the same bad advice and now points at the field
+instead.
+
+### How the three name fields differ
+
+| Field | Used for | Fanny's |
+|---|---|---|
+| **Library name** | finding the entry in your list | `Fanny Price` |
+| **Anchor / name** | what the story calls her — how the parser recognises her in a passage, and how relations refer to her | `Fanny` |
+| **Name in prompts** | what the image model is told, and nothing else | `Price` |
+
+Only the third reaches Draw Things. Leave it blank and the anchor is used, which
+is right for almost every character.
+
 
 ## 0.38.0 — When a character's name is also a thing
 

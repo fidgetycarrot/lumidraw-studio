@@ -2678,7 +2678,7 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
       const clash = nameReadsAsTag(profile.anchor)
       if (clash) {
         trace(`prompt name · ${profile.anchor}`, 'warn',
-          `${clash}, so the model may draw that instead of the character. Set a prompt name on this character — a full name usually fixes it.`)
+          `${clash}, so the model may draw that instead of the character. Set \"Name in prompts\" on this character to something that does not contain the word at all — adding a surname will not help.`)
         spindle.log.warn(`[lumidraw] ${profile.anchor}: ${clash}. Set "Name in prompts" on the character to something unambiguous.`)
       }
     }
@@ -4504,7 +4504,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.38.0 ranks presentation first, a stray one now survives every cap
+// and since 0.38.1 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -6375,7 +6375,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.38.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.38.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7473,4 +7473,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.38.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.38.1'))
