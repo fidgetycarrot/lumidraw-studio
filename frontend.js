@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.49.0'
+const EXTENSION_VERSION = '0.49.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -500,7 +500,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.42.3" aria-label="LumiDraw Studio v0.42.3">
+    <button class="ld-launcher" title="LumiDraw Studio" aria-label="LumiDraw Studio">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -509,7 +509,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.42.3</small></span>
+        <span class="ld-head-title">LumiDraw <small class="ld-version" style="font-weight:400;opacity:.65"></small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -4210,7 +4210,31 @@ img[class*="inlineImage"] {
       renderCharacterList(); renderPersonaList(); renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
       updateScanLabel()
       initialized = true
-      console.log(`[LumiDraw] backend connected — UI v${EXTENSION_VERSION}`)
+      // The header shows the version the BACKEND reports, which comes from the
+      // installed spindle.json manifest. It used to be a literal in the markup, so
+      // it read v0.42.3 through six releases while the manifest said otherwise —
+      // there is no version to display that the installed extension does not own.
+      const installed = String(res.version || '').trim()
+      const versionEl = $('.ld-version')
+      if (versionEl) versionEl.textContent = installed ? `v${installed}` : ''
+      const launcher = $('.ld-launcher')
+      if (launcher && installed) {
+        launcher.title = `LumiDraw Studio v${installed}`
+        launcher.setAttribute('aria-label', `LumiDraw Studio v${installed}`)
+      }
+      // A half-installed extension is a real failure mode — copying backend.js and
+      // forgetting frontend.js leaves two versions running against each other, and
+      // every symptom of that looks like a bug in the feature instead.
+      if (installed && installed !== EXTENSION_VERSION) {
+        console.warn(`[LumiDraw] version mismatch — frontend.js is v${EXTENSION_VERSION}, ` +
+          `the installed manifest says v${installed}. One of the files did not get copied.`)
+        if (versionEl) {
+          versionEl.textContent = `v${installed} · UI v${EXTENSION_VERSION}`
+          versionEl.style.color = 'var(--ld-warn, #e0a458)'
+          versionEl.title = 'The frontend and the manifest disagree — one file was not copied.'
+        }
+      }
+      console.log(`[LumiDraw] backend connected — UI v${EXTENSION_VERSION}, installed v${installed || 'unknown'}`)
       return true
     } catch (e) {
       console.log('[LumiDraw] backend not ready yet:', e.message)

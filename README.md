@@ -1,76 +1,55 @@
-# LumiDraw Studio 0.49.0
+# LumiDraw Studio 0.49.1
 
-Includes 0.42.4 through 0.48.0.
+Includes 0.42.4 through 0.49.0.
 
-## The elf was mine, not the model's
+## The header was lying, and it was my fault
 
-Your prompt is what solved it. Two blocks, same phrase, different words:
+The version in the panel was a **literal string in the HTML**:
 
-```
-caption:  Price wraps a towel around elf in the bathroom.
-tag run:  ..., wrapping towel around self, ...
-```
-
-The tag kept it. The caption didn't. So this was never the text encoder finding
-`elf` inside "herself" — **LumiDraw wrote the word.** I reproduced it in one run:
-
-```
-Ilsa wraps a towel around elf in the bathroom.
+```html
+<span class="ld-head-title">LumiDraw <small …>v0.42.3</small></span>
+<button class="ld-launcher" title="LumiDraw Studio v0.42.3" …>
 ```
 
-### `groundCreatureWords()`
+Not a variable. So bumping `package.json`, `spindle.json`, and even
+`EXTENSION_VERSION` changed nothing you could see — the panel has read **v0.42.3
+through six releases**. Your install was almost certainly fine; the label just
+couldn't tell you.
 
-The creature grounder turns a coined creature name into one the model knows —
-`mycewolf` → `wolf`. The rule was "ends with a creature noun and is longer than it".
+There were two more stale copies of the same number in `backend.js`, as fallbacks:
+`(spindle.manifest && spindle.manifest.version) || '0.42.3'`. If the manifest ever
+failed to load, the extension would have confidently reported 0.42.3 forever.
 
-That's a fine rule for a made-up name and a terrible one for English. I checked it
-against a 234,000-word dictionary: **it mangles 1,222 real words.**
+## One source of truth
 
-| you write | model receives |
-|---|---|
-| herself, himself, myself, itself | elf |
-| shape, escape, landscape, drape | ape |
-| growl, prowl | owl |
-| combat, acrobat | bat |
-| program, diagram | ram |
-| forbear, forebear | bear |
+The header now shows whatever the **backend reports from the installed
+`spindle.json` manifest** — the file you actually install. There is no version to
+display that the installed extension doesn't own. The backend's fallback is now an
+empty string and the log says `unknown — no manifest` rather than naming a version
+it can't verify.
 
-"The shape of the landscape" has been reaching Draw Things as "the ape of the ape".
-It never showed in a log, because the caption just reads slightly wrong and looks
-like a parser mistake.
+## And a check for the failure mode you've already hit
 
-### The fix
+Copying `backend.js` but not `frontend.js` leaves two versions running against each
+other, and every symptom of that looks like a bug in whichever feature you were
+testing. If the two disagree now, the header says so:
 
-No dictionary ships with the extension, so I stopped applying a name-shaped rule to
-prose. **A coinage is grounded in a sentence only when the scene itself names it** —
-as a subject's label, ref, appearance or outfit. Hyphenated words (`spore-wolf`) are
-coinages by construction and need no corroboration.
+```
+LumiDraw  v0.49.1 · UI v0.46.1
+```
 
-That's stricter than any blocklist, and it needs no word list:
+in amber, with a console warning naming the file that didn't get copied.
 
-- *"the alpha mycewolf"* still grounds, because a subject is labelled `alpha mycewolf`.
-- *"wraps a towel around herself"* doesn't, because nothing in the scene is a herself.
+## Sanity check for this build
 
-Tags and labels keep the loose rule — they're name-shaped by construction and
-conventionally lowercase, so the corroboration signal isn't there. They're guarded by
-a stoplist instead, which is safe because tag vocabulary is narrow.
+```
+package.json   0.49.1
+spindle.json   0.49.1
+frontend.js    0.49.1
+```
 
-### One regression, caught by your own test
+After installing, the panel should read **v0.49.1** with no amber. If it shows two
+numbers, one file didn't land.
 
-My first attempt used capitalisation as the signal. `wolfregress` stayed green but
-`traits` went red on *"the alpha mycewolf"* — lowercase, and it must still ground.
-That's the test you and I built after the wolf fight doing its job.
-
-## Also in here: the reflexive strip
-
-Before I found the real cause I'd built `stripSubwordTraps()`, which removes
-reflexive pronouns from the finished prompt. I've kept it, because the token risk is
-real independently — "shelf" carries `elf` too and can't be removed. It's cheap:
-"braces herself against the table" and "braces against the table" are the same
-picture.
-
-And `elf, pointy ears` now goes in the negative whenever nobody in the scene is an
-elf, with the check covering `half-elf` and `elven` so a real elf is never negated.
-
-**40 suites · 1242 assertions · all green** — a new `subword` suite, plus 16 more in
-`traits` covering the words that made Fanny an elf.
+**40 suites · 1256 assertions · all green**, including 14 new ones asserting no
+version literal survives in the markup.
