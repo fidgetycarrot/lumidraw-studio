@@ -1,81 +1,63 @@
-# LumiDraw Studio 0.45.0
+# LumiDraw Studio 0.46.1
 
-Includes 0.42.4 through 0.44.0.
+Install this instead of 0.46.0 — it includes it, and 0.46.0 alone would not have
+helped you.
 
-## First: do not put "uncensored" in the negative prompt
+## What 0.46.0 missed
 
-That would ask for the opposite. `uncensored` is a positive Danbooru tag — it marks
-posts where genitals are shown plainly. Putting it in the negative pushes the model
-toward the censored half of its training.
+It checked the message being illustrated. But user messages are never illustrated
+in the first place, so the `[ooc]:` marker was on a message LumiDraw already ignored.
+The message that *does* get illustrated — the assistant's reply — carries no marker
+at all. It just answers.
 
-The tags that belong in a negative are the censorship ones: `censored`,
-`mosaic censoring`, `bar censor`, `heart censor`, `novelty censor`, `steam censor`,
-`light censor`, `convenient censoring`.
+## How it works now
 
-You don't need to add either by hand — LumiDraw does it now.
-
-## Why a correct prompt still came out censored
-
-Censorship on Danbooru is **tagged**, so the model learned it as a style rather than
-as an absence. `futanari` is the worst case: that tag is dense with Japanese
-commercial art, where mosaic and bar censoring are a legal requirement. So
-`futanari` carries a censorship prior all on its own, and nothing in an ordinary
-prompt argues against it.
-
-Adding `penis` cleared it by accident — explicit anatomy tags co-occur with
-`uncensored` in the training data far more than with `censored`. You found the right
-lever by the wrong route. Saying it directly is more reliable.
-
-**New censorship defence.** When an explicit or nsfw scene shows saved anatomy,
-`uncensored` goes into the header beside the safety tag, and the whole censor family
-goes into the negative.
+The **preceding user message** decides whether to look. The **reply's own shape**
+decides the verdict, because you use OOC to direct the story as well as to talk
+about it.
 
 ```
-✓ censorship defence — "uncensored" added and the censor tags negated
+user:      [ooc]: can we back up a scene?
+assistant: Sure — where would you like to pick up from?
+           → skipped: addressed to you rather than describing a scene
+
+user:      [ooc]: continue from the shower
+assistant: Sovi stepped under the water, steam curling around her shoulders...
+           → illustrated: the reply names Sovi
 ```
 
-## Why the anatomy tag wasn't there in the first place
-
-This is the part your instinct was right about, though I've done it in the compiler
-rather than in the parser.
-
-The gate required the passage to **name** the anatomy:
-
-```js
-anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, ...)
-```
-
-A shower scene is nude, but the prose says water and steam — it almost never says
-"penis". So the gate stayed shut, the model got a nude figure with nothing anchoring
-the genitals, and it filled the gap from the censored end of its training. That is
-your mosaic.
-
-A nude body in an nsfw scene shows its anatomy; that is what nude means. The gate
-now opens on **either** the passage naming it **or** the subject being stated nude
-in an nsfw scene.
+Both decisions are logged:
 
 ```
-✓ anatomy gate · Sovi — the passage never names the anatomy, but the subject is
-  nude in an nsfw scene, so it is visible
+[lumidraw] the message before this one was out of character · skipping — the reply
+is addressed to you rather than describing a scene
+[lumidraw] the message before this one was out of character · illustrating anyway —
+the reply names Sovi
 ```
 
-### Why not tell the parser, as you suggested
+### What counts as narrative
 
-Because the firewall exists precisely because the parser invented anatomy — it wrote
-`erect penis` into a walk-on's appearance, and 0.43.0 had to widen the scrub to catch
-`erection`, `bulge` and `shaft` doing the same. Telling it "add anatomy when nsfw"
-re-opens that door, and it would hand an LLM a decision that has a deterministic
-answer. LumiDraw still supplies only what the profile saved.
+In priority order:
 
-**Nudity must be stated** — by the outfit, appearance, pose or action. An empty
-outfit list is a parser omission at least as often as a naked character, and guessing
-wrong puts genitals in a clothed scene. `nude`, `naked`, `completely nude`,
-`unclothed`, `undressed`, `bottomless`, `bathing` all count.
+1. **Addressed to you** → aside. *"Would you like…", "Shall I…", "I can…", "Got it",
+   "Understood", "my mistake", "no problem".* This is checked first deliberately —
+   *"Understood, I'll keep Sovi out of the next scene"* names a character but is
+   still a reply to you, so naming the cast must not veto it.
+2. **Contains dialogue** → scene.
+3. **Names your cast** → scene. Pulled from the active preset's profiles, matching
+   both the anchor and the prompt name.
+4. **Talks to you about the writing** — meta nouns plus "you" → aside.
+5. **Short with no past-tense sentence** → aside. *"That works for me." "Yes."*
+6. Otherwise → scene.
 
-## If it recurs
+Only the nearest preceding user message is considered, and the search stops at any
+intervening assistant message, so this cannot reach back into an unrelated exchange.
 
-The trace now distinguishes the two failures. `anatomy gate` tells you whether the
-tag was allowed; `censorship defence` tells you whether the mosaic was argued
-against. Previously both were invisible.
+### Scope
 
-`anatomy.mjs` is up to 75 assertions. **38 suites · 1087 assertions · all green.**
+The classifier runs **only** when the preceding user message is out of character.
+An ordinary story message never touches it, so it can't cost you an image in normal
+play.
+
+`ooc.mjs` is up to 67 assertions, including the reply pairs above.
+**39 suites · 1154 assertions · all green.**

@@ -780,9 +780,94 @@ function loomLedgerToText(html) {
     .trim())
 }
 
+// Out-of-character asides are a conversation with the author, not a moment in the
+// story. Illustrating one produces a picture of nothing, and the alternative was
+// switching the extension off and on around every "[ooc]:".
+//
+// A marker at the very start means the whole message is out of character. A marker
+// anywhere else marks that span or that line only, so a story message carrying a
+// short aside is still illustrated — from the story part.
+const OOC_DELIMITED_RE = /(\(\(|\[\[|\{\{|\(|\[|\{)\s*(?:ooc|o\.o\.c\.?)\b[^)\]}]*(\)\)|\]\]|\}\}|\)|\]|\})/gi
+const OOC_LINE_RE = /^[ \t>*_~-]*(?:\(\(|\[\[|\{\{|\(|\[|\{)?\s*(?:ooc|o\.o\.c\.?|out[- ]of[- ]character)\b[^\n]*$/gim
+const OOC_OPENING_RE = /^[\s>*_~-]*(?:\(\(|\[\[|\{\{|\(|\[|\{)?\s*(?:ooc|o\.o\.c\.?|out[- ]of[- ]character)\b\s*[:\-\]})]/i
+
+// Any story prose left once the asides are removed? A message that is nothing but
+// an aside has none, and there is nothing in it to draw.
+function stripOutOfCharacter(text) {
+  return String(text || '')
+    .replace(OOC_DELIMITED_RE, ' ')
+    .replace(OOC_LINE_RE, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+// Reported separately from the strip so a skip can say which it was.
+function outOfCharacterVerdict(text) {
+  const value = String(text || '').trim()
+  if (!value) return { ooc: false, reason: '' }
+  if (OOC_OPENING_RE.test(value)) return { ooc: true, reason: 'the message opens with an out-of-character marker' }
+  const remaining = stripOutOfCharacter(value)
+  // Punctuation and stray brackets are not a scene. Ten characters of actual
+  // words is the floor for calling something a passage worth illustrating.
+  if (remaining.replace(/[^\p{L}\p{N}]/gu, '').length < 10) {
+    return { ooc: true, reason: 'nothing but out-of-character text remains once the asides are removed' }
+  }
+  return { ooc: false, reason: '' }
+}
+
+// An out-of-character question usually gets an out-of-character answer, but the
+// answer carries no marker of its own — the assistant simply replies. And "[ooc]:
+// continue the scene" produces real narrative that should still be illustrated.
+// So the preceding user message decides whether to look, and the reply's own shape
+// decides the verdict.
+//
+// Meta: written to the author. Second person, offers, questions aimed outward.
+const META_ADDRESS_RE = /\b(?:would you like|do you want|shall i|let me know|want me to|i can |i (?:will|could|should) |i'?ll |i'?ve |if you(?:'?d| would)|you(?:'?d| would) (?:like|prefer|rather)|happy to|no problem|got it|understood|makes sense|good catch|my mistake|sorry about|to clarify|just to check|which (?:one|scene|version))\b/i
+const META_NOUN_RE = /\b(?:scene|chapter|reply|response|message|post|prompt|recap|summary|continuity|retcon|the parser|out[- ]of[- ]character|character sheet|token|context window)\b/i
+// Narrative: written about the story. Dialogue, and past-tense prose in sentences.
+const NARRATIVE_QUOTE_RE = /[“"][^”"]{12,}[”"]/
+const NARRATIVE_PROSE_RE = /\b\w{3,}ed\b[^.!?]{0,120}[.!?]/
+
+function assistantReplyIsMeta(text, knownNames = []) {
+  const value = String(text || '').trim()
+  if (!value) return { meta: false, reason: '' }
+  const words = value.split(/\s+/).filter(Boolean).length
+
+  // Addressing the author settles it first. "Understood — I'll keep Sovi out of the
+  // next scene" names a character but is still a reply to you, not a scene, so the
+  // cast check cannot be allowed to veto this one.
+  if (META_ADDRESS_RE.test(value)) {
+    return { meta: true, reason: 'the reply is addressed to you rather than describing a scene' }
+  }
+  if (NARRATIVE_QUOTE_RE.test(value)) return { meta: false, reason: 'the reply contains dialogue' }
+
+  // Then the strongest narrative signal available: the story's own cast. An aside
+  // about pacing does not name Sovi; a scene does.
+  const named = knownNames.filter(Boolean).find((name) => {
+    const trimmed = String(name).trim()
+    if (trimmed.length < 3) return false
+    return new RegExp('\\b' + escapeRegExp(trimmed) + '\\b', 'i').test(value)
+  })
+  if (named) return { meta: false, reason: `the reply names ${named}` }
+
+  const secondPerson = /\byou(?:'?re|'?ve|r)?\b/i.test(value)
+  if (META_NOUN_RE.test(value) && secondPerson) {
+    return { meta: true, reason: 'the reply talks to you about the writing rather than telling it' }
+  }
+  // No cast, no dialogue, no past-tense sentence, and short: an aside.
+  if (words < 40 && !NARRATIVE_PROSE_RE.test(value)) {
+    return { meta: true, reason: 'the reply is a short aside with no scene in it' }
+  }
+  return { meta: false, reason: 'the reply reads as narrative prose' }
+}
+
 function cleanParserMessageText(text, { keepLedger = false } = {}) {
   let value = stripParserUtilityCards(stripParserTrigger(stripThinking(text)))
   if (!keepLedger) value = stripLoomLedgers(value)
+  // Before the tag strip, so an aside can never reach the parser as story prose
+  // and become scenery.
+  value = stripOutOfCharacter(value)
   return value
     .replace(TAG_RE, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
@@ -6345,6 +6430,42 @@ async function scanStoryCore(userId, options = {}) {
     scan.chatId = String(chatId || options.chatId || '')
   }
   assertStoryScanActive(scan)
+
+  // ------------------------- out-of-character messages ---------------------
+  // Checked before either engine runs, so an aside costs no parser call and no
+  // Draw Things time, and the extension no longer has to be switched off by hand.
+  const targetText = stripParserUtilityCards(stripParserTrigger(stripThinking(target.content)))
+  let oocVerdict = outOfCharacterVerdict(targetText)
+  // The assistant's own reply carries no marker — it just answers. So when the
+  // message that prompted it was out of character, the reply's shape decides:
+  // "[ooc]: can we back up?" gets an aside and no image, while "[ooc]: continue
+  // the scene" gets narrative that should still be illustrated.
+  if (!oocVerdict.ooc && Number.isInteger(targetIndex) && targetIndex > 0) {
+    let prompting = null
+    for (let i = targetIndex - 1; i >= 0 && i >= targetIndex - 4; i--) {
+      const bits = messageBits(messages[i])
+      if (!bits || typeof bits.content !== 'string' || !bits.content.trim()) continue
+      if (bits.isUser) { prompting = bits; break }
+      if (bits.isAssistant) break
+    }
+    if (prompting && outOfCharacterVerdict(cleanParserMessageText(prompting.content, { keepLedger: true }) || prompting.content).ooc) {
+      const names = allKnownProfiles(await getStoryProfiles(preset, settings, userId, chatId))
+        .flatMap((profile) => [profile.anchor, profile.promptName])
+      const shape = assistantReplyIsMeta(targetText, names)
+      spindle.log.info('[lumidraw] the message before this one was out of character · ' +
+        (shape.meta ? 'skipping — ' : 'illustrating anyway — ') + shape.reason)
+      if (shape.meta) oocVerdict = { ooc: true, reason: `the message before it was out of character and ${shape.reason}` }
+    }
+  }
+  if (oocVerdict.ooc) {
+    const note = `Skipped: ${oocVerdict.reason}.`
+    spindle.log.info('[lumidraw] out-of-character message skipped · ' + oocVerdict.reason +
+      (target.id ? ' · message=' + target.id : ''))
+    // Reported as a skip rather than left looking like a silent failure.
+    setAutoStatus(userId, { status: 'skipped', note, messageId: String(target.id || ''), mode: settings.mode })
+    if (scan) setStoryScanStage(scan, 'done', note)
+    return { mode: settings.mode, processed: 0, skipped: true, outOfCharacter: true, note }
+  }
 
   // ------------------------- inline: process <dt-image> tags ---------------
   const visibleContent = stripParserTrigger(stripThinking(target.content))
