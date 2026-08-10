@@ -1,7 +1,77 @@
-# LumiDraw Studio 0.41.1
+# LumiDraw Studio 0.42.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.42.0 — Eight hand edits, three of them ours
+
+### "the head of Jason"
+
+```text
+Price drags tongue across the head of Jason, flat tongue stripe and eye contact held.
+```
+
+The relation renderer appends the target's name after the action. An action
+ending in a body part plus **of** collides with it: `the head of Jason` reads as
+**his head**, and the model drew that. LumiDraw wrote that sentence, not the
+parser.
+
+We already know the referent — the target's anatomy is on the descriptor:
+
+```text
+Price drags tongue across the head of Jason's large penis.
+```
+
+With no anatomy available the target is dropped rather than asserted wrongly,
+and the trace says so. Only genuinely ambiguous nouns qualify — `head`, `tip`,
+`base`, `shaft`, `underside`, `length`, `crown`. Spatial phrases like *stands in
+front of* are untouched.
+
+### The details bound to the wrong character
+
+```text
+Price performs fellatio on Jason, eye contact held tongue out.
+```
+
+Details rendered at the **end** of the sentence, next to the target's name — so
+Jason got the tongue. They describe the actor, so they now sit beside the actor:
+
+```text
+Price, eye contact held and tongue out, performs fellatio on Jason.
+```
+
+Introduced in 0.34.0 when details started rendering at all. Same adjacency
+failure as the staff in 0.35.0.
+
+### Clinical terms, because those are the trained ones
+
+Danbooru tags anatomy and acts clinically. `cock`, `blowjob` and `jerking off`
+are not tags; `penis`, `fellatio` and `masturbation` carry the signal. Roughly
+thirty colloquial terms now rewrite to the canonical tag, and the instruction
+asks for the clinical register directly.
+
+### BREAK between characters
+
+Your manual `BREAK` separators were the right instinct — the token resets the
+attention chunk, which is exactly what stops one character's traits reaching
+another. LumiDraw now inserts one between each character's description, **only
+when the preset already uses BREAK**, which proves the setup understands the
+token rather than rendering it as a word.
+
+### The budget was measuring your cast
+
+The ceiling failed on an addition that fit, because `profileSchemaHints` appends
+a block per character — so a larger cast made a budget failure out of somebody
+else's story. It now measures the rules alone, at 9,468 of 9,500.
+
+### Still open
+
+The bed comes from `bedroom` in the setting, which implies one strongly; a rug
+in the caption will not outvote it. And Jason's tongue should be fixed by the
+details change above — that was the bleed.
+
+**35 suites · 928 assertions.**
+
 
 ## 0.41.1 — pov in a two-person scene
 

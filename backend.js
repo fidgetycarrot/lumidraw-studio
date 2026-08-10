@@ -3009,6 +3009,13 @@ const BOORU_VOCAB = new Set([
   'furry', 'horns', 'wings', 'pointy ears', 'elf', 'slit pupils', 'vertical pupils',
   'colored sclera', 'muscular', 'muscular male', 'scar', 'blood', 'wound', 'dirty',
   'sweaty', 'wet', 'veins', 'toned',
+  // anatomy and acts, in the clinical register Danbooru uses
+  'penis', 'testicles', 'vagina', 'pussy', 'anus', 'nipples', 'breasts',
+  'erection', 'flaccid', 'large penis', 'huge penis', 'veiny penis',
+  'fellatio', 'cunnilingus', 'handjob', 'masturbation', 'male masturbation',
+  'vaginal', 'anal', 'sex', 'straddling', 'cowgirl position', 'doggystyle',
+  'missionary', 'deepthroat', 'licking penis', 'penis grab', 'tongue out',
+  'saliva', 'cum', 'ejaculation', 'blush', 'sweat',
   // orientation — which way the bodies face each other. Verified on Danbooru:
   // eye contact carries 67,846 posts and implicates looking at another.
   'face-to-face', 'facing another', 'looking at another', 'eye contact',
@@ -3101,6 +3108,18 @@ const BOORU_ALIASES = {
   'crossdresser': 'crossdressing', 'crossdressed': 'crossdressing',
   'mtf crossdressing': 'crossdressing (mtf)', 'ftm crossdressing': 'crossdressing (ftm)',
   'androgyne': 'androgynous', 'androgynous male': 'androgynous',
+  // Colloquial anatomy carries a fraction of the signal of the trained tag.
+  'cock': 'penis', 'dick': 'penis', 'shaft': 'penis', 'member': 'penis',
+  'manhood': 'penis', 'erection': 'erection', 'hard-on': 'erection',
+  'balls': 'testicles', 'ballsack': 'testicles', 'sack': 'testicles',
+  'blowjob': 'fellatio', 'blow job': 'fellatio', 'oral sex': 'fellatio',
+  'sucking cock': 'fellatio', 'sucking penis': 'fellatio', 'giving head': 'fellatio',
+  'going down on': 'fellatio', 'eating out': 'cunnilingus',
+  'jerking off': 'masturbation', 'stroking himself': 'male masturbation',
+  'stroking herself': 'masturbation', 'jacking off': 'masturbation',
+  'tits': 'breasts', 'boobs': 'breasts', 'chest': 'breasts',
+  'ass': 'ass', 'butt': 'ass', 'arse': 'ass',
+  'cum': 'cum', 'jizz': 'cum', 'spunk': 'cum', 'load': 'cum',
   'glow': 'glowing', 'glowed': 'glowing', 'aglow': 'glowing', 'luminous': 'glowing',
   'grayscale': 'greyscale', 'black and white': 'greyscale', 'monochromatic': 'monochrome',
   'oil painting': 'traditional media', 'watercolor': 'traditional media',
@@ -4181,6 +4200,15 @@ function orientationTags(scene, descriptors) {
   return { tags: uniqueStrings(tags), note: why.join('; ') }
 }
 
+// A relation action ending in a body part plus "of" collides with the target's
+// name: "drags tongue across the head of" + "Jason" becomes "the head of Jason".
+// The anatomical reading and the person's-head reading are both available and
+// the model picks the wrong one.
+// Only the nouns that are genuinely ambiguous between a person's body and the
+// anatomy being described. "in front of" and "the side of" are spatial and
+// perfectly clear; "the head of" is not.
+const AMBIGUOUS_POSSESSIVE_RE = /\b(head|tip|base|shaft|underside|length|crown)\s+of\s*$/i
+
 function relationSentence(relation, byRef) {
   const actor = byRef.get(relation.actor)
   const target = relation.target ? byRef.get(relation.target) : null
@@ -4188,15 +4216,37 @@ function relationSentence(relation, byRef) {
   const targetName = target ? displayName(target, false) : ''
   const action = normalizeVisualPhrase(relation.action)
   if (!action) return ''
+  // "drags tongue across the head of" + "Jason" renders as "the head of Jason",
+  // which reads as HIS head. An anatomical noun before a trailing "of" collides
+  // with the person's name and the model draws the wrong thing entirely.
+  // We already know what the referent is: the target's own anatomy is on the
+  // descriptor. "the head of" + "Jason" becomes "the head of Jason's penis"
+  // rather than a sentence about his head.
+  const ambiguous = AMBIGUOUS_POSSESSIVE_RE.exec(action)
   let sentence = `${actorName} ${action}`
-  if (targetName && !sentence.toLowerCase().includes(targetName.toLowerCase())) sentence += ` ${targetName}`
-  // Relation details are the modifiers that make a hold specific — "claws
-  // hooked into the nose", "knuckles against muscle". In a multi-subject scene
-  // they reached nothing at all: the tag run excludes them by design, and the
-  // sentence never looked at them. The contact was described in the vaguest
-  // available terms and the detail the parser found was discarded.
+  if (targetName && !sentence.toLowerCase().includes(targetName.toLowerCase())) {
+    const anatomy = ambiguous && target ? (target.anatomy || []).map(animaTag).find(Boolean) : ''
+    if (ambiguous && anatomy) {
+      sentence += ` ${targetName}'s ${anatomy}`
+    } else if (ambiguous) {
+      // No anatomy to name, so the sentence would assert the wrong body part.
+      // Drop the dangling "of" and let the relation stay unattached rather than
+      // attached to the wrong thing.
+      sentence = `${actorName} ${action.replace(/\s+of\s*$/i, '')}`
+      trace('relation wording', 'warn',
+        `"${action}${targetName ? ' ' + targetName : ''}" would read as ${targetName || 'the target'}'s ${ambiguous[1]}; no anatomy is available to name, so the target was left out`)
+    } else {
+      sentence += ` ${targetName}`
+    }
+  }
+
+  // Details are the modifiers that make a hold specific. Appended at the END
+  // they sit next to the TARGET's name, so "eye contact held tongue out" gave
+  // Jason the tongue. They describe the actor, so they belong beside the actor.
   const extras = (relation.details || []).map(normalizeVisualPhrase).filter(Boolean).slice(0, 2)
-  if (extras.length) sentence += `, ${naturalList(extras)}`
+  if (extras.length) {
+    sentence = sentence.replace(actorName, `${actorName}, ${naturalList(extras)},`)
+  }
   return sentence.replace(/\s+([,.])/g, '$1').replace(/\s{2,}/g, ' ').trim() + '.'
 }
 
@@ -4640,7 +4690,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.41.1 ranks presentation first, a stray one now survives every cap
+// and since 0.42.0 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -4858,7 +4908,9 @@ function applyPromptNames(text, profiles) {
   return value.replace(/\s{2,}/g, ' ').trim()
 }
 
-function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null } = {}) {
+const SUBJECT_BREAK_MARK = '\u0000SUBJECT_BREAK'
+
+function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null, breakInPreset = false } = {}) {
   traceReset()
   let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
     ...item,
@@ -4974,7 +5026,14 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   let crossRelationCount = 0   // relations carried by prose OR already in the statement
   let renderedRelations = 0    // sentences actually written — this is the budget
   if (multi) {
-    for (const item of descriptors) prose.push(...subjectIdentitySentences(item, scene, descriptors, profiles))
+    // BREAK resets the attention chunk, which is what keeps one character's
+    // traits from reaching another. Only emitted when the preset already uses
+    // BREAK — that proves this setup understands the token rather than
+    // rendering it as a word.
+    for (const item of descriptors) {
+      const sentences = subjectIdentitySentences(item, scene, descriptors, profiles)
+      if (sentences.length) prose.push(SUBJECT_BREAK_MARK, ...sentences)
+    }
 
     for (const relation of scene.relations) {
       if (!relation.target || relation.target === relation.actor) continue
@@ -5139,7 +5198,14 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     headerTags.join(', '),
     collapseRedundantTags([...subjectTags, ...generalTags]).join(', '),
   ])
-  let caption = prose.filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim()
+  const presetUsesBreak = !!breakInPreset
+  let caption = prose.filter(Boolean)
+    .map((part) => part === SUBJECT_BREAK_MARK ? (presetUsesBreak ? 'BREAK.' : '') : part)
+    .filter(Boolean)
+    .join(' ').replace(/\s{2,}/g, ' ').trim()
+  if (presetUsesBreak && multi) {
+    trace('subject separation', 'applied', 'BREAK inserted between each character — the preset already uses it')
+  }
   // Demoted atmosphere joins the caption as a closing scene fragment — the same
   // words, in the register Anima can actually read. Anything the sentences
   // above already said is skipped rather than repeated.
@@ -5201,10 +5267,10 @@ This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw compiles i
 TAG STYLE — every string you emit is destined for a booru-tag model, so prefer common Danbooru tags and take every one from what the passage actually describes. Every value must name something an artist could draw: "clinical focus releasing" and "heat radiating" are not visible, and neither is a hedge like "clearly visible" or "prominently shown". Words used in these rules to illustrate TAG FORMAT are examples of shape only and must never appear among your tags as if they were part of the scene. This restriction applies to tags; it does not apply to scene_statement, whose examples below you SHOULD imitate closely.
 For a subject that is a recognisable published character, set "booru_character" to that character's booru tag and "booru_series" to the work it comes from. Leave both empty for original characters; a made-up name in those fields is worse than nothing.
 "style" is the mood of this one scene only (e.g. "backlit", "soft focus"). A medium, artist, or rendering style belongs to the preset and must stay identical between images, or characters drift between generations.
-SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "[name] is fighting three bandits." "[name] is casting a large spell." "[name] is performing oral sex on [name]." (Write the characters' real names in place of [name].) ONGOING ACT BEATS MOMENTARY GESTURE. A passage is usually one beat inside a continuing act, and the continuing act is what the image is of. Name that act, even when it began in an earlier message and the current passage only shows a small movement within it. A hand, a glance, a shift of weight, or a change of expression during an act is a detail of that act, never a replacement for it — put those in pose, expression, or action, not here. WRONG: "[name] tips [name]'s chin up." RIGHT: "[name] is performing oral sex on [name], chin tipped up." ONE GEOMETRY ONLY: the statement fixes where the bodies are, said once. A trailing clause may add an expression — "gagging" — never a second account of the same contact. "taking him deep" restates it at another depth and the two render as neither; depth and penetration belong in pose or action." If you cannot tell what the continuing act is from the CURRENT PASSAGE alone, read PRIOR CONTEXT and the ESTABLISHED SCENE STATE to find it before falling back to the gesture. In an nsfw or explicit scene, name the act plainly and anatomically — a euphemism, or a literary substitute such as "forcing eye contact" in place of the act being performed, costs the image its subject. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
+SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "[name] is fighting three bandits." "[name] is casting a large spell." "[name] is performing oral sex on [name]." (Write the characters' real names in place of [name].) ONGOING ACT BEATS MOMENTARY GESTURE. A passage is usually one beat inside a continuing act, and the continuing act is what the image is of. Name that act, even when it began in an earlier message and the current passage only shows a small movement within it. A hand, a glance, a shift of weight, or a change of expression during an act is a detail of that act, never a replacement for it — put those in pose, expression, or action, not here. WRONG: "[name] tips [name]'s chin up." RIGHT: "[name] is performing oral sex on [name], chin tipped up." ONE GEOMETRY ONLY: the statement fixes where the bodies are, said once. A trailing clause may add an expression — "gagging" — never a second account of the same contact. "taking him deep" restates it at another depth and the two render as neither; depth and penetration belong in pose or action." If you cannot tell what the continuing act is from the CURRENT PASSAGE alone, read PRIOR CONTEXT and the ESTABLISHED SCENE STATE to find it before falling back to the gesture. Prefer the clinical booru word: fellatio, penis, masturbation — not blowjob, cock, stroking. In an nsfw or explicit scene, name the act plainly and anatomically — a euphemism, or a literary substitute such as "forcing eye contact" in place of the act being performed, costs the image its subject. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
 SAFETY is the Danbooru rating of the picture, not the mood of the story around it: safe = nothing suggestive; sensitive = suggestive but not sexual (swimwear, underwear, a suggestive pose); nsfw = nudity or overt sexual context; explicit = a sexual act or visible genitals. A tense, frightening, or violent scene with no suggestive content is safe.
 ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag, taken from the CURRENT PASSAGE or the established location in PRIOR CONTEXT. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
-Keep each image object compact: at most 4 setting, 3 camera, 3 lighting, 3 style, 3 outfit, 2 pose, 2 expression, 2 relation details, and 1 action item, each a terse visual tag of at most 7 words. These are choices, not truncation points — pick the strongest few rather than listing everything true. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
+Keep each image object compact: at most 4 setting, 3 camera, 3 lighting, 3 style, 3 outfit, 2 pose, 2 expression, 2 relation details, and 1 action item, each a terse visual tag of at most 7 words. These are choices, not truncation points — pick the strongest few rather than listing everything true. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 PARTIAL CHANGES ARE NOT STATE CHANGES. When a passage shows only SOME of a character's transformation — a single feature slipping, eyes changing, claws extending, "partly", "slightly", "a little", "just his eyes", "beginning to" — keep appearance_state at the form they are otherwise in and list the specific features in "partial_features" using the exact saved feature names listed below. Switching appearance_state transforms the WHOLE character, which is wrong for a partial change and produces a completely different creature than the passage describes. Use partial_features for anything short of a full, completed transformation. Select only names that are listed for that ref; never invent a feature name, and never put transformation words in appearance, outfit, pose, or expression.
 RELATIONS ARE THE ONLY CHANNEL FOR CONTACT — anything two subjects do to each other that is not written as a relation will not be drawn, so they are mandatory in a multi-subject scene. The FIRST relation establishes the base body arrangement: "straddles the lap of", "stands between the knees of", "leans over", "faces", "sits beside". Later ones name the clearest contact points, always as a visible hold plus the body part it takes: "pins the shoulders of", "grips the snout of", "bites the neck of", "braces both hands on the shoulders of". Verbs of motion or intensity — "fights", "attacks", "struggles with", "pounds", "thrusts", "presses into" — describe nothing an artist could draw; use the hold instead. Put the specifics in details: "claws hooked into the nose", "knuckles white".
 For seated, leaning, lying, or kneeling poses, name the visible support surface in "support". Use the camera tag "pov" only when ref "persona" is seen from the viewer's own eye position, and in that subject's pose include a cue such as "viewer hands visible" or "face out of frame".
@@ -5279,6 +5345,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
     rememberedSetting: remembered,
     contextText,
     rememberedOutfits: memoryEntry.outfits || null,
+    breakInPreset: /\bBREAK\b/.test(String(preset.qualityTags || '')),
   })
   // Remember whatever survived reconciliation as the story's location.
   const groundingForMemory = [sourcePassage, contextText].filter(Boolean).join('\n')
@@ -6742,7 +6809,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.41.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.42.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7740,4 +7807,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.41.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.42.0'))
