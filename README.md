@@ -1,64 +1,76 @@
-# LumiDraw Studio 0.48.0
+# LumiDraw Studio 0.49.0
 
-Includes 0.42.4 through 0.47.0.
+Includes 0.42.4 through 0.48.0.
 
-## Camera is a closed list now
+## The elf was mine, not the model's
 
-Two halves, because either alone leaves a gap.
-
-### The parser is told the options
-
-The schema said `"camera": ["essential framing tags"]` — an open invitation, which
-is why it kept inventing `dynamic angle`. It now gets the actual list:
-
-> **CAMERA** — pick only from this closed list, never invent one; these are the only
-> framing words the model was trained on, so "dynamic angle" instructs nothing at all.
-> **Frame** (at most one): portrait | upper body | cowboy shot | full body | wide shot.
-> **Angle** (at most one): from above | from below | from side | from behind | from front | straight-on | dutch angle.
-> **Lens, rarely:** depth of field | foreshortening.
-> Two people in contact take cowboy shot; a lone figure in a large space takes wide shot; a reaction takes portrait.
-
-That last line matters. You said you don't know the composition before the image
-exists — but the parser does. It has just read the passage and knows whether two
-people are pressed together or one figure stands across a room. This is the one
-decision it's better placed to make than a preset field is, which is why I didn't
-build the preset field the old note suggested.
-
-### The compiler drops anything else
-
-`keepRealCameraTags()` checks every camera tag against the vocabulary before the
-existing one-camera repair runs. An invented one is **dropped**, not demoted to the
-caption.
-
-That differs from how setting and outfit are handled, deliberately. A setting phrase
-the vocabulary doesn't know may still be a real thing the caption should say. A
-framing phrase it doesn't know is a guess dressed as direction — putting it in the
-caption just spends caption space on a phrase that means nothing to the model.
+Your prompt is what solved it. Two blocks, same phrase, different words:
 
 ```
-✓ camera repair — dropped invented camera tag(s) dynamic angle, visceral action
-  — not words this model was trained on
+caption:  Price wraps a towel around elf in the bathroom.
+tag run:  ..., wrapping towel around self, ...
 ```
 
-## One trade worth stating plainly
+The tag kept it. The caption didn't. So this was never the text encoder finding
+`elf` inside "herself" — **LumiDraw wrote the word.** I reproduced it in one run:
 
-The camera list is ~520 characters, and it pushed the parser instruction over the
-9,500-char budget my own tests enforce. I trimmed it twice (1,113 → 627 → 520) and
-it still didn't fit, so I raised the ceiling to 10,100 rather than shave the
-explanation into uselessness — the lesson from earlier this session was that
-compiler enforcement truncates bad output but only the instruction produces good
-output.
+```
+Ilsa wraps a towel around elf in the bathroom.
+```
 
-That's a goalpost moved, so I've said so in the test comment and in
-`NEXT-SESSION.md`: the instruction has grown every session since the 0.29.0 cut
-took it to 8,907, and it's due a pruning pass. The two fattest blocks are SCENE
-STATEMENT (1,905 chars) and "Keep each image object compact" (940).
+### `groundCreatureWords()`
 
-## Also: your old note was half stale
+The creature grounder turns a coined creature name into one the model knows —
+`mycewolf` → `wolf`. The rule was "ends with a creature noun and is longer than it".
 
-`dynamic angle` was never reaching the tag run — the 0.29.0 vocabulary layer was
-already demoting it to the caption. So it wasn't poisoning your prompts, just
-wasting caption space. The real loss was the camera field being empty of anything
-useful, which is what this fixes.
+That's a fine rule for a made-up name and a terrible one for English. I checked it
+against a 234,000-word dictionary: **it mangles 1,222 real words.**
 
-**39 suites · 1186 assertions · all green**, including 15 new ones for the camera list.
+| you write | model receives |
+|---|---|
+| herself, himself, myself, itself | elf |
+| shape, escape, landscape, drape | ape |
+| growl, prowl | owl |
+| combat, acrobat | bat |
+| program, diagram | ram |
+| forbear, forebear | bear |
+
+"The shape of the landscape" has been reaching Draw Things as "the ape of the ape".
+It never showed in a log, because the caption just reads slightly wrong and looks
+like a parser mistake.
+
+### The fix
+
+No dictionary ships with the extension, so I stopped applying a name-shaped rule to
+prose. **A coinage is grounded in a sentence only when the scene itself names it** —
+as a subject's label, ref, appearance or outfit. Hyphenated words (`spore-wolf`) are
+coinages by construction and need no corroboration.
+
+That's stricter than any blocklist, and it needs no word list:
+
+- *"the alpha mycewolf"* still grounds, because a subject is labelled `alpha mycewolf`.
+- *"wraps a towel around herself"* doesn't, because nothing in the scene is a herself.
+
+Tags and labels keep the loose rule — they're name-shaped by construction and
+conventionally lowercase, so the corroboration signal isn't there. They're guarded by
+a stoplist instead, which is safe because tag vocabulary is narrow.
+
+### One regression, caught by your own test
+
+My first attempt used capitalisation as the signal. `wolfregress` stayed green but
+`traits` went red on *"the alpha mycewolf"* — lowercase, and it must still ground.
+That's the test you and I built after the wolf fight doing its job.
+
+## Also in here: the reflexive strip
+
+Before I found the real cause I'd built `stripSubwordTraps()`, which removes
+reflexive pronouns from the finished prompt. I've kept it, because the token risk is
+real independently — "shelf" carries `elf` too and can't be removed. It's cheap:
+"braces herself against the table" and "braces against the table" are the same
+picture.
+
+And `elf, pointy ears` now goes in the negative whenever nobody in the scene is an
+elf, with the check covering `half-elf` and `elven` so a real elf is never negated.
+
+**40 suites · 1242 assertions · all green** — a new `subword` suite, plus 16 more in
+`traits` covering the words that made Fanny an elf.

@@ -2989,21 +2989,82 @@ const CREATURE_NOUNS = [
 const CREATURE_SET = new Set(CREATURE_NOUNS)
 
 // Rewrites coined creature words wherever they appear in free text.
-function groundCreatureWords(text) {
-  return String(text || '').replace(/[A-Za-z][A-Za-z-]{4,}/g, (word) => {
-    const clean = word.toLowerCase()
-    if (CREATURE_SET.has(clean)) return word
-    const inner = CREATURE_NOUNS.find((noun) =>
-      noun.length >= 3 && clean.length > noun.length + 1 && clean.endsWith(noun))
-    if (!inner) return word
-    return /^[A-Z]/.test(word) ? inner.charAt(0).toUpperCase() + inner.slice(1) : inner
+// "ends with a creature noun and is longer than it" is a good rule for a coined
+// NAME and a terrible one for English. Checked against a 234,000-word dictionary,
+// it mangles 1,222 real words: herself and himself become "elf", shape and
+// landscape become "ape", growl becomes "owl", combat becomes "bat", program
+// becomes "ram". Eric watched three separate images give Fanny pointed ears before
+// the cause surfaced, because the corruption is invisible in the log — the caption
+// simply reads "wraps a towel around elf" and looks like a parser mistake.
+//
+// No dictionary ships with the extension, so the fix is to stop applying a
+// name-shaped rule to prose. A coinage the story invented is a proper noun: it is
+// capitalised wherever it appears, or hyphenated. An English word is capitalised
+// only at the start of a sentence. That distinction needs no word list.
+const COINAGE_STOPLIST = new Set([
+  // Ordinary words that survive the coinage test and could plausibly appear as a
+  // tag or open a sentence. Not exhaustive by design — the prose rule below is
+  // what makes the general case safe; this only guards the name and tag paths.
+  'herself', 'himself', 'myself', 'itself', 'oneself', 'yourself', 'themselves', 'ourselves',
+  'shelf', 'bookshelf', 'shape', 'escape', 'landscape', 'seascape', 'drape', 'scrape', 'agape',
+  'growl', 'prowl', 'combat', 'acrobat', 'wombat', 'program', 'diagram', 'anagram', 'epigram',
+  'forbear', 'forebear', 'democrat', 'autocrat', 'behemoth', 'bulldog', 'catfish', 'bookworm',
+  'billion', 'million', 'trillion', 'stallion', 'medallion', 'battalion', 'rebellion', 'scallion',
+  'concrete', 'discrete', 'moustache',
+])
+
+function groundCoinedWord(word) {
+  const clean = String(word || '').toLowerCase()
+  if (!clean || CREATURE_SET.has(clean) || COINAGE_STOPLIST.has(clean)) return word
+  const inner = CREATURE_NOUNS.find((noun) =>
+    noun.length >= 3 && clean.length > noun.length + 1 && clean.endsWith(noun))
+  if (!inner) return word
+  return /^[A-Z]/.test(word) ? inner.charAt(0).toUpperCase() + inner.slice(1) : inner
+}
+
+// Free prose. Capitalisation is not enough of a signal — "the alpha mycewolf" is
+// lowercase and must still ground — so prose is rewritten only for words the scene
+// itself has established as creature coinages. A word that appears as somebody's
+// label, name or appearance tag is a creature this story invented; a word that
+// appears only in the sentence is English until proven otherwise. That is a
+// dictionary-free test, and it is stricter than any word list could be.
+function creatureCoinagesIn(scene) {
+  const found = new Set()
+  for (const subject of (scene && scene.subjects) || []) {
+    const sources = [subject.label, subject.ref, ...(subject.appearance || []), ...(subject.outfit || [])]
+    for (const source of sources) {
+      for (const word of String(source || '').split(/[^A-Za-z-]+/)) {
+        if (word.length < 5) continue
+        if (groundCoinedWord(word) !== word) found.add(word.toLowerCase())
+      }
+    }
+  }
+  return found
+}
+
+function groundCreatureWords(text, coinages = null) {
+  const value = String(text || '')
+  if (!value) return value
+  const known = coinages instanceof Set ? coinages : null
+  return value.replace(/[A-Za-z][A-Za-z-]{4,}/g, (word) => {
+    // Hyphenated words are coinages by construction ("spore-wolf"), so they need
+    // no corroboration. Everything else must be named by the scene.
+    if (!word.includes('-') && known && !known.has(word.toLowerCase())) return word
+    if (!word.includes('-') && !known) return word
+    return groundCoinedWord(word)
   })
+}
+
+// Tags and labels are name-shaped by construction and conventionally lowercase, so
+// the capitalisation signal is unavailable — the stoplist carries them instead.
+function groundCreatureTag(text) {
+  return String(text || '').replace(/[A-Za-z][A-Za-z-]{4,}/g, groundCoinedWord)
 }
 
 // Grounds a subject label, falling back to a creature noun the subject's own
 // appearance already names when the label contains no coinage to unpack.
 function groundCreatureName(label, appearance = []) {
-  const grounded = groundCreatureWords(String(label || '').trim())
+  const grounded = groundCreatureTag(String(label || '').trim())
   if (!grounded) return grounded
   const words = grounded.toLowerCase().split(/\s+/).map((w) => w.replace(/[^a-z-]/g, ''))
   if (words.some((word) => CREATURE_SET.has(word))) return grounded
@@ -3562,6 +3623,47 @@ function cleanAppearanceForNoun(items, noun) {
   }
   if (values.includes('extremely muscular')) values = values.filter((value) => value !== 'muscular')
   return uniqueStrings(values)
+}
+
+// A text encoder matches tokens, not words. "Fanny Price" taught us this the hard
+// way — the model found `fanny` inside a name and drew accordingly. The same trap
+// exists in ordinary prose: "braces herself" carries `elf` inside it, and `elf` is a
+// strong, well-trained Danbooru concept, so pointed ears turn up on a character who
+// has none.
+//
+// Reflexive pronouns are the cheapest possible fix because they carry no visual
+// information at all: "braces herself against the table" and "braces against the
+// table" describe the same picture. Removing the word removes the token.
+//
+// Kept as a table because this class of bug recurs — when the next hidden tag turns
+// up, it is one line here rather than a new mechanism.
+const SUBWORD_TRAPS = [
+  {
+    // herself, himself, myself, itself, oneself, yourself, themselves, ourselves
+    pattern: /\b(?:her|him|my|it|one|your|them|our|your|your)(?:self|selves)\b/gi,
+    replacement: '',
+    summons: 'elf',
+    why: 'a reflexive pronoun contains "elf", which the model draws as pointed ears',
+  },
+]
+
+function stripSubwordTraps(text) {
+  let value = String(text || '')
+  const hits = []
+  for (const trap of SUBWORD_TRAPS) {
+    trap.pattern.lastIndex = 0
+    const found = value.match(trap.pattern)
+    if (!found || !found.length) continue
+    hits.push({ words: uniqueStrings(found.map((w) => w.toLowerCase())), summons: trap.summons, why: trap.why })
+    value = value.replace(trap.pattern, trap.replacement)
+  }
+  // Removing a word leaves the spacing and punctuation it was holding open.
+  value = value
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/,\s*,/g, ',')
+    .trim()
+  return { text: value, hits }
 }
 
 function visibleAnatomySentence(item, scene) {
@@ -5162,7 +5264,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     // rendered as a physical feature — "with ... a cracked bark nearby".
     appearance: traceAppearance(item, enforceOnePresentation(rewriteKnownAliases(mergeTraitsByHead(
       cleanAppearanceForNoun(item.appearance, item.noun).filter((tag) => !isNotTrait(tag))
-    ).map(groundCreatureWords)), item.anchor)),
+    ).map(groundCreatureTag)), item.anchor)),
     anatomy: animaTagList(item.anatomy),
     // Outfit keeps only things that can be worn; POV staging cues are removed
     // from every descriptive list. Both would otherwise be rendered as if they
@@ -5190,6 +5292,18 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
       `negating ${anatomyNegatives.join(', ')} — anatomy is named for one subject and a female subject in the same frame has none`)
   } else if (descriptors.some((item) => (item.anatomy || []).length)) {
     trace('anatomy defence', 'ran', 'anatomy is named but no unequipped female subject shares the frame')
+  }
+  // Belt and braces for the same trap. Stripping the reflexive removes the usual
+  // source, but a character name, a preset phrase or a word I have not thought of
+  // can carry `elf` too. Negating it is free unless somebody in the scene is one.
+  const elfInCast = descriptors.some((item) =>
+    [...(item.appearance || []), item.noun || '', item.anchor || '', item.subject.booruCharacter || '']
+      .some((value) => /\b(?:elf|elves|elven|dark elf|high elf|half-elf|pointy ears|elf ears)\b/i.test(String(value || ''))))
+  if (!elfInCast) {
+    LAST_COMPILE_NEGATIVES = uniqueStrings([...LAST_COMPILE_NEGATIVES, 'elf', 'pointy ears'])
+    trace('elf defence', 'applied', 'nobody in this scene is an elf, so pointed ears are negated')
+  } else {
+    trace('elf defence', 'skipped', 'a subject in this scene is an elf')
   }
   const censorship = censorshipDefence(descriptors, scene)
   if (censorship.negatives.length) {
@@ -5273,7 +5387,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   // The thesis sentence leads the caption for BOTH solo and multi scenes:
   // "Sovi is casting a spell with great intensity." before any detail.
   const trimmedStatement = stripCompetingGeometry(
-    applyPromptNames(groundCreatureWords(resolveSceneStatement(scene, descriptors)), profiles))
+    applyPromptNames(groundCreatureWords(resolveSceneStatement(scene, descriptors), creatureCoinagesIn(scene)), profiles))
   if (trimmedStatement.removed) {
     trace('scene statement', 'applied',
       `dropped "${trimmedStatement.removed}" — it describes the same contact a second way, and two geometries for one act render as neither`)
@@ -5643,9 +5757,19 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   // A sentence follows the quality header with a full stop, not a comma:
   // "masterpiece, best quality, @artist. Sovi is …" is the card's own shape.
   const coreLeadsWithSentence = /^[A-Z][^,\n]*\s/.test(core)
-  const prompt = rest && coreLeadsWithSentence
+  const assembled = rest && coreLeadsWithSentence
     ? `${rest.replace(/[\s,]+$/g, '')}. ${core}`
     : joinPromptParts([rest, core])
+  // Last thing before the prompt leaves: one pass over the finished text, because a
+  // trap word can arrive from the parser, a profile, or the preset, and this is the
+  // only point all three have met.
+  const detrapped = stripSubwordTraps(assembled)
+  const prompt = detrapped.text
+  for (const hit of detrapped.hits) {
+    trace('subword trap', 'applied', `removed ${hit.words.join(', ')} — ${hit.why}`)
+    spindle.log.info(`[lumidraw] subword trap · removed ${hit.words.join(', ')} from the prompt · ${hit.why}`)
+  }
+  if (!detrapped.hits.length) trace('subword trap', 'clean', 'no word in the prompt hides a tag inside it')
   const compileTrace = traceSnapshot()
   spindle.log.info('[lumidraw] compile trace (' + compileTrace.length + ' rules)\n' + formatCompileTrace(compileTrace))
   return {
