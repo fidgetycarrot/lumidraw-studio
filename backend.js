@@ -2692,6 +2692,10 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
       (stateReport.unmatchedRequest ? ` (parser asked for "${stateReport.unmatchedRequest}", which is not a saved state)` : ''))
   }
   const anchor = profile ? (profile.promptName || profile.anchor) : (subject.label || subject.ref.replace(/_/g, ' '))
+  // The name the story uses, which is what the parser will have written into
+  // pose and action text. Rendering uses `anchor`; recognising parser prose has
+  // to use both, or a prompt name quietly defeats every cross-subject check.
+  const sourceAnchor = profile ? profile.anchor : anchor
   const noun = state && state.subject ? state.subject : (profile ? profile.subject : subject.label)
   // A transformation state marked appearance=replace stands on its own tags;
   // otherwise the form's tags are layered over the profile's permanent ones.
@@ -2729,7 +2733,7 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   // `named` distinguishes "Ilsa" (a proper name that can head a sentence) from
   // "cloaked stranger" (a label that needs an article: "the cloaked stranger").
   return {
-    subject, profile, appearanceState: state, anchor, noun,
+    subject, profile, appearanceState: state, anchor, sourceAnchor, noun,
     appearance: featureTags.length ? uniqueStrings([...appearance, ...featureTags]) : appearance,
     outfit, anatomy, countTag, named: !!profile,
     partialFeatures: activeFeatures,
@@ -3905,17 +3909,30 @@ const MAX_CAPTION_TRAITS = 7
 // relation sentence already carries that geometry, bound to both names, so
 // rendering the pose too states the same contact twice — and the second
 // telling never words the contact point quite the same way.
+
+// Every name a subject might be called in text the parser produced.
+function subjectNameForms(item) {
+  return uniqueStrings([item && item.anchor, item && item.sourceAnchor].filter(Boolean))
+}
+
+function textNamesSubject(text, other) {
+  const value = normalizeIdentityText(text)
+  if (!value) return false
+  return subjectNameForms(other).some((name) => {
+    const anchor = normalizeIdentityText(name)
+    if (anchor.length < 3) return false
+    return anchor.split(/\s+/).some((word) =>
+      word.length >= 4 && new RegExp(`\\b${escapeRegExp(word)}\\b`).test(value))
+  })
+}
+
 function poseBelongsToRelation(pose, item, scene, descriptors) {
   const text = normalizeIdentityText(pose)
   if (!text) return false
   const hasRelation = (scene.relations || []).some((relation) => relation.actor === item.subject.ref && relation.target)
   if (!hasRelation) return false
-  const namesAnother = (descriptors || []).some((other) => {
-    if (!other || other.subject.ref === item.subject.ref) return false
-    const anchor = normalizeIdentityText(other.anchor || '')
-    if (anchor.length < 3) return false
-    return anchor.split(/\s+/).some((word) => word.length >= 4 && new RegExp(`\\b${escapeRegExp(word)}\\b`).test(text))
-  })
+  const namesAnother = (descriptors || []).some((other) =>
+    other && other.subject.ref !== item.subject.ref && textNamesSubject(text, other))
   if (!namesAnother) return false
   // Only drop when a relation actually carries THIS pose's action. Dropping on
   // the mere existence of a relation deleted "pinning the alpha's muzzle"
@@ -3925,7 +3942,7 @@ function poseBelongsToRelation(pose, item, scene, descriptors) {
     relation.actor === item.subject.ref && verbStemsMatch(relation.action, text))
 }
 
-function subjectIdentitySentences(item, scene, descriptors) {
+function subjectIdentitySentences(item, scene, descriptors, profiles = null) {
   const name = displayName(item)
 
   // One appositive caption phrase per subject, not three narrative sentences.
@@ -4012,7 +4029,13 @@ function subjectIdentitySentences(item, scene, descriptors) {
     .filter((part) => !consumedHold.has(part))
     .filter((part) => !actionDuplicatesRelation(part, item.subject.ref, scene.relations))
     .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
-  const { doing, having, looking } = stateClauses([...item.expression, ...actions])
+    .map((part) => applyPromptNames(part, profiles))
+  const raw = stateClauses([...item.expression, ...actions])
+  // stateClauses lowercases through animaTagList, which turns a substituted
+  // name back into a common noun — "watching price". Restore it afterwards.
+  const doing = raw.doing.map((part) => applyPromptNames(part, profiles))
+  const having = raw.having.map((part) => applyPromptNames(part, profiles))
+  const looking = raw.looking.map((part) => applyPromptNames(part, profiles))
 
   // Anything beyond the two garments already bound to the name.
   const remainingClothes = clothes.filter((tag) => !wornEarly.slice(0, 2).includes(animaTag(tag)))
@@ -4504,7 +4527,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.38.1 ranks presentation first, a stray one now survives every cap
+// and since 0.38.2 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -4610,13 +4633,8 @@ function promoteCrossSubjectPoses(descriptors, scene) {
     const kept = []
     for (const phrase of item.pose || []) {
       const text = normalizeIdentityText(phrase)
-      const other = descriptors.find((candidate) => {
-        if (!candidate || candidate.subject.ref === item.subject.ref) return false
-        const anchor = normalizeIdentityText(candidate.anchor || '')
-        if (anchor.length < 3) return false
-        return anchor.split(/\s+/).some((word) =>
-          word.length >= 4 && new RegExp(`\\b${escapeRegExp(word)}\\b`).test(text))
-      })
+      const other = descriptors.find((candidate) =>
+        candidate && candidate.subject.ref !== item.subject.ref && textNamesSubject(text, candidate))
       if (!other) { kept.push(phrase); continue }
       const covered = (scene.relations || []).some((relation) =>
         relation.actor === item.subject.ref && verbStemsMatch(relation.action, text))
@@ -4627,7 +4645,9 @@ function promoteCrossSubjectPoses(descriptors, scene) {
       }
       // Strip the other name and trailing preposition off the tail, leaving an
       // action the relation renderer can complete with the real target.
-      const anchorWords = normalizeIdentityText(other.anchor || '').split(/\s+/).filter(Boolean)
+      const anchorWords = subjectNameForms(other)
+        .flatMap((name) => normalizeIdentityText(name).split(/\s+/))
+        .filter(Boolean)
       let action = animaTag(phrase)
       for (const word of anchorWords) {
         action = action.replace(new RegExp(`\\b${escapeRegExp(word)}\\b`, 'gi'), '').trim()
@@ -4712,7 +4732,11 @@ function applyPromptNames(text, profiles) {
   for (const profile of allKnownProfiles(profiles)) {
     if (!profile || !profile.promptName || !profile.anchor) continue
     if (normalizeIdentityText(profile.promptName) === normalizeIdentityText(profile.anchor)) continue
-    for (const word of String(profile.anchor).split(/\s+/).filter((part) => part.length >= 3)) {
+    const targets = [
+      ...String(profile.anchor).split(/\s+/).filter((part) => part.length >= 3),
+      profile.promptName,   // catches a substitution that was later lowercased
+    ]
+    for (const word of targets) {
       value = value.replace(new RegExp(`\\b${escapeRegExp(word)}\\b`, 'gi'), profile.promptName)
     }
     // Replacing each word of a multi-word anchor can repeat the substitute.
@@ -4831,7 +4855,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   let crossRelationCount = 0   // relations carried by prose OR already in the statement
   let renderedRelations = 0    // sentences actually written — this is the budget
   if (multi) {
-    for (const item of descriptors) prose.push(...subjectIdentitySentences(item, scene, descriptors))
+    for (const item of descriptors) prose.push(...subjectIdentitySentences(item, scene, descriptors, profiles))
 
     for (const relation of scene.relations) {
       if (!relation.target || relation.target === relation.actor) continue
@@ -6375,7 +6399,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.38.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.38.2',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7473,4 +7497,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.38.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.38.2'))

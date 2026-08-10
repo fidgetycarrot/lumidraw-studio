@@ -1,7 +1,39 @@
-# LumiDraw Studio 0.38.1
+# LumiDraw Studio 0.38.2
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.38.2 — Every occurrence, not most of them
+
+Confirmed by hand: replacing **all** instances of the name in a prompt fixed the
+image. That word is what matters — one surviving occurrence still contributes,
+and 0.38.0 had three ways to leave one behind.
+
+**The parser writes the story name; we render the prompt name.** The descriptor's
+anchor becomes `Price`, but every pose, action and label the parser produced
+still says `Fanny`. Both cross-subject checks matched the descriptor's anchor
+against parser prose, so with a prompt name set they matched nothing — and a
+pose like *"reaching toward Fanny"* would sail through into the prompt. Both now
+match either name, and name-stripping during promotion removes both forms.
+
+**Actions were not substituted at all.** A subject's own action text went
+straight to the caption. `Rook, watching Fanny.`
+
+**And `stateClauses` lowercased it back.** It re-normalises through
+`animaTagList`, which turned a substituted name into `watching price` — a common
+noun, which is the exact problem being solved. The substitution is re-applied
+after normalisation, and it now also recognises an already-substituted name that
+lost its capital.
+
+One assertion was wrong rather than the code: a promoted pose is correctly
+suppressed when the scene statement already covers the same action.
+
+A note on method — `node --check` validates syntax, not scope. Passing
+`profiles` into a function that never had that parameter was caught by running
+the suite, not by the syntax check that had just said the file was fine.
+
+29 suites · 739 assertions.
+
 
 ## 0.38.1 — The field's own hint gave the wrong advice
 
