@@ -1,7 +1,120 @@
-# LumiDraw Studio 0.36.1
+# LumiDraw Studio 0.36.3
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.36.3 — A recognised key with an unusable value
+
+```text
+Draw Things rejected the generation:
+Value for tea_cache_end must be between 0 and 1000, inclusive (was -1)
+```
+
+0.36.2's self-healing did not fire, because Draw Things refuses a payload in two
+different ways and only one was being read:
+
+```text
+Unrecognized keys: [tiled_decoding]      ← the key does not exist
+Value for tea_cache_end must be …        ← the key exists, the value does not work
+```
+
+`tea_cache_end` is a real setting. `-1` is what Draw Things stores internally for
+"off", and its generation API will not accept that. We captured it verbatim on
+Sync and sent it straight back — full pass-through faithfully returning a value
+that is valid as app state and invalid as API input.
+
+Both shapes now feed the same machinery: the key is dropped, the generation is
+retried immediately, and it is omitted from then on. Dropping beats guessing a
+replacement, because an absent key leaves Draw Things on its own setting —
+which is what `-1` meant to begin with.
+
+Also parsed: `Invalid value for X` and a bare `X must be between …`. Prose that
+merely contains "must be" names nothing.
+
+The error text explains this case on its own terms rather than talking about
+unknown keys.
+
+### And the runner caught itself again
+
+The ten new assertions ran but were **not counted** — `dtkeys.mjs` printed its
+summary above the appended block, so the total stayed at 12 while 22 executed.
+Green, correct, and silently understating itself.
+
+`run-all.mjs` now also requires the summary to be the **last** line, not merely
+present. A suite whose summary sits mid-file reports as broken. That is the
+fourth variant of this one mistake in a session, and the runner has now caught
+two of them itself.
+
+**28 suites · 694 assertions.**
+
+
+## 0.36.2 — A dropped socket no longer costs a whole scan
+
+```text
+story scan stage · parsing · 28ms   · Waiting for the selected parser model.
+parser request started · deepseek
+story scan stage · error   · 72ms   · The socket connection was closed unexpectedly
+```
+
+Forty-four milliseconds between opening the request and the connection dying.
+That is not a timeout, a refusal, or a bad reply — the request never landed.
+Nothing was generated and nothing was billed, and LumiDraw threw the entire
+scan away over it.
+
+The existing retry only covers a truncated or empty reply, which is a response.
+A dropped connection is the absence of one, and it now gets **two retries with a
+short backoff** (1.2s, then 2.4s) before giving up. Failing three times reports
+that it is the provider or the network rather than the extension, with where to
+look.
+
+Deliberately narrow — a timeout, a cancelled scan, an abort, and every
+content-level failure are excluded. Only connection-level messages qualify:
+socket closed, `ECONNRESET`, `ETIMEDOUT`, `EPIPE`, `fetch failed`, `terminated`.
+
+11 assertions cover both directions, because a retry loop that fires on the
+wrong error is worse than none.
+
+### The test runner was lying, three times over
+
+Those 11 assertions did not run when I first wrote them. `resilience.mjs` had a
+`process.exit(fail ? 1 : 0)` in the middle of the file, so an appended block
+below it was never reached — 7 assertions, exit code 0, and my verification was
+"read the last line of the output", which cannot tell *passed* from *never ran*.
+
+`directives.mjs` had the same shape, and had been reported green all evening
+while a third of it never executed.
+
+There is now a `run-all.mjs` that checks the exit code, **requires a summary
+line as the final output**, and prints per-suite assertion counts so a suite
+that quietly shrinks is visible. It found both files on its first run.
+
+This is the same blind spot as the two duplicate-call-site bugs earlier: a
+verification that matches on text rather than on structure. Reading a tail is
+not a test result.
+
+**28 suites · 684 assertions · all green** — the real number, checked properly.
+
+### Not the previous release
+
+Worth recording, since the timing pointed at it. Everything 0.36.1 changed
+worked in that same log:
+
+```text
+removed 29 image reference(s) from the prompt context
+parser trigger protocol injected (396 chars)
+auto trigger queued
+```
+
+Interceptor fine, strip fine, trigger fine. The failure was one layer further
+out.
+
+### Unrelated but visible in that log
+
+Prompt assembly took **53.7 seconds** before the request was even made —
+`databank-embed` 53.5s, `world-info-vector` 32.7s. That is Lumiverse-side and
+worth watching; a host under that much strain is also more likely to drop a
+socket. The runner also reports being 3 commits behind.
+
 
 ## 0.36.1 — The story model had learned to fake our markdown
 

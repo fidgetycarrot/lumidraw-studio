@@ -248,6 +248,13 @@ function extractDtError(res) {
 // with where to remove them, turns a dead generation into a one-step fix.
 function describeDtRejection(message) {
   const text = String(message || '')
+  const ranged = /Value for\s+([A-Za-z_][A-Za-z0-9_]*)\s+must be([^.]*)/i.exec(text)
+  if (ranged) {
+    return `Draw Things will not accept the value LumiDraw captured for ${ranged[1]}: it must be${ranged[2]}. ` +
+      `This usually means the value is meaningful inside the Draw Things app but not through its generation API — ` +
+      `-1 for "off", for instance. ${ranged[1]} has been dropped and will be omitted from now on, so Draw Things ` +
+      `uses its own setting. Clear the list in Settings if you change it there.`
+  }
   const match = /Unrecognized keys:\s*\[([^\]]*)\]/i.exec(text)
   if (!match) return text
   const keys = match[1].split(',').map((key) => key.trim()).filter(Boolean)
@@ -333,10 +340,47 @@ async function forgetRejectedKeys() {
   try { await spindle.storage.set(REJECTED_KEYS_FILE, JSON.stringify([])) } catch { /* best effort */ }
 }
 
+// Draw Things refuses a payload in two different ways, and only one of them was
+// being read.
+//
+//   Unrecognized keys: [tiled_decoding]
+//     — the key does not exist in the generation API at all.
+//
+//   Value for tea_cache_end must be between 0 and 1000, inclusive (was -1)
+//     — the key exists, but the value we captured on Sync is valid as the app's
+//       internal state and invalid as API input. -1 means "off" inside Draw
+//       Things; the API will not take it.
+//
+// Both are the same problem from here: a key we cannot send. Dropping it is
+// better than guessing a replacement, because an absent key leaves Draw Things
+// on its own setting — which is what -1 meant in the first place.
 function rejectedKeysIn(message) {
-  const match = /Unrecognized keys:\s*\[([^\]]*)\]/i.exec(String(message || ''))
-  if (!match) return []
-  return match[1].split(',').map((key) => key.trim().replace(/^["']|["']$/g, '')).filter(Boolean)
+  const text = String(message || '')
+  const keys = []
+
+  const unknown = /Unrecognized keys:\s*\[([^\]]*)\]/i.exec(text)
+  if (unknown) {
+    for (const key of unknown[1].split(',')) {
+      const value = key.trim().replace(/^["']|["']$/g, '')
+      if (value) keys.push(value)
+    }
+  }
+
+  // "Value for X must be …", "X must be between …", "Invalid value for X"
+  const rangePatterns = [
+    /Value for\s+([A-Za-z_][A-Za-z0-9_]*)\s+must be/gi,
+    /Invalid value for\s+([A-Za-z_][A-Za-z0-9_]*)/gi,
+    /^\s*([A-Za-z_][A-Za-z0-9_]*)\s+must be (?:between|greater|less|at least|at most|a )/gim,
+  ]
+  for (const pattern of rangePatterns) {
+    pattern.lastIndex = 0
+    let hit
+    while ((hit = pattern.exec(text))) {
+      const value = (hit[1] || '').trim()
+      if (value && !keys.includes(value)) keys.push(value)
+    }
+  }
+  return keys
 }
 
 async function dtGenerate(settings, payload, attempt = 0) {
@@ -4351,7 +4395,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.36.1 ranks presentation first, a stray one now survives every cap
+// and since 0.36.3 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -5051,6 +5095,20 @@ function extractParserReasoning(res) {
 // the request resolved to, whether a model override could be applied, and the
 // token split. "I changed the model and the log still shows the old one" is
 // otherwise impossible to tell apart from "the override was silently refused".
+
+// A dropped socket is not an answer, it is the absence of one. Losing a whole
+// scan to a connection reset — 44ms after the request opened, in the observed
+// case — is the wrong response to a transient failure that would have succeeded
+// on the next attempt.
+const TRANSIENT_NETWORK_RE = /socket connection was closed|socket hang up|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|network error|fetch failed|Failed to fetch|connection closed|premature close|stream closed|terminated/i
+
+function isTransientNetworkError(error) {
+  if (!error) return false
+  if (error.name === 'ParserTimeoutError' || error.name === 'StoryScanCancelledError') return false
+  if (error.name === 'AbortError') return false
+  return TRANSIENT_NETWORK_RE.test(String(error.message || ''))
+}
+
 async function quietLLM(system, user, settings, userId, structured = false, scan = null, report = null) {
   const generateApi = spindle.generate || spindle.generation || spindle.llm
   if (!generateApi || (typeof generateApi.quiet !== 'function' && typeof generateApi.raw !== 'function')) {
@@ -5193,6 +5251,25 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
         } catch (error) {
           const message = (error && error.message) || ''
           if (/userId/i.test(message)) return await method(opts, userId)
+          // Two quick retries on a dropped connection. Cheap, because nothing
+          // was generated and nothing was billed — the request never landed.
+          if (isTransientNetworkError(error)) {
+            for (let attempt = 1; attempt <= 2; attempt++) {
+              assertStoryScanActive(scan)
+              const backoff = attempt * 1200
+              spindle.log.warn(`[lumidraw] parser connection dropped (${message}); retrying in ${backoff}ms — attempt ${attempt} of 2`)
+              if (scan) setStoryScanStage(scan, 'parsing', `The connection dropped; retrying (${attempt} of 2).`)
+              await wait(backoff)
+              try {
+                return await method(opts)
+              } catch (retryError) {
+                if (!isTransientNetworkError(retryError)) throw retryError
+                if (attempt === 2) {
+                  throw new Error(`${retryError.message} — the parser connection dropped three times. This is usually the provider or the network rather than LumiDraw; check the connection in Lumiverse.`)
+                }
+              }
+            }
+          }
           // A strict provider may reject the multi-spelling reasoning object.
           // Drop back to the minimal form once rather than failing the scan.
           if (/reasoning|unrecognized key|unknown (?:field|parameter)|invalid.*param|mandatory/i.test(message) &&
@@ -6169,7 +6246,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.36.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.36.3',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7267,4 +7344,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.36.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.36.3'))
