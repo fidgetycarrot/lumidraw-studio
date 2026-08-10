@@ -44,6 +44,8 @@ const DEFAULT_SETTINGS = {
   bridgePort: 7863,
   protocol: '',           // tag guidance for Inline mode (blank = pre-0.17 default)
   stripImageDirectives: true, // remove dead ![...](/…/gen) image-request directives from the prompt context
+  sizeChatImages: false,  // off by default: a custom Lumiverse stylesheet would fight it
+  chatImageWidth: 500,    // px, only consulted when sizeChatImages is on
 }
 
 const LEGACY_DEFAULT_PROTOCOL = `[Illustration protocol] You may illustrate key visual moments. When a scene deserves an image, include on its own line:
@@ -7135,6 +7137,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
         if (payload.useLoomLedger !== undefined) settings.useLoomLedger = !!payload.useLoomLedger
         if (payload.stripImageDirectives !== undefined) settings.stripImageDirectives = !!payload.stripImageDirectives
+        if (payload.sizeChatImages !== undefined) settings.sizeChatImages = !!payload.sizeChatImages
+        if (payload.chatImageWidth !== undefined) {
+          settings.chatImageWidth = Math.min(1200, Math.max(200, Number(payload.chatImageWidth) || 500))
+        }
         if (payload.parserContextMessages !== undefined) settings.parserContextMessages = Math.max(0, Math.min(4, Number(payload.parserContextMessages) || 0))
         if (!['legacy', 'anima'].includes(settings.parserEngine)) settings.parserEngine = 'legacy'
         settings.subjectBinding = settings.parserEngine === 'anima'

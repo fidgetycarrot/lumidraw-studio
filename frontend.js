@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.42.3'
+const EXTENSION_VERSION = '0.47.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -660,6 +660,9 @@ function realSetup(ctx) {
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-strip-directives" style="width:auto" /> Hide generated images and image-request directives from the story model</label>
             <div class="ld-help">Some presets teach the model to request pictures by writing markdown such as <code>![tags](/api/v1/images/gen)</code>. Those never render, and each one left in the history teaches the model to write another. This removes them from what the model sees for each generation — your stored messages are never modified. Real images, including LumiDraw's own, are always left alone.</div>
+            <label style="display:flex;align-items:center;gap:7px;margin-top:11px;font-size:12px"><input type="checkbox" class="ld-size-images" style="width:auto" /> Set the display width of images in chat</label>
+            <div class="ld-size-images-row" style="display:none;align-items:center;gap:8px;margin-top:6px"><input type="range" class="ld-image-width" min="200" max="1200" step="10" style="flex:1" /><input type="number" class="ld-image-width-num" min="200" max="1200" step="10" style="width:76px" /><span style="font-size:12px;opacity:0.7">px</span></div>
+            <div class="ld-help">Applies immediately, to every image in the conversation. This is presentation only — nothing is regenerated and no message is modified. Leave it off if you already size images with your own custom CSS, or the two will fight.</div>
             <div class="ld-parser-binding-controls" style="margin-top:9px">
               <span class="ld-label">Parser engine</span>
               <select class="ld-parser-engine">
@@ -3056,6 +3059,77 @@ ${entry.prompt || ''}`.trim()
   // The override silently beats the connection dropdown, so switching
   // connections can change nothing at all while looking like it changed
   // everything. Say so where the field is.
+  // Image display width. Presentation only — no message is modified and nothing is
+  // regenerated. The selectors mirror the ones a hand-written Lumiverse stylesheet
+  // needs, but this survives a Lumiverse rebuild better: it leans on the stable
+  // [data-component] attributes and on attribute-substring matches for the hashed
+  // CSS-module class names, which are the part that changes when Lumiverse builds.
+  let imageSizeStyleRemove = null
+  function imageSizeCss(px) {
+    const size = `${px}px`
+    return `
+:root { --lumidraw-image-size: ${size}; }
+[data-component="MessageContent"] p:has(img) {
+  width: 100% !important; max-width: 100% !important; height: auto !important;
+  text-align: center !important; overflow: visible !important; clear: both !important;
+}
+[data-component="MessageContent"] p:has(img) > span:has(> img),
+[data-component="MessageContent"] p:has(img) > a:has(img) {
+  display: block !important;
+  width: min(100%, var(--lumidraw-image-size)) !important;
+  max-width: var(--lumidraw-image-size) !important;
+  height: auto !important; max-height: none !important;
+  margin-inline: auto !important; overflow: visible !important;
+}
+[data-component="MessageContent"] img {
+  display: block !important; float: none !important; clear: both !important;
+  width: min(100%, var(--lumidraw-image-size)) !important;
+  max-width: var(--lumidraw-image-size) !important;
+  height: auto !important; max-height: none !important;
+  margin: 0 auto !important; object-fit: contain !important; box-sizing: border-box !important;
+}
+button[class*="inlineImageBtn"],
+div[class*="inlineImageWrap"] {
+  display: block !important;
+  width: min(100%, var(--lumidraw-image-size)) !important;
+  max-width: var(--lumidraw-image-size) !important;
+  height: auto !important; max-height: none !important;
+  aspect-ratio: auto !important; margin-inline: auto !important; overflow: visible !important;
+}
+img[class*="inlineImage"] {
+  display: block !important; width: 100% !important;
+  max-width: var(--lumidraw-image-size) !important;
+  height: auto !important; max-height: none !important;
+  margin-inline: auto !important; object-fit: contain !important;
+}`
+  }
+
+  function applyImageSize() {
+    const on = $('.ld-size-images') && $('.ld-size-images').checked
+    const row = $('.ld-size-images-row')
+    if (row) row.style.display = on ? 'flex' : 'none'
+    if (imageSizeStyleRemove) { try { imageSizeStyleRemove() } catch (e) {} ; imageSizeStyleRemove = null }
+    if (!on) return
+    const raw = Number($('.ld-image-width') ? $('.ld-image-width').value : 0)
+    const px = Math.min(1200, Math.max(200, raw || 500))
+    imageSizeStyleRemove = dom.addStyle(imageSizeCss(px))
+  }
+
+  // The slider and the number box are two views of one value.
+  for (const [from, to] of [['.ld-image-width', '.ld-image-width-num'], ['.ld-image-width-num', '.ld-image-width']]) {
+    const el = $(from)
+    if (!el) continue
+    el.addEventListener('input', () => {
+      const mirror = $(to)
+      if (mirror) mirror.value = el.value
+      applyImageSize()
+      scheduleSettingsSave()
+    })
+  }
+  if ($('.ld-size-images')) {
+    $('.ld-size-images').addEventListener('change', () => { applyImageSize(); scheduleSettingsSave() })
+  }
+
   function refreshModelOverrideNote() {
     const note = $('.ld-model-override-note')
     const input = $('.ld-parser-model')
@@ -3727,6 +3801,8 @@ ${entry.prompt || ''}`.trim()
       minImages: $('.ld-minimg').value,
       autoCharTags: $('.ld-chartags').checked,
       stripImageDirectives: $('.ld-strip-directives').checked,
+      sizeChatImages: $('.ld-size-images') ? $('.ld-size-images').checked : false,
+      chatImageWidth: $('.ld-image-width') ? Number($('.ld-image-width').value) || 500 : 500,
       parserContextMessages: $('.ld-parser-context').value,
       useLoomLedger: $('.ld-use-loom-ledger').checked,
     })
@@ -3831,6 +3907,12 @@ ${entry.prompt || ''}`.trim()
 
   // All settings text fields auto-save as you type (debounced).
   let settingsSaveTimer = null
+  function scheduleSettingsSave() {
+    clearTimeout(settingsSaveTimer)
+    settingsSaveTimer = setTimeout(() => {
+      pushSettings('Settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
+    }, 900)
+  }
   for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-overrides', '.ld-parser-maxtokens', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port']) {
     const el = $(sel)
     if (el) el.addEventListener('input', () => {
@@ -4072,6 +4154,13 @@ ${entry.prompt || ''}`.trim()
       $('.ld-minimg').value = settings.minImages || 0
       $('.ld-chartags').checked = settings.autoCharTags !== false
       $('.ld-strip-directives').checked = settings.stripImageDirectives !== false
+      if ($('.ld-size-images')) {
+        const width = Number(settings.chatImageWidth) || 500
+        $('.ld-size-images').checked = !!settings.sizeChatImages
+        if ($('.ld-image-width')) $('.ld-image-width').value = width
+        if ($('.ld-image-width-num')) $('.ld-image-width-num').value = width
+        applyImageSize()
+      }
       $('.ld-parser-engine').value = settings.parserEngine || 'legacy'
       $('.ld-parser-context').value = String(settings.parserContextMessages ?? 2)
       $('.ld-use-loom-ledger').checked = settings.useLoomLedger !== false

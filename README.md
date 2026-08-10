@@ -1,63 +1,64 @@
-# LumiDraw Studio 0.46.1
+# LumiDraw Studio 0.47.0
 
-Install this instead of 0.46.0 — it includes it, and 0.46.0 alone would not have
-helped you.
+Includes 0.42.4 through 0.46.1.
 
-## What 0.46.0 missed
+## It wasn't my commits — I checked before answering
 
-It checked the message being illustrated. But user messages are never illustrated
-in the first place, so the `[ooc]:` marker was on a message LumiDraw already ignored.
-The message that *does* get illustrated — the assistant's reply — carries no marker
-at all. It just answers.
-
-## How it works now
-
-The **preceding user message** decides whether to look. The **reply's own shape**
-decides the verdict, because you use OOC to direct the story as well as to talk
-about it.
+Every version I shipped this session, diffed on the image markup:
 
 ```
-user:      [ooc]: can we back up a scene?
-assistant: Sure — where would you like to pick up from?
-           → skipped: addressed to you rather than describing a scene
-
-user:      [ooc]: continue from the shower
-assistant: Sovi stepped under the water, steam curling around her shoulders...
-           → illustrated: the reply names Sovi
+0.42.3   newContent.slice(0, paraEnd) + '\n\n' + mds[i]
+0.42.4   ... identical ...
+0.46.1   newContent.slice(0, paraEnd) + '\n\n' + mds[i]
 ```
 
-Both decisions are logged:
+`markdownAltText` is byte-identical between 0.42.3 and 0.46.1. All four image
+templates are unchanged. And **LumiDraw's frontend injects no CSS touching message
+images at all** — it never has.
 
-```
-[lumidraw] the message before this one was out of character · skipping — the reply
-is addressed to you rather than describing a scene
-[lumidraw] the message before this one was out of character · illustrating anyway —
-the reply names Sovi
-```
+So nothing LumiDraw emits changed what your selectors match. The image still goes in
+as `\n\n![alt](url)\n\n`, which is what makes `p:has(img)` work in the first place.
 
-### What counts as narrative
+### What I'd look at instead
 
-In priority order:
+Your stylesheet leans on two kinds of selector, and only one of them is stable:
 
-1. **Addressed to you** → aside. *"Would you like…", "Shall I…", "I can…", "Got it",
-   "Understood", "my mistake", "no problem".* This is checked first deliberately —
-   *"Understood, I'll keep Sovi out of the next scene"* names a character but is
-   still a reply to you, so naming the cast must not veto it.
-2. **Contains dialogue** → scene.
-3. **Names your cast** → scene. Pulled from the active preset's profiles, matching
-   both the anchor and the prompt name.
-4. **Talks to you about the writing** — meta nouns plus "you" → aside.
-5. **Short with no past-tense sentence** → aside. *"That works for me." "Yes."*
-6. Otherwise → scene.
+- `[data-component="MessageContent"]`, `[data-part="user"]` — **stable.** Deliberate
+  attributes Lumiverse puts there.
+- `[class*="_avatar_"]`, `[class*="_prose_"]`, `[class*="_bubble_"]`,
+  `[class*="inlineImageBtn"]`, `[class*="_bodyWrapperOpen_"]` — **not stable.** Those
+  are CSS-module class names, generated at build time. A Lumiverse update can rename
+  `_avatar_1a2b3` to something else and every rule keyed to it silently stops
+  matching, with no error anywhere.
 
-Only the nearest preceding user message is considered, and the search stops at any
-intervening assistant message, so this cannot reach back into an unrelated exchange.
+If the breakage is in the Moonlit Echoes half — portraits, glass panels, headers —
+that half is entirely class-name-driven and a Lumiverse rebuild is the first
+suspect. Checking one of those elements in devtools for its current class name
+would settle it in about thirty seconds.
 
-### Scope
+## And yes — LumiDraw can size images itself
 
-The classifier runs **only** when the preceding user message is out of character.
-An ordinary story message never touches it, so it can't cost you an image in normal
-play.
+**Settings → "Set the display width of images in chat"**, with a slider and a number
+box (200–1200px, default 500). Applies immediately as you drag, to every image in the
+conversation. Presentation only: no message is modified, nothing is regenerated.
 
-`ooc.mjs` is up to 67 assertions, including the reply pairs above.
-**39 suites · 1154 assertions · all green.**
+It covers the *Full Width Images* half of your CSS — the part that is LumiDraw's
+business — and is written to survive a rebuild better: stable `[data-component]`
+attributes where they exist, attribute-substring matches for the hashed names where
+they don't.
+
+**Off by default, deliberately.** If your own stylesheet is still setting
+`--lumi-image-size`, the two would fight. Either delete the *Full Width Images* block
+and use this, or leave this off and keep yours. Not both.
+
+The Moonlit Echoes theming — portrait rails, masks, glass content panels, Cormorant
+headings, justified prose — is out of scope for an image extension, and I have not
+tried to absorb it.
+
+## One caveat
+
+I could not test the CSS against a live Lumiverse from here. The stylesheet is
+brace-balanced and the six rules are what I'd expect to work, but if a selector
+misses, tell me which element and I'll adjust it against the real markup.
+
+**39 suites · 1171 assertions · all green**, including 17 new ones for this feature.
