@@ -1,55 +1,65 @@
-# LumiDraw Studio 0.49.1
+# LumiDraw Studio 0.49.3
 
-Includes 0.42.4 through 0.49.0.
+Includes 0.42.4 through 0.49.2.
 
-## The header was lying, and it was my fault
+## Found it, and the screenshots were the whole answer
 
-The version in the panel was a **literal string in the HTML**:
+Your message #131 was `[ooc]: the gabrielle monitor packet…`. The reply was a patch
+note: wrapper tags, JSON keys, a wall of CSS, "Patch applied." Two images.
 
-```html
-<span class="ld-head-title">LumiDraw <small …>v0.42.3</small></span>
-<button class="ld-launcher" title="LumiDraw Studio v0.42.3" …>
-```
-
-Not a variable. So bumping `package.json`, `spindle.json`, and even
-`EXTENSION_VERSION` changed nothing you could see — the panel has read **v0.42.3
-through six releases**. Your install was almost certainly fine; the label just
-couldn't tell you.
-
-There were two more stale copies of the same number in `backend.js`, as fallbacks:
-`(spindle.manifest && spindle.manifest.version) || '0.42.3'`. If the manifest ever
-failed to load, the extension would have confidently reported 0.42.3 forever.
-
-## One source of truth
-
-The header now shows whatever the **backend reports from the installed
-`spindle.json` manifest** — the file you actually install. There is no version to
-display that the installed extension doesn't own. The backend's fallback is now an
-empty string and the log says `unknown — no manifest` rather than naming a version
-it can't verify.
-
-## And a check for the failure mode you've already hit
-
-Copying `backend.js` but not `frontend.js` leaves two versions running against each
-other, and every symptom of that looks like a bug in whichever feature you were
-testing. If the two disagree now, the header says so:
+I fed that exact text through the classifier:
 
 ```
-LumiDraw  v0.49.1 · UI v0.46.1
+verdict: ILLUSTRATE
+reason : the reply contains dialogue
 ```
 
-in amber, with a console warning naming the file that didn't get copied.
+**The CSS was the dialogue.** The dialogue test looks for a quoted string over
+twelve characters — and `style="max-width:560px;margin:18px auto;font-family:Inter…"`
+is a quoted string over twelve characters. A patch note full of attributes looked
+like a scene full of speech.
 
-## Sanity check for this build
+So the gate ran, found your `[ooc]:`, looked at the reply, and was fooled by
+punctuation.
+
+## The fix
+
+Markup is stripped before the reply is judged — fenced code, inline code, HTML
+comments, tags and their attributes — and the verdict is taken on the prose that
+remains. On top of that, a new check runs **before** everything else:
 
 ```
-package.json   0.49.1
-spindle.json   0.49.1
-frontend.js    0.49.1
+SKIP | the reply is about the story's plumbing — it names a code token (GABI_MONITOR_START)
 ```
 
-After installing, the panel should read **v0.49.1** with no amber. If it shows two
-numbers, one file didn't land.
+It fires on a `SCREAMING_SNAKE` token in the prose, or on two independent technical
+markers (`regex`, `json`, `wrapper tags`, `schema`, `patch applied`, `bonus fields`…).
+It's checked first on purpose: a message about broken plumbing usually names the
+character whose card is broken, and the cast-name test would otherwise rescue it.
 
-**40 suites · 1256 assertions · all green**, including 14 new ones asserting no
-version literal survives in the markup.
+### The part I nearly got wrong
+
+Your ordinary messages embed **rendered UI cards**, so markup is normal in this chat
+and can never by itself mean "don't illustrate". My first version tested the code
+token against the raw text — and every one of your story messages is wrapped in
+`<!-- UI_START -->`. It only passed because `UI_START` has two letters before the
+underscore and my pattern wanted three. That's a coin landing on its edge, so the
+token test now runs on the stripped prose, where a comment wrapper can't reach it.
+
+Verified against both sides:
+
+| message | verdict |
+|---|---|
+| The patch note | **skipped** — names `GABI_MONITOR_START` |
+| Patch note that also says "Gabrielle here." | **skipped** — plumbing outranks the cast |
+| A rendered UI card + "Gabrielle leaned back from the console…" | **illustrated** |
+| `"The parser is down again," Gabrielle muttered` | **illustrated** — a scene about a terminal is still a scene |
+
+## Still worth confirming
+
+Install this and check the header reads **v0.49.3**. Everything above only matters
+if the OOC code is actually on your machine, and until 0.49.1 the panel couldn't
+tell you.
+
+`ooc.mjs` is up to 86 assertions, including your patch note verbatim.
+**41 suites · 1275 assertions · all green.**

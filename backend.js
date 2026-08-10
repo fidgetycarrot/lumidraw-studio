@@ -831,10 +831,51 @@ const META_NOUN_RE = /\b(?:scene|chapter|reply|response|message|post|prompt|reca
 const NARRATIVE_QUOTE_RE = /[“"][^”"]{12,}[”"]/
 const NARRATIVE_PROSE_RE = /\b\w{3,}ed\b[^.!?]{0,120}[.!?]/
 
+// Your stories embed rendered HTML cards, so markup in a message is normal and
+// cannot itself mean "do not illustrate". But an attribute like style="max-width:
+// 560px;margin:18px auto" is a quoted string over twelve characters long, which is
+// exactly what the dialogue test looks for — so a patch note full of CSS read as a
+// scene full of dialogue. Markup is removed before the reply is judged, and the
+// verdict is taken on the prose that remains.
+function stripMarkupForClassification(text) {
+  return String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')          // fenced code
+    .replace(/`[^`\n]*`/g, ' ')               // inline code
+    .replace(/<!--[\s\S]*?-->/g, ' ')         // html comments, incl. the UI wrappers
+    .replace(/<[^>]+>/g, ' ')                 // tags and their attribute soup
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+// Vocabulary that essentially never appears in a story passage. Two independent
+// markers are required, because any one of them could turn up in dialogue about a
+// terminal — but a SCREAMING_SNAKE token is distinctive enough to count on its own.
+const TECHNICAL_META_RE = /\b(?:regex|json|html|css|div|span|wrapper tags?|api|endpoint|schema|parser|markdown|code block|syntax|boolean|stack trace|console log|hotfix|rollback|deploy|patch applied|bonus fields?|extra keys?|key(?:s)? *:|output(?:ting)?|render(?:ing|ed)? (?:correctly|properly)|clean output)\b/gi
+const SCREAMING_TOKEN_RE = /\b[A-Z][A-Z0-9]{2,}(?:_[A-Z0-9]+)+\b/
+
 function assistantReplyIsMeta(text, knownNames = []) {
-  const value = String(text || '').trim()
-  if (!value) return { meta: false, reason: '' }
+  const raw = String(text || '').trim()
+  if (!raw) return { meta: false, reason: '' }
+  const value = stripMarkupForClassification(raw)
+  if (!value) return { meta: true, reason: 'the reply is markup with no prose in it' }
   const words = value.split(/\s+/).filter(Boolean).length
+
+  // Checked before anything else, including the cast, because a message about the
+  // story's plumbing often names the character whose card is broken.
+  TECHNICAL_META_RE.lastIndex = 0
+  const technical = [...new Set((value.match(TECHNICAL_META_RE) || []).map((m) => m.toLowerCase()))]
+  // Tested on the STRIPPED prose, not the raw text: your story cards are wrapped in
+  // <!-- UI_START -->, which is a code token sitting inside every ordinary message.
+  // Judging the raw text would skip the whole chat.
+  const codeToken = (value.match(SCREAMING_TOKEN_RE) || [])[0]
+  if (codeToken || technical.length >= 2) {
+    return {
+      meta: true,
+      reason: codeToken
+        ? `the reply is about the story's plumbing — it names a code token (${codeToken})`
+        : `the reply is about the story's plumbing — it uses ${technical.slice(0, 3).join(', ')}`,
+    }
+  }
 
   // Addressing the author settles it first. "Understood — I'll keep Sovi out of the
   // next scene" names a character but is still a reply to you, not a scene, so the
@@ -6605,13 +6646,30 @@ async function scanStoryCore(userId, options = {}) {
       if (bits.isUser) { prompting = bits; break }
       if (bits.isAssistant) break
     }
-    if (prompting && outOfCharacterVerdict(cleanParserMessageText(prompting.content, { keepLedger: true }) || prompting.content).ooc) {
-      const names = allKnownProfiles(await getStoryProfiles(preset, settings, userId, chatId))
-        .flatMap((profile) => [profile.anchor, profile.promptName])
-      const shape = assistantReplyIsMeta(targetText, names)
-      spindle.log.info('[lumidraw] the message before this one was out of character · ' +
-        (shape.meta ? 'skipping — ' : 'illustrating anyway — ') + shape.reason)
-      if (shape.meta) oocVerdict = { ooc: true, reason: `the message before it was out of character and ${shape.reason}` }
+    // Every branch says something. This check was silent in exactly the case where
+    // it fails — no preceding user message found — so a gate that never looked was
+    // indistinguishable from a gate that looked and decided to illustrate.
+    if (!prompting) {
+      const roles = messages.slice(Math.max(0, targetIndex - 4), targetIndex)
+        .map((m) => messageBits(m).role || '(no role)')
+      spindle.log.info('[lumidraw] out-of-character check · no preceding user message found · ' +
+        `roles seen: ${roles.join(', ') || '(none)'} · if one of those IS your message, its role name is not ` +
+        'one this check recognises (user, persona, human) — tell me the name and I will add it')
+    } else {
+      const promptingText = cleanParserMessageText(prompting.content, { keepLedger: true }) || prompting.content
+      const promptingVerdict = outOfCharacterVerdict(promptingText)
+      if (!promptingVerdict.ooc) {
+        spindle.log.info('[lumidraw] out-of-character check · the preceding message is in character · ' +
+          `opens with: ${JSON.stringify(String(promptingText).slice(0, 60))}`)
+      } else {
+        const names = allKnownProfiles(await getStoryProfiles(preset, settings, userId, chatId))
+          .flatMap((profile) => [profile.anchor, profile.promptName])
+        const shape = assistantReplyIsMeta(targetText, names)
+        spindle.log.info('[lumidraw] the message before this one was out of character · ' +
+          (shape.meta ? 'skipping — ' : 'illustrating anyway — ') + shape.reason +
+          ' · reply opens with: ' + JSON.stringify(String(targetText).slice(0, 80)))
+        if (shape.meta) oocVerdict = { ooc: true, reason: `the message before it was out of character and ${shape.reason}` }
+      }
     }
   }
   if (oocVerdict.ooc) {
