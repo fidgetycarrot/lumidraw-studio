@@ -3800,7 +3800,7 @@ function isNotClothing(value) {
 
 // Build traits are adjectives — "a slender half-elf woman", never "…with
 // slender". Everything else is treated as a noun phrase for the "with" list.
-const BUILD_ADJECTIVE_RE = /^(?:extremely |very |slightly )?(?:slender|slim|thin|petite|curvy|voluptuous|muscular|athletic|toned|lean|stocky|chubby|plump|tall|short|large|small|young|old|androgynous|freckled|pale|tanned|dark-skinned|light-skinned)$/
+const BUILD_ADJECTIVE_RE = /^(?:extremely |very |slightly |incredibly )?(?:slender|slim|thin|petite|curvy|voluptuous|muscular|athletic|toned|lean|stocky|chubby|plump|tall|short|large|small|huge|massive|enormous|towering|hulking|burly|brawny|bulky|broad|giant|gigantic|young|old|androgynous|freckled|pale|tanned|dark-skinned|light-skinned)$/
 
 // English orders adjectives size → age → build; "a tall muscular man", not
 // "a muscular tall man".
@@ -3954,7 +3954,7 @@ function subjectIdentitySentences(item, scene, descriptors, profiles = null) {
   const nounPhrase = subjectNounPhrase(item)
   const visible = animaTagList(filterAppearanceByVisibility(item.appearance, item.outfit))
     .filter((tag) => !normalizeIdentityText(nounPhrase).includes(normalizeIdentityText(tag)))
-  const { modifiers, nouns } = splitTraitWords(visible)
+  const { builds, modifiers, nouns } = splitTraitWords(visible)
   const orderedNouns = [...nouns].sort((a, b) => signaturePriority(a) - signaturePriority(b))
   // Identity traits are never traded away for incidental ones. Sorting puts
   // them first, but a subject with several could still crowd itself out, so the
@@ -3968,7 +3968,13 @@ function subjectIdentitySentences(item, scene, descriptors, profiles = null) {
       `kept ${chosen.length} of ${orderedNouns.length}; dropped ${cut.join(', ')}`)
   }
   const traits = withArticleList(chosen)
-  const leadModifiers = modifiers.slice(0, 2)
+  // Size leads, because it is read first and because it is the property most
+  // often expressed across several tags at once.
+  const leadModifiers = uniqueStrings([...builds, ...modifiers]).slice(0, 3)
+  if (builds.length) {
+    trace(`build · ${item.anchor || item.subject.ref}`, 'applied',
+      `${builds.join(', ')} — cumulative size words, previously collected and discarded`)
+  }
 
   // An unprofiled subject's label doubles as its noun ("cloaked stranger"), so
   // the appositive is dropped rather than repeating it.
@@ -4560,7 +4566,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.39.0 ranks presentation first, a stray one now survives every cap
+// and since 0.39.1 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -6438,7 +6444,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.39.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.39.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7536,4 +7542,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.39.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.39.1'))

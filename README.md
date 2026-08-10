@@ -1,7 +1,57 @@
-# LumiDraw Studio 0.39.0
+# LumiDraw Studio 0.39.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.39.1 — Size words were collected and thrown away
+
+A persona tagged `large man, muscular, muscular male, extremely muscular,
+bodybuilder, tall male, large hands` renders as a hulk in Draw Things directly,
+and as an average muscular man through the parser.
+
+`splitTraitWords` sorts appearance into three buckets:
+
+```js
+return { builds, modifiers, nouns }
+```
+
+**Both callers destructured only `{ modifiers, nouns }`.** `builds` was
+populated on every call and consumed by nobody — dead since it was written.
+
+Everything matching a single-word size adjective went into it and vanished:
+
+```text
+muscular            → builds → discarded
+extremely muscular  → builds → discarded
+tall                → builds → discarded
+large               → builds → discarded
+```
+
+What survived were the noun phrases — `large man`, `muscular male`,
+`bodybuilder` — so the character was still male and still muscular, and had lost
+every word saying *how* muscular. Build is cumulative: "large" plus "extremely
+muscular" plus "tall" is a different body from any one of them.
+
+Builds now lead the description, ahead of other modifiers, because size is read
+first and is the property most often spread across several tags at once:
+
+```text
+before  Jason, an adult man with short brown messy hair, blue eyes,
+        a muscular male, large hands, and a sharp jawline
+after   Jason, a large, extremely muscular, tall adult man with short brown
+        messy hair, blue eyes, a muscular male, large hands, and a sharp jawline
+```
+
+The vocabulary also gained the words a character sheet actually uses — `huge`,
+`massive`, `enormous`, `towering`, `hulking`, `burly`, `brawny`, `bulky`,
+`giant`, and `incredibly` as an intensifier alongside `extremely` and `very`.
+
+This is the same shape as the clothing problem in 0.36.0: correct in a solo
+scene, where appearance goes straight to the tag run, and lost in the caption
+path that multi-subject scenes use.
+
+**32 suites · 832 assertions.**
+
 
 ## 0.39.0 — Two geometries for one act render as neither
 
