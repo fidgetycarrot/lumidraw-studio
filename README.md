@@ -1,7 +1,38 @@
-# LumiDraw Studio 0.38.3
+# LumiDraw Studio 0.38.4
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.38.4 — Blank Settings tab, broken Presets layout
+
+My fault, and the same mistake twice over.
+
+0.38.0 inserted "Name in prompts" at three sites with a script. At two of them it
+left a stray `</div>` that closed the profile grid a field early. 0.38.3 fixed
+**one** of the three and I did not check the others — so both preset editors
+still closed their grid early, every following `</div>` closed the wrong element,
+and the damage ran past the end of the panel. Settings rendered empty; Presets
+rendered wrong.
+
+An unbalanced `<div>` does not fail. It silently reparents everything after it,
+which is why nothing in the logs pointed at it.
+
+### The guard was too narrow
+
+`editors.mjs` already checked markup balance — but only within a window around
+the field it had just edited, and the stray `</div>` was on the line *above*.
+A check scoped to the thing you changed cannot see damage done next to it.
+
+It now balances **every markup template in the file**, and confirms 0 of them
+are broken rather than confirming one is fine. Verified by putting the stray
+`</div>` back and watching it fail.
+
+Third time this session the lesson has been the same shape: an edit made by
+pattern-match, verified within the pattern's own scope. The fix is not more
+care, it is checks that are scoped to the file rather than to the edit.
+
+**30 suites · 792 assertions.**
+
 
 ## 0.38.3 — The field was never saved
 
