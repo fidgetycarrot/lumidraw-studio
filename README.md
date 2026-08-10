@@ -1,65 +1,55 @@
-# LumiDraw Studio 0.49.3
+# LumiDraw Studio 0.51.0
 
-Includes 0.42.4 through 0.49.2.
+Includes 0.42.4 through 0.50.0.
 
-## Found it, and the screenshots were the whole answer
+## Basic, as asked. And you were right.
 
-Your message #131 was `[ooc]: the gabrielle monitor packet…`. The reply was a patch
-note: wrapper tags, JSON keys, a wall of CSS, "Patch applied." Two images.
-
-I fed that exact text through the classifier:
+**If the message before it was out of character, the reply is not illustrated
+automatically.** No judgement about what the reply contains.
 
 ```
-verdict: ILLUSTRATE
-reason : the reply contains dialogue
+Skipped: you were talking out of character, so this reply was not illustrated
+automatically — press Scan if it turned out to have a scene in it.
 ```
 
-**The CSS was the dialogue.** The dialogue test looks for a quoted string over
-twelve characters — and `style="max-width:560px;margin:18px auto;font-family:Inter…"`
-is a quoted string over twelve characters. A patch note full of attributes looked
-like a scene full of speech.
+**Pressing Scan overrides it.** Only automatic scans are blocked, so the manual path
+is your escape hatch exactly as you described. Re-run parser and Replace all images
+were never on this path and are unaffected.
 
-So the gate ran, found your `[ooc]:`, looked at the reply, and was fooled by
-punctuation.
+## Why you're right and I wasn't
 
-## The fix
+The asymmetry decides it, and I should have seen it two versions ago:
 
-Markup is stripped before the reply is judged — fenced code, inline code, HTML
-comments, tags and their attributes — and the verdict is taken on the prose that
-remains. On top of that, a new check runs **before** everything else:
+- Guess wrong towards an image → a picture of nothing lands in your chat, costs a
+  generation, and you delete it.
+- Guess wrong towards no image → one press of a button.
 
-```
-SKIP | the reply is about the story's plumbing — it names a code token (GABI_MONITOR_START)
-```
+Those are not the same size, so the automatic path should take the safe side and
+leave the judgement to you, who can actually see the message. Instead I kept trying
+to read the reply, and it guessed wrong twice — most memorably on a patch note where
+`style="max-width:560px…"` is a quoted string over twelve characters and therefore
+read as dialogue. Each fix made the rule longer without making the next surprise any
+less likely.
 
-It fires on a `SCREAMING_SNAKE` token in the prose, or on two independent technical
-markers (`regex`, `json`, `wrapper tags`, `schema`, `patch applied`, `bonus fields`…).
-It's checked first on purpose: a message about broken plumbing usually names the
-character whose card is broken, and the cast-name test would otherwise rescue it.
+## What I deleted
 
-### The part I nearly got wrong
+The whole classifier, not just its call site: `assistantReplyIsMeta`,
+`META_ADDRESS_RE`, `META_NOUN_RE`, `NARRATIVE_QUOTE_RE`, `NARRATIVE_PROSE_RE`,
+`TECHNICAL_META_RE`, `SCREAMING_TOKEN_RE` — about 90 lines. A heuristic nobody calls
+is a heuristic somebody calls again by accident, and there are assertions now that
+each of those names stays gone.
 
-Your ordinary messages embed **rendered UI cards**, so markup is normal in this chat
-and can never by itself mean "don't illustrate". My first version tested the code
-token against the raw text — and every one of your story messages is wrapped in
-`<!-- UI_START -->`. It only passed because `UI_START` has two letters before the
-underscore and my pattern wanted three. That's a coin landing on its edge, so the
-token test now runs on the stripped prose, where a comment wrapper can't reach it.
+## Kept, because they're structural rather than guesses
 
-Verified against both sides:
+- **Card stripping** (0.50.0). `<!-- UI_START -->…<!-- UI_END -->` and
+  `<statuscard>…</statuscard>` never reach the parser. This is the one that had been
+  quietly feeding "dependency load 34 / 100" into your prompts on every message.
+- **A turn that is only a card is skipped**, at any rating, with or without an
+  `[ooc]:` before it.
+- **A message opening with an `[ooc]:` marker is skipped**, and a marker mid-message
+  strips just that span.
+- **Every branch logs**, including "no preceding user message found", which is the
+  one that used to be silent when it failed.
 
-| message | verdict |
-|---|---|
-| The patch note | **skipped** — names `GABI_MONITOR_START` |
-| Patch note that also says "Gabrielle here." | **skipped** — plumbing outranks the cast |
-| A rendered UI card + "Gabrielle leaned back from the console…" | **illustrated** |
-| `"The parser is down again," Gabrielle muttered` | **illustrated** — a scene about a terminal is still a scene |
-
-## Still worth confirming
-
-Install this and check the header reads **v0.49.3**. Everything above only matters
-if the OOC code is actually on your machine, and until 0.49.1 the panel couldn't
-tell you.
-
-`ooc.mjs` is up to 86 assertions, including your patch note verbatim.
-**41 suites · 1275 assertions · all green.**
+**41 suites · 1255 assertions · all green.** The count dropped by 30 because the
+classifier's tests went with it, which is the right direction.

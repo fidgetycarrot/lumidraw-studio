@@ -727,7 +727,16 @@ function stripForeignImageDirectives(text) {
 const PARSER_TRIGGER_TAG = '<lumidraw-parse request="generate"></lumidraw-parse>'
 const PARSER_TRIGGER_RE = /<lumidraw-parse\b[^>]*><\/lumidraw-parse>|<lumidraw-parse\b[^>]*>[\s\S]*?<\/lumidraw-parse>|<lumidraw-parse\b[^>]*\/>/gi
 const LOOM_LEDGER_RE = /<loomledger\b[^>]*>[\s\S]*?<\/loomledger>/gi
-const PARSER_UTILITY_CARD_RE = /<(?:scenecard|adventurecard|statuscard|choicecard|summarycard)\b[^>]*>[\s\S]*?<\/(?:scenecard|adventurecard|statuscard|choicecard|summarycard)>/gi
+// Cards are furniture: a status readout, a dice roll, a helpdesk console. They are
+// never a moment in the story, so the parser must not see them. Two conventions are
+// in use — a named custom element, and a pair of HTML comments around a block of
+// markup, which is how Lumiverse presets embed a rendered card.
+//
+// The comment form was not covered, so a card like
+//   <!-- UI_START --><div style="…">Gabrielle · OPERATOR CONSOLE · TRACKER 34…
+// reached the parser as prose, on every message that carried one. "dependency load
+// 34 / 100" and "monitored focus" are not scenery, but nothing had told it that.
+const PARSER_UTILITY_CARD_RE = /<(?:scenecard|adventurecard|statuscard|choicecard|summarycard)\b[^>]*>[\s\S]*?<\/(?:scenecard|adventurecard|statuscard|choicecard|summarycard)>|<!--\s*[A-Z0-9_]*_?START\s*-->[\s\S]*?<!--\s*[A-Z0-9_]*_?END\s*-->/gi
 
 function stripBannedTags(sceneTags, bannedCsv) {
   if (!bannedCsv || !sceneTags) return sceneTags
@@ -818,25 +827,10 @@ function outOfCharacterVerdict(text) {
   return { ooc: false, reason: '' }
 }
 
-// An out-of-character question usually gets an out-of-character answer, but the
-// answer carries no marker of its own — the assistant simply replies. And "[ooc]:
-// continue the scene" produces real narrative that should still be illustrated.
-// So the preceding user message decides whether to look, and the reply's own shape
-// decides the verdict.
-//
-// Meta: written to the author. Second person, offers, questions aimed outward.
-const META_ADDRESS_RE = /\b(?:would you like|do you want|shall i|let me know|want me to|i can |i (?:will|could|should) |i'?ll |i'?ve |if you(?:'?d| would)|you(?:'?d| would) (?:like|prefer|rather)|happy to|no problem|got it|understood|makes sense|good catch|my mistake|sorry about|to clarify|just to check|which (?:one|scene|version))\b/i
-const META_NOUN_RE = /\b(?:scene|chapter|reply|response|message|post|prompt|recap|summary|continuity|retcon|the parser|out[- ]of[- ]character|character sheet|token|context window)\b/i
-// Narrative: written about the story. Dialogue, and past-tense prose in sentences.
-const NARRATIVE_QUOTE_RE = /[“"][^”"]{12,}[”"]/
-const NARRATIVE_PROSE_RE = /\b\w{3,}ed\b[^.!?]{0,120}[.!?]/
 
-// Your stories embed rendered HTML cards, so markup in a message is normal and
-// cannot itself mean "do not illustrate". But an attribute like style="max-width:
-// 560px;margin:18px auto" is a quoted string over twelve characters long, which is
-// exactly what the dialogue test looks for — so a patch note full of CSS read as a
-// scene full of dialogue. Markup is removed before the reply is judged, and the
-// verdict is taken on the prose that remains.
+// Used to answer one question: once the cards and markup are taken out, is there
+// any prose left in this message at all? A turn that is only a rendered card has
+// nothing to draw.
 function stripMarkupForClassification(text) {
   return String(text || '')
     .replace(/```[\s\S]*?```/g, ' ')          // fenced code
@@ -845,64 +839,6 @@ function stripMarkupForClassification(text) {
     .replace(/<[^>]+>/g, ' ')                 // tags and their attribute soup
     .replace(/\s{2,}/g, ' ')
     .trim()
-}
-
-// Vocabulary that essentially never appears in a story passage. Two independent
-// markers are required, because any one of them could turn up in dialogue about a
-// terminal — but a SCREAMING_SNAKE token is distinctive enough to count on its own.
-const TECHNICAL_META_RE = /\b(?:regex|json|html|css|div|span|wrapper tags?|api|endpoint|schema|parser|markdown|code block|syntax|boolean|stack trace|console log|hotfix|rollback|deploy|patch applied|bonus fields?|extra keys?|key(?:s)? *:|output(?:ting)?|render(?:ing|ed)? (?:correctly|properly)|clean output)\b/gi
-const SCREAMING_TOKEN_RE = /\b[A-Z][A-Z0-9]{2,}(?:_[A-Z0-9]+)+\b/
-
-function assistantReplyIsMeta(text, knownNames = []) {
-  const raw = String(text || '').trim()
-  if (!raw) return { meta: false, reason: '' }
-  const value = stripMarkupForClassification(raw)
-  if (!value) return { meta: true, reason: 'the reply is markup with no prose in it' }
-  const words = value.split(/\s+/).filter(Boolean).length
-
-  // Checked before anything else, including the cast, because a message about the
-  // story's plumbing often names the character whose card is broken.
-  TECHNICAL_META_RE.lastIndex = 0
-  const technical = [...new Set((value.match(TECHNICAL_META_RE) || []).map((m) => m.toLowerCase()))]
-  // Tested on the STRIPPED prose, not the raw text: your story cards are wrapped in
-  // <!-- UI_START -->, which is a code token sitting inside every ordinary message.
-  // Judging the raw text would skip the whole chat.
-  const codeToken = (value.match(SCREAMING_TOKEN_RE) || [])[0]
-  if (codeToken || technical.length >= 2) {
-    return {
-      meta: true,
-      reason: codeToken
-        ? `the reply is about the story's plumbing — it names a code token (${codeToken})`
-        : `the reply is about the story's plumbing — it uses ${technical.slice(0, 3).join(', ')}`,
-    }
-  }
-
-  // Addressing the author settles it first. "Understood — I'll keep Sovi out of the
-  // next scene" names a character but is still a reply to you, not a scene, so the
-  // cast check cannot be allowed to veto this one.
-  if (META_ADDRESS_RE.test(value)) {
-    return { meta: true, reason: 'the reply is addressed to you rather than describing a scene' }
-  }
-  if (NARRATIVE_QUOTE_RE.test(value)) return { meta: false, reason: 'the reply contains dialogue' }
-
-  // Then the strongest narrative signal available: the story's own cast. An aside
-  // about pacing does not name Sovi; a scene does.
-  const named = knownNames.filter(Boolean).find((name) => {
-    const trimmed = String(name).trim()
-    if (trimmed.length < 3) return false
-    return new RegExp('\\b' + escapeRegExp(trimmed) + '\\b', 'i').test(value)
-  })
-  if (named) return { meta: false, reason: `the reply names ${named}` }
-
-  const secondPerson = /\byou(?:'?re|'?ve|r)?\b/i.test(value)
-  if (META_NOUN_RE.test(value) && secondPerson) {
-    return { meta: true, reason: 'the reply talks to you about the writing rather than telling it' }
-  }
-  // No cast, no dialogue, no past-tense sentence, and short: an aside.
-  if (words < 40 && !NARRATIVE_PROSE_RE.test(value)) {
-    return { meta: true, reason: 'the reply is a short aside with no scene in it' }
-  }
-  return { meta: false, reason: 'the reply reads as narrative prose' }
 }
 
 function cleanParserMessageText(text, { keepLedger = false } = {}) {
@@ -6634,11 +6570,29 @@ async function scanStoryCore(userId, options = {}) {
   // Draw Things time, and the extension no longer has to be switched off by hand.
   const targetText = stripParserUtilityCards(stripParserTrigger(stripThinking(target.content)))
   let oocVerdict = outOfCharacterVerdict(targetText)
-  // The assistant's own reply carries no marker — it just answers. So when the
-  // message that prompted it was out of character, the reply's shape decides:
-  // "[ooc]: can we back up?" gets an aside and no image, while "[ooc]: continue
-  // the scene" gets narrative that should still be illustrated.
-  if (!oocVerdict.ooc && Number.isInteger(targetIndex) && targetIndex > 0) {
+  // A turn that is nothing but a card — a roll, a status readout, the preset's
+  // helpdesk voice answering you — has no scene in it at any rating. Checked
+  // structurally rather than by name, because Gabrielle, Stella and whoever comes
+  // next all arrive the same way: a block between two HTML comments.
+  if (!oocVerdict.ooc && String(target.content || '').trim() && !stripMarkupForClassification(targetText).replace(/[^\p{L}\p{N}]/gu, '').length) {
+    oocVerdict = { ooc: true, reason: 'the whole message is a card — a roll, a readout or the preset\'s own voice — with no scene in it' }
+  }
+  // A reply to an out-of-character message is not illustrated automatically. Full
+  // stop — no judgement about what the reply contains.
+  //
+  // The reply carries no marker of its own, so something has to decide, and I tried
+  // deciding by reading it. That guessed wrong twice: a patch note full of CSS read
+  // as dialogue because `style="max-width:560px…"` is a quoted string. Every fix
+  // made the rule longer and the next surprise no less likely.
+  //
+  // The asymmetry settles it. Guessing wrong towards an image puts a picture of
+  // nothing in the chat and costs a generation; guessing wrong towards no image
+  // costs one press of Scan. So the automatic path takes the safe side and the
+  // decision goes to you, who can see the message.
+  //
+  // Only automatic scans are blocked. Pressing Scan is you overriding this on
+  // purpose, and it must always work.
+  if (!oocVerdict.ooc && options.auto && Number.isInteger(targetIndex) && targetIndex > 0) {
     let prompting = null
     for (let i = targetIndex - 1; i >= 0 && i >= targetIndex - 4; i--) {
       const bits = messageBits(messages[i])
@@ -6646,9 +6600,8 @@ async function scanStoryCore(userId, options = {}) {
       if (bits.isUser) { prompting = bits; break }
       if (bits.isAssistant) break
     }
-    // Every branch says something. This check was silent in exactly the case where
-    // it fails — no preceding user message found — so a gate that never looked was
-    // indistinguishable from a gate that looked and decided to illustrate.
+    // Silent-when-it-fails was the previous version's real bug: "the gate never
+    // looked" and "the gate looked and allowed it" produced identical logs.
     if (!prompting) {
       const roles = messages.slice(Math.max(0, targetIndex - 4), targetIndex)
         .map((m) => messageBits(m).role || '(no role)')
@@ -6657,18 +6610,14 @@ async function scanStoryCore(userId, options = {}) {
         'one this check recognises (user, persona, human) — tell me the name and I will add it')
     } else {
       const promptingText = cleanParserMessageText(prompting.content, { keepLedger: true }) || prompting.content
-      const promptingVerdict = outOfCharacterVerdict(promptingText)
-      if (!promptingVerdict.ooc) {
+      if (outOfCharacterVerdict(promptingText).ooc) {
+        oocVerdict = {
+          ooc: true,
+          reason: 'you were talking out of character, so this reply was not illustrated automatically — press Scan if it turned out to have a scene in it',
+        }
+      } else {
         spindle.log.info('[lumidraw] out-of-character check · the preceding message is in character · ' +
           `opens with: ${JSON.stringify(String(promptingText).slice(0, 60))}`)
-      } else {
-        const names = allKnownProfiles(await getStoryProfiles(preset, settings, userId, chatId))
-          .flatMap((profile) => [profile.anchor, profile.promptName])
-        const shape = assistantReplyIsMeta(targetText, names)
-        spindle.log.info('[lumidraw] the message before this one was out of character · ' +
-          (shape.meta ? 'skipping — ' : 'illustrating anyway — ') + shape.reason +
-          ' · reply opens with: ' + JSON.stringify(String(targetText).slice(0, 80)))
-        if (shape.meta) oocVerdict = { ooc: true, reason: `the message before it was out of character and ${shape.reason}` }
       }
     }
   }
