@@ -4690,7 +4690,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.42.0 ranks presentation first, a stray one now survives every cap
+// and since 0.42.1 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -5345,7 +5345,8 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
     rememberedSetting: remembered,
     contextText,
     rememberedOutfits: memoryEntry.outfits || null,
-    breakInPreset: /\bBREAK\b/.test(String(preset.qualityTags || '')),
+    breakInPreset: preset.useBreakSeparators === true ||
+      (preset.useBreakSeparators === undefined && /\bBREAK\b/.test(String(preset.qualityTags || ''))),
   })
   // Remember whatever survived reconciliation as the story's location.
   const groundingForMemory = [sourcePassage, contextText].filter(Boolean).join('\n')
@@ -6809,7 +6810,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.42.0',
+          version: (spindle.manifest && spindle.manifest.version) || '0.42.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7807,4 +7808,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.42.0'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.42.1'))

@@ -1,4 +1,4 @@
-# LumiDraw Studio 0.42.0
+# LumiDraw Studio 0.42.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
@@ -54,9 +54,17 @@ asks for the clinical register directly.
 
 Your manual `BREAK` separators were the right instinct — the token resets the
 attention chunk, which is exactly what stops one character's traits reaching
-another. LumiDraw now inserts one between each character's description, **only
-when the preset already uses BREAK**, which proves the setup understands the
-token rather than rendering it as a word.
+another. LumiDraw now inserts one between each character's description.
+
+**0.42.1: this is a preset checkbox**, not an inference. The first version
+sniffed the quality tags for the word BREAK and enabled itself, which meant the
+feature's state was invisible and I confidently told Eric he already had it when
+he did not. A preset that already types BREAK still gets the old behaviour; a
+checkbox decides everything else.
+
+Put BREAK in the **quality tags** if you want it in the header — never in a
+character's own tags, where it lands mid-description and separates a character
+from their own hair.
 
 ### The budget was measuring your cast
 

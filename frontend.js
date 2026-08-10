@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.42.0'
+const EXTENSION_VERSION = '0.42.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -500,7 +500,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.42.0" aria-label="LumiDraw Studio v0.42.0">
+    <button class="ld-launcher" title="LumiDraw Studio v0.42.1" aria-label="LumiDraw Studio v0.42.1">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -509,7 +509,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.42.0</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.42.1</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -844,6 +844,8 @@ fangs = fangs, sharp teeth"></textarea></div>
               </div>
             </details>
             <span class="ld-label" style="margin-top:7px">Scene anchor (default location)</span><input class="ld-ed-scene-anchor" placeholder="mycetheric grove, pink bioluminescent mushrooms, glowing moss" />
+            <label class="ld-check" style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px"><input type="checkbox" class="ld-ed-break" style="width:auto" /> Separate each character with BREAK</label>
+            <div class="ld-hint">Inserts BREAK between the characters in a multi-subject prompt. BREAK resets the attention chunk, which is what keeps one character's hair, build or clothes from reaching another. Only add BREAK to your quality tags — never to a character's own tags, or it lands mid-description.</div>
             <div class="ld-help">Where this story takes place, as tags. The parser is a separate, stateless call that only sees the current passage and a short recency window — during a long scene the prose stops naming the location, so it can go blind to it and invent one. This is handed over on every request as the established location. LumiDraw updates its own record when a passage clearly moves the characters; this is the starting point and the fallback.</div>
             <span class="ld-label" style="margin-top:7px">Banned tags</span><input class="ld-ed-banned" />
             <span class="ld-label" style="margin-top:7px">Prompt prefix</span><textarea class="ld-ed-prefix" style="min-height:58px"></textarea>
@@ -3314,6 +3316,11 @@ ${entry.prompt || ''}`.trim()
     renderCastEditor()
     $('.ld-ed-banned').value = p ? (p.bannedTags || '') : (seed ? (seed.bannedTags || '') : '')
     $('.ld-ed-scene-anchor').value = p ? (p.sceneAnchor || '') : (seed ? (seed.sceneAnchor || '') : '')
+    if ($('.ld-ed-break')) {
+      const source = p || seed || {}
+      $('.ld-ed-break').checked = source.useBreakSeparators === true ||
+        (source.useBreakSeparators === undefined && /\bBREAK\b/.test(String(source.qualityTags || '')))
+    }
     $('.ld-ed-prefix').value = p ? (p.promptPrefix || '') : (seed ? (seed.promptPrefix || '') : '')
     $('.ld-ed-negative').value = p ? (p.negativePrompt || '') : (seed ? (seed.negativePrompt || '') : '')
     setStatus('.ld-ed-status', p ? '' : (seed ? 'Starting from the current workspace.' : (syncedConfig ? 'Starting from the last synced recipe.' : 'No synced recipe yet — Sync in Studio first for model/sampler defaults.')))
@@ -3514,6 +3521,7 @@ ${entry.prompt || ''}`.trim()
         castLibraryIds: [...editorCastIds],
         bannedTags: $('.ld-ed-banned').value,
         sceneAnchor: $('.ld-ed-scene-anchor').value,
+        useBreakSeparators: $('.ld-ed-break') ? $('.ld-ed-break').checked : false,
       })
       presets = res.presets
       if (editorOriginalName && editorOriginalName !== name) {
