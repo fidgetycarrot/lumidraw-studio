@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.39.1'
+const EXTENSION_VERSION = '0.40.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -132,6 +132,12 @@ function realSetup(ctx) {
       const newest = payload.entry && payload.entry.images && payload.entry.images[0]
       if (payload.source === 'studio' && newest && newest.url) selectedOutputUrl = newest.url
       renderHistory()
+      return
+    }
+    if (payload.type === 'bulk_regen_progress') {
+      const gist = String(payload.statement || '').slice(0, 44)
+      setStatus('.ld-lightbox-regen-status',
+        `Rebuilding image ${payload.index} of ${payload.total}${gist ? ` — ${gist}…` : '…'}`)
       return
     }
     if (payload.type === 'auto_status') {
@@ -494,7 +500,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.39.1" aria-label="LumiDraw Studio v0.39.1">
+    <button class="ld-launcher" title="LumiDraw Studio v0.40.1" aria-label="LumiDraw Studio v0.40.1">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +509,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.39.1</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.40.1</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -687,23 +693,6 @@ function realSetup(ctx) {
             </div>
           </div>
           <div class="ld-card">
-            <div class="ld-subtitle">Parser connection</div>
-            <div class="ld-row ld-mobile-stack">
-              <div><span class="ld-label">Connection</span><div style="display:flex;gap:6px;align-items:center"><select class="ld-parser-conn" style="flex:1"><option value="">— default connection —</option></select><button class="ld-btn ld-compact" data-act="refresh-parser-sources" title="Reload available parser connections">↻</button></div></div>
-              <div><span class="ld-label">Model override (optional)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="e.g. your Kimi deployment" /><button class="ld-btn ld-compact" data-act="use-conn-model" title="Copy the selected connection's current model into the override field">Use connection model</button></div></div>
-              <div>
-                <span class="ld-label">Settings Draw Things refused</span>
-                <div style="display:flex;gap:6px;align-items:center">
-                  <span class="ld-rejected-keys" style="flex:1;font-size:12px;opacity:.8">none</span>
-                  <button class="ld-btn ld-compact" data-act="clear-rejected-keys">Clear</button>
-                </div>
-                <div class="ld-hint">Draw Things refuses an entire generation if one setting is not in its API, so refused settings are remembered and omitted. Clear this after updating Draw Things to try them again.</div>
-              </div>
-              <div><span class="ld-label">Parser output budget (tokens)</span><input class="ld-parser-maxtokens" type="number" min="1200" max="32000" step="500" placeholder="12000" /><div class="ld-hint">First-attempt <code>max_tokens</code>. The JSON needs ~700; the rest is headroom for a provider that will not turn reasoning off. Lower it to ~4000 only once the log shows reasoning is genuinely off.</div></div>
-              <div><span class="ld-label">Parser request overrides (JSON, advanced)</span><textarea class="ld-parser-overrides" style="min-height:64px;font-family:ui-monospace,monospace;font-size:12px" placeholder='{"reasoning":{"enabled":false}}'></textarea><div class="ld-hint">Merged into the parser request. Use this to force a provider-specific setting — most often turning reasoning off. Check the Spindle log for <code>reasoning_tokens=</code> after a scan to see whether it worked.</div></div>
-            </div>
-          </div>
-          <div class="ld-card">
             <span class="ld-label ld-parser-instruction-label">Legacy parser instruction</span>
             <textarea class="ld-parser-instr" style="min-height:110px"></textarea>
             <button class="ld-btn ld-compact" data-act="reset-parser" style="margin-top:6px">Reset to default</button>
@@ -868,6 +857,23 @@ fangs = fangs, sharp teeth"></textarea></div>
       <section class="ld-view" data-view="settings">
         <div class="ld-form-view">
           <div class="ld-card">
+            <div class="ld-subtitle">Parser connection</div>
+            <div class="ld-row ld-mobile-stack">
+              <div><span class="ld-label">Connection</span><div style="display:flex;gap:6px;align-items:center"><select class="ld-parser-conn" style="flex:1"><option value="">— default connection —</option></select><button class="ld-btn ld-compact" data-act="refresh-parser-sources" title="Reload available parser connections">↻</button></div></div>
+              <div><span class="ld-label">Model override (optional)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="e.g. your Kimi deployment" /><button class="ld-btn ld-compact" data-act="use-conn-model" title="Copy the selected connection's current model into the override field">Use connection model</button></div></div>
+              <div>
+                <span class="ld-label">Settings Draw Things refused</span>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <span class="ld-rejected-keys" style="flex:1;font-size:12px;opacity:.8">none</span>
+                  <button class="ld-btn ld-compact" data-act="clear-rejected-keys">Clear</button>
+                </div>
+                <div class="ld-hint">Draw Things refuses an entire generation if one setting is not in its API, so refused settings are remembered and omitted. Clear this after updating Draw Things to try them again.</div>
+              </div>
+              <div><span class="ld-label">Parser output budget (tokens)</span><input class="ld-parser-maxtokens" type="number" min="1200" max="32000" step="500" placeholder="12000" /><div class="ld-hint">First-attempt <code>max_tokens</code>. The JSON needs ~700; the rest is headroom for a provider that will not turn reasoning off. Lower it to ~4000 only once the log shows reasoning is genuinely off.</div></div>
+              <div><span class="ld-label">Parser request overrides (JSON, advanced)</span><textarea class="ld-parser-overrides" style="min-height:64px;font-family:ui-monospace,monospace;font-size:12px" placeholder='{"reasoning":{"enabled":false}}'></textarea><div class="ld-hint">Merged into the parser request. Use this to force a provider-specific setting — most often turning reasoning off. Check the Spindle log for <code>reasoning_tokens=</code> after a scan to see whether it worked.</div></div>
+            </div>
+          </div>
+          <div class="ld-card">
             <div class="ld-subtitle">Draw Things API</div>
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Host</span><input class="ld-host" /></div>
@@ -914,6 +920,7 @@ fangs = fangs, sharp teeth"></textarea></div>
         <div class="ld-lightbox-regen" style="display:none">
           <div class="ld-row" style="margin-bottom:7px;align-items:center">
             <button class="ld-btn ld-compact ld-lightbox-reparse" title="Run the parser again over the passage this image came from and load the new prompt below. Nothing is generated and no image is replaced.">Re-run parser <span style="opacity:.6">(prompt only)</span></button>
+            <button class="ld-btn ld-compact ld-lightbox-rebuild" title="Re-parse this message once and rebuild EVERY image it produced, each replaced in place. Use after changing a character's tags.">Replace all images in this message</button>
             <span class="ld-lightbox-reparse-info" style="font-size:11px;opacity:.7"></span>
           </div>
           <div class="ld-lightbox-reparse-picker" style="display:none;margin-bottom:7px"></div>
@@ -1160,6 +1167,11 @@ fangs = fangs, sharp teeth"></textarea></div>
     // image out of three is otherwise unidentifiable.
     const info = $('.ld-lightbox-reparse-info')
     const origin = entry.origin || {}
+    const rebuild = $('.ld-lightbox-rebuild')
+    if (rebuild) {
+      rebuild.style.display = origin.sceneCount > 1 ? '' : 'none'
+      rebuild.textContent = `Replace all ${origin.sceneCount} images in this message`
+    }
     if (info && origin.sceneCount > 1 && origin.sceneIndex) {
       info.textContent = `moment ${origin.sceneIndex} of ${origin.sceneCount}`
       info.title = origin.sceneStatement || ''
@@ -3010,6 +3022,45 @@ ${entry.prompt || ''}`.trim()
       label.textContent = error.message
     }
   }
+  // The connection refresh button had no click handler at all. It rendered, it
+  // looked pressable, and switching models meant reloading the panel.
+  const refreshConn = $('[data-act="refresh-parser-sources"]')
+  if (refreshConn) {
+    refreshConn.addEventListener('click', async () => {
+      refreshConn.disabled = true
+      const label = refreshConn.textContent
+      refreshConn.textContent = '…'
+      try {
+        await reloadParserSources(true)
+        setStatus('.ld-settings-status', 'Connections reloaded.', 'good')
+      } catch (error) {
+        setStatus('.ld-settings-status', 'Could not reload connections: ' + error.message, 'err')
+      } finally {
+        refreshConn.disabled = false
+        refreshConn.textContent = label
+      }
+    })
+  }
+
+  // Also markup-only: "Use connection model" advertises copying the selected
+  // connection's model into the override field and never did.
+  const useConnModel = $('[data-act="use-conn-model"]')
+  if (useConnModel) {
+    useConnModel.addEventListener('click', () => {
+      const sel = $('.ld-parser-conn')
+      const input = $('.ld-parser-model')
+      if (!sel || !input) return
+      const model = sel.selectedOptions && sel.selectedOptions[0] ? (sel.selectedOptions[0].dataset.model || '') : ''
+      if (!model) {
+        setStatus('.ld-settings-status', 'That connection does not report a model. Pick a connection first, or type the model yourself.', 'err')
+        return
+      }
+      input.value = model
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      setStatus('.ld-settings-status', `Model override set to ${model}.`, 'good')
+    })
+  }
+
   const clearRejected = $('[data-act="clear-rejected-keys"]')
   if (clearRejected) {
     clearRejected.addEventListener('click', async () => {
@@ -3026,6 +3077,50 @@ ${entry.prompt || ''}`.trim()
     regenBox.addEventListener('keydown', (event) => {
       if (isTextEntry(event.target) && event.key !== 'Escape') event.stopPropagation()
     }, true)
+  }
+
+  // One parse, every image in the message rebuilt. The motivating case is a
+  // character's tags changing after the images were already written into the
+  // story — the scenes are fine, the compile is what is stale.
+  const rebuildButton = $('.ld-lightbox-rebuild')
+  if (rebuildButton) {
+    rebuildButton.addEventListener('click', async () => {
+      const item = lightboxItems[lightboxIndex]
+      if (!item) return
+      const org = item.entry.origin || {}
+      const total = Number(org.sceneCount || 0)
+      if (total > 1 && !window.confirm(
+        `Rebuild all ${total} images from this message?\n\nThe parser runs once, then each image is regenerated and replaced in place. ` +
+        `The old images stay in History. This takes about ${total} generations.`)) return
+
+      rebuildButton.disabled = true
+      const label = rebuildButton.textContent
+      setStatus('.ld-lightbox-regen-status', 'Re-parsing once, then rebuilding every image in this message…')
+      try {
+        const res = await call('regenerate_message_images', {
+          imageUrl: item.image.url,
+          parserModel: $('.ld-parser-model') ? $('.ld-parser-model').value.trim() : undefined,
+          parserConnection: $('.ld-parser-conn') ? $('.ld-parser-conn').value : undefined,
+        }, 1800000)
+        history = Array.isArray(res.history) ? res.history : history
+        renderHistory()
+        lightboxItems = flattenHistoryImages()
+        const first = (res.replaced || []).find((entry) => entry.ok && entry.newUrl)
+        if (first) {
+          const at = lightboxItems.findIndex(({ image }) => image.url === first.newUrl)
+          if (at >= 0) lightboxIndex = at
+        }
+        renderLightbox()
+        const failed = (res.replaced || []).filter((entry) => !entry.ok).length
+        setStatus('.ld-lightbox-regen-status', res.note || 'Done.', failed ? 'err' : 'good')
+        setStatus('.ld-gen-status', res.note || 'Rebuilt the message images.', failed ? 'err' : 'good')
+      } catch (error) {
+        setStatus('.ld-lightbox-regen-status', error.message, 'err')
+      } finally {
+        rebuildButton.disabled = false
+        rebuildButton.textContent = label
+      }
+    })
   }
 
   $('.ld-lightbox-regen-cancel').addEventListener('click', closeRegenPanel)

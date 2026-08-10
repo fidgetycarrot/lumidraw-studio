@@ -4566,7 +4566,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.39.1 ranks presentation first, a stray one now survives every cap
+// and since 0.40.1 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -6432,6 +6432,196 @@ function fail(payload, requestId, err) {
 
 let lastUserId = null
 
+
+// Shared by "Re-run parser" (one image) and "Replace all" (every image in the
+// message). One parse, however many images are being rebuilt — changing a
+// character's tags does not need a new reading of the passage, only a new
+// compile of the same scenes.
+async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
+  const history = await getHistory()
+  const source = history.find((item) => (item.images || []).some((image) => image && image.url === imageUrl))
+  const origin = (source && source.origin) || {}
+  const messageId = String(origin.messageId || '').trim()
+  if (!messageId) {
+    throw new Error('This image has no recorded source message, so there is no passage to re-parse. Only images made by a story scan can be re-parsed.')
+  }
+
+  const saved = await getSettings()
+  const settings = { ...saved }
+  if (overrides.parserModel !== undefined) settings.parserModel = String(overrides.parserModel || '').trim()
+  if (overrides.parserConnection) settings.parserConnection = String(overrides.parserConnection).trim()
+
+  const presets = await getPresets()
+  const preset = presets.find((item) => item.name === (origin.presetName || settings.activePreset))
+  if (!preset) throw new Error('No preset available to compile against.')
+
+  const { messages, chatId: resolvedChatId } = await fetchMessages(userId, String(origin.chatId || '').trim())
+  const chatId = String(origin.chatId || resolvedChatId || '')
+  const targetIndex = messages.findIndex((message) => String((message.id || message.messageId) || '') === messageId)
+  if (targetIndex < 0) {
+    throw new Error(`The source message (${messageId}) is no longer in this chat, so its passage cannot be re-read.`)
+  }
+  const target = messageBits(messages[targetIndex])
+  if (!target.content) throw new Error('The source message has no readable text.')
+
+  const passage = cleanParserMessageText(target.content).slice(-6000)
+  const sceneMemory = await getSceneMemory()
+  const rememberedState = sceneMemory[String(chatId || '')] || {}
+  const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
+  const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, {
+    setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorTags,
+    lighting: rememberedState.lighting || [],
+  })
+  const profiles = await getStoryProfiles(preset, settings, userId, chatId)
+  const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
+    .replaceAll('{{max_images}}', String(settings.maxImages || 2))
+    .replaceAll('{{min_images}}', String(settings.minImages || 0))
+  const instruction = (await resolveMacros(guidance, userId, chatId)) +
+    structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0)
+
+  const startedAt = Date.now()
+  const report = {}
+  const raw = await quietLLM(instruction, parserInput.input, settings, userId, true, null, report)
+  const parserMs = Date.now() - startedAt
+
+  let parsed = []
+  let parseError = ''
+  try {
+    parsed = parseParserScenes(raw, settings.maxImages || 2, profiles)
+  } catch (error) {
+    parseError = error.message
+  }
+
+  const results = []
+  if (!parseError) {
+    for (const item of parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2)))) {
+      const assessment = assessStructuredScene(item.scene)
+      if (!assessment.valid) {
+        results.push({ ok: false, anchor: item.anchor || '', note: `Incomplete scene — ${assessment.summary}.` })
+        continue
+      }
+      const compiled = await compileSceneWithPreset(
+        item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '')
+      results.push({
+        ok: true,
+        anchor: item.anchor || '',
+        sceneStatement: (compiled.scene && compiled.scene.sceneStatement) || '',
+        prompt: compiled.prompt,
+        core: compiled.core,
+        aspect: compiled.aspect || '',
+        negativePrompt: negativeWith(preset.negativePrompt, compiled.garmentNegatives),
+        warnings: assessment.warnings,
+        trace: compiled.trace || [],
+      })
+    }
+  }
+
+  return { origin, messageId, chatId, preset, settings, results, report, parserMs, raw, parseError }
+}
+
+// Generate one replacement image and swap it into the story message in place.
+// Extracted from the regenerate_image case so bulk replacement runs exactly the
+// same path, including the URL-matching fallbacks that took three attempts to
+// get right in 0.22.x. One implementation, one set of bugs.
+async function replaceOneImage(userId, payload) {
+      const imageUrl = String(payload.imageUrl || '').trim()
+      if (!imageUrl) throw new Error('Regeneration needs the image being replaced.')
+      const prompt = String(payload.prompt || '').trim()
+      if (!prompt) throw new Error('The prompt cannot be empty.')
+
+      const history = await getHistory()
+      const source = history.find((item) => (item.images || []).some((image) => image && image.url === imageUrl))
+      const origin = (source && source.origin) || {}
+
+      // Recipe priority: the exact config this image was made with, then the
+      // preset it came from, then the active preset. A regeneration must not
+      // silently switch models because a preset was edited since.
+      let config = source && source.recipe && source.recipe.config ? source.recipe.config : null
+      let extra = source && source.recipe ? source.recipe.extra : null
+      if (!config) {
+        const presets = await getPresets()
+        const settings = await getSettings()
+        const preset = presets.find((item) => item.name === (origin.presetName || settings.activePreset))
+        if (!preset) throw new Error('No saved recipe for this image and no matching preset to fall back on.')
+        config = preset.config
+        extra = preset.extra
+      }
+
+      const reuseSeed = payload.reuseSeed !== false
+      const previousSeed = source && source.seed !== undefined && source.seed !== 'random' ? Number(source.seed) : NaN
+      const seed = reuseSeed && Number.isFinite(previousSeed) ? previousSeed : undefined
+
+      const entry = await generateAndUpload({
+        prompt,
+        negativePrompt: String(payload.negativePrompt || ''),
+        config,
+        extra,
+        seed,
+        origin: { ...origin, regeneratedFrom: imageUrl },
+      }, userId)
+
+      const newUrl = entry.images && entry.images[0] ? entry.images[0].url : ''
+      if (!newUrl) throw new Error('Draw Things returned no image.')
+
+      // Put it back where the old one was. A failure here is not fatal: the
+      // new image already exists in History and the panel says so.
+      let replaced = false
+      let note = ''
+      try {
+        const sourceImage = source && (source.images || []).find((image) => image && image.url === imageUrl)
+        const target = await locateMessageByImageUrl(userId, imageUrl, {
+          ...origin,
+          imageId: sourceImage && sourceImage.id ? sourceImage.id : '',
+          promptText: source && source.prompt ? source.prompt : '',
+          chatImageUrl: String(payload.chatImageUrl || '').trim(),
+        })
+        if (!target || target.notFound) {
+          if (target && target.ambiguous) {
+            note = 'Generated and saved to History, but this message holds several images with the same prompt opening and the exact one could not be identified — nothing was replaced, so no good image was overwritten. Click the image directly in the chat and fix it from there; that identifies it precisely.'
+          } else {
+            const scanned = target && target.scanned ? target.scanned : []
+            const where = scanned.length
+              ? scanned.map((item) => `${item.chatId || 'active chat'} (${item.messages} messages)`).join(', ')
+              : 'no chat could be read'
+            const sample = target && target.sampleRefs && target.sampleRefs.length
+              ? ` Image references that ARE present look like: ${target.sampleRefs.slice(0, 3).join(' · ')}`
+              : ' Those messages contain no image references at all.'
+            note = `Generated and saved to History, but the original image was not found in any message. Searched: ${where}.${sample}`
+          }
+        } else {
+          // Swap on whatever actually matched — the full URL, the id or
+          // filename if the host rewrote the markdown — trying each encoded
+          // spelling the stored text might use.
+          const swapCandidates = uniqueStrings([
+            ...needleEncodings(imageUrl),
+            ...(target.matchedNeedle ? needleEncodings(target.matchedNeedle) : []),
+          ])
+          let swap = { content: target.content, replaced: false }
+          for (const candidate of swapCandidates) {
+            const attempt = replaceImageUrlInContent(target.content, candidate, newUrl)
+            if (attempt.replaced) { swap = attempt; break }
+          }
+          if (!swap.replaced) {
+            note = 'Generated, but the original image markdown could not be matched — it is in History.'
+          } else {
+            // A chat id is required for the chat-scoped updateMessage shapes;
+            // without one the host rejects every attempt with "Chat not found".
+            let chatId = String(target.chatId || origin.chatId || '').trim()
+            if (!chatId) chatId = String((await resolveActiveChatId(userId)) || '')
+            if (!chatId) throw new Error('could not determine which chat this message belongs to.')
+            await updateMessageContent(target.id, target.contentKey, swap.content, userId, chatId)
+            replaced = true
+            note = 'Replaced the image in the story message.'
+          }
+        }
+      } catch (error) {
+        note = 'Generated, but replacing it in the message failed: ' + error.message
+        spindle.log.warn('[lumidraw] regeneration replace failed: ' + error.message)
+      }
+
+  return { entry, newUrl, replaced, note }
+}
+
 spindle.onFrontendMessage(async (payload, userId) => {
   if (userId) lastUserId = userId
   const requestId = payload && payload.requestId
@@ -6444,7 +6634,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.39.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.40.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -6868,227 +7058,127 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      // One parse, every image in the message rebuilt in place. The use that
+      // motivated it is not a new reading of the passage at all — it is having
+      // changed a character's tags and wanting that applied to images already
+      // written into the story.
+      case 'regenerate_message_images': {
+        const imageUrl = String(payload.imageUrl || '').trim()
+        if (!imageUrl) throw new Error('Rebuilding needs to know which message to work from.')
+
+        const parse = await reparseSourceMessage(userId, imageUrl, payload)
+        if (parse.parseError) throw new Error(`Parser returned invalid structured data: ${parse.parseError}`)
+        const usable = parse.results.filter((item) => item.ok)
+        if (!usable.length) throw new Error('The parser produced no usable scene, so nothing was changed.')
+
+        // Every image this message produced, in the order they were made.
+        const history = await getHistory()
+        const siblings = history
+          .filter((item) => item && item.origin && String(item.origin.messageId || '') === parse.messageId)
+          .filter((item) => (item.images || []).length)
+          .sort((a, b) => Number((a.origin || {}).sceneIndex || 0) - Number((b.origin || {}).sceneIndex || 0))
+        if (!siblings.length) throw new Error('No images from this message were found in History.')
+
+        const count = Math.min(siblings.length, usable.length)
+        const replaced = []
+        const notes = []
+        if (usable.length < siblings.length) {
+          notes.push(`The parser found ${usable.length} moment(s) but this message has ${siblings.length} image(s); the last ${siblings.length - usable.length} were left alone.`)
+        }
+
+        for (let index = 0; index < count; index++) {
+          const entry = siblings[index]
+          const oldUrl = entry.images[0] && entry.images[0].url
+          if (!oldUrl) continue
+          const scene = usable[index]
+          notifyFrontend(userId, 'bulk_regen_progress', { index: index + 1, total: count, statement: scene.sceneStatement || '' })
+          try {
+            const swap = await replaceOneImage(userId, {
+              imageUrl: oldUrl,
+              prompt: scene.prompt,
+              negativePrompt: scene.negativePrompt,
+              reuseSeed: false,
+              chatImageUrl: '',
+            })
+            replaced.push({ index: index + 1, ok: swap.replaced, newUrl: swap.newUrl, note: swap.note })
+            if (!swap.replaced) notes.push(`Image ${index + 1}: ${swap.note}`)
+          } catch (error) {
+            replaced.push({ index: index + 1, ok: false, note: error.message })
+            notes.push(`Image ${index + 1} failed: ${error.message}`)
+          }
+        }
+
+        const good = replaced.filter((item) => item.ok).length
+        reply = ok(payload, requestId, {
+          history: await getHistory(),
+          replaced,
+          total: count,
+          parserMs: parse.parserMs,
+          model: parse.report.model || '',
+          note: `${good} of ${count} image(s) replaced.${notes.length ? ' ' + notes.join(' ') : ''}`,
+        })
+        break
+      }
+
+      // Re-parse the passage behind one image and return the compiled prompt(s)
+      // WITHOUT generating. Shares its parse with "Replace all images".
       case 'reparse_image': {
         const imageUrl = String(payload.imageUrl || '').trim()
         if (!imageUrl) throw new Error('Re-parsing needs to know which image to work from.')
 
-        const history = await getHistory()
-        const source = history.find((item) => (item.images || []).some((image) => image && image.url === imageUrl))
-        const origin = (source && source.origin) || {}
-        const messageId = String(origin.messageId || '').trim()
-        if (!messageId) {
-          throw new Error('This image has no recorded source message, so there is no passage to re-parse. Only images made by a story scan can be re-parsed.')
-        }
-
-        const saved = await getSettings()
-        // Overrides come from the Settings fields as they are typed, so a model
-        // can be tried without saving it first — the whole point of the button.
-        const settings = { ...saved }
-        if (payload.parserModel !== undefined) settings.parserModel = String(payload.parserModel || '').trim()
-        if (payload.parserConnection) settings.parserConnection = String(payload.parserConnection).trim()
-        const presets = await getPresets()
-        const preset = presets.find((item) => item.name === (origin.presetName || settings.activePreset))
-        if (!preset) throw new Error('No preset available to compile against.')
-
-        const { messages, chatId: resolvedChatId } = await fetchMessages(userId, String(origin.chatId || '').trim())
-        const chatId = String(origin.chatId || resolvedChatId || '')
-        const targetIndex = messages.findIndex((message) => String((message.id || message.messageId) || '') === messageId)
-        if (targetIndex < 0) {
-          throw new Error(`The source message (${messageId}) is no longer in this chat, so its passage cannot be re-read.`)
-        }
-        const target = messageBits(messages[targetIndex])
-        if (!target.content) throw new Error('The source message has no readable text.')
-
-        const passage = cleanParserMessageText(target.content).slice(-6000)
-        const sceneMemory = await getSceneMemory()
-        const rememberedState = sceneMemory[String(chatId || '')] || {}
-        const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
-        const parserSceneState = {
-          setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorTags,
-          lighting: rememberedState.lighting || [],
-        }
-        const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, parserSceneState)
-        const profiles = await getStoryProfiles(preset, settings, userId, chatId)
-        const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
-          .replaceAll('{{max_images}}', String(settings.maxImages || 2))
-          .replaceAll('{{min_images}}', String(settings.minImages || 0))
-        const instruction = (await resolveMacros(guidance, userId, chatId)) +
-          structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0)
-
-        const startedAt = Date.now()
-        const report = {}
-        const raw = await quietLLM(instruction, parserInput.input, settings, userId, true, null, report)
-        const parserMs = Date.now() - startedAt
-
-        let parsed = []
-        try {
-          parsed = parseParserScenes(raw, settings.maxImages || 2, profiles)
-        } catch (error) {
+        const parse = await reparseSourceMessage(userId, imageUrl, payload)
+        if (parse.parseError) {
           reply = ok(payload, requestId, {
             reparsed: false,
-            note: `Parser returned invalid structured data: ${error.message}`,
-            parserMs,
-            model: report.model || '',
-            overrideNote: report.overrideNote || '',
-            raw: String(raw || '').slice(0, 600),
+            note: `Parser returned invalid structured data: ${parse.parseError}`,
+            parserMs: parse.parserMs,
+            model: parse.report.model || '',
+            overrideNote: parse.report.overrideNote || '',
+            raw: String(parse.raw || '').slice(0, 600),
           })
           break
         }
-        if (!parsed.length) {
-          reply = ok(payload, requestId, { reparsed: false, note: 'The parser judged this passage to have no visual moment.', parserMs, model: report.model || '', overrideNote: report.overrideNote || '', raw: String(raw || '').slice(0, 600) })
+        const usable = parse.results.filter((item) => item.ok).length
+        if (!parse.results.length) {
+          reply = ok(payload, requestId, {
+            reparsed: false,
+            note: 'The parser judged this passage to have no visual moment.',
+            parserMs: parse.parserMs,
+            model: parse.report.model || '',
+            overrideNote: parse.report.overrideNote || '',
+            raw: String(parse.raw || '').slice(0, 600),
+          })
           break
         }
 
-        // Compile every scene the parser returned, keeping the rejects visible
-        // rather than silently dropping them — a rejected scene is exactly the
-        // kind of thing worth seeing when comparing two models.
-        const results = []
-        for (const item of parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2)))) {
-          const assessment = assessStructuredScene(item.scene)
-          if (!assessment.valid) {
-            results.push({ ok: false, anchor: item.anchor || '', note: `Incomplete scene — ${assessment.summary}.` })
-            continue
-          }
-          const compiled = await compileSceneWithPreset(
-            item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '')
-          results.push({
-            ok: true,
-            anchor: item.anchor || '',
-            sceneStatement: (compiled.scene && compiled.scene.sceneStatement) || '',
-            prompt: compiled.prompt,
-            core: compiled.core,
-            aspect: compiled.aspect || '',
-            negativePrompt: negativeWith(preset.negativePrompt, compiled.garmentNegatives),
-            warnings: assessment.warnings,
-            trace: compiled.trace || [],
-          })
-        }
-
-        const usable = results.filter((item) => item.ok).length
-        spindle.log.info(`[lumidraw] re-parsed message ${messageId} in ${parserMs}ms · ${usable}/${results.length} scene(s) usable`)
+        spindle.log.info(`[lumidraw] re-parsed message ${parse.messageId} in ${parse.parserMs}ms · ${usable}/${parse.results.length} scene(s) usable`)
         reply = ok(payload, requestId, {
           reparsed: usable > 0,
-          results,
-          parserMs,
-          // The model actually used, not the one asked for. Those differ more
-          // often than is comfortable.
-          model: report.model || settings.parserModel || '(connection default)',
-          requestedModel: report.requestedModel || '',
-          provider: report.provider || '',
-          overrideNote: report.overrideNote || '',
-          reasoningTokens: report.reasoningTokens ?? null,
-          usage: report.usage || null,
-          presetName: preset.name || '',
-          messageId,
+          results: parse.results,
+          parserMs: parse.parserMs,
+          model: parse.report.model || '',
+          requestedModel: parse.report.requestedModel || '',
+          provider: parse.report.provider || '',
+          overrideNote: parse.report.overrideNote || '',
+          reasoningTokens: parse.report.reasoningTokens ?? null,
+          usage: parse.report.usage || null,
+          presetName: parse.preset.name || '',
+          messageId: parse.messageId,
           note: usable
-            ? `Parsed in ${(parserMs / 1000).toFixed(1)}s — ${usable} of ${results.length} scene(s) usable.`
+            ? `Parsed in ${(parse.parserMs / 1000).toFixed(1)}s — ${usable} of ${parse.results.length} scene(s) usable.`
             : 'The parser ran but produced no usable scene.',
         })
         break
       }
 
       case 'regenerate_image': {
-        const imageUrl = String(payload.imageUrl || '').trim()
-        if (!imageUrl) throw new Error('Regeneration needs the image being replaced.')
-        const prompt = String(payload.prompt || '').trim()
-        if (!prompt) throw new Error('The prompt cannot be empty.')
-
-        const history = await getHistory()
-        const source = history.find((item) => (item.images || []).some((image) => image && image.url === imageUrl))
-        const origin = (source && source.origin) || {}
-
-        // Recipe priority: the exact config this image was made with, then the
-        // preset it came from, then the active preset. A regeneration must not
-        // silently switch models because a preset was edited since.
-        let config = source && source.recipe && source.recipe.config ? source.recipe.config : null
-        let extra = source && source.recipe ? source.recipe.extra : null
-        if (!config) {
-          const presets = await getPresets()
-          const settings = await getSettings()
-          const preset = presets.find((item) => item.name === (origin.presetName || settings.activePreset))
-          if (!preset) throw new Error('No saved recipe for this image and no matching preset to fall back on.')
-          config = preset.config
-          extra = preset.extra
-        }
-
-        const reuseSeed = payload.reuseSeed !== false
-        const previousSeed = source && source.seed !== undefined && source.seed !== 'random' ? Number(source.seed) : NaN
-        const seed = reuseSeed && Number.isFinite(previousSeed) ? previousSeed : undefined
-
-        const entry = await generateAndUpload({
-          prompt,
-          negativePrompt: String(payload.negativePrompt || ''),
-          config,
-          extra,
-          seed,
-          origin: { ...origin, regeneratedFrom: imageUrl },
-        }, userId)
-
-        const newUrl = entry.images && entry.images[0] ? entry.images[0].url : ''
-        if (!newUrl) throw new Error('Draw Things returned no image.')
-
-        // Put it back where the old one was. A failure here is not fatal: the
-        // new image already exists in History and the panel says so.
-        let replaced = false
-        let note = ''
-        try {
-          const sourceImage = source && (source.images || []).find((image) => image && image.url === imageUrl)
-          const target = await locateMessageByImageUrl(userId, imageUrl, {
-            ...origin,
-            imageId: sourceImage && sourceImage.id ? sourceImage.id : '',
-            promptText: source && source.prompt ? source.prompt : '',
-            chatImageUrl: String(payload.chatImageUrl || '').trim(),
-          })
-          if (!target || target.notFound) {
-            if (target && target.ambiguous) {
-              note = 'Generated and saved to History, but this message holds several images with the same prompt opening and the exact one could not be identified — nothing was replaced, so no good image was overwritten. Click the image directly in the chat and fix it from there; that identifies it precisely.'
-            } else {
-              const scanned = target && target.scanned ? target.scanned : []
-              const where = scanned.length
-                ? scanned.map((item) => `${item.chatId || 'active chat'} (${item.messages} messages)`).join(', ')
-                : 'no chat could be read'
-              const sample = target && target.sampleRefs && target.sampleRefs.length
-                ? ` Image references that ARE present look like: ${target.sampleRefs.slice(0, 3).join(' · ')}`
-                : ' Those messages contain no image references at all.'
-              note = `Generated and saved to History, but the original image was not found in any message. Searched: ${where}.${sample}`
-            }
-          } else {
-            // Swap on whatever actually matched — the full URL, the id or
-            // filename if the host rewrote the markdown — trying each encoded
-            // spelling the stored text might use.
-            const swapCandidates = uniqueStrings([
-              ...needleEncodings(imageUrl),
-              ...(target.matchedNeedle ? needleEncodings(target.matchedNeedle) : []),
-            ])
-            let swap = { content: target.content, replaced: false }
-            for (const candidate of swapCandidates) {
-              const attempt = replaceImageUrlInContent(target.content, candidate, newUrl)
-              if (attempt.replaced) { swap = attempt; break }
-            }
-            if (!swap.replaced) {
-              note = 'Generated, but the original image markdown could not be matched — it is in History.'
-            } else {
-              // A chat id is required for the chat-scoped updateMessage shapes;
-              // without one the host rejects every attempt with "Chat not found".
-              let chatId = String(target.chatId || origin.chatId || '').trim()
-              if (!chatId) chatId = String((await resolveActiveChatId(userId)) || '')
-              if (!chatId) throw new Error('could not determine which chat this message belongs to.')
-              await updateMessageContent(target.id, target.contentKey, swap.content, userId, chatId)
-              replaced = true
-              note = 'Replaced the image in the story message.'
-            }
-          }
-        } catch (error) {
-          note = 'Generated, but replacing it in the message failed: ' + error.message
-          spindle.log.warn('[lumidraw] regeneration replace failed: ' + error.message)
-        }
-
+        const outcome = await replaceOneImage(userId, payload)
         reply = ok(payload, requestId, {
           history: await getHistory(),
-          entry,
-          newUrl,
-          replaced,
-          note,
+          entry: outcome.entry,
+          newUrl: outcome.newUrl,
+          replaced: outcome.replaced,
+          note: outcome.note,
         })
         break
       }
@@ -7542,4 +7632,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.39.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.40.1'))

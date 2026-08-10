@@ -1,7 +1,87 @@
-# LumiDraw Studio 0.39.1
+# LumiDraw Studio 0.40.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.40.1 — Two buttons that rendered and did nothing
+
+The connection **↻** button had no click handler. It rendered, it looked
+pressable, and switching parser models meant reloading the whole panel. Exactly
+the shape of the promptName field that accepted typing and saved nothing.
+
+Writing the guard for it immediately found a second: **Use connection model**
+was also markup only. It advertised copying the selected connection's model into
+the override field and never did.
+
+Both work now. `Use connection model` reports honestly when a connection does
+not expose one, rather than silently doing nothing — which is what it did
+before, and is indistinguishable from the bug.
+
+### Parser connection moved to Settings
+
+The card — connection, model override, output budget, request overrides, and the
+list of settings Draw Things refused — lived in the **Story** view. It is
+configuration, not story state, so it now sits at the top of **Settings**.
+
+### The guard
+
+`editors.mjs` collects every `data-act` in the file and requires each to be
+named more than once. An action named exactly once exists only as its own
+attribute: nothing selects it, so the button does nothing. That check found
+`use-conn-model` on its first run.
+
+It also asserts each view's markup balances independently, which is what the
+move needed — a card lifted out of one `<section>` and dropped into another is
+the same edit that produced a blank Settings tab in 0.38.4.
+
+**33 suites · 892 assertions.**
+
+
+## 0.40.0 — Replace all images in this message
+
+Neither existing path did this. **Fix this image** replaces the one image you
+opened, so clicking through Scene 1/2/3 and regenerating each would overwrite
+the same image three times. A forced re-scan *inserts* at anchor points and
+never removes anything, so you would finish with six images and delete three by
+hand.
+
+The motivating case is not a new reading of the passage at all: a character's
+tags change — build words that were being discarded, a prompt name, an outfit —
+and the scenes are still right while the compile is stale.
+
+**Replace all N images in this message** parses once and rebuilds every image
+the message produced, each replaced in place:
+
+```text
+Rebuilding image 2 of 3 — Sovi seals the bandage over Rook's…
+2 of 3 image(s) replaced.
+```
+
+- **One parser call** for the whole message, not one per image.
+- Images are rebuilt **in the order they were made**, using the recorded scene
+  position from 0.32.0.
+- **A failure on one does not abort the rest** — each is reported by number.
+- If the parser finds fewer moments than there are images, the extras are left
+  alone and it says so.
+- The old images stay in History.
+- The button only appears when the message produced more than one image, and
+  confirms first, since it costs one generation per image.
+
+### One implementation, not three
+
+Both the parse and the replacement were extracted rather than copied:
+
+- `reparseSourceMessage` — used by **Re-run parser** and by this.
+- `replaceOneImage` — used by **Regenerate & replace** and by this, including
+  the URL-matching fallbacks that took three attempts to get right in 0.22.x.
+
+`reparse_image` lost 118 lines to 50 by calling the shared helper. A test
+asserts the copies do not come back, because the obvious way to build this
+feature was to paste the existing case and edit it — and a second copy of the
+image-matching logic would be a second set of the same bugs.
+
+**33 suites · 850 assertions.**
+
 
 ## 0.39.1 — Size words were collected and thrown away
 
