@@ -1,7 +1,95 @@
-# LumiDraw Studio 0.40.1
+# LumiDraw Studio 0.41.1
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.41.1 — pov in a two-person scene
+
+```text
+explicit, 1girl, 1boy, …, pov, from above, close-up, realistic
+```
+
+Confirmed as the cause of the facing problem, and it came from LumiDraw rather
+than the preset.
+
+**POV means the camera is a participant's eyes.** A multi-subject caption
+describes every subject as a third-person figure with its own hair, build and
+clothes. Both cannot be true. The model resolves it by pointing one character at
+the camera instead of at the other, and rendering the "viewer" as a third body —
+which is precisely the same-way-facing symptom.
+
+A gate for this existed since 0.27.1 and had two holes.
+
+**It read `scene.camera` only.** A `pov` the parser filed under style or
+lighting walked straight past it. It is a camera concept wherever it lands, and
+is now lifted out of any field and gated with the rest.
+
+**A staging cue was the only test.** `pov` survived if the persona's pose
+mentioned "viewer hands visible" or similar. But in a scene where every subject
+gets a full identity clause, no staging cue makes POV coherent — the persona is
+being drawn as a separate person in the same breath. Multi-subject scenes now
+drop it outright.
+
+**And the decision was never visible.** Both outcomes are traced:
+
+```text
+! pov — dropped — 2 subjects are each described as visible figures, so none of
+  them can also be the camera
+! pov — found in style rather than camera; treated as a camera tag
+```
+
+Solo POV with a proper staging cue is unaffected — that is the case the tag is
+for.
+
+**35 suites · 927 assertions.**
+
+
+## 0.41.0 — Which way they face
+
+Two characters kept rendering facing the *same* direction — one's back to the
+other — in scenes where they should be facing each other. Nothing in the prompt
+said which way anybody was pointing. Position gives left and right; it says
+nothing about which way a body is turned.
+
+The tag that would have fixed it was already in the prompt, mangled:
+
+```text
+Price, …, defiant grin, an eye contact.
+```
+
+The parser produced the real Danbooru tag `eye contact` and filed it as one of
+Price's **expressions**, so it went into her prose clause and picked up an
+article. Orientation describes the **pair**, not one person.
+
+### Orientation now reaches the tag run
+
+```text
+explicit, 1girl, 1boy, face-to-face, facing another, eye contact,
+looking at another, height difference, looking up, bedroom, from side, …
+```
+
+All verified against Danbooru before use — `eye contact` alone carries 67,846
+posts and formally implicates `looking at another`. `front-to-back` is the tag
+for what you were getting.
+
+Three signals, each traced:
+
+- **A relation that puts them front to front** — facing, kissing, licking,
+  straddling, embracing, looking at, confronting — emits `face-to-face` and
+  `facing another`.
+- **`eye contact` stated anywhere** — expression, action, pose or relation
+  detail — is lifted out and emitted as a scene tag with the tag it implicates.
+- **One low, one upright** — kneeling or sitting against standing — emits
+  `height difference` and `looking up`.
+
+An explicit `from behind` beats all of it. The parser saying so outranks
+anything inferred from a verb, so a from-behind scene is not turned around by a
+licking verb elsewhere in the sentence.
+
+Two people simply standing get nothing. Solo scenes get nothing.
+
+**34 suites · 917 assertions.**
+
 
 ## 0.40.1 — Two buttons that rendered and did nothing
 

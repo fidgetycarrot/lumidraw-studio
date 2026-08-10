@@ -3009,6 +3009,12 @@ const BOORU_VOCAB = new Set([
   'furry', 'horns', 'wings', 'pointy ears', 'elf', 'slit pupils', 'vertical pupils',
   'colored sclera', 'muscular', 'muscular male', 'scar', 'blood', 'wound', 'dirty',
   'sweaty', 'wet', 'veins', 'toned',
+  // orientation — which way the bodies face each other. Verified on Danbooru:
+  // eye contact carries 67,846 posts and implicates looking at another.
+  'face-to-face', 'facing another', 'looking at another', 'eye contact',
+  'averting eyes', 'front-to-back', 'back-to-back', 'height difference',
+  'noses touching', 'forehead-to-forehead', 'looking up', 'looking down',
+  'looking at viewer', 'profile', 'from side',
   // conflict — a fight had no booru vocabulary at all, so every tag describing
   // one was demoted to the caption
   'fighting', 'battle', 'fighting stance', 'clenched hand', 'punching', 'kicking',
@@ -4036,7 +4042,10 @@ function subjectIdentitySentences(item, scene, descriptors, profiles = null) {
     .filter((part) => !actionDuplicatesRelation(part, item.subject.ref, scene.relations))
     .map((part) => resolveCrossSubjectPronouns(part, item, descriptors))
     .map((part) => applyPromptNames(part, profiles))
-  const raw = stateClauses([...item.expression, ...actions])
+  const raw = stateClauses([
+    ...item.expression.filter((tag) => !/\beye contact\b/i.test(String(tag))),
+    ...actions,
+  ])
   // stateClauses lowercases through animaTagList, which turns a substituted
   // name back into a common noun — "watching price". Restore it afterwards.
   const doing = raw.doing.map((part) => applyPromptNames(part, profiles))
@@ -4105,6 +4114,71 @@ function stripCompetingGeometry(statement) {
   // Three words is the floor — "Price rides Jason" is a complete act statement.
   if (head.split(/\s+/).length < 3) return { statement: text, removed: '' }
   return { statement: head.replace(/[,;:]+$/, ''), removed: tail }
+}
+
+
+// --- which way they face ------------------------------------------------------
+// Two characters kept rendering facing the SAME way — one's back to the other —
+// when the scene had them facing each other. Nothing in the prompt said which
+// way anybody was pointing.
+//
+// Orientation is a property of the pair, not of one person, so it belongs in the
+// shared tag run. Put "eye contact" in a subject's expression list and it lands
+// in that subject's prose clause instead, where it also picks up an article:
+// "defiant grin, an eye contact".
+const FACING_RELATION_RE = new RegExp([
+  '\\bfac(?:es|ing)\\b', '\\bkiss(?:es|ing)\\b', '\\blick(?:s|ing)\\b',
+  '\\bsuck(?:s|ing)\\b', '\\bfellatio\\b', '\\bblow(?:s|job)\\b',
+  '\\blook(?:s|ing) (?:at|up at|down at)\\b', '\\bstar(?:es|ing) at\\b',
+  '\\bglar(?:es|ing) at\\b', '\\bstraddl(?:es|ing)\\b', '\\bembrac(?:es|ing)\\b',
+  '\\bhugg?(?:s|ing)\\b', '\\bhold(?:s|ing) the (?:face|chin|cheek)\\b',
+  '\\bspeak(?:s|ing) to\\b', '\\btalk(?:s|ing) to\\b', '\\bconfront(?:s|ing)\\b',
+  '\\bcup(?:s|ping) the (?:face|cheek|chin)\\b',
+].join('|'), 'i')
+
+const AWAY_RELATION_RE = /\bfrom behind\b|\bbehind\b|\bturn(?:s|ing) away\b|\bback to\b|\bbent over\b/i
+const LOW_POSTURE_RE = /\b(?:kneel\w*|sit\w*|seated|crouch\w*|squat\w*|lying|on (?:all fours|knees)|prone)\b/i
+const TALL_POSTURE_RE = /\b(?:stand\w*|upright|towering|looming)\b/i
+
+function orientationTags(scene, descriptors) {
+  if (!descriptors || descriptors.length < 2) return { tags: [], note: '' }
+  const tags = []
+  const why = []
+
+  const relationText = (scene.relations || [])
+    .map((relation) => `${relation.action || ''} ${(relation.details || []).join(' ')}`).join(' ')
+  const everything = [relationText, scene.sceneStatement || '', scene.coreAction || ''].join(' ')
+
+  // An explicit "from behind" beats an inferred facing — the parser said so.
+  const facesAway = AWAY_RELATION_RE.test(everything)
+  const facesEach = FACING_RELATION_RE.test(everything)
+
+  if (facesEach && !facesAway) {
+    tags.push('face-to-face', 'facing another')
+    why.push('a relation puts them front to front')
+  }
+
+  // "eye contact" wherever the parser filed it — expression, detail, action.
+  const mentionsEyeContact = descriptors.some((item) =>
+    [...(item.expression || []), ...(item.action || []), ...(item.pose || [])]
+      .some((value) => /\beye contact\b/i.test(String(value)))) ||
+    /\beye contact\b/i.test(everything)
+  if (mentionsEyeContact && !facesAway) {
+    tags.push('eye contact', 'looking at another')
+    why.push('eye contact was stated')
+  }
+
+  // One low, one tall: the kneeler looks up and the pair has a height gap.
+  const postures = descriptors.map((item) => (item.pose || []).join(' '))
+  const someLow = postures.some((text) => LOW_POSTURE_RE.test(text))
+  const someTall = postures.some((text) => TALL_POSTURE_RE.test(text))
+  if (someLow && someTall) {
+    tags.push('height difference')
+    if (!facesAway) tags.push('looking up')
+    why.push('one is low and one is upright')
+  }
+
+  return { tags: uniqueStrings(tags), note: why.join('; ') }
 }
 
 function relationSentence(relation, byRef) {
@@ -4566,7 +4640,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.40.1 ranks presentation first, a stray one now survives every cap
+// and since 0.41.1 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -4958,10 +5032,36 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     ].join(' ').toLowerCase()
     return /\b(?:viewer|first[- ]person|pov body|body only|face out of frame|faceless|hands? in foreground|visible hands?|visible arms?|forearms? only|lower body only)\b/.test(cueText)
   })
-  const povFiltered = animaTagList(scene.camera).filter((tag) => {
-    if (/^(?:pov|first person view|first-person view)$/.test(tag) && !personaPovVisible) return false
-    return true
-  })
+  // POV means the camera IS a participant's eyes. A multi-subject caption
+  // describes every subject as a third-person figure with its own appearance,
+  // and those two things cannot both be true — the result is one character
+  // facing the camera instead of the other, plus the "viewer" rendered as a
+  // third body.
+  //
+  // The gate previously read scene.camera only, so a pov arriving in style or
+  // lighting walked straight past it. It is a camera concept wherever it lands.
+  const POV_TAG_RE = /^(?:pov|first person view|first-person view|from pov)$/
+  const strayPov = ['style', 'lighting', 'setting'].filter((field) =>
+    animaTagList(scene[field]).some((tag) => POV_TAG_RE.test(tag)))
+  if (strayPov.length) {
+    scene = {
+      ...scene,
+      ...Object.fromEntries(strayPov.map((field) =>
+        [field, animaTagList(scene[field]).filter((tag) => !POV_TAG_RE.test(tag))])),
+    }
+    trace('pov', 'applied', `found in ${strayPov.join(', ')} rather than camera; treated as a camera tag`)
+  }
+
+  const povAsked = animaTagList(scene.camera).some((tag) => POV_TAG_RE.test(tag)) || strayPov.length > 0
+  const povAllowed = personaPovVisible && !(multi && descriptors.length > 1)
+  const povFiltered = animaTagList(scene.camera).filter((tag) => !(POV_TAG_RE.test(tag) && !povAllowed))
+  if (povAsked) {
+    trace('pov', povAllowed ? 'applied' : 'warn', povAllowed
+      ? 'kept — the persona carries a staging cue and is not separately described'
+      : (multi && descriptors.length > 1
+        ? `dropped — ${descriptors.length} subjects are each described as visible figures, so none of them can also be the camera`
+        : 'dropped — no staging cue ("viewer hands visible", "face out of frame") says the persona is the viewer'))
+  }
   const repaired = repairCameraTags(povFiltered, scene, descriptors)
   const cameraTags = animaTagList(repaired.tags)
   if (repaired.note) spindle.log.info('[lumidraw] camera repair · ' + repaired.note)
@@ -5012,7 +5112,15 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   // stay in the run rather than being dropped — the weaker of two slots beats
   // no slot at all.
   const tagOnly = !prose.filter(Boolean).length
+  const facing = orientationTags(scene, descriptors)
+  if (facing.tags.length) {
+    trace('orientation', 'applied', `${facing.tags.join(', ')} — ${facing.note}`)
+  } else if (multi) {
+    trace('orientation', 'clean', 'nothing in the scene said which way they face')
+  }
+
   const generalTags = animaTagList([
+    ...facing.tags,
     ...(multi ? [] : safeRelationDetails),
     ...(scene.coreAction && !(multi && crossRelationCount) ? [scene.coreAction] : []),
     ...(multi ? [] : supportTags(descriptors, scene)),
@@ -6634,7 +6742,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.40.1',
+          version: (spindle.manifest && spindle.manifest.version) || '0.41.1',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7632,4 +7740,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.40.1'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.41.1'))
