@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.42.2'
+const EXTENSION_VERSION = '0.42.3'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -500,7 +500,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.42.2" aria-label="LumiDraw Studio v0.42.2">
+    <button class="ld-launcher" title="LumiDraw Studio v0.42.3" aria-label="LumiDraw Studio v0.42.3">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -509,7 +509,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.42.2</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.42.3</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -862,7 +862,7 @@ fangs = fangs, sharp teeth"></textarea></div>
             <div class="ld-subtitle">Parser connection</div>
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Connection</span><div style="display:flex;gap:6px;align-items:center"><select class="ld-parser-conn" style="flex:1"><option value="">— default connection —</option></select><button class="ld-btn ld-compact" data-act="refresh-parser-sources" title="Reload available parser connections">↻</button></div></div>
-              <div><span class="ld-label">Model override (optional)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="e.g. your Kimi deployment" /><button class="ld-btn ld-compact" data-act="use-conn-model" title="Copy the selected connection's current model into the override field">Use connection model</button></div></div>
+              <div><span class="ld-label">Model override (optional)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="e.g. your Kimi deployment" /><button class="ld-btn ld-compact" data-act="use-conn-model" title="Copy the selected connection's current model into the override field">Use connection model</button><button class="ld-btn ld-compact" data-act="clear-model-override" title="Use the connection's own model">Clear</button></div><div class="ld-model-override-note" style="font-size:11px;margin-top:4px"></div></div>
               <div>
                 <span class="ld-label">Settings Draw Things refused</span>
                 <div style="display:flex;gap:6px;align-items:center">
@@ -3063,6 +3063,42 @@ ${entry.prompt || ''}`.trim()
     })
   }
 
+  // The override silently beats the connection dropdown, so switching
+  // connections can change nothing at all while looking like it changed
+  // everything. Say so where the field is.
+  function refreshModelOverrideNote() {
+    const note = $('.ld-model-override-note')
+    const input = $('.ld-parser-model')
+    const sel = $('.ld-parser-conn')
+    if (!note || !input) return
+    const typed = input.value.trim()
+    const connModel = sel && sel.selectedOptions && sel.selectedOptions[0]
+      ? (sel.selectedOptions[0].dataset.model || '') : ''
+    if (typed && connModel && typed !== connModel) {
+      note.textContent = `Overriding the connection — requests go to "${typed}", not "${connModel}". Switching connections will not change the model until this is cleared.`
+      note.style.color = 'var(--ld-warn, #e0a458)'
+    } else if (typed) {
+      note.textContent = `Requests go to "${typed}".`
+      note.style.color = ''
+    } else {
+      note.textContent = connModel ? `Using the connection's model: ${connModel}.` : ''
+      note.style.color = ''
+    }
+  }
+  const clearOverride = $('[data-act="clear-model-override"]')
+  if (clearOverride) {
+    clearOverride.addEventListener('click', () => {
+      const input = $('.ld-parser-model')
+      if (!input) return
+      input.value = ''
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      refreshModelOverrideNote()
+      setStatus('.ld-settings-status', "Cleared — the connection's own model will be used.", 'good')
+    })
+  }
+  if ($('.ld-parser-model')) $('.ld-parser-model').addEventListener('input', refreshModelOverrideNote)
+  if ($('.ld-parser-conn')) $('.ld-parser-conn').addEventListener('change', refreshModelOverrideNote)
+
   const clearRejected = $('[data-act="clear-rejected-keys"]')
   if (clearRejected) {
     clearRejected.addEventListener('click', async () => {
@@ -3770,10 +3806,32 @@ ${entry.prompt || ''}`.trim()
       else sel.value = settings.parserConnection || ''
     }
     const currentModel = sel && sel.selectedOptions && sel.selectedOptions[0] ? (sel.selectedOptions[0].dataset.model || '') : ''
-    if (modelInput && (!previousModelValue || previousModelValue === previousOptionModel)) {
-      modelInput.value = currentModel || settings.parserModel || ''
+    // The override field is never filled in automatically. Writing the connection's
+    // own model in here used to turn a connection choice into a sticky override that
+    // outlived the connection it came from — switching connections then changed
+    // nothing. The connection's model is shown as a placeholder instead.
+    if (modelInput) {
+      modelInput.placeholder = currentModel
+        ? 'leave empty to use ' + currentModel
+        : 'leave empty to use the connection\'s own model'
+      clearAutoFilledModelOverride(connections)
     }
     return connections
+  }
+
+  // One-time repair for setups polluted by the old auto-fill: an override that is
+  // exactly some connection's own model was written by the picker, not typed. It is
+  // either a no-op or actively wrong, so drop it and say so.
+  function clearAutoFilledModelOverride(connections) {
+    const stored = String(settings.parserModel || '').trim()
+    if (!stored) return false
+    if (!Array.isArray(connections) || !connections.some((c) => String(c.model || '').trim() === stored)) return false
+    settings.parserModel = ''
+    const input = $('.ld-parser-model')
+    if (input) input.value = ''
+    console.log('[LumiDraw] cleared the model override "' + stored + '" — it was written by the connection picker, not typed. Requests now follow the selected connection.')
+    try { call('save_settings', { parserModel: '' }, 10000) } catch (e) {}
+    return true
   }
 
   // All settings text fields auto-save as you type (debounced).
@@ -3796,7 +3854,14 @@ ${entry.prompt || ''}`.trim()
         const conn = $('.ld-parser-conn')
         const modelInput = $('.ld-parser-model')
         const selectedModel = conn && conn.selectedOptions && conn.selectedOptions[0] ? (conn.selectedOptions[0].dataset.model || '') : ''
-        if (modelInput && (!modelInput.value || modelInput.value === settings.parserModel)) modelInput.value = selectedModel || modelInput.value
+        // Choosing a connection must not write an override. It used to, which meant
+        // the first connection you picked kept running after you switched away from it.
+        if (modelInput) {
+          modelInput.placeholder = selectedModel
+            ? 'leave empty to use ' + selectedModel
+            : 'leave empty to use the connection\'s own model'
+        }
+        refreshModelOverrideNote()
       }
       if (sel === '.ld-parser-engine') {
         const previousEngine = settings.parserEngine || 'legacy'
@@ -4022,6 +4087,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-parser-model').value = settings.parserModel || ''
       if ($('.ld-parser-overrides')) $('.ld-parser-overrides').value = settings.parserRequestOverrides || ''
       if ($('.ld-parser-maxtokens')) $('.ld-parser-maxtokens').value = settings.parserMaxTokens || 12000
+      refreshModelOverrideNote()
       refreshRejectedKeys()
       $('.ld-parser-instr').value = settings.parserInstruction || parserDefaultFor(settings.parserEngine || 'legacy')
       $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
