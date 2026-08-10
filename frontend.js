@@ -862,7 +862,7 @@ fangs = fangs, sharp teeth"></textarea></div>
             <div class="ld-subtitle">Parser connection</div>
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Connection</span><div style="display:flex;gap:6px;align-items:center"><select class="ld-parser-conn" style="flex:1"><option value="">— default connection —</option></select><button class="ld-btn ld-compact" data-act="refresh-parser-sources" title="Reload available parser connections">↻</button></div></div>
-              <div><span class="ld-label">Model override (optional)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="e.g. your Kimi deployment" /><button class="ld-btn ld-compact" data-act="use-conn-model" title="Copy the selected connection's current model into the override field">Use connection model</button><button class="ld-btn ld-compact" data-act="clear-model-override" title="Use the connection's own model">Clear</button></div><div class="ld-model-override-note" style="font-size:11px;margin-top:4px"></div></div>
+              <div><span class="ld-label">Model override (leave empty)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="leave empty to use the connection's own model" /><button class="ld-btn ld-compact ld-clear-override" data-act="clear-model-override" title="Go back to the connection's own model" style="display:none">Clear</button></div><div class="ld-model-override-note" style="font-size:11px;margin-top:4px"></div></div>
               <div>
                 <span class="ld-label">Settings Draw Things refused</span>
                 <div style="display:flex;gap:6px;align-items:center">
@@ -3044,24 +3044,10 @@ ${entry.prompt || ''}`.trim()
     })
   }
 
-  // Also markup-only: "Use connection model" advertises copying the selected
-  // connection's model into the override field and never did.
-  const useConnModel = $('[data-act="use-conn-model"]')
-  if (useConnModel) {
-    useConnModel.addEventListener('click', () => {
-      const sel = $('.ld-parser-conn')
-      const input = $('.ld-parser-model')
-      if (!sel || !input) return
-      const model = sel.selectedOptions && sel.selectedOptions[0] ? (sel.selectedOptions[0].dataset.model || '') : ''
-      if (!model) {
-        setStatus('.ld-settings-status', 'That connection does not report a model. Pick a connection first, or type the model yourself.', 'err')
-        return
-      }
-      input.value = model
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      setStatus('.ld-settings-status', `Model override set to ${model}.`, 'good')
-    })
-  }
+  // There is deliberately no "Use connection model" button. Copying the connection's
+  // model into the override is what the connection dropdown already means, and a
+  // redundant override is the exact state that used to make switching connections
+  // do nothing. The dropdown on the left is the model; this field is the exception.
 
   // The override silently beats the connection dropdown, so switching
   // connections can change nothing at all while looking like it changed
@@ -3074,14 +3060,19 @@ ${entry.prompt || ''}`.trim()
     const typed = input.value.trim()
     const connModel = sel && sel.selectedOptions && sel.selectedOptions[0]
       ? (sel.selectedOptions[0].dataset.model || '') : ''
+    const clearBtn = $('.ld-clear-override')
+    if (clearBtn) clearBtn.style.display = typed ? '' : 'none'
     if (typed && connModel && typed !== connModel) {
-      note.textContent = `Overriding the connection — requests go to "${typed}", not "${connModel}". Switching connections will not change the model until this is cleared.`
+      note.textContent = `Override in effect — requests go to "${typed}", not the connection's "${connModel}". Switching connections will not change the model until you clear this.`
+      note.style.color = 'var(--ld-warn, #e0a458)'
+    } else if (typed && connModel) {
+      note.textContent = `This is already the connection's model — clearing it changes nothing except that switching connections will work again.`
       note.style.color = 'var(--ld-warn, #e0a458)'
     } else if (typed) {
-      note.textContent = `Requests go to "${typed}".`
-      note.style.color = ''
+      note.textContent = `Override in effect — requests go to "${typed}".`
+      note.style.color = 'var(--ld-warn, #e0a458)'
     } else {
-      note.textContent = connModel ? `Using the connection's model: ${connModel}.` : ''
+      note.textContent = connModel ? `Using ${connModel} from the connection.` : ''
       note.style.color = ''
     }
   }
