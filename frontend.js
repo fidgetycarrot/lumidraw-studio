@@ -1317,6 +1317,10 @@ fangs = fangs, sharp teeth"></textarea></div>
       localStorage.setItem(DRAFT_KEY, JSON.stringify({
         config: draftConfig,
         negativePrompt: $('.ld-negative') ? $('.ld-negative').value : '',
+        // Stamped so a restored draft can say which preset it came from. Without
+        // this the workspace silently shows one preset's negative prompt while
+        // another is active, which is indistinguishable from a bug.
+        presetName: activePreset || '',
       }))
     } catch { /* best effort */ }
   }
@@ -4090,12 +4094,20 @@ ${entry.prompt || ''}`.trim()
         else activePreset = null
       }
       const savedDraft = loadDraftLocal()
-      if (savedDraft && savedDraft.config && savedDraft.config.model) {
+      // A draft belonging to a preset you have since switched away from is not
+      // restored over the top of the one you are actually using. Its negative
+      // prompt would look like it came from the active preset, and diagnosing a
+      // preset is impossible if it can be wearing another preset's settings.
+      const draftBelongsElsewhere = savedDraft && savedDraft.presetName && activePreset &&
+        savedDraft.presetName !== activePreset
+      if (savedDraft && savedDraft.config && savedDraft.config.model && !draftBelongsElsewhere) {
         draftConfig = savedDraft.config
         renderDraftControls()
         $('.ld-negative').value = savedDraft.negativePrompt || ''
         renderChips()
-        setStatus('.ld-draft-status', 'Restored your last workspace draft.')
+        setStatus('.ld-draft-status', savedDraft.presetName
+          ? `Restored your last workspace draft from “${savedDraft.presetName}”.`
+          : 'Restored your last workspace draft.')
       } else if (activePreset) {
         const p = presets.find((x) => x.name === activePreset)
         if (p) {

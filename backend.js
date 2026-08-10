@@ -150,14 +150,47 @@ async function pushHistory(entry) {
 
 
 // The location a chat has established, so an uncertain parser cannot relocate
-// the story. Keyed by chat; a handful of entries, pruned to a sane size.
+// the story. Keyed by chat AND preset: memory outranks a preset's scene anchor,
+// so a chat-only key meant the first preset to run in a chat set the location for
+// every other preset used there, and a second preset's anchor was dead on arrival.
+// A preset has to be something you can stay inside.
+function sceneMemoryKey(chatId, presetName) {
+  const chat = String(chatId || '').trim()
+  if (!chat) return ''
+  const preset = String(presetName || '').trim()
+  return preset ? `${chat}::${preset}` : chat
+}
+
 async function getSceneMemory() {
   const value = await spindle.storage.getJson(SCENE_MEMORY_FILE, { fallback: {} })
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
 
-async function rememberSceneState(chatId, { setting = [], lighting = [], outfits = null } = {}) {
-  const key = String(chatId || '').trim()
+// Entries written before memory was preset-scoped are keyed by chat alone. The
+// first preset to ask for one adopts it, and the unscoped entry is removed, so the
+// upgrade keeps continuity for whoever is using the chat now without leaving a
+// shared entry behind for the next preset to inherit.
+async function readSceneMemory(chatId, presetName) {
+  const memory = await getSceneMemory()
+  const scoped = sceneMemoryKey(chatId, presetName)
+  if (scoped && memory[scoped]) return memory[scoped]
+  const legacy = String(chatId || '').trim()
+  if (!legacy || !memory[legacy] || legacy === scoped) return {}
+  const adopted = memory[legacy]
+  try {
+    memory[scoped] = { ...adopted, at: Date.now() }
+    delete memory[legacy]
+    await spindle.storage.setJson(SCENE_MEMORY_FILE, memory, { indent: 2 })
+    spindle.log.info(`[lumidraw] scene memory for this chat is now scoped to the preset "${presetName}". ` +
+      'Other presets start from their own scene anchor.')
+  } catch (error) {
+    spindle.log.warn('[lumidraw] could not migrate scene memory: ' + error.message)
+  }
+  return adopted
+}
+
+async function rememberSceneState(chatId, presetName, { setting = [], lighting = [], outfits = null } = {}) {
+  const key = sceneMemoryKey(chatId, presetName)
   const tags = uniqueStrings(setting || []).slice(0, 6)
   const light = uniqueStrings(lighting || []).slice(0, 4)
   const wardrobe = outfits && typeof outfits === 'object' ? outfits : null
@@ -267,7 +300,12 @@ function describeDtRejection(message) {
 
 // Keys LumiDraw sets per request. A config or extras block may not override
 // them, or a preset would silently re-prompt or re-seed the generation.
+// Matched by canonical spelling, not literally. A preset holding "negativePrompt"
+// used to sail past a set containing only "negative_prompt" and land on the payload
+// beside the real one — a second negative prompt LumiDraw never composed, and a
+// "must only specify one of" rejection from Draw Things when it noticed.
 const RESERVED_PAYLOAD_KEYS = new Set(['prompt', 'negative_prompt', 'seed', 'batch_count'])
+const RESERVED_CANONICAL = new Set(['prompt', 'negativeprompt', 'seed', 'batchcount'])
 
 function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   const payload = {}
@@ -291,9 +329,15 @@ function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   const assign = (source) => {
     if (!source || typeof source !== 'object') return
     for (const [key, value] of Object.entries(source)) {
-      if (RESERVED_PAYLOAD_KEYS.has(key)) continue
       if (value === undefined || value === null || value === '') continue
       const canonical = canonicalKey(key)
+      if (RESERVED_CANONICAL.has(canonical)) {
+        if (!RESERVED_PAYLOAD_KEYS.has(key)) {
+          spindle.log.info(`[lumidraw] ignoring "${key}" from the preset — LumiDraw sets that per request. ` +
+            `If a negative prompt is appearing that you did not write, this was it.`)
+        }
+        continue
+      }
       const previous = seenByCanonical.get(canonical)
       // Later assignment wins, matching the precedence below — but the earlier
       // spelling has to be removed, not merely overwritten, or both go out.
@@ -5339,18 +5383,40 @@ function joinPromptParts(parts) {
 
 // Merge the compile's garment defence into the preset's negative prompt without
 // repeating anything the preset already lists.
+// Framing tags describe where the camera is, not what is in the picture. Negating
+// "lower body" does not mean "do not show the lower body" — it argues with the
+// composition, and on a turbo config that argument is loud. Danbooru's framing
+// vocabulary in a negative prompt is nearly always a mistake carried over from a
+// quality-tag list somebody pasted.
+const FRAMING_NEGATIVE_RE = /^(?:lower body|upper body|full body|cowboy shot|close-?up|portrait|wide shot|very wide shot|profile|from (?:above|below|side|behind|front)|straight-on|three-quarter view|depth of field|foreshortening|perspective)$/i
+
+function framingTagsIn(negative) {
+  return String(negative || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => FRAMING_NEGATIVE_RE.test(part))
+}
+
 function negativeWith(presetNegative, extras) {
   const base = String(presetNegative || '')
+  // Said once per generation, where the negative prompt is already logged, so the
+  // question "where is this coming from" has an answer without reading source.
+  const framing = framingTagsIn(base)
+  if (framing.length) {
+    spindle.log.info(`[lumidraw] the preset's negative prompt contains framing tag(s): ${framing.join(', ')}. ` +
+      `These come from your preset, not from LumiDraw. Negating a framing tag fights the composition ` +
+      `rather than removing anything from the picture — worth deleting if images look oddly cropped or posed.`)
+  }
   if (!extras || !extras.length) return base
   const have = new Set(base.split(',').map((part) => normalizeIdentityText(part)).filter(Boolean))
   const add = extras.filter((tag) => !have.has(normalizeIdentityText(tag)))
   if (!add.length) return base
+  spindle.log.info(`[lumidraw] LumiDraw added to your preset's negative prompt: ${add.join(', ')}`)
   return base ? `${base.replace(/[\s,]+$/, '')}, ${add.join(', ')}` : add.join(', ')
 }
 
 async function compileSceneWithPreset(sceneInput, preset, settings, userId, chatId, sourcePassage = '', contextText = '') {
-  const sceneMemory = await getSceneMemory()
-  const memoryEntry = sceneMemory[String(chatId || '')] || {}
+  const memoryEntry = await readSceneMemory(chatId, preset.name)
   // Author intent is the floor; verified memory is the current truth. A story
   // that has moved keeps its new location, but a chat with no history yet
   // still starts in the place the preset declares.
@@ -5401,7 +5467,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   // Record the wardrobe as compiled — after the ownership check, so a rejected
   // garment is never learned as belonging to the wrong character.
   const establishedOutfits = outfitSnapshot()
-  await rememberSceneState(chatId, {
+  await rememberSceneState(chatId, preset.name, {
     setting: establishedSetting,
     lighting: establishedLighting,
     outfits: Object.keys(establishedOutfits).length ? establishedOutfits : null,
@@ -6302,8 +6368,7 @@ async function scanStoryCore(userId, options = {}) {
     if (settings.parserEngine === 'anima') {
       // Hand the parser the location outright rather than hoping it survives
       // inside the recency window.
-      const sceneMemoryForParser = await getSceneMemory()
-      const rememberedState = sceneMemoryForParser[String(chatId || '')] || {}
+      const rememberedState = await readSceneMemory(chatId, preset.name)
       const anchorForParser = tagsFrom(preset.sceneAnchor || '', 8)
       const parserSceneState = {
         setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorForParser,
@@ -6687,8 +6752,18 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   if (overrides.parserConnection) settings.parserConnection = String(overrides.parserConnection).trim()
 
   const presets = await getPresets()
-  const preset = presets.find((item) => item.name === (origin.presetName || settings.activePreset))
+  // The active preset wins here, unlike a plain regeneration. Re-running the parser
+  // exists to apply the settings you have now — a new instruction, an edited
+  // character, a different negative prompt. Inheriting the preset the image was
+  // originally made under meant a new prompt compiled against an old preset's
+  // negative prompt, banned tags and scene anchor, none of which you were using.
+  const preset = presets.find((item) => item.name === settings.activePreset)
+    || presets.find((item) => item.name === origin.presetName)
   if (!preset) throw new Error('No preset available to compile against.')
+  if (origin.presetName && preset.name !== origin.presetName) {
+    spindle.log.info(`[lumidraw] re-parsing against the active preset "${preset.name}". ` +
+      `This image was originally made under "${origin.presetName}" — its negative prompt and banned tags no longer apply.`)
+  }
 
   const { messages, chatId: resolvedChatId } = await fetchMessages(userId, String(origin.chatId || '').trim())
   const chatId = String(origin.chatId || resolvedChatId || '')
@@ -6700,8 +6775,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   if (!target.content) throw new Error('The source message has no readable text.')
 
   const passage = cleanParserMessageText(target.content).slice(-6000)
-  const sceneMemory = await getSceneMemory()
-  const rememberedState = sceneMemory[String(chatId || '')] || {}
+  const rememberedState = await readSceneMemory(chatId, preset.name)
   const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
   const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, {
     setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorTags,

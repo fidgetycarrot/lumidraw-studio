@@ -1,69 +1,76 @@
-# LumiDraw Studio 0.43.0
+# LumiDraw Studio 0.44.0
 
-Includes 0.42.4 and 0.42.5.
+Includes 0.42.4, 0.42.5, 0.43.0 and 0.43.1.
 
-## Penis on a female — what I found
+## A preset is now something you can stay inside
 
-I read the path before changing it. The gate itself looks right, and it may well
-have fired correctly on your image. **Anatomy is never a shared tag.** In a
-multi-subject prompt it appears only as an owner-bound caption sentence:
+I audited every route by which prompt content — positive or negative — could reach
+a generation from a preset other than the active one. Three did.
 
-> Sovi's penis is visibly exposed.
+### 1. Scene memory was keyed by chat, not by preset
 
-The caption binds by name. The model binds by proximity — and Anima has seen a
-great deal of futanari. A `1girl` standing in a frame where a penis is named can
-be given one, and nothing in the prompt said whose body it was not.
+This is the big one, and it was silently disabling your presets.
 
-Two holes, both fixed.
+Remembered setting **outranks a preset's scene anchor** — that is deliberate, so a
+story that moves keeps its new location. But memory was stored under the chat id
+alone:
 
-### 1. Nothing defended the other body
-
-New `anatomyDefence()`, built like the existing garment defence. When an explicit
-or nsfw scene has one subject with saved anatomy and another subject who is
-counted female and has none, the negative prompt gains:
-
-```
-futanari, dickgirl, newhalf, futa
+```js
+memory[String(chatId)] = { setting, lighting, outfits, at }
 ```
 
-Deliberately **not** `penis` — the caption is asking for one on the other subject,
-and negating the tag outright is how anatomy disappears from a scene entirely.
-That is the opposite failure, and it's already an open note from before.
+So the first preset to run in a chat set the location, lighting and wardrobe for
+**every other preset used in that chat**. A second preset's Scene anchor was dead
+on arrival — it could only ever apply in a chat where nothing had been generated
+yet. Testing two presets against the same story compared two presets that were both
+running the first one's scene.
 
-It stands down when it should: two men, a solo subject, a safe or sensitive
-rating, or a woman with her own saved anatomy. It also stands down when the female
-subject's own identity blurs this — `futanari`, `trap`, `otoko no ko`, `femboy`,
-`cuntboy`, `newhalf`, `intersex`. Negating futanari on a futa is negating who she
-is, and Sovi must not be caught by this.
+Keyed on chat **and** preset now (`chatId::presetName`), through one helper that
+every read and write goes through. Each preset keeps its own continuity in the same
+chat, and each starts from its own anchor.
 
-The compile trace reports it either way:
+Existing memory is keyed the old way. The first preset to ask for it adopts it and
+the unscoped entry is deleted, so you keep continuity in whatever preset you are
+using now, and no other preset inherits it:
 
 ```
-✓ anatomy defence — negating futanari, dickgirl, newhalf, futa
-· anatomy defence — anatomy is named but no unequipped female subject shares the frame
+[lumidraw] scene memory for this chat is now scoped to the preset "Anima Turbo".
+Other presets start from their own scene anchor.
 ```
 
-### 2. The firewall had two gaps of its own
+### 2. The workspace draft outlived its preset
 
-**Unprofiled subjects skipped it entirely.** The scrub was inside a ternary that
-returned known refs cleaned and everyone else untouched, so an `other_1` walk-on
-could be handed anatomy in her pose, outfit or action and nothing stopped it. She
-now gets the same scrub; only the appearance wipe stays profile-only, since an
-unprofiled subject has no saved appearance to fall back on.
+The Generate tab's draft lives in your browser's local storage and was restored over
+the top of whatever preset was active. Draft under preset A, switch to preset B, and
+the workspace showed **A's negative prompt under B's name** — indistinguishable from
+a bug, which is exactly your complaint.
 
-**The pattern was too narrow.** These all read as pose or clothing and sailed
-through: `erection`, `erect`, `member`, `manhood`, `shaft`, `girth`, `balls`,
-`clitoris`, `clit`, `labia`, `genitalia`, `crotch`, `groin`, `bulge`, `dickgirl`,
-`newhalf`. All covered now.
+Drafts are stamped with the preset that wrote them. A draft from a different preset
+is not restored; the active preset is hydrated instead. A restored draft says whose
+it is: *"Restored your last workspace draft from 'Anima Turbo'."*
 
-## If it happens again
+### 3. Re-parsing inherited the origin preset
 
-Two things narrow it immediately, and I would rather have them than guess:
+Fixed in 0.43.1, restated here because it's the same principle. Re-run parser and
+Replace all images now compile against the active preset. A plain regeneration still
+pins the preset the image was made under — that path exists to remake the same
+image, and switching models underneath it would be its own bug.
 
-1. **The compile trace** for that image — the `anatomy defence` line says whether
-   it fired and why.
-2. **Her profile's Anatomy mode.** If it's set to `always` rather than `relevant`,
-   the tag is unconditional and no passage gate applies. Worth a look before
-   anything else.
+## Checked and deliberately left alone
 
-New `anatomy.mjs` suite: 50 assertions. **37 suites · 1023 assertions · all green.**
+- **Banned tags, scene anchor, artist tags, quality header** — already read from the
+  preset being compiled.
+- **Per-compile outfit and negative state** — reset at the top of every compile.
+- **Character and persona profiles** — shared across presets by design. They are
+  your cast, not a preset's settings.
+- **The lightbox regen panel** — shows the image's own stored negative prompt, which
+  is what you want when diagnosing that image.
+
+## One thing worth knowing
+
+A stray NUL byte got into the scene-memory delimiter while I was writing it, and my
+first test passed only because the same corruption was in the assertion. Caught it
+by checking the file's bytes rather than trusting the green tick. Both files are
+clean — verified zero NUL bytes — and the delimiter is now an explicit `::`.
+
+New `presets.mjs` suite: 29 assertions. **38 suites · 1062 assertions · all green.**
