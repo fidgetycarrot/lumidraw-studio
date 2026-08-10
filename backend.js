@@ -4670,12 +4670,42 @@ function dropConflictingViewAngles(tags) {
   return { kept, dropped }
 }
 
+// Camera is the one field where a closed list is honest. Setting and outfit are
+// open-ended — a phrase the vocabulary does not know may still be a real thing the
+// caption should say. Framing is not like that: there are about fifteen words the
+// model was trained on, and anything else is a guess dressed as direction. Demoting
+// "dynamic angle" to the caption spends caption space on a phrase that means
+// nothing to the model, so it is dropped outright instead.
+const CAMERA_VOCAB = new Set([
+  'portrait', 'close-up', 'upper body', 'cowboy shot', 'full body', 'wide shot', 'very wide shot',
+  'from above', 'from below', 'from side', 'from behind', 'from front', 'straight-on',
+  'dutch angle', 'three-quarter view', 'profile', 'pov',
+  'depth of field', 'foreshortening', 'perspective', 'fisheye',
+])
+
+function keepRealCameraTags(cameraTags) {
+  const kept = []
+  const dropped = []
+  for (const tag of Array.isArray(cameraTags) ? cameraTags : []) {
+    const value = animaTag(tag)
+    if (!value) continue
+    if (CAMERA_VOCAB.has(value)) kept.push(value)
+    else dropped.push(value)
+  }
+  return { kept: uniqueStrings(kept), dropped: uniqueStrings(dropped) }
+}
+
 function repairCameraTags(cameraTags, scene, descriptors) {
   const required = requiredVisibleRegions(scene, descriptors)
-  const angles = dropConflictingViewAngles(cameraTags)
-  const preNotes = angles.dropped.length
-    ? [`dropped conflicting view angle(s) ${angles.dropped.join(', ')} — the camera can only stand in one place`]
-    : []
+  const real = keepRealCameraTags(cameraTags)
+  const angles = dropConflictingViewAngles(real.kept)
+  const preNotes = []
+  if (real.dropped.length) {
+    preNotes.push(`dropped invented camera tag(s) ${real.dropped.join(', ')} — not words this model was trained on`)
+  }
+  if (angles.dropped.length) {
+    preNotes.push(`dropped conflicting view angle(s) ${angles.dropped.join(', ')} — the camera can only stand in one place`)
+  }
   if (!required.size) {
     return { tags: angles.kept, note: preNotes.join('; ') }
   }
@@ -5485,7 +5515,7 @@ function structuredParserSchema(maxImages, profiles, minImages = 0) {
 STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
 Return ONLY one compact JSON object, no markdown and no prose.
 Write every scene in the EXACT field order shown below. The order is a survival order: if your reply is ever cut off, everything already written must still form a usable scene, so the mandatory core (safety, core_action, setting, subjects) comes FIRST and droppable refinements (camera, lighting, style) come LAST:
-{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","partial_features":["exact saved feature names currently showing, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","partial_features":["exact saved feature names currently showing, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["from the CAMERA list below only"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 ${minImages > 0
   ? `Return between ${minImages} and ${maxImages} image objects. ${minImages} is a FLOOR: find that many distinct visual moments even when one dominates — a second character's reaction, a change of position, a detail shown close. Each needs its own anchor from a different part of the passage.`
   : `Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.`}
@@ -5496,6 +5526,7 @@ For a subject that is a recognisable published character, set "booru_character" 
 "style" is the mood of this one scene only (e.g. "backlit", "soft focus"). A medium, artist, or rendering style belongs to the preset and must stay identical between images, or characters drift between generations.
 SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "[name] is fighting three bandits." "[name] is casting a large spell." "[name] is performing oral sex on [name]." (Write the characters' real names in place of [name].) ONGOING ACT BEATS MOMENTARY GESTURE. A passage is usually one beat inside a continuing act, and the continuing act is what the image is of. Name that act, even when it began in an earlier message and the current passage only shows a small movement within it. A hand, a glance, a shift of weight, or a change of expression during an act is a detail of that act, never a replacement for it — put those in pose, expression, or action, not here. WRONG: "[name] tips [name]'s chin up." RIGHT: "[name] is performing oral sex on [name], chin tipped up." ONE GEOMETRY ONLY: the statement fixes where the bodies are, said once. A trailing clause may add an expression — "gagging" — never a second account of the same contact. "taking him deep" restates it at another depth and the two render as neither; depth and penetration belong in pose or action." If you cannot tell what the continuing act is from the CURRENT PASSAGE alone, read PRIOR CONTEXT and the ESTABLISHED SCENE STATE to find it before falling back to the gesture. Prefer the clinical booru word: fellatio, penis, masturbation — not blowjob, cock, stroking. In an nsfw or explicit scene, name the act plainly and anatomically — a euphemism, or a literary substitute such as "forcing eye contact" in place of the act being performed, costs the image its subject. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
 SAFETY is the Danbooru rating of the picture, not the mood of the story around it: safe = nothing suggestive; sensitive = suggestive but not sexual (swimwear, underwear, a suggestive pose); nsfw = nudity or overt sexual context; explicit = a sexual act or visible genitals. A tense, frightening, or violent scene with no suggestive content is safe.
+CAMERA — pick only from this closed list, never invent one; these are the only framing words the model was trained on, so "dynamic angle" instructs nothing at all. Frame (at most one): portrait | upper body | cowboy shot | full body | wide shot. Angle (at most one): from above | from below | from side | from behind | from front | straight-on | dutch angle. Lens, rarely: depth of field | foreshortening. Two people in contact take cowboy shot; a lone figure in a large space takes wide shot; a reaction takes portrait.
 ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag, taken from the CURRENT PASSAGE or the established location in PRIOR CONTEXT. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
 Keep each image object compact: at most 4 setting, 3 camera, 3 lighting, 3 style, 3 outfit, 2 pose, 2 expression, 2 relation details, and 1 action item, each a terse visual tag of at most 7 words. These are choices, not truncation points — pick the strongest few rather than listing everything true. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 PARTIAL CHANGES ARE NOT STATE CHANGES. When a passage shows only SOME of a character's transformation — a single feature slipping, eyes changing, claws extending, "partly", "slightly", "a little", "just his eyes", "beginning to" — keep appearance_state at the form they are otherwise in and list the specific features in "partial_features" using the exact saved feature names listed below. Switching appearance_state transforms the WHOLE character, which is wrong for a partial change and produces a completely different creature than the passage describes. Use partial_features for anything short of a full, completed transformation. Select only names that are listed for that ref; never invent a feature name, and never put transformation words in appearance, outfit, pose, or expression.
