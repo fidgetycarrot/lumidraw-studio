@@ -1,7 +1,48 @@
-# LumiDraw Studio 0.38.2
+# LumiDraw Studio 0.38.3
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.38.3 — The field was never saved
+
+"I changed it to Price before the update and it reset after the update." It did
+not reset. **It was never stored.**
+
+The character and persona library editors save through `libraryPersonaProfile()`.
+I added the field's read to `editorProfile()` — a different function, for the
+preset's inline profile editor. So the input rendered, accepted typing, and
+nothing read it. Reopening the editor repopulated from storage, where the value
+had never been written, and the field came back blank.
+
+Three bugs in one small feature:
+
+- **Never read on save** — `libraryPersonaProfile()` had no `promptName`.
+- **Never restored on load** — nor did the function that fills the editor.
+- **Broken markup** — my scripted insertion opened a `<div>` it never closed and
+  closed the profile grid one field early, so every following field nested
+  inside the new one.
+
+All three came from editing by pattern-match instead of reading the surrounding
+code. Same root as the duplicate-call-site mistakes earlier: a string matched is
+not a location understood.
+
+### A guard for the whole class
+
+`editors.mjs` checks every input in the profile editors is mentioned three
+times — markup, read on save, write on load. Two out of three is a field that
+silently does nothing, which is invisible from the UI and looks exactly like a
+setting that will not stick.
+
+Its first version reported twenty failures that were all its own fault: several
+fields are reached through a template literal (`` `.ld-ed-${prefix}-outfit` ``),
+so the literal class name appears only in the markup. A test that cries wolf
+twenty times is worse than no test, so it now understands both access patterns.
+
+Verified by deleting the real read and confirming it fails — a guard that has
+never been seen to fail is not yet a guard.
+
+**30 suites · 784 assertions.**
+
 
 ## 0.38.2 — Every occurrence, not most of them
 
