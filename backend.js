@@ -1654,6 +1654,17 @@ function escapeRegExp(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+// Nudity has to be stated by something in the scene — an empty outfit list is a
+// parser omission as often as it is a naked character, and guessing wrong would put
+// genitals in a clothed scene.
+const NUDE_STATE_RE = /\b(?:nude|naked|completely nude|fully nude|unclothed|undressed|bottomless|nude in a bath|bathing)\b/i
+
+function statesNude(outfit, appearance, subject) {
+  const parts = [...(outfit || []), ...(appearance || []),
+    ...((subject && subject.pose) || []), ...((subject && subject.action) || [])]
+  return parts.some((tag) => NUDE_STATE_RE.test(String(tag || '')))
+}
+
 function anatomyExplicitlyMentioned(anatomyTags, passage, anchor = '', requireOwnership = false) {
   const text = String(passage || '')
   if (!text.trim()) return false
@@ -2762,10 +2773,23 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   const featureTags = activeFeatures.flatMap((feature) => feature.tags || [])
   const inheritedOutfit = profile && (!state || state.outfitPolicy !== 'omit') ? profile.defaultOutfit : []
   const outfit = subject.outfit.length ? subject.outfit : inheritedOutfit
+  // A nude body in an nsfw scene shows its anatomy — that is what nude means. The
+  // passage does not have to name it, and prose about a shower rarely does. Left
+  // unnamed, the model has a nude figure with nothing anchoring the genitals, and
+  // Anima fills that gap from the censored end of its training rather than leaving
+  // it blank. This is not the parser inventing anatomy: LumiDraw still supplies
+  // only what the profile saved, and only when something in the scene said "nude".
+  const nudeNow = statesNude(outfit, appearance, subject)
   const anatomyAllowed = profile && (
     profile.anatomyMode === 'always' ||
-    (profile.anatomyMode === 'relevant' && subject.anatomyVisible && anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, profile.anchor, requireAnatomyOwner))
+    (profile.anatomyMode === 'relevant' && subject.anatomyVisible &&
+      (anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, profile.anchor, requireAnatomyOwner) || nudeNow))
   )
+  if (profile && profile.anatomyMode === 'relevant' && subject.anatomyVisible && nudeNow &&
+      !anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, profile.anchor, requireAnatomyOwner)) {
+    trace(`anatomy gate · ${profile.anchor || subject.ref}`, 'applied',
+      'the passage never names the anatomy, but the subject is nude in an nsfw scene, so it is visible')
+  }
   const anatomy = anatomyAllowed ? profile.anatomy : []
   // A profile's count tag is locked identity and outranks whatever the parser
   // guessed — this is what stops a femboy being rendered as 1girl because the
@@ -4931,6 +4955,23 @@ const BLURRED_IDENTITY_RE = /\b(?:futanari|futa|dickgirl|newhalf|trap|otoko no k
 // character having one, which is the thing that is actually wrong.
 const FUTANARI_NEGATIVES = ['futanari', 'dickgirl', 'newhalf', 'futa']
 
+// Danbooru tags censorship explicitly, so the model learned it as a style rather
+// than as an absence. `futanari` in particular is dense with Japanese commercial
+// art, where mosaic and bar censoring are a legal requirement — so the tag carries
+// a censorship prior that nothing in an ordinary prompt argues against. Naming the
+// anatomy fights it by accident, which is why adding "penis" cleared the mosaic.
+// Saying it directly is better than relying on that side effect.
+const CENSOR_NEGATIVES = ['censored', 'mosaic censoring', 'bar censor', 'heart censor',
+  'novelty censor', 'steam censor', 'light censor', 'convenient censoring']
+const UNCENSORED_TAG = 'uncensored'
+
+function censorshipDefence(descriptors, scene) {
+  if (!scene || !['nsfw', 'explicit'].includes(scene.safety)) return { positive: '', negatives: [] }
+  const showsAnatomy = (descriptors || []).some((item) => (item.anatomy || []).length)
+  if (!showsAnatomy) return { positive: '', negatives: [] }
+  return { positive: UNCENSORED_TAG, negatives: CENSOR_NEGATIVES.slice() }
+}
+
 function anatomyDefence(descriptors, scene) {
   if (!scene || !['nsfw', 'explicit'].includes(scene.safety)) return []
   const items = descriptors || []
@@ -5033,6 +5074,12 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   } else if (descriptors.some((item) => (item.anatomy || []).length)) {
     trace('anatomy defence', 'ran', 'anatomy is named but no unequipped female subject shares the frame')
   }
+  const censorship = censorshipDefence(descriptors, scene)
+  if (censorship.negatives.length) {
+    LAST_COMPILE_NEGATIVES = uniqueStrings([...LAST_COMPILE_NEGATIVES, ...censorship.negatives])
+    trace('censorship defence', 'applied',
+      `"${censorship.positive}" added and the censor tags negated — exposed anatomy carries a censorship prior on this model`)
+  }
 
   // A pose naming another subject is a relation in the wrong field. Promoting
   // it keeps the geometry and takes the foreign name out of the clause where a
@@ -5087,6 +5134,9 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   // everything from the safety tag rightward.
   const headerTags = []
   if (scene.safety) headerTags.push(scene.safety)
+  // Beside the safety tag, which is the slot Anima saw it in on Danbooru.
+  const censorshipTag = censorshipDefence(descriptors, scene).positive
+  if (censorshipTag) headerTags.push(censorshipTag)
   headerTags.push(...aggregateCountTags(descriptors))
   if (!multi) headerTags.push('solo')
   // [character] then [series], the slots Anima expects between the count tags

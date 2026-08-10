@@ -1,76 +1,81 @@
-# LumiDraw Studio 0.44.0
+# LumiDraw Studio 0.45.0
 
-Includes 0.42.4, 0.42.5, 0.43.0 and 0.43.1.
+Includes 0.42.4 through 0.44.0.
 
-## A preset is now something you can stay inside
+## First: do not put "uncensored" in the negative prompt
 
-I audited every route by which prompt content — positive or negative — could reach
-a generation from a preset other than the active one. Three did.
+That would ask for the opposite. `uncensored` is a positive Danbooru tag — it marks
+posts where genitals are shown plainly. Putting it in the negative pushes the model
+toward the censored half of its training.
 
-### 1. Scene memory was keyed by chat, not by preset
+The tags that belong in a negative are the censorship ones: `censored`,
+`mosaic censoring`, `bar censor`, `heart censor`, `novelty censor`, `steam censor`,
+`light censor`, `convenient censoring`.
 
-This is the big one, and it was silently disabling your presets.
+You don't need to add either by hand — LumiDraw does it now.
 
-Remembered setting **outranks a preset's scene anchor** — that is deliberate, so a
-story that moves keeps its new location. But memory was stored under the chat id
-alone:
+## Why a correct prompt still came out censored
+
+Censorship on Danbooru is **tagged**, so the model learned it as a style rather than
+as an absence. `futanari` is the worst case: that tag is dense with Japanese
+commercial art, where mosaic and bar censoring are a legal requirement. So
+`futanari` carries a censorship prior all on its own, and nothing in an ordinary
+prompt argues against it.
+
+Adding `penis` cleared it by accident — explicit anatomy tags co-occur with
+`uncensored` in the training data far more than with `censored`. You found the right
+lever by the wrong route. Saying it directly is more reliable.
+
+**New censorship defence.** When an explicit or nsfw scene shows saved anatomy,
+`uncensored` goes into the header beside the safety tag, and the whole censor family
+goes into the negative.
+
+```
+✓ censorship defence — "uncensored" added and the censor tags negated
+```
+
+## Why the anatomy tag wasn't there in the first place
+
+This is the part your instinct was right about, though I've done it in the compiler
+rather than in the parser.
+
+The gate required the passage to **name** the anatomy:
 
 ```js
-memory[String(chatId)] = { setting, lighting, outfits, at }
+anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, ...)
 ```
 
-So the first preset to run in a chat set the location, lighting and wardrobe for
-**every other preset used in that chat**. A second preset's Scene anchor was dead
-on arrival — it could only ever apply in a chat where nothing had been generated
-yet. Testing two presets against the same story compared two presets that were both
-running the first one's scene.
+A shower scene is nude, but the prose says water and steam — it almost never says
+"penis". So the gate stayed shut, the model got a nude figure with nothing anchoring
+the genitals, and it filled the gap from the censored end of its training. That is
+your mosaic.
 
-Keyed on chat **and** preset now (`chatId::presetName`), through one helper that
-every read and write goes through. Each preset keeps its own continuity in the same
-chat, and each starts from its own anchor.
-
-Existing memory is keyed the old way. The first preset to ask for it adopts it and
-the unscoped entry is deleted, so you keep continuity in whatever preset you are
-using now, and no other preset inherits it:
+A nude body in an nsfw scene shows its anatomy; that is what nude means. The gate
+now opens on **either** the passage naming it **or** the subject being stated nude
+in an nsfw scene.
 
 ```
-[lumidraw] scene memory for this chat is now scoped to the preset "Anima Turbo".
-Other presets start from their own scene anchor.
+✓ anatomy gate · Sovi — the passage never names the anatomy, but the subject is
+  nude in an nsfw scene, so it is visible
 ```
 
-### 2. The workspace draft outlived its preset
+### Why not tell the parser, as you suggested
 
-The Generate tab's draft lives in your browser's local storage and was restored over
-the top of whatever preset was active. Draft under preset A, switch to preset B, and
-the workspace showed **A's negative prompt under B's name** — indistinguishable from
-a bug, which is exactly your complaint.
+Because the firewall exists precisely because the parser invented anatomy — it wrote
+`erect penis` into a walk-on's appearance, and 0.43.0 had to widen the scrub to catch
+`erection`, `bulge` and `shaft` doing the same. Telling it "add anatomy when nsfw"
+re-opens that door, and it would hand an LLM a decision that has a deterministic
+answer. LumiDraw still supplies only what the profile saved.
 
-Drafts are stamped with the preset that wrote them. A draft from a different preset
-is not restored; the active preset is hydrated instead. A restored draft says whose
-it is: *"Restored your last workspace draft from 'Anima Turbo'."*
+**Nudity must be stated** — by the outfit, appearance, pose or action. An empty
+outfit list is a parser omission at least as often as a naked character, and guessing
+wrong puts genitals in a clothed scene. `nude`, `naked`, `completely nude`,
+`unclothed`, `undressed`, `bottomless`, `bathing` all count.
 
-### 3. Re-parsing inherited the origin preset
+## If it recurs
 
-Fixed in 0.43.1, restated here because it's the same principle. Re-run parser and
-Replace all images now compile against the active preset. A plain regeneration still
-pins the preset the image was made under — that path exists to remake the same
-image, and switching models underneath it would be its own bug.
+The trace now distinguishes the two failures. `anatomy gate` tells you whether the
+tag was allowed; `censorship defence` tells you whether the mosaic was argued
+against. Previously both were invisible.
 
-## Checked and deliberately left alone
-
-- **Banned tags, scene anchor, artist tags, quality header** — already read from the
-  preset being compiled.
-- **Per-compile outfit and negative state** — reset at the top of every compile.
-- **Character and persona profiles** — shared across presets by design. They are
-  your cast, not a preset's settings.
-- **The lightbox regen panel** — shows the image's own stored negative prompt, which
-  is what you want when diagnosing that image.
-
-## One thing worth knowing
-
-A stray NUL byte got into the scene-memory delimiter while I was writing it, and my
-first test passed only because the same corruption was in the assertion. Caught it
-by checking the file's bytes rather than trusting the green tick. Both files are
-clean — verified zero NUL bytes — and the delimiter is now an explicit `::`.
-
-New `presets.mjs` suite: 29 assertions. **38 suites · 1062 assertions · all green.**
+`anatomy.mjs` is up to 75 assertions. **38 suites · 1087 assertions · all green.**
