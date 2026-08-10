@@ -1,55 +1,66 @@
-# LumiDraw Studio 0.51.0
+# LumiDraw Studio 0.51.2
 
-Includes 0.42.4 through 0.50.0.
+Includes 0.42.4 through 0.51.1.
 
-## Basic, as asked. And you were right.
+## No — and asking made me find the real bug
 
-**If the message before it was out of character, the reply is not illustrated
-automatically.** No judgement about what the reply contains.
+You were right to push. The `isAssistant break` I fixed in 0.51.1 needs an assistant
+turn wedged between your question and the reply, and there wasn't one before #132.
+It could never have explained the first image pair.
+
+So I ran your transcript through 0.51.1's own decision logic:
 
 ```
-Skipped: you were talking out of character, so this reply was not illustrated
-automatically — press Scan if it turned out to have a scene in it.
+#132  would illustrate ✗
+#134  would illustrate ✗
 ```
 
-**Pressing Scan overrides it.** Only automatic scans are blocked, so the manual path
-is your escape hatch exactly as you described. Re-run parser and Replace all images
-were never on this path and are unaffected.
+**Still broken, both turns.** Two bugs, compounding.
 
-## Why you're right and I wasn't
+### 1. `[ooc]:` closes the bracket before the colon
 
-The asymmetry decides it, and I should have seen it two versions ago:
+`stripOutOfCharacter` ran the delimited rule first. It matched `[ooc]` on its own,
+removed it, and left this behind:
 
-- Guess wrong towards an image → a picture of nothing lands in your chat, costs a
-  generation, and you delete it.
-- Guess wrong towards no image → one press of a button.
+```
+": the gabrielle monitor packet on top doesn't seem to be rendering correctly."
+```
 
-Those are not the same size, so the automatic path should take the safe side and
-leave the judgement to you, who can actually see the message. Instead I kept trying
-to read the reply, and it guessed wrong twice — most memorably on a patch note where
-`style="max-width:560px…"` is a quoted string over twelve characters and therefore
-read as dialogue. Each fix made the rule longer without making the next surprise any
-less likely.
+A line with no "ooc" left in it for the whole-line rule to find. The aside then read
+as ordinary prose. Line rule runs first now; a mid-line `[ooc: nice]` is still
+removed surgically.
 
-## What I deleted
+### 2. The gate asked the wrong text
 
-The whole classifier, not just its call site: `assistantReplyIsMeta`,
-`META_ADDRESS_RE`, `META_NOUN_RE`, `NARRATIVE_QUOTE_RE`, `NARRATIVE_PROSE_RE`,
-`TECHNICAL_META_RE`, `SCREAMING_TOKEN_RE` — about 90 lines. A heuristic nobody calls
-is a heuristic somebody calls again by accident, and there are assertions now that
-each of those names stays gone.
+```js
+const promptingText = cleanParserMessageText(prompting.content, …)
+if (outOfCharacterVerdict(promptingText).ooc)
+```
 
-## Kept, because they're structural rather than guesses
+`cleanParserMessageText` **removes out-of-character markers.** So the gate was asking
+whether a marker was present in text specifically chosen to have none. It reads the
+raw message now.
 
-- **Card stripping** (0.50.0). `<!-- UI_START -->…<!-- UI_END -->` and
-  `<statuscard>…</statuscard>` never reach the parser. This is the one that had been
-  quietly feeding "dependency load 34 / 100" into your prompts on every message.
-- **A turn that is only a card is skipped**, at any rating, with or without an
-  `[ooc]:` before it.
-- **A message opening with an `[ooc]:` marker is skipped**, and a marker mid-message
-  strips just that span.
-- **Every branch logs**, including "no preceding user message found", which is the
-  one that used to be silent when it failed.
+### Why every test I wrote passed anyway
 
-**41 suites · 1255 assertions · all green.** The count dropped by 30 because the
-classifier's tests went with it, which is the right direction.
+All my asides were short — *"[ooc]: brb"*, *"[ooc] can we back up a scene?"*. A short
+one strips to nothing, and empty text hit the `|| prompting.content` fallback, so the
+raw message got checked and the answer came out right by accident.
+
+Yours were sentences. They kept enough words to look like prose, never hit the
+fallback, and sailed through. The test suite was 96 assertions of the easy case.
+There are now assertions using your exact wording, and the end-to-end check runs both
+turns of the exchange:
+
+```
+#132  BLOCKED ✓
+#134  BLOCKED ✓
+```
+
+## Keeping 0.51.1's fix too
+
+The `isAssistant break` was a genuine hole even though it wasn't this one — a preset
+that posts a card as its own turn would have hidden your question from the gate. It
+stays fixed.
+
+**41 suites · 1278 assertions · all green.**

@@ -805,9 +805,18 @@ const OOC_OPENING_RE = /^[\s>*_~-]*(?:\(\(|\[\[|\{\{|\(|\[|\{)?\s*(?:ooc|o\.o\.c
 // Any story prose left once the asides are removed? A message that is nothing but
 // an aside has none, and there is nothing in it to draw.
 function stripOutOfCharacter(text) {
+  // Line rule first, and the order is the whole point. "[ooc]: is the card broken?"
+  // has its marker closed BEFORE the colon, so the delimited rule matched "[ooc]"
+  // on its own, removed it, and left ": is the card broken?" behind — a line that
+  // no longer contains the word "ooc" for the line rule to find. The aside then
+  // read as ordinary prose, which is exactly how a four-message out-of-character
+  // exchange got illustrated end to end.
+  //
+  // A whole line that opens with a marker is an aside entire. Only when that does
+  // not apply is a delimited span removed from within a line.
   return String(text || '')
-    .replace(OOC_DELIMITED_RE, ' ')
     .replace(OOC_LINE_RE, ' ')
+    .replace(OOC_DELIMITED_RE, ' ')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
@@ -1004,6 +1013,25 @@ function messageBits(m) {
     isAssistant,
     isUser,
   }
+}
+
+// Which message of yours prompted this reply? Extracted from the scan so it can be
+// tested directly: an out-of-character exchange is usually several turns long, and
+// the whole gate rests on this walking back to the right message on turn four as
+// reliably as it does on turn two.
+//
+// It stops at the first message of yours, and does NOT stop at an intervening
+// assistant message — a preset that posts a card of its own between your question
+// and its answer would otherwise hide the question from the gate. Nothing but a
+// message of yours ends the search, and only the window bounds it.
+function precedingUserMessage(messages, targetIndex, window = 8) {
+  if (!Array.isArray(messages) || !Number.isInteger(targetIndex)) return null
+  for (let i = targetIndex - 1; i >= 0 && i >= targetIndex - window; i--) {
+    const bits = messageBits(messages[i] || {})
+    if (!bits || typeof bits.content !== 'string' || !bits.content.trim()) continue
+    if (bits.isUser) return bits
+  }
+  return null
 }
 
 function storyPreview(content, maxLength = 260) {
@@ -6593,13 +6621,7 @@ async function scanStoryCore(userId, options = {}) {
   // Only automatic scans are blocked. Pressing Scan is you overriding this on
   // purpose, and it must always work.
   if (!oocVerdict.ooc && options.auto && Number.isInteger(targetIndex) && targetIndex > 0) {
-    let prompting = null
-    for (let i = targetIndex - 1; i >= 0 && i >= targetIndex - 4; i--) {
-      const bits = messageBits(messages[i])
-      if (!bits || typeof bits.content !== 'string' || !bits.content.trim()) continue
-      if (bits.isUser) { prompting = bits; break }
-      if (bits.isAssistant) break
-    }
+    const prompting = precedingUserMessage(messages, targetIndex)
     // Silent-when-it-fails was the previous version's real bug: "the gate never
     // looked" and "the gate looked and allowed it" produced identical logs.
     if (!prompting) {
@@ -6609,7 +6631,12 @@ async function scanStoryCore(userId, options = {}) {
         `roles seen: ${roles.join(', ') || '(none)'} · if one of those IS your message, its role name is not ` +
         'one this check recognises (user, persona, human) — tell me the name and I will add it')
     } else {
-      const promptingText = cleanParserMessageText(prompting.content, { keepLedger: true }) || prompting.content
+      // The RAW message. cleanParserMessageText removes out-of-character markers by
+      // design, so asking it whether a marker is present is asking a question of
+      // text chosen to have none. Short asides survived only because they stripped
+      // to nothing and fell back to the raw content; a longer one kept enough words
+      // to look like prose and sailed through.
+      const promptingText = String(prompting.content || '')
       if (outOfCharacterVerdict(promptingText).ooc) {
         oocVerdict = {
           ooc: true,
