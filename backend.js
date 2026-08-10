@@ -276,11 +276,32 @@ function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   // whitelist. The config originates from Draw Things' own GET / response, so
   // its key names are DT's rather than anything guessed here — that is what
   // makes full pass-through safe enough to prefer over a curated subset.
+  // Draw Things treats compression_artifacts and compressionArtifacts as one
+  // setting and refuses a payload naming it twice:
+  //
+  //   More than one key for Compression Artifacts specified
+  //   (must only specify one of ["compression_artifacts", "compression_artifacts"])
+  //
+  // The same name printed twice is the tell — one canonical setting reached by
+  // two spellings. Sync captures snake_case from GET /; a preset's extras may
+  // hold camelCase. Both are distinct JavaScript keys and neither looks wrong.
+  const canonicalKey = (key) => String(key).toLowerCase().replace(/[_-]/g, '')
+  const seenByCanonical = new Map()
+
   const assign = (source) => {
     if (!source || typeof source !== 'object') return
     for (const [key, value] of Object.entries(source)) {
       if (RESERVED_PAYLOAD_KEYS.has(key)) continue
       if (value === undefined || value === null || value === '') continue
+      const canonical = canonicalKey(key)
+      const previous = seenByCanonical.get(canonical)
+      // Later assignment wins, matching the precedence below — but the earlier
+      // spelling has to be removed, not merely overwritten, or both go out.
+      if (previous && previous !== key) {
+        delete payload[previous]
+        spindle.log.info(`[lumidraw] "${key}" and "${previous}" are the same Draw Things setting; sending only "${key}"`)
+      }
+      seenByCanonical.set(canonical, key)
       payload[key] = value
     }
   }
@@ -366,6 +387,15 @@ function rejectedKeysIn(message) {
     }
   }
 
+  // "must only specify one of [\"a\", \"b\"]" — one setting, two spellings.
+  const duplicate = /must only specify one of\s*\[([^\]]*)\]/i.exec(text)
+  if (duplicate) {
+    for (const key of duplicate[1].split(',')) {
+      const value = key.trim().replace(/^["']|["']$/g, '')
+      if (value && !keys.includes(value)) keys.push(value)
+    }
+  }
+
   // "Value for X must be …", "X must be between …", "Invalid value for X"
   const rangePatterns = [
     /Value for\s+([A-Za-z_][A-Za-z0-9_]*)\s+must be/gi,
@@ -406,14 +436,25 @@ async function dtGenerate(settings, payload, attempt = 0) {
     const offenders = rejectedKeysIn(raw)
     // Learn and retry once. The first generation that meets a new unsupported
     // setting still succeeds, and no later one meets it again.
-    if (offenders.length && attempt === 0) {
-      await rememberRejectedKeys(offenders)
-      spindle.log.warn('[lumidraw] Draw Things refused ' + offenders.join(', ') +
-        ' — dropping ' + (offenders.length === 1 ? 'it' : 'them') + ' and retrying once. ' +
+    // Keep going while each attempt names something new. A freshly synced
+    // config can carry several unusable keys, and Draw Things reports only the
+    // first one it trips over — so retrying ONCE meant one failed generation
+    // per bad key before the config settled. Now it converges within a single
+    // generation.
+    const stillPresent = offenders.filter((key) => key in payload)
+    if (stillPresent.length && attempt < 5) {
+      await rememberRejectedKeys(stillPresent)
+      spindle.log.warn('[lumidraw] Draw Things refused ' + stillPresent.join(', ') +
+        ' — dropping ' + (stillPresent.length === 1 ? 'it' : 'them') + ' and retrying (round ' + (attempt + 1) + ' of 5). ' +
         'These settings will be omitted from now on; clear the list in Settings if Draw Things is updated.')
       const retry = { ...payload }
-      for (const key of offenders) delete retry[key]
+      for (const key of stillPresent) delete retry[key]
       return dtGenerate(settings, retry, attempt + 1)
+    }
+    if (offenders.length && !stillPresent.length) {
+      spindle.log.warn('[lumidraw] Draw Things named ' + offenders.join(', ') +
+        ' but the payload no longer contains ' + (offenders.length === 1 ? 'it' : 'them') +
+        ' — the setting is probably active in the Draw Things app itself rather than in this request.')
     }
     throw new Error(`Draw Things rejected the generation: ${describeDtRejection(raw)}`)
   }
@@ -4395,7 +4436,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.36.3 ranks presentation first, a stray one now survives every cap
+// and since 0.37.0 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -6246,7 +6287,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.36.3',
+          version: (spindle.manifest && spindle.manifest.version) || '0.37.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7344,4 +7385,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.36.3'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.37.0'))

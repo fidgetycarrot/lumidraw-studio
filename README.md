@@ -1,7 +1,65 @@
-# LumiDraw Studio 0.36.3
+# LumiDraw Studio 0.37.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.37.0 — Sync converges in one generation, not four
+
+Three different Draw Things rejections in one evening, all from the same place:
+
+```text
+Unrecognized keys: [tiled_decoding]
+Value for tea_cache_end must be between 0 and 1000, inclusive (was -1)
+More than one key for Compression Artifacts specified
+  (must only specify one of ["compression_artifacts", "compression_artifacts"])
+```
+
+### The design flaw underneath
+
+**Sync reads `GET /`, which returns Draw Things' full internal configuration.
+That is not the same shape as what its generation API accepts.** Full
+pass-through was built on the assumption that it was — my assumption, and the
+reason a fresh Sync can immediately stop working.
+
+The read format carries settings the write API has never heard of, values that
+are only meaningful internally (`-1` for "off"), and more than one spelling of a
+single setting.
+
+### One setting, two spellings
+
+`compression_artifacts` and `compressionArtifacts` are distinct JavaScript keys
+and the same Draw Things setting — the giveaway is the error printing the
+canonical name **twice**. Sync captures snake_case; a preset's extras can hold
+camelCase; both survive into one object and neither looks wrong.
+
+`buildPayload` now collapses keys that normalise to the same setting, keeping
+the later assignment so the visible workspace still wins.
+
+### Converging in one generation instead of four
+
+Draw Things reports only the **first** key it trips over. Retrying once meant a
+config with four unusable settings needed four failed generations before it
+settled — which is what "I clicked Sync and now it won't generate" actually
+looked like.
+
+The retry now loops while each attempt names something new, up to five rounds,
+dropping only keys the payload actually contains. A key Draw Things names that
+we never sent is reported rather than retried — that setting is active in the
+app itself, not in the request.
+
+Combined with 0.36.3, all three rejection shapes now feed the same machinery:
+learn the key, drop it, retry immediately, omit it from then on.
+
+### The runner earned itself
+
+The three assertions for this landed below `dtkeys.mjs`'s summary and would have
+gone uncounted. `run-all.mjs` caught it on the first run — the fifth instance of
+this mistake in the session and the first one I did not have to find by hand.
+Its check reads the source rather than the output, because assertions that only
+print on failure are invisible to any output-based guard.
+
+**28 suites · 705 assertions.**
+
 
 ## 0.36.3 — A recognised key with an unusable value
 
