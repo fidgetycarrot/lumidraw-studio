@@ -1481,7 +1481,10 @@ const VALID_ASPECTS = new Set(['3:4', '4:3', '1:1', '9:16', '16:9'])
 // Parser scene fields cannot invent genital anatomy for a saved identity.
 // Conditional anatomy must come from the profile and be explicitly named in
 // the source passage as well as marked visible by the parser.
-const EXPLICIT_ANATOMY_RE = /\b(?:penis|penises|cock|cocks|dick|dicks|phallus|vagina|vaginas|vulva|vulvas|pussy|pussies|testicle|testicles|testes|scrotum|genital|genitals|futa|futanari)\b/i
+// The firewall is only as wide as this pattern. Every synonym missing from it is
+// a way for the parser to hand a subject anatomy that LumiDraw never granted —
+// "erection" and "bulge" read as pose or clothing and used to sail through.
+const EXPLICIT_ANATOMY_RE = /\b(?:penis|penises|cock|cocks|dick|dicks|phallus|phalluses|erection|erections|erect|member|manhood|shaft|girth|balls|vagina|vaginas|vulva|vulvas|pussy|pussies|clitoris|clit|labia|testicle|testicles|testes|scrotum|genital|genitals|genitalia|crotch|groin|bulge|futa|futanari|dickgirl|newhalf)\b/i
 const ANATOMY_ALIAS_GROUPS = [
   { profile: /\b(?:penis|cock|dick|phallus|male genitals?)\b/i, passage: /\b(?:penis|cock|dick|phallus|male genitals?)\b/i },
   { profile: /\b(?:vagina|vulva|pussy|female genitals?)\b/i, passage: /\b(?:vagina|vulva|pussy|female genitals?)\b/i },
@@ -2470,14 +2473,19 @@ function applyAnatomyFirewall(scene, profiles = null) {
     : new Set(['character', 'persona'])
   return {
     ...scene,
-    subjects: scene.subjects.map((subject) => knownRefs.has(subject.ref) ? {
+    // Unprofiled subjects used to skip the firewall entirely: the ternary scrubbed
+    // known refs and returned an `other_1` untouched, so a walk-on could be handed
+    // anatomy in her pose or outfit and nothing stopped it. Only the appearance
+    // wipe is profile-only — an unprofiled subject has no saved appearance to fall
+    // back on, so hers is all there is.
+    subjects: scene.subjects.map((subject) => ({
       ...subject,
-      appearance: [],
+      appearance: knownRefs.has(subject.ref) ? [] : removeInventedAnatomy(subject.appearance),
       outfit: removeInventedAnatomy(subject.outfit),
       pose: removeInventedAnatomy(subject.pose),
       expression: removeInventedAnatomy(subject.expression),
       action: removeInventedAnatomy(subject.action),
-    } : subject),
+    })),
     relations: scene.relations.map((relation) => ({
       ...relation,
       action: scrubInventedAnatomyPhrase(relation.action),
@@ -4864,6 +4872,36 @@ function garmentDefence(descriptors) {
   return negatives.slice(0, 6)
 }
 
+// The caption binds anatomy by name — "Sovi's penis is visibly exposed." The model
+// binds by proximity, and Anima has seen a great deal of futanari, so a 1girl
+// standing in a frame where a penis is named can be given one. Nothing in the
+// positive prompt says whose body it is not. The negative can.
+const FEMALE_COUNT_RE = /\b(?:\d+girls?|multiple girls)\b/i
+const PENIS_ANATOMY_RE = /\b(?:penis|testicles|erection)\b/i
+// A character whose own identity blurs this is not protected against it: negating
+// futanari on a trap or a futa is negating who she is.
+const BLURRED_IDENTITY_RE = /\b(?:futanari|futa|dickgirl|newhalf|trap|otoko no ko|femboy|cuntboy|intersex)\b/i
+// Deliberately not "penis". The caption is asking for one on the other subject, and
+// negating the tag outright is how the anatomy disappears from the scene entirely —
+// the opposite failure. These four name the specific condition of a female-bodied
+// character having one, which is the thing that is actually wrong.
+const FUTANARI_NEGATIVES = ['futanari', 'dickgirl', 'newhalf', 'futa']
+
+function anatomyDefence(descriptors, scene) {
+  if (!scene || !['nsfw', 'explicit'].includes(scene.safety)) return []
+  const items = descriptors || []
+  const anyPenis = items.some((item) => (item.anatomy || []).some((tag) => PENIS_ANATOMY_RE.test(String(tag || ''))))
+  if (!anyPenis) return []
+  const exposed = items.some((item) => {
+    if ((item.anatomy || []).length) return false
+    if (!FEMALE_COUNT_RE.test(String(item.countTag || ''))) return false
+    const identity = [...(item.appearance || []), item.noun || '', item.anchor || ''].join(' ')
+    return !BLURRED_IDENTITY_RE.test(identity)
+  })
+  if (!exposed) return []
+  return FUTANARI_NEGATIVES.slice()
+}
+
 function traceAppearance(item, after) {
   const before = cleanAppearanceForNoun(item.appearance, item.noun)
   const scenery = before.filter((tag) => isNotTrait(tag))
@@ -4942,6 +4980,14 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   if (LAST_COMPILE_NEGATIVES.length) {
     trace('garment defence', 'applied',
       `negating ${LAST_COMPILE_NEGATIVES.join(', ')} — nobody in this scene wears them and the model's prior reaches for them`)
+  }
+  const anatomyNegatives = anatomyDefence(descriptors, scene)
+  if (anatomyNegatives.length) {
+    LAST_COMPILE_NEGATIVES = uniqueStrings([...LAST_COMPILE_NEGATIVES, ...anatomyNegatives])
+    trace('anatomy defence', 'applied',
+      `negating ${anatomyNegatives.join(', ')} — anatomy is named for one subject and a female subject in the same frame has none`)
+  } else if (descriptors.some((item) => (item.anatomy || []).length)) {
+    trace('anatomy defence', 'ran', 'anatomy is named but no unequipped female subject shares the frame')
   }
 
   // A pose naming another subject is a relation in the wrong field. Promoting
