@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.38.4'
+const EXTENSION_VERSION = '0.39.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -494,7 +494,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio v0.38.4" aria-label="LumiDraw Studio v0.38.4">
+    <button class="ld-launcher" title="LumiDraw Studio v0.39.0" aria-label="LumiDraw Studio v0.39.0">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -503,7 +503,7 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.38.4</small></span>
+        <span class="ld-head-title">LumiDraw <small style="font-weight:400;opacity:.65">v0.39.0</small></span>
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
@@ -747,9 +747,9 @@ function realSetup(ctx) {
             <span class="ld-label">Library name</span><input class="ld-persona-ed-name" placeholder="Eric" />
             <div class="ld-profile-grid" style="margin-top:7px">
               <div><span class="ld-label">Anchor / name</span><input class="ld-persona-ed-anchor" placeholder="Eric" /></div>
-              <div><span class="ld-label">Name in prompts (optional)</span><input class="ld-persona-ed-promptname" placeholder="Price" /><div class="ld-hint">Only needed when the name means something to the image model. "Fanny" is booru slang for a body part, "Rose" draws roses. Adding a surname does NOT help — the model matches tokens, not words, so "Fanny Price" still contains "fanny". Use a name with no trace of it: Price, or anything neutral. Leave blank otherwise.</div></div>
               <div><span class="ld-label">Count tag</span><input class="ld-persona-ed-count" placeholder="1boy" /></div>
             </div>
+              <div style="margin-top:7px"><span class="ld-label">Name in prompts (optional)</span><input class="ld-persona-ed-promptname" placeholder="Price" /><div class="ld-hint">Only needed when the name means something to the image model — "Fanny" is booru slang, "Rose" draws roses. A surname does not help; use a name without the word at all.</div></div>
             <div><span class="ld-label">Stable subject phrase</span><input class="ld-persona-ed-subject" placeholder="adult man" /></div>
             <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-persona-ed-tags" style="min-height:58px"></textarea></div>
             <div><span class="ld-label">Default outfit tags</span><textarea class="ld-persona-ed-outfit" style="min-height:48px"></textarea></div>
@@ -796,9 +796,9 @@ Armored [outfit=omit; subject=armored man] | armor, battle gear => heavy plate a
                 <div class="ld-help">Link a reusable character from the library, or keep a local one-off character in this preset. Linked library profiles are edited from the Character Library above.</div>
                 <div class="ld-profile-grid">
                   <div><span class="ld-label">Anchor / name</span><input class="ld-ed-char-anchor" placeholder="Mara" /></div>
-                  <div><span class="ld-label">Name in prompts (optional)</span><input class="ld-ed-char-promptname" placeholder="Price" /><div class="ld-hint">Only needed when the name means something to the image model. "Fanny" is booru slang for a body part, "Rose" draws roses. Adding a surname does NOT help — the model matches tokens, not words, so "Fanny Price" still contains "fanny". Use a name with no trace of it: Price, or anything neutral. Leave blank otherwise.</div></div>
                   <div><span class="ld-label">Count tag</span><input class="ld-ed-char-count" placeholder="1girl" /></div>
                 </div>
+                  <div style="margin-top:7px"><span class="ld-label">Name in prompts (optional)</span><input class="ld-ed-char-promptname" placeholder="Price" /><div class="ld-hint">Only needed when the name means something to the image model — "Fanny" is booru slang, "Rose" draws roses. A surname does not help; use a name without the word at all.</div></div>
                 <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-char-subject" placeholder="adult woman" /></div>
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-chartags" style="min-height:58px" placeholder="feminine appearance, tall, curvy, long black hair, green eyes"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-char-outfit" style="min-height:48px" placeholder="black fitted jacket, dark trousers"></textarea></div>
@@ -825,9 +825,9 @@ fangs = fangs, sharp teeth"></textarea></div>
                 <div class="ld-help">Link a reusable persona from the library, or keep a local one-off persona in this preset. Linked library profiles are edited from the Persona Library above.</div>
                 <div class="ld-profile-grid">
                   <div><span class="ld-label">Anchor / name</span><input class="ld-ed-persona-anchor" placeholder="User" /></div>
-                  <div><span class="ld-label">Name in prompts (optional)</span><input class="ld-ed-persona-promptname" placeholder="Price" /><div class="ld-hint">Only needed when the name means something to the image model. "Fanny" is booru slang for a body part, "Rose" draws roses. Adding a surname does NOT help — the model matches tokens, not words, so "Fanny Price" still contains "fanny". Use a name with no trace of it: Price, or anything neutral. Leave blank otherwise.</div></div>
                   <div><span class="ld-label">Count tag</span><input class="ld-ed-persona-count" placeholder="1boy" /></div>
                 </div>
+                  <div style="margin-top:7px"><span class="ld-label">Name in prompts (optional)</span><input class="ld-ed-persona-promptname" placeholder="Price" /><div class="ld-hint">Only needed when the name means something to the image model — "Fanny" is booru slang, "Rose" draws roses. A surname does not help; use a name without the word at all.</div></div>
                 <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-persona-subject" placeholder="adult man" /></div>
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-personatags" style="min-height:58px"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-persona-outfit" style="min-height:48px"></textarea></div>

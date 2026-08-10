@@ -4068,6 +4068,39 @@ function verbStemsMatch(a, b) {
   return sa.slice(0, min) === sb.slice(0, min)
 }
 
+
+// --- one geometry per statement ----------------------------------------------
+// "Price is performing fellatio on Jason" fixes a geometry: mouth to genitals.
+// Appending ", gagging as she takes him deep" adds a SECOND spatial claim about
+// the same contact, and its object is a whole person rather than a body part, so
+// "deep" has nothing to attach to. The model renders both and averages them —
+// observed result: correct anatomy on one subject, mouth at the other's stomach,
+// and geometry passing through a torso.
+//
+// A trailing clause that re-states the contact is removed. One that only adds an
+// expression or a head angle is kept: "chin tipped up" cannot compete with a
+// geometry, "takes him deep" is nothing but one.
+const COMPETING_GEOMETRY_RE = new RegExp([
+  '\\b(?:deep|deeper|deeply|balls deep|to the hilt|all the way)\\b',
+  '\\b(?:tak(?:es|ing)|swallow(?:s|ing)|engulf(?:s|ing)|impal(?:es|ing)|sheath(?:es|ing))\\s+\\w+',
+  '\\b(?:buried|burying|sunk|sinking|driv(?:es|ing)|thrust(?:s|ing)|slid(?:es|ing))\\b',
+  '\\b(?:inside|into|down)\\s+(?:him|her|them|his|hers|their)\\b',
+].join('|'), 'i')
+
+function stripCompetingGeometry(statement) {
+  const text = String(statement || '').trim()
+  if (!text) return { statement: text, removed: '' }
+  const cut = text.indexOf(',')
+  if (cut < 0) return { statement: text, removed: '' }
+  const head = text.slice(0, cut).trim()
+  const tail = text.slice(cut + 1).trim()
+  if (!head || !tail || !COMPETING_GEOMETRY_RE.test(tail)) return { statement: text, removed: '' }
+  // Only when the head already names an act; otherwise the tail may BE the act.
+  // Three words is the floor — "Price rides Jason" is a complete act statement.
+  if (head.split(/\s+/).length < 3) return { statement: text, removed: '' }
+  return { statement: head.replace(/[,;:]+$/, ''), removed: tail }
+}
+
 function relationSentence(relation, byRef) {
   const actor = byRef.get(relation.actor)
   const target = relation.target ? byRef.get(relation.target) : null
@@ -4527,7 +4560,7 @@ function repairTagWeight(tag) {
 // male body read feminine; "futanari" is a female body with both sets; "male
 // futanari" is the male-bodied version of that. Two of them on one character is
 // the same coin-flip as two coat colours, except it decides the whole figure —
-// and since 0.38.4 ranks presentation first, a stray one now survives every cap
+// and since 0.39.0 ranks presentation first, a stray one now survives every cap
 // that used to quietly remove it.
 const PRESENTATION_TAGS = [
   'trap', 'futanari', 'male futanari', 'futa without pussy', 'cuntboy',
@@ -4850,7 +4883,13 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   const prose = []
   // The thesis sentence leads the caption for BOTH solo and multi scenes:
   // "Sovi is casting a spell with great intensity." before any detail.
-  const statement = applyPromptNames(groundCreatureWords(resolveSceneStatement(scene, descriptors)), profiles)
+  const trimmedStatement = stripCompetingGeometry(
+    applyPromptNames(groundCreatureWords(resolveSceneStatement(scene, descriptors)), profiles))
+  if (trimmedStatement.removed) {
+    trace('scene statement', 'applied',
+      `dropped "${trimmedStatement.removed}" — it describes the same contact a second way, and two geometries for one act render as neither`)
+  }
+  const statement = trimmedStatement.statement
   if (statement) prose.push(statement)
   let crossRelationCount = 0   // relations carried by prose OR already in the statement
   let renderedRelations = 0    // sentences actually written — this is the budget
@@ -5041,14 +5080,14 @@ Return ONLY one compact JSON object, no markdown and no prose.
 Write every scene in the EXACT field order shown below. The order is a survival order: if your reply is ever cut off, everything already written must still form a usable scene, so the mandatory core (safety, core_action, setting, subjects) comes FIRST and droppable refinements (camera, lighting, style) come LAST:
 {"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","partial_features":["exact saved feature names currently showing, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["essential framing tags"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 ${minImages > 0
-  ? `Return between ${minImages} and ${maxImages} image objects. ${minImages} is a FLOOR, not a suggestion: find that many distinct visual moments in the passage even when one seems dominant — a second character's reaction, a change of position, or a detail shown close are all separate images. Each needs its own anchor quoting a different part of the passage.`
+  ? `Return between ${minImages} and ${maxImages} image objects. ${minImages} is a FLOOR: find that many distinct visual moments even when one dominates — a second character's reaction, a change of position, a detail shown close. Each needs its own anchor from a different part of the passage.`
   : `Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.`}
 The parser input may contain PRIOR CONTEXT and a LATEST LOOM LEDGER. They are reference-only. Use them to resolve identities, pronouns, current attire/accessories, carried props, location, and continuity. Never choose an image moment, action, pose, or anchor from those sections. CURRENT PASSAGE always overrides older context and is the only section that may be illustrated.
 This JSON is a visual skeleton for an Anima hybrid compiler. LumiDraw compiles it into one Danbooru/Gelbooru-style tag run followed by a short natural-language caption block, in the tag order Anima was trained on. Do not write the final image prompt yourself.
 TAG STYLE — every string you emit is destined for a booru-tag model, so prefer common Danbooru tags and take every one from what the passage actually describes. Every value must name something an artist could draw: "clinical focus releasing" and "heat radiating" are not visible, and neither is a hedge like "clearly visible" or "prominently shown". Words used in these rules to illustrate TAG FORMAT are examples of shape only and must never appear among your tags as if they were part of the scene. This restriction applies to tags; it does not apply to scene_statement, whose examples below you SHOULD imitate closely.
 For a subject that is a recognisable published character, set "booru_character" to that character's booru tag and "booru_series" to the work it comes from. Leave both empty for original characters; a made-up name in those fields is worse than nothing.
 "style" is the mood of this one scene only (e.g. "backlit", "soft focus"). A medium, artist, or rendering style belongs to the preset and must stay identical between images, or characters drift between generations.
-SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "[name] is fighting three bandits." "[name] is casting a large spell." "[name] is performing oral sex on [name]." (Write the characters' real names in place of [name].) ONGOING ACT BEATS MOMENTARY GESTURE. A passage is usually one beat inside a continuing act, and the continuing act is what the image is of. Name that act, even when it began in an earlier message and the current passage only shows a small movement within it. A hand, a glance, a shift of weight, or a change of expression during an act is a detail of that act, never a replacement for it — put those in pose, expression, or action, not here. WRONG: "[name] tips [name]'s chin up." RIGHT: "[name] is performing oral sex on [name], chin tipped up." If you cannot tell what the continuing act is from the CURRENT PASSAGE alone, read PRIOR CONTEXT and the ESTABLISHED SCENE STATE to find it before falling back to the gesture. In an nsfw or explicit scene, name the act plainly and anatomically — a euphemism, or a literary substitute such as "forcing eye contact" in place of the act being performed, costs the image its subject. Write it as flatly as a caption in a reference book. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
+SCENE STATEMENT — the most important sentence you write. One plain declarative sentence stating what is actually being pictured: name the subjects (use their real names from the known refs below; use the label for unnamed others) and the central action, bluntly and concretely. "[name] is fighting three bandits." "[name] is casting a large spell." "[name] is performing oral sex on [name]." (Write the characters' real names in place of [name].) ONGOING ACT BEATS MOMENTARY GESTURE. A passage is usually one beat inside a continuing act, and the continuing act is what the image is of. Name that act, even when it began in an earlier message and the current passage only shows a small movement within it. A hand, a glance, a shift of weight, or a change of expression during an act is a detail of that act, never a replacement for it — put those in pose, expression, or action, not here. WRONG: "[name] tips [name]'s chin up." RIGHT: "[name] is performing oral sex on [name], chin tipped up." ONE GEOMETRY ONLY: the statement fixes where the bodies are, said once. A trailing clause may add an expression — "gagging" — never a second account of the same contact. "taking him deep" restates it at another depth and the two render as neither; depth and penetration belong in pose or action." If you cannot tell what the continuing act is from the CURRENT PASSAGE alone, read PRIOR CONTEXT and the ESTABLISHED SCENE STATE to find it before falling back to the gesture. In an nsfw or explicit scene, name the act plainly and anatomically — a euphemism, or a literary substitute such as "forcing eye contact" in place of the act being performed, costs the image its subject. In a safe or sensitive scene, never mention a sexual act. No mood words, no scenery, no appearance: subjects and action only, under 15 words.
 SAFETY is the Danbooru rating of the picture, not the mood of the story around it: safe = nothing suggestive; sensitive = suggestive but not sexual (swimwear, underwear, a suggestive pose); nsfw = nudity or overt sexual context; explicit = a sexual act or visible genitals. A tense, frightening, or violent scene with no suggestive content is safe.
 ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag, taken from the CURRENT PASSAGE or the established location in PRIOR CONTEXT. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
 Keep each image object compact: at most 4 setting, 3 camera, 3 lighting, 3 style, 3 outfit, 2 pose, 2 expression, 2 relation details, and 1 action item, each a terse visual tag of at most 7 words. These are choices, not truncation points — pick the strongest few rather than listing everything true. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Avoid him/her/them pronouns in pose and action fields. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
@@ -6399,7 +6438,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
-          version: (spindle.manifest && spindle.manifest.version) || '0.38.4',
+          version: (spindle.manifest && spindle.manifest.version) || '0.39.0',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
         break
@@ -7497,4 +7536,4 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
-spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.38.4'))
+spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || '0.39.0'))

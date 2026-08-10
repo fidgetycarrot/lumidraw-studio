@@ -1,7 +1,105 @@
-# LumiDraw Studio 0.38.4
+# LumiDraw Studio 0.39.0
 
 A responsive Draw Things workspace inside Lumiverse, with Bridge-powered model,
 sampler, and LoRA catalogs plus separate Studio and Story workflows.
+
+## 0.39.0 — Two geometries for one act render as neither
+
+A hand-edited prompt worked; the automatic one did not. The entire difference
+was a trailing clause on the scene statement:
+
+```text
+auto     …is performing fellatio on Jason, gagging as she takes him deep
+manual   …is performing fellatio on Jason
+```
+
+The automatic version produced anatomically correct subjects in an impossible
+arrangement — one mouth at the other's stomach, geometry passing through a
+torso.
+
+`performing fellatio on` already fixes where the bodies are: mouth to genitals.
+`takes him deep` is a **second spatial claim about the same contact**, and its
+object is a whole person rather than a body part, so "deep" has nothing to
+attach to. The model renders both and averages them.
+
+### The parser learned it from my instruction
+
+```text
+WRONG:  "[name] tips [name]'s chin up."
+RIGHT:  "[name] is performing oral sex on [name], chin tipped up."
+```
+
+That worked example demonstrates appending a detail clause. `chin tipped up` is
+a head angle and cannot compete with a geometry; `takes him deep` is nothing but
+a geometry. I never told the parser there was a difference, so it appended both
+kinds equally.
+
+The rule is now stated:
+
+> ONE GEOMETRY ONLY: the statement fixes where the bodies are, said once. A
+> trailing clause may add an expression — "gagging" — never a second account of
+> the same contact. "taking him deep" restates it at another depth and the two
+> render as neither; depth and penetration belong in pose or action.
+
+And the compiler removes such a clause when it appears anyway, tracing what went:
+
+```text
+✓ scene statement — dropped "gagging as she takes him deep" — it describes the
+  same contact a second way, and two geometries for one act render as neither
+```
+
+Deliberately narrow. An expression, a head angle or a hand position is kept —
+only depth, penetration and "how far" language is removed, and only when the
+clause before it already names an act.
+
+### Two measurement fixes
+
+The new rule pushed the instruction past its ceiling, which is the ceiling
+working. It was absorbed by tightening the wording and cutting one line the
+following clause already covered, rather than by raising the limit a third time.
+
+The budget test was also measuring two different instructions against one
+number: the minimum-images block is an addition, so the with-minimum variant is
+inherently longer. It now measures the base against the ceiling and the minimum
+block against its own 300-character allowance.
+
+**31 suites · 813 assertions.**
+
+
+## 0.38.5 — The field was in a 110-pixel column
+
+The tabs render again, but the editor still looked wrong, and this is why:
+
+```css
+.ld-profile-grid { display:grid; grid-template-columns:1fr 110px; }
+```
+
+Two columns, the second 110 pixels wide. I put "Name in prompts" into it along
+with a full paragraph of explanation, so the hint wrapped one or two words at a
+time down an enormous narrow column and pushed everything else out of shape.
+
+The field now sits **outside the grid on its own full-width row**, and the hint
+is one line:
+
+> Only needed when the name means something to the image model — "Fanny" is
+> booru slang, "Rose" draws roses. A surname does not help; use a name without
+> the word at all.
+
+The longer explanation lives in the trace warning, where there is room for it.
+
+### A check removed rather than repaired
+
+The per-field markup check started failing, because the field now opens with
+`<div style="…">` instead of `<div>` and its search window landed in the wrong
+place. That is the same narrow check that missed the stray `</div>` on the line
+above and let a blank Settings tab ship.
+
+It is deleted. The whole-template balance added in 0.38.4 supersedes it, and a
+narrow check that also produces false failures is worse than no check — the same
+conclusion reached when its first version reported twenty imaginary problems.
+
+**30 suites · 789 assertions.**
+
 
 ## 0.38.4 — Blank Settings tab, broken Presets layout
 
