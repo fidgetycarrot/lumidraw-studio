@@ -863,6 +863,20 @@ function cleanParserMessageText(text, { keepLedger = false } = {}) {
     .trim()
 }
 
+// Remembered outfits are keyed by subject ref; the parser needs names. Built here so
+// both parser entry points describe the wardrobe the same way.
+function wardrobeLinesFor(rememberedState, profiles) {
+  const outfits = (rememberedState && rememberedState.outfits) || {}
+  const lines = []
+  for (const profile of allKnownProfiles(profiles)) {
+    if (!profile || !profile.ref) continue
+    const tags = uniqueStrings(outfits[profile.ref] || [])
+    if (!tags.length) continue
+    lines.push({ name: profile.promptName || profile.anchor || profile.ref, tags })
+  }
+  return lines
+}
+
 function buildAnimaParserInput(messages, targetIndex, target, settings, sceneState = null) {
   const currentPassage = cleanParserMessageText(target.content).slice(-6000)
   const contextCount = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
@@ -910,9 +924,25 @@ function buildAnimaParserInput(messages, targetIndex, target, settings, sceneSta
   const stateLines = []
   if (sceneState && (sceneState.setting || []).length) stateLines.push('Location: ' + sceneState.setting.join(', '))
   if (sceneState && (sceneState.lighting || []).length) stateLines.push('Lighting: ' + sceneState.lighting.join(', '))
+  // The wardrobe, stated outright, for the same reason the location is.
+  //
+  // A passage says "white shirt and jean shorts" once. Ten turns later the parser
+  // is asked for an outfit again, has no record of the first answer, and writes
+  // "baggy blue shirt, loose exercise shorts" — not a change of clothes, a second
+  // description of the same clothes. Everything downstream is then correct about
+  // the wrong garment, so the fix has to be here, before the answer is given.
+  if (sceneState && (sceneState.outfits || []).length) {
+    stateLines.push(...sceneState.outfits.map((entry) => `${entry.name} is wearing: ${entry.tags.join(', ')}`))
+  }
   if (stateLines.length) {
+    // The wardrobe sentence is only worth its tokens when there is a wardrobe. A
+    // scene with nothing but a location should not pay for advice about clothes.
+    const wardrobeRule = (sceneState && (sceneState.outfits || []).length)
+      ? '\nAttire is kept for you. OMIT a subject\'s outfit array entirely when the CURRENT PASSAGE does not change it — silence means unchanged, and the wardrobe line above is used. Fill it in only when the passage changes, removes, or adds clothing, or when a time-skip ("later", "the next morning", "after dressing") means they would have changed. When you do fill it in, give the WHOLE outfit, not the one garment the passage mentioned. Never re-describe clothing that has not changed: a re-wording reads as a costume change to the image model.'
+      : ''
     sections.push('----- ESTABLISHED SCENE STATE — AUTHORITATIVE -----\n' +
-      'This is where the story currently is. Use it for setting and lighting unless the CURRENT PASSAGE states that the characters moved or the light changed. Never invent a different place, and never describe a location that appears nowhere in this request.\n\n' +
+      'This is where the story currently is. Use it for setting and lighting unless the CURRENT PASSAGE states that the characters moved or the light changed. Never invent a different place, and never describe a location that appears nowhere in this request.' +
+      wardrobeRule + '\n\n' +
       stateLines.join('\n'))
   }
   if (previous.length) {
@@ -2982,19 +3012,21 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   //
   // Precedence: what this passage says > what she was last seen in > her default.
   // A passage that does describe clothing still wins, so changing outfits works.
-  const rememberedOutfit = (!state || state.outfitPolicy !== 'omit')
+  const rememberedOutfit = (!state || state.outfitPolicy !== 'omit') && !ANONYMOUS_REF_RE.test(subject.ref || '')
     ? uniqueStrings(((rememberedOutfits && rememberedOutfits[subject.ref]) || []))
     : []
-  const merged = mergeOutfitByZone(subject.outfit, rememberedOutfit.length ? rememberedOutfit : inheritedOutfit)
+  const merged = mergeOutfitByZone(subject.outfit, rememberedOutfit.length ? rememberedOutfit : inheritedOutfit, sourcePassage)
   const outfit = subject.outfit.length ? merged.outfit
     : (rememberedOutfit.length ? rememberedOutfit : inheritedOutfit)
   const who = (profile && profile.anchor) || subject.ref
   if (!subject.outfit.length && rememberedOutfit.length) {
     trace(`outfit continuity · ${who}`, 'applied',
       `the passage did not describe clothing, so what she was last seen in was kept: ${rememberedOutfit.join(', ')}`)
-  } else if (merged.restored.length) {
-    trace(`outfit continuity · ${who}`, 'applied',
-      `the passage dressed only part of her (${subject.outfit.join(', ')}); ${merged.restored.join(', ')} restored from what she was last seen in`)
+  } else if (merged.restored.length || merged.corrected.length) {
+    const parts = []
+    if (merged.corrected.length) parts.push(`re-worded garment(s) put back to what was established: ${merged.corrected.join('; ')}`)
+    if (merged.restored.length) parts.push(`${merged.restored.join(', ')} restored for a zone the passage left silent`)
+    trace(`outfit continuity · ${who}`, 'applied', parts.join(' · '))
   }
   // A nude body in an nsfw scene shows its anatomy — that is what nude means. The
   // passage does not have to name it, and prose about a shower rarely does. Left
@@ -4234,7 +4266,7 @@ const GARMENT_ZONES = [
   // or "dress" would register as a top.
   { zone: 'full', re: /\b(?:dress|gown|robe|kimono|yukata|jumpsuit|overalls|bodysuit|leotard|swimsuit|bikini|catsuit|coveralls|apron dress|nightgown|cassock|habit)\b/i },
   { zone: 'bottom', re: /\b(?:shorts|pants|trousers|jeans|skirt|leggings|tights|slacks|chaps|breeches|hakama|loincloth|briefs|boxers|panties|thong|underwear bottom)\b/i },
-  { zone: 'top', re: /\b(?:shirt|t-shirt|tank top|blouse|sweater|hoodie|jacket|coat|cardigan|vest|top|tunic|bra|camisole|crop top|pullover|blazer|poncho|cloak)\b/i },
+  { zone: 'top', re: /\b(?:shirt|t-shirt|tank top|blouse|sweater|hoodie|jacket|coat|cardigan|vest|top|tunic|bra|camisole|crop top|pullover|blazer|poncho|cloak|corset|bustier|halter|bandeau|bodice|turtleneck|sweatshirt|jersey|smock|waistcoat|shrug|bolero|kimono jacket|haori)\b/i },
   { zone: 'feet', re: /\b(?:shoes|sneakers|boots|sandals|heels|slippers|socks|loafers|flats)\b/i },
   { zone: 'legs', re: /\b(?:thighhighs|stockings|kneehighs|garter)\b/i },
 ]
@@ -4255,20 +4287,46 @@ const BARE_ZONE_RE = [
   { zone: 'feet', re: /\b(?:barefoot|bare feet)\b/i },
 ]
 
-function mergeOutfitByZone(reported, remembered) {
+// Changing clothes is an event the passage narrates. Absent one of these, a garment
+// that differs from memory is a re-description, not a new outfit.
+const OUTFIT_CHANGE_RE = /\b(?:chang(?:e|es|ed|ing)|shrug(?:s|ged)? (?:on|into)|pull(?:s|ed|ing)? (?:on|off)|put(?:s|ting)? on|slip(?:s|ped|ping)? (?:on|out of|into)|strip(?:s|ped|ping)?|undress|undo(?:es|ne)?|unbutton|unzip|took off|takes? off|threw on|throws? on|dressed in|now wearing|swap(?:s|ped)|borrow(?:s|ed)|change of clothes|got dressed|redress)\b/i
+
+function mergeOutfitByZone(reported, remembered, passage = '') {
   const worn = uniqueStrings(reported || [])
   const memory = uniqueStrings(remembered || [])
-  if (!worn.length || !memory.length) return { outfit: worn, restored: [] }
+  if (!worn.length || !memory.length) return { outfit: worn, restored: [], corrected: [] }
+
+  // A zone that memory already covers is defended: "white shirt" becoming "baggy
+  // blue shirt" two turns later is the parser describing the same shirt again, and
+  // an image model reads a re-wording as a costume change. The passage saying she
+  // changed is the only thing that outranks the record.
+  const changing = OUTFIT_CHANGE_RE.test(String(passage || ''))
+  const corrected = []
+  if (!changing) {
+    const memoryByZone = new Map()
+    for (const tag of memory) {
+      const zone = garmentZone(tag)
+      if (zone && !memoryByZone.has(zone)) memoryByZone.set(zone, tag)
+    }
+    for (let i = 0; i < worn.length; i++) {
+      const zone = garmentZone(worn[i])
+      if (!zone || !memoryByZone.has(zone)) continue
+      const known = memoryByZone.get(zone)
+      if (normalizeIdentityText(known) === normalizeIdentityText(worn[i])) continue
+      corrected.push(`${worn[i]} → ${known}`)
+      worn[i] = known
+    }
+  }
 
   const covered = new Set()
   for (const tag of worn) {
     for (const entry of BARE_ZONE_RE) {
       if (!entry.re.test(normalizeIdentityText(tag))) continue
-      if (entry.zone === 'all') return { outfit: worn, restored: [] }
+      if (entry.zone === 'all') return { outfit: worn, restored: [], corrected }
       covered.add(entry.zone)
     }
     const zone = garmentZone(tag)
-    if (zone === 'full') { covered.add('top'); covered.add('bottom') }
+    if (zone === 'full') { covered.add('full'); covered.add('top'); covered.add('bottom') }
     else if (zone) covered.add(zone)
   }
   // Only the zones the passage never mentioned, and only the two that read as
@@ -4277,12 +4335,17 @@ function mergeOutfitByZone(reported, remembered) {
   for (const tag of memory) {
     const zone = garmentZone(tag)
     if (zone !== 'top' && zone !== 'bottom' && zone !== 'full') continue
-    if (zone === 'full' && (covered.has('top') || covered.has('bottom'))) continue
-    if (zone !== 'full' && covered.has(zone)) continue
+    if (zone === 'full') {
+      // A one-piece is displaced only when the passage dressed the WHOLE body.
+      // Skipping it as soon as any single garment was named is how a remembered
+      // red dress evaporated the moment the prose mentioned her jeans, leaving
+      // her in jeans and nothing else — topless without anyone saying so.
+      if (covered.has('full') || (covered.has('top') && covered.has('bottom'))) continue
+    } else if (covered.has(zone)) continue
     restored.push(tag)
-    if (zone === 'full') { covered.add('top'); covered.add('bottom') } else covered.add(zone)
+    if (zone === 'full') { covered.add('full'); covered.add('top'); covered.add('bottom') } else covered.add(zone)
   }
-  return { outfit: uniqueStrings([...worn, ...restored]), restored }
+  return { outfit: uniqueStrings([...worn, ...restored]), restored, corrected }
 }
 
 function isNotClothing(value) {
@@ -4838,6 +4901,44 @@ function placeWordsIn(value) {
 // Any PLACE word it contains must be supported specifically: "kitchen
 // lighting" must not pass merely because the passage happens to say
 // "mushrooms lighting the moss".
+// Learning a garment is not the same as rendering one. The passage wins for THIS
+// image — that is the precedence everywhere else — but writing an ungrounded guess
+// into memory makes it permanent: restored into every later scene until the story
+// explicitly contradicts it, and now defended by the re-wording correction too. One
+// hallucinated sundress becomes her outfit forever.
+//
+// Same shape as settingTagSupported, and the same asymmetry as the out-of-character
+// gate: not learning a real garment costs one restore, learning a false one poisons
+// every later image.
+// Canonicals are bare HEAD NOUNS, because normalizeIdentityText turns "t-shirt"
+// into "t shirt" and the head is therefore "shirt". Getting this wrong silently
+// blocked every tee.
+const GARMENT_SYNONYMS = [
+  [/\bcutoffs?\b|\bhot pants\b|\bdaisy dukes\b|\bshorts\b/i, 'shorts'],
+  [/\btee\b|\bt shirt\b|\bt-shirt\b|\bblouse\b|\btop\b/i, 'shirt'],
+  [/\btrainers\b|\btennis shoes\b|\bkicks\b/i, 'sneakers'],
+  [/\bfrock\b|\bsundress\b|\bgown\b/i, 'dress'],
+  [/\bdenims\b|\bslacks\b/i, 'jeans'],
+  [/\bboots?\b/i, 'boots'],
+]
+
+function garmentSupported(tag, text, wardrobe, profile) {
+  const head = normalizeIdentityText(tag).split(/\s+/).pop()
+  if (!head || head.length < 3) return false
+  // Anything already established is grounded by definition — this only questions
+  // garments the compile has just invented.
+  const known = [...(wardrobe || []), ...((profile && profile.defaultOutfit) || [])]
+  if (known.some((item) => normalizeIdentityText(item).split(/\s+/).pop() === head)) return true
+  const hay = normalizeIdentityText(text)
+  if (new RegExp(`\\b${escapeRegExp(head)}\\b`).test(hay)) return true
+  return GARMENT_SYNONYMS.some(([re, canonical]) => canonical === head && re.test(hay))
+}
+
+// Positional refs are not identities. The tavern keeper in one scene and the bandit
+// eight scenes later are both other_1, so remembering a wardrobe against that ref
+// dresses the bandit in the keeper's apron. Named refs are stable and keep theirs.
+const ANONYMOUS_REF_RE = /^other_\d+$/
+
 function settingTagSupported(tag, text) {
   const value = normalizeIdentityText(tag)
   if (!value) return false
@@ -5902,7 +6003,7 @@ SCENE STATEMENT — the most important sentence you write. One plain declarative
 SAFETY is the Danbooru rating of the picture, not the mood of the story around it: safe = nothing suggestive; sensitive = suggestive but not sexual (swimwear, underwear, a suggestive pose); nsfw = nudity or overt sexual context; explicit = a sexual act or visible genitals. A tense, frightening, or violent scene with no suggestive content is safe.
 CAMERA — pick only from this closed list, never invent one; these are the only framing words the model was trained on, so "dynamic angle" instructs nothing at all. Frame (at most one): portrait | upper body | cowboy shot | full body | wide shot. Angle (at most one): from above | from below | from side | from behind | from front | straight-on | dutch angle. Lens, rarely: depth of field | foreshortening. Two people in contact take cowboy shot; a lone figure in a large space takes wide shot; a reaction takes portrait.
 ESSENTIALS FIRST: safety, scene_statement, core_action, setting, and every subject must be completed before relations, camera, lighting, and style. A scene with no subjects is discarded entirely, so never spend output on framing or mood words before the subjects array is closed. Every image must include at least one setting tag, taken from the CURRENT PASSAGE or the established location in PRIOR CONTEXT. A solo scene must include core_action or a visible pose/action. A multi-subject scene must include at least one relation.
-Keep each image object compact: at most 4 setting, 3 camera, 3 lighting, 3 style, 3 outfit, 2 pose, 2 expression, 2 relation details, and 1 action item, each a terse visual tag of at most 7 words. These are choices, not truncation points — pick the strongest few rather than listing everything true. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
+Keep each image object compact: at most 4 setting, 3 camera, 3 lighting, 3 style, 6 outfit, 2 pose, 2 expression, 2 relation details, and 1 action item, each a terse visual tag of at most 7 words. These are choices, not truncation points — pick the strongest few rather than listing everything true. Omit optional keys when their value would be empty or redundant; do not output an empty appearance_state. Never write a descriptive paragraph. Never include permanent appearance for ANY known ref listed below (character, persona, or a named cast member); LumiDraw inserts their locked profiles. Use each cast member's exact listed ref when they appear; reserve other_1/other_2 for subjects with no saved profile. For a known ref with saved appearance states, set appearance_state only when the current passage or reference context clearly establishes one exact saved state. Omit it when uncertain. Never combine traits from multiple states.
 PARTIAL CHANGES ARE NOT STATE CHANGES. When a passage shows only SOME of a character's transformation — a single feature slipping, eyes changing, claws extending, "partly", "slightly", "a little", "just his eyes", "beginning to" — keep appearance_state at the form they are otherwise in and list the specific features in "partial_features" using the exact saved feature names listed below. Switching appearance_state transforms the WHOLE character, which is wrong for a partial change and produces a completely different creature than the passage describes. Use partial_features for anything short of a full, completed transformation. Select only names that are listed for that ref; never invent a feature name, and never put transformation words in appearance, outfit, pose, or expression.
 RELATIONS ARE THE ONLY CHANNEL FOR CONTACT — anything two subjects do to each other that is not written as a relation will not be drawn, so they are mandatory in a multi-subject scene. The FIRST relation establishes the base body arrangement: "straddles the lap of", "stands between the knees of", "leans over", "faces", "sits beside". Later ones name the clearest contact points, always as a visible hold plus the body part it takes: "pins the shoulders of", "grips the snout of", "bites the neck of", "braces both hands on the shoulders of". Verbs of motion or intensity — "fights", "attacks", "struggles with", "pounds", "thrusts", "presses into" — describe nothing an artist could draw; use the hold instead. Put the specifics in details: "claws hooked into the nose", "knuckles white".
 For seated, leaning, lying, or kneeling poses, name the visible support surface in "support". Use the camera tag "pov" only when ref "persona" is seen from the viewer's own eye position, and in that subject's pose include a cue such as "viewer hands visible" or "face out of frame".
@@ -6009,10 +6110,29 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   // Record the wardrobe as compiled — after the ownership check, so a rejected
   // garment is never learned as belonging to the wrong character.
   const establishedOutfits = outfitSnapshot()
+  const groundedOutfits = {}
+  for (const [ref, worn] of Object.entries(establishedOutfits)) {
+    if (ANONYMOUS_REF_RE.test(ref)) {
+      spindle.log.info(`[lumidraw] outfit memory · ${ref} — not remembered; an anonymous ref is a position, not a person`)
+      continue
+    }
+    const profile = allKnownProfiles(profiles).find((item) => item && item.ref === ref) || null
+    const known = (memoryEntry.outfits || {})[ref]
+    const keep = worn.filter((tag) => garmentSupported(tag, groundingForMemory, known, profile))
+    const dropped = worn.filter((tag) => !keep.includes(tag))
+    if (dropped.length) {
+      spindle.log.info(`[lumidraw] outfit memory · ${ref} — rendered but NOT remembered, nothing in the passage backs them: ${dropped.join(', ')}`)
+    }
+    if (keep.length) {
+      groundedOutfits[ref] = keep
+      const learned = keep.filter((tag) => !(known || []).includes(tag))
+      if (learned.length) spindle.log.info(`[lumidraw] outfit memory · ${ref} — learned: ${learned.join(', ')}`)
+    }
+  }
   await rememberSceneState(chatId, preset.name, {
     setting: establishedSetting,
     lighting: establishedLighting,
-    outfits: Object.keys(establishedOutfits).length ? establishedOutfits : null,
+    outfits: Object.keys(groundedOutfits).length ? groundedOutfits : null,
   })
   // A sentence follows the quality header with a full stop, not a comma:
   // "masterpiece, best quality, @artist. Sovi is …" is the card's own shape.
@@ -6999,15 +7119,21 @@ async function scanStoryCore(userId, options = {}) {
       // inside the recency window.
       const rememberedState = await readSceneMemory(chatId, preset.name)
       const anchorForParser = tagsFrom(preset.sceneAnchor || '', 8)
+      const profilesForState = await getStoryProfiles(preset, settings, userId, chatId)
       const parserSceneState = {
         setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorForParser,
         lighting: rememberedState.lighting || [],
+        outfits: wardrobeLinesFor(rememberedState, profilesForState),
       }
       const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, parserSceneState)
+      if (parserSceneState.outfits.length) {
+        spindle.log.info('[lumidraw] established wardrobe supplied to parser · ' +
+          parserSceneState.outfits.map((e) => `${e.name}: ${e.tags.join(', ')}`).join(' · '))
+      }
       if (parserSceneState.setting.length) {
         spindle.log.info('[lumidraw] established scene state supplied to parser · ' + parserSceneState.setting.join(', '))
       }
-      const profiles = await getStoryProfiles(preset, settings, userId, chatId)
+      const profiles = profilesForState
       const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
         .replaceAll('{{max_images}}', String(settings.maxImages || 2))
         .replaceAll('{{min_images}}', String(settings.minImages || 0))
@@ -7406,11 +7532,12 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const passage = cleanParserMessageText(target.content).slice(-6000)
   const rememberedState = await readSceneMemory(chatId, preset.name)
   const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
+  const profiles = await getStoryProfiles(preset, settings, userId, chatId)
   const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, {
     setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorTags,
     lighting: rememberedState.lighting || [],
+    outfits: wardrobeLinesFor(rememberedState, profiles),
   })
-  const profiles = await getStoryProfiles(preset, settings, userId, chatId)
   const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
     .replaceAll('{{max_images}}', String(settings.maxImages || 2))
     .replaceAll('{{min_images}}', String(settings.minImages || 0))
