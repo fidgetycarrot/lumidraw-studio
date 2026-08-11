@@ -1,99 +1,71 @@
-# LumiDraw Studio 0.54.0
+# LumiDraw Studio 0.55.0
 
-Includes 0.42.4 through 0.53.2.
+Includes 0.42.4 through 0.54.2 — everything since your last install.
 
-That review is largely right, and its one-sentence version is the correct diagnosis:
-**the wardrobe had no honest writer.** I've taken most of it. Below is what I built,
-what I skipped, and where it was working from a stale copy.
+Both things, and the manual one is first because it's the one you can lean on while
+you're out.
 
-## The zone bug was real, and worse than described
+## The wardrobe panel — Story tab
 
-I reproduced it before touching anything:
-
-```
-memory: red dress, sandals | passage reports jeans
-  -> {"outfit":["jeans"],"restored":[],"corrected":[]}
-```
-
-Jeans and nothing else. Topless with nobody having said so, and the dress gone
-rather than merely uncovered. A one-piece is now displaced only when the passage
-dressed the **whole** body:
-
-| memory | passage says | result |
-|---|---|---|
-| red dress | jeans | jeans, **red dress** |
-| red dress | blouse | blouse, **red dress** |
-| red dress | blouse + skirt | blouse, skirt *(dress displaced)* |
-
-The residual oddity is real — dress + jeans is incoherent but covered, and by the
-same asymmetry as everywhere else, covered-and-odd beats half-dressed.
-
-**Also found while testing it:** `corset`, `bustier`, `halter`, `turtleneck`,
-`sweatshirt`, `waistcoat` had no zone at all, so they covered nothing and a
-remembered top was layered over them. Zoned now.
-
-## The parser's contract changed
-
-Not just "here's the wardrobe" — the field itself now means something different:
-
-> Attire is kept for you. **OMIT** a subject's outfit array entirely when the
-> CURRENT PASSAGE does not change it — silence means unchanged. Fill it in only
-> when the passage changes, removes or adds clothing, or when a time-skip means
-> they would have changed. When you do, give the **whole** outfit, not the one
-> garment the passage mentioned.
-
-This is the review's best point. It turns a reported outfit from noise into a
-signal: it now means *this changed*, which is what makes the memory write
-trustworthy. It costs no instruction budget because it lives in the wardrobe block,
-which only appears when there is a wardrobe — so a first scene still gets described.
-
-The outfit cap went **3 → 6**. A real outfit is 4–6 items and memory was being
-truncated before it ever saw the whole thing.
-
-## Learning is now separate from rendering
-
-The passage still wins for the image. But an ungrounded garment is no longer
-written to memory — which matters more since 0.53.2, because the re-wording
-correction now *defends* whatever got learned:
+Under the auto-illustration status:
 
 ```
-[lumidraw] outfit memory · character — rendered but NOT remembered, nothing in
-the passage backs them: sundress
-[lumidraw] outfit memory · character — learned: denim shorts, t-shirt
+Wardrobe of record — this chat                    ↻
+
+  Price     [ white shirt, denim shorts, sneakers ]
+  Jason     [ grey henley, work jeans             ]
+
+  [ Save wardrobe ]
 ```
 
-Same shape as `settingTagSupported`, same asymmetry as the OOC gate: not learning a
-real garment costs one restore, learning a false one poisons every later image.
+- **Edit a line and Save** — the next image uses it immediately. No scan needed.
+- **Clear a line** — LumiDraw forgets and re-learns from the next scan.
+- Placeholder text shows the character's profile default when nothing is recorded.
 
-One bug in my own first cut, worth recording: `normalizeIdentityText` strips
-hyphens, so `t-shirt` reduces to head `shirt` — my synonym table keyed on `t-shirt`
-and silently blocked every tee. Canonicals are bare head nouns now.
+This is what images are built from when the passage doesn't describe clothing, and
+it **outranks the character's default outfit** — which is why editing that default
+wasn't fixing anything for you. It's scoped to this chat and preset, like the rest
+of scene memory.
 
-## Anonymous refs no longer carry a wardrobe
+If a scan goes wrong while you're out: open the panel, type what she should be
+wearing, Save, carry on. That's the escape hatch.
 
-`other_1` is a position, not a person. The tavern keeper in scene 1 and the bandit
-in scene 8 are the same ref, so the keeper's apron was being restored onto the
-bandit. Skipped on both read and write. Named refs keep theirs.
+## The clothing digest — 30 messages
 
-## What I did not build, and why
+Agreed on 30. When the wardrobe has **no record for someone in the scene**, LumiDraw
+scans back 30 messages and keeps only the sentences that mention clothing:
 
-**LUMIWARDROBE.** It's the right long-term answer — the review is correct that the
-wardrobe should track the story rather than the images. But LUMICAST is a preset
-mechanism you haven't tested yet, and shipping a second one that depends on the same
-unproven cooperation would mean two things failing at once with no way to tell which.
-Worth doing once LUMICAST is known to work.
+```
+[lumidraw] clothing digest · 2 earlier mention(s) found in the last 30 messages,
+because the wardrobe has no record for someone in this scene
+```
 
-**The `stripBorrowedOutfit` ownership change.** Plausible, but it's the function that
-stops garments bleeding between characters in two-handers, and rewriting it on
-reasoning alone is how I'd introduce the bug it exists to prevent. It deserves its
-own investigation with a failing case.
+```
+- She pulled on her denim shorts and a white tank top before dawn.
+- Later she kicked off her sneakers by the door.
+```
 
-**Inline protocol injection.** You're on the Anima parser; inline isn't your path.
+Oldest first, and the parser is told a later line undoes an earlier one — because
+that ordering is the whole reason a digest beats a wider window. Capped at ~900
+characters, so it costs roughly a fiftieth of what six full messages would.
 
-## One correction to the review
+**It stays out of the way when the record is populated.** A wardrobe that knows the
+answer is authoritative, and the digest on top of it would just be more material for
+the parser to second-guess itself with.
 
-It says the parser can't see the wardrobe. That was true when it was written —
-0.53.2 fixed it an hour ago. What it *added* on top, and what I've now taken, is the
-omit-unless-changed contract, which is the more valuable half.
+Cards and out-of-character asides are stripped before the search, so Gabrielle's
+console can't contribute a crown.
 
-**42 suites · 1412 assertions · all green.**
+## What I'd watch for
+
+**The panel is the thing to try first**, since it verifies everything else — if what
+it shows doesn't match what you'd expect, the record is the problem rather than the
+compiler, and you can fix it in place.
+
+**The digest is the least tested thing here.** It fires only on the cold-start case,
+and whether the parser reads a list of past clothing sentences well is something only
+a real turn will show. If it produces worse outfits than no digest at all, clearing
+that character's wardrobe line is what makes it fire again, and telling me so is what
+gets it removed.
+
+**42 suites · 1470 assertions · all green.**

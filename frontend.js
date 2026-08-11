@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.54.0'
+const EXTENSION_VERSION = '0.55.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -676,19 +676,28 @@ function realSetup(ctx) {
                     <span class="ld-label">Reference context</span>
                     <select class="ld-parser-context">
                       <option value="0">Current message only</option>
-                      <option value="1">1 previous chat message</option>
-                      <option value="2">2 previous chat messages</option>
-                      <option value="3">3 previous chat messages</option>
-                      <option value="4">4 previous chat messages</option>
+                      <option value="1">1 previous story message</option>
+                      <option value="2">2 previous story messages</option>
+                      <option value="3">3 previous story messages</option>
+                      <option value="4">4 previous story messages</option>
                     </select>
                   </div>
                   <div style="display:flex;align-items:end;padding-bottom:5px">
                     <label style="display:flex;align-items:center;gap:7px;font-size:12px"><input type="checkbox" class="ld-use-loom-ledger" style="width:auto" /> Use latest &lt;loomledger&gt; as continuity reference</label>
                   </div>
                 </div>
-                <div class="ld-help">Prior messages and the latest Loom ledger may resolve clothing, accessories, props, location, and pronouns. Only the current message may supply the illustrated moment or anchor.</div>
+                <div class="ld-help">Prior messages and the latest Loom ledger may resolve clothing, accessories, props, location, and pronouns. Only the current message may supply the illustrated moment or anchor. This counts <strong>story</strong> messages: your own turns are included as well but do not use up the count, since a reply like &ldquo;I take her hand&rdquo; carries little scene.</div>
               </div>
               <div class="ld-help ld-story-last-status">Auto illustrations idle.</div>
+              <div style="margin-top:11px;padding-top:9px;border-top:1px solid var(--ld-border, rgba(255,255,255,.08))">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="ld-label" style="margin:0">Wardrobe of record — this chat</span>
+                  <button class="ld-btn ld-compact" data-act="wardrobe-refresh" title="Read what LumiDraw currently believes everyone is wearing">↻</button>
+                </div>
+                <div class="ld-wardrobe-rows" style="margin-top:6px"></div>
+                <div class="ld-help">What images are built from when the passage does not describe clothing. Edit a line and press Save to correct it; clear a line to make LumiDraw learn it again from the next scan. This beats the character's default outfit, which is only used when nothing is recorded here.</div>
+                <div class="ld-status ld-wardrobe-status" style="font-size:11px"></div>
+              </div>
             </div>
             <div class="ld-row" style="margin-top:9px">
               <div><span class="ld-label">Minimum images (0 = model decides)</span><input class="ld-minimg" type="number" min="0" max="4" step="1" /></div>
@@ -3130,6 +3139,59 @@ img[class*="inlineImage"] {
     $('.ld-size-images').addEventListener('change', () => { applyImageSize(); scheduleSettingsSave() })
   }
 
+  // --- wardrobe of record -----------------------------------------------------
+  // The compiler corrects the parser toward what it remembers, so a wrong record
+  // is worse than no record: it is defended. This is the correction.
+  function renderWardrobeRows(rows) {
+    const box = $('.ld-wardrobe-rows')
+    if (!box) return
+    if (!rows || !rows.length) {
+      box.innerHTML = '<div class="ld-help" style="margin:0">Nothing recorded yet. It fills in from the next image.</div>'
+      return
+    }
+    box.innerHTML = rows.map((row) => {
+      const name = String(row.name || row.ref).replace(/[<>&]/g, '')
+      const tags = String(row.tags || '').replace(/"/g, '&quot;')
+      const hint = row.tags ? '' : (row.fallback ? `falls back to: ${String(row.fallback).replace(/[<>&]/g, '')}` : 'nothing recorded')
+      return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+        <span style="min-width:96px;font-size:12px;opacity:.8">${name}${row.orphan ? ' *' : ''}</span>
+        <input class="ld-wardrobe-input" data-ref="${row.ref}" style="flex:1" value="${tags}" placeholder="${hint}" />
+      </div>`
+    }).join('') + '<button class="ld-btn ld-compact" data-act="wardrobe-save" style="margin-top:4px">Save wardrobe</button>'
+  }
+
+  async function loadWardrobe(quiet = true) {
+    try {
+      const res = await call('wardrobe', {}, 15000)
+      renderWardrobeRows(res.rows)
+      if (!quiet) setStatus('.ld-wardrobe-status', `Read from "${res.preset || 'no preset'}".`, 'good')
+    } catch (e) {
+      setStatus('.ld-wardrobe-status', e.message, 'err')
+    }
+  }
+
+  if ($('[data-act="wardrobe-refresh"]')) {
+    $('[data-act="wardrobe-refresh"]').addEventListener('click', () => loadWardrobe(false))
+  }
+  // The save button is created by renderWardrobeRows, so the listener is delegated.
+  if ($('.ld-wardrobe-rows')) {
+    $('.ld-wardrobe-rows').addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-act="wardrobe-save"]')
+      if (!button) return
+      const set = {}
+      for (const input of document.querySelectorAll('.ld-wardrobe-input')) {
+        set[input.getAttribute('data-ref')] = input.value
+      }
+      try {
+        const res = await call('wardrobe', { set }, 15000)
+        renderWardrobeRows(res.rows)
+        setStatus('.ld-wardrobe-status', 'Saved. The next image uses this.', 'good')
+      } catch (e) {
+        setStatus('.ld-wardrobe-status', e.message, 'err')
+      }
+    })
+  }
+
   function refreshModelOverrideNote() {
     const note = $('.ld-model-override-note')
     const input = $('.ld-parser-model')
@@ -4208,6 +4270,7 @@ img[class*="inlineImage"] {
         }
       }
       renderCharacterList(); renderPersonaList(); renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
+      loadWardrobe().catch(() => {})
       updateScanLabel()
       initialized = true
       // The header shows the version the BACKEND reports, which comes from the

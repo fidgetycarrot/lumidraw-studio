@@ -877,6 +877,50 @@ function wardrobeLinesFor(rememberedState, profiles) {
   return lines
 }
 
+// --- clothing digest ----------------------------------------------------------
+// A recency window is the wrong instrument for a stable fact: the passage that
+// dressed her could be thirty messages back, and widening the window just moves the
+// blind spot without removing it — while giving the parser more material to
+// rationalise a confident guess from.
+//
+// So this searches for the thing instead of hoping it is nearby: scan back a long
+// way, keep only the sentences that mention clothing, and hand over a short digest
+// in order. ~500 characters instead of ~24,000, and it finds the change moment
+// wherever it is.
+//
+// It runs ONLY when the wardrobe has nothing for somebody in the scene. When the
+// record is populated it is authoritative and this would be noise.
+const CLOTHING_SENTENCE_RE = /\b(?:wearing|wore|dressed|undressed|changed into|pulled on|pulled off|shrugged into|slipped (?:on|into|out of)|stripped|took off|threw on|buttoned|unbuttoned|zipped|unzipped|tugged|barefoot|topless|bottomless|naked|nude|shirt|t-shirt|blouse|tank top|sweater|hoodie|jacket|coat|cardigan|corset|dress|gown|robe|skirt|shorts|jeans|trousers|pants|leggings|boots|sneakers|shoes|sandals|heels|socks|stockings|thighhighs|apron|uniform|swimsuit|bikini|underwear|panties|bra)\b/i
+
+function clothingDigest(messages, targetIndex, window = 30, maxChars = 900) {
+  if (!Array.isArray(messages) || !Number.isInteger(targetIndex)) return []
+  const found = []
+  const start = Math.max(0, targetIndex - window)
+  for (let i = start; i < targetIndex && i < messages.length; i++) {
+    const bits = messageBits(messages[i] || {})
+    if (!bits || typeof bits.content !== 'string') continue
+    // Cards and out-of-character asides are not the story's account of anybody's
+    // clothes, and the card stripper already knows how to remove them.
+    const text = cleanParserMessageText(bits.content)
+    if (!text) continue
+    for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
+      const line = sentence.trim()
+      if (line.length < 12 || line.length > 220) continue
+      if (!CLOTHING_SENTENCE_RE.test(line)) continue
+      found.push(line)
+    }
+  }
+  // Most recent last, and trimmed from the FRONT when over budget: the newest
+  // mention is the one most likely to still be true.
+  let total = 0
+  const kept = []
+  for (let i = found.length - 1; i >= 0 && total < maxChars; i--) {
+    kept.unshift(found[i])
+    total += found[i].length
+  }
+  return kept
+}
+
 function buildAnimaParserInput(messages, targetIndex, target, settings, sceneState = null) {
   const currentPassage = cleanParserMessageText(target.content).slice(-6000)
   const contextCount = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
@@ -885,19 +929,44 @@ function buildAnimaParserInput(messages, targetIndex, target, settings, sceneSta
     // Prefer the nearest messages and cap the entire reference window. Large
     // scene/adventure cards are stripped above and cannot crowd out the actual
     // prose or inflate the parser request.
+    // The setting counts STORY messages, not turns.
+    //
+    // It used to walk back N messages of any kind, and a roleplay chat alternates.
+    // So "2 messages of context" bought one assistant message and one of yours —
+    // and yours is "I take her hand", not the paragraph describing the room. Half
+    // the window went to the half of the conversation that carries the least scene.
+    //
+    // A user message is still included when it falls inside the window, because it
+    // is the persona acting and matters for pronouns and intent. It just does not
+    // consume the budget. The character cap still bounds the whole thing, so a long
+    // one cannot crowd out the prose.
+    // There IS a message cap — it is the setting. These are a second, defensive
+    // layer so one enormous message cannot inflate the request, and they were fixed
+    // numbers: 3,000 across the whole window and 1,200 per message, while the
+    // current passage gets 6,000. A roleplay message is routinely longer than 1,200,
+    // so every message of context arrived pre-truncated and asking for four bought
+    // barely more than asking for two.
+    //
+    // Scaled to the setting instead: ask for four messages and you get four
+    // messages' worth. The ceiling stays, because it is protecting the request
+    // rather than rationing the story.
+    const perMessageChars = 3000
     const collected = []
-    let remainingChars = 3000
-    const start = Math.max(0, targetIndex - contextCount)
-    for (let i = targetIndex - 1; i >= start && remainingChars > 0; i--) {
+    let remainingChars = Math.min(12000, Math.max(3000, contextCount * 3000))
+    let storyMessages = 0
+    const scanFloor = Math.max(0, targetIndex - (contextCount * 3) - 4)
+    for (let i = targetIndex - 1; i >= scanFloor && remainingChars > 0; i--) {
+      if (storyMessages >= contextCount) break
       const bits = messageBits(messages[i])
       if (!bits.contentKey || typeof bits.content !== 'string') continue
       const cleanAll = cleanParserMessageText(bits.content)
       if (!cleanAll) continue
-      const clean = cleanAll.slice(-Math.min(1200, remainingChars))
+      const clean = cleanAll.slice(-Math.min(perMessageChars, remainingChars))
       if (!clean) continue
       const label = bits.isAssistant ? 'Previous assistant message' : bits.isUser ? 'Previous user message' : 'Previous chat message'
       collected.push(`[${label}]\n${clean}`)
       remainingChars -= clean.length
+      if (bits.isAssistant || !bits.isUser) storyMessages++
     }
     previous.push(...collected.reverse())
   }
@@ -933,6 +1002,12 @@ function buildAnimaParserInput(messages, targetIndex, target, settings, sceneSta
   // the wrong garment, so the fix has to be here, before the answer is given.
   if (sceneState && (sceneState.outfits || []).length) {
     stateLines.push(...sceneState.outfits.map((entry) => `${entry.name} is wearing: ${entry.tags.join(', ')}`))
+  }
+  // Only when the record cannot answer. A populated wardrobe is authoritative and
+  // this would be noise on top of it.
+  if (sceneState && (sceneState.clothingDigest || []).length) {
+    stateLines.push('Clothing mentioned earlier in this story, oldest first — use it to work out what they are wearing now, and remember a later line undoes an earlier one:\n' +
+      sceneState.clothingDigest.map((line) => '- ' + line).join('\n'))
   }
   if (stateLines.length) {
     // The wardrobe sentence is only worth its tokens when there is a wardrobe. A
@@ -7120,10 +7195,20 @@ async function scanStoryCore(userId, options = {}) {
       const rememberedState = await readSceneMemory(chatId, preset.name)
       const anchorForParser = tagsFrom(preset.sceneAnchor || '', 8)
       const profilesForState = await getStoryProfiles(preset, settings, userId, chatId)
+      const wardrobeLines = wardrobeLinesFor(rememberedState, profilesForState)
+      // Somebody with no record is the only case the digest earns its tokens for.
+      const knownCast = allKnownProfiles(profilesForState).filter((p) => p && p.ref)
+      const anyUnknown = !knownCast.length || knownCast.some((p) => !((rememberedState.outfits || {})[p.ref] || []).length)
+      const digest = anyUnknown ? clothingDigest(messages, targetIndex) : []
+      if (digest.length) {
+        spindle.log.info(`[lumidraw] clothing digest · ${digest.length} earlier mention(s) found in the last 30 messages, ` +
+          'because the wardrobe has no record for someone in this scene')
+      }
       const parserSceneState = {
         setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorForParser,
         lighting: rememberedState.lighting || [],
-        outfits: wardrobeLinesFor(rememberedState, profilesForState),
+        outfits: wardrobeLines,
+        clothingDigest: digest,
       }
       const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, parserSceneState)
       if (parserSceneState.outfits.length) {
@@ -7533,10 +7618,13 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const rememberedState = await readSceneMemory(chatId, preset.name)
   const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
   const profiles = await getStoryProfiles(preset, settings, userId, chatId)
+  const reparseCast = allKnownProfiles(profiles).filter((p) => p && p.ref)
+  const reparseUnknown = !reparseCast.length || reparseCast.some((p) => !((rememberedState.outfits || {})[p.ref] || []).length)
   const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, {
     setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorTags,
     lighting: rememberedState.lighting || [],
     outfits: wardrobeLinesFor(rememberedState, profiles),
+    clothingDigest: reparseUnknown ? clothingDigest(messages, targetIndex) : [],
   })
   const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
     .replaceAll('{{max_images}}', String(settings.maxImages || 2))
@@ -8117,6 +8205,59 @@ spindle.onFrontendMessage(async (payload, userId) => {
       // Lets the user see and reset what Draw Things has refused, so a DT
       // update that adds support for a setting is one button away from being
       // usable again.
+      // The wardrobe of record, readable and correctable.
+      //
+      // Since 0.53.2 the compiler actively corrects the parser back toward what it
+      // remembers, which is right when the record is right and unfixable when it is
+      // not: a hand-edited prompt never recompiles, so it teaches the record
+      // nothing, and the profile default sits BELOW memory in the precedence chain.
+      // Confidence without a correction is just a louder mistake.
+      case 'wardrobe': {
+        const settings = await getSettings()
+        const presets = await getPresets()
+        const preset = presets.find((p) => p.name === settings.activePreset)
+        const presetName = preset ? preset.name : ''
+        const chatId = String(payload.chatId || '').trim() || await resolveActiveChatId(userId)
+        const entry = await readSceneMemory(chatId, presetName)
+        const profiles = preset ? await getStoryProfiles(preset, settings, userId, chatId) : null
+
+        if (payload.set && typeof payload.set === 'object') {
+          const memory = await getSceneMemory()
+          const key = sceneMemoryKey(chatId, presetName)
+          const previous = memory[key] || entry || {}
+          const outfits = { ...(previous.outfits || {}) }
+          for (const [ref, value] of Object.entries(payload.set)) {
+            const tags = animaTagList(String(value || '').split(',')).slice(0, 12)
+            if (tags.length) outfits[ref] = tags
+            else delete outfits[ref]
+            spindle.log.info(`[lumidraw] wardrobe edited by hand · ${ref} — ${tags.length ? tags.join(', ') : '(cleared)'}`)
+          }
+          memory[key] = { ...previous, outfits, at: Date.now() }
+          await spindle.storage.setJson(SCENE_MEMORY_FILE, memory, { indent: 2 })
+        }
+
+        const fresh = await readSceneMemory(chatId, presetName)
+        const worn = fresh.outfits || {}
+        const rows = []
+        for (const profile of allKnownProfiles(profiles)) {
+          if (!profile || !profile.ref) continue
+          rows.push({
+            ref: profile.ref,
+            name: profile.promptName || profile.anchor || profile.ref,
+            tags: (worn[profile.ref] || []).join(', '),
+            fallback: (profile.defaultOutfit || []).join(', '),
+          })
+        }
+        // Anything recorded against a ref with no profile — shown so nothing is
+        // invisible, even though 0.54.0 stopped writing anonymous refs.
+        for (const [ref, tags] of Object.entries(worn)) {
+          if (rows.some((row) => row.ref === ref)) continue
+          rows.push({ ref, name: ref, tags: (tags || []).join(', '), fallback: '', orphan: true })
+        }
+        reply = ok(payload, requestId, { rows, chatId, preset: presetName })
+        break
+      }
+
       case 'dt_rejected_keys': {
         if (payload.clear) {
           await forgetRejectedKeys()
