@@ -2985,11 +2985,16 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   const rememberedOutfit = (!state || state.outfitPolicy !== 'omit')
     ? uniqueStrings(((rememberedOutfits && rememberedOutfits[subject.ref]) || []))
     : []
-  const outfit = subject.outfit.length ? subject.outfit
+  const merged = mergeOutfitByZone(subject.outfit, rememberedOutfit.length ? rememberedOutfit : inheritedOutfit)
+  const outfit = subject.outfit.length ? merged.outfit
     : (rememberedOutfit.length ? rememberedOutfit : inheritedOutfit)
+  const who = (profile && profile.anchor) || subject.ref
   if (!subject.outfit.length && rememberedOutfit.length) {
-    trace(`outfit continuity · ${(profile && profile.anchor) || subject.ref}`, 'applied',
+    trace(`outfit continuity · ${who}`, 'applied',
       `the passage did not describe clothing, so what she was last seen in was kept: ${rememberedOutfit.join(', ')}`)
+  } else if (merged.restored.length) {
+    trace(`outfit continuity · ${who}`, 'applied',
+      `the passage dressed only part of her (${subject.outfit.join(', ')}); ${merged.restored.join(', ')} restored from what she was last seen in`)
   }
   // A nude body in an nsfw scene shows its anatomy — that is what nude means. The
   // passage does not have to name it, and prose about a shower rarely does. Left
@@ -4212,6 +4217,73 @@ const BODY_PART_RE = /\b(?:hand|hands|thumb|finger|fingers|palm|wrist|arm|arms|f
 // A condition is not a garment. "blood-covered" describes the wearer, and
 // rendering it as "wearing blood-covered" asks the model for a thing.
 const WORN_CONDITION_RE = /^(?:blood[- ]?(?:covered|soaked|stained)|bloodied|bloody|soaked|drenched|muddy|dirty|filthy|singed|burnt|scorched|frayed|ragged|tattered|torn|ruined|wet|damp|dusty|ash[- ]?covered)$/i
+
+// Which part of the body a garment actually covers.
+//
+// 0.53.0 restored the remembered outfit only when the passage described NO clothing
+// at all. That missed the commoner and sillier case: the passage mentions ONE thing
+// — "he fisted the back of her shirt" — so the parser reports a t-shirt and sneakers
+// and nothing else, and a partial outfit replaced the whole wardrobe. Price walked
+// through a diner car park in her underwear.
+//
+// Restoring by zone fixes it without overriding the passage: whatever the passage
+// dressed stays exactly as written, and only the zones it left silent are filled in
+// from what she was last seen wearing.
+const GARMENT_ZONES = [
+  // Checked in order; the first match wins, so full-body garments must come first
+  // or "dress" would register as a top.
+  { zone: 'full', re: /\b(?:dress|gown|robe|kimono|yukata|jumpsuit|overalls|bodysuit|leotard|swimsuit|bikini|catsuit|coveralls|apron dress|nightgown|cassock|habit)\b/i },
+  { zone: 'bottom', re: /\b(?:shorts|pants|trousers|jeans|skirt|leggings|tights|slacks|chaps|breeches|hakama|loincloth|briefs|boxers|panties|thong|underwear bottom)\b/i },
+  { zone: 'top', re: /\b(?:shirt|t-shirt|tank top|blouse|sweater|hoodie|jacket|coat|cardigan|vest|top|tunic|bra|camisole|crop top|pullover|blazer|poncho|cloak)\b/i },
+  { zone: 'feet', re: /\b(?:shoes|sneakers|boots|sandals|heels|slippers|socks|loafers|flats)\b/i },
+  { zone: 'legs', re: /\b(?:thighhighs|stockings|kneehighs|garter)\b/i },
+]
+
+function garmentZone(tag) {
+  const text = normalizeIdentityText(tag)
+  if (!text) return ''
+  for (const entry of GARMENT_ZONES) if (entry.re.test(text)) return entry.zone
+  return ''
+}
+
+// A stated bare zone is a decision, not an omission — "topless" means no top, and
+// restoring one would contradict the passage.
+const BARE_ZONE_RE = [
+  { zone: 'all', re: /\b(?:nude|naked|completely nude|fully nude|unclothed|undressed)\b/i },
+  { zone: 'top', re: /\btopless\b/i },
+  { zone: 'bottom', re: /\b(?:bottomless|no panties|no underwear)\b/i },
+  { zone: 'feet', re: /\b(?:barefoot|bare feet)\b/i },
+]
+
+function mergeOutfitByZone(reported, remembered) {
+  const worn = uniqueStrings(reported || [])
+  const memory = uniqueStrings(remembered || [])
+  if (!worn.length || !memory.length) return { outfit: worn, restored: [] }
+
+  const covered = new Set()
+  for (const tag of worn) {
+    for (const entry of BARE_ZONE_RE) {
+      if (!entry.re.test(normalizeIdentityText(tag))) continue
+      if (entry.zone === 'all') return { outfit: worn, restored: [] }
+      covered.add(entry.zone)
+    }
+    const zone = garmentZone(tag)
+    if (zone === 'full') { covered.add('top'); covered.add('bottom') }
+    else if (zone) covered.add(zone)
+  }
+  // Only the zones the passage never mentioned, and only the two that read as
+  // undressed when missing. Restoring socks nobody asked about is noise.
+  const restored = []
+  for (const tag of memory) {
+    const zone = garmentZone(tag)
+    if (zone !== 'top' && zone !== 'bottom' && zone !== 'full') continue
+    if (zone === 'full' && (covered.has('top') || covered.has('bottom'))) continue
+    if (zone !== 'full' && covered.has(zone)) continue
+    restored.push(tag)
+    if (zone === 'full') { covered.add('top'); covered.add('bottom') } else covered.add(zone)
+  }
+  return { outfit: uniqueStrings([...worn, ...restored]), restored }
+}
 
 function isNotClothing(value) {
   const text = normalizeIdentityText(value)

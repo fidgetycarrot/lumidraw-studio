@@ -1,74 +1,55 @@
-# LumiDraw Studio 0.53.0
+# LumiDraw Studio 0.53.1
 
-Includes 0.42.4 through 0.52.0. (The cast block from 0.52.0 is in here too.)
+Includes 0.42.4 through 0.53.0.
 
-## Clothing was a bug, not a hard problem
+## The prompt shows it: "Price, in a t-shirt and sneakers"
 
-You were right that the story has no reason to keep repeating the outfit. LumiDraw
-was already recording it — `outfitSnapshot()` saves what each character wore, every
-scene, into chat memory. But the wardrobe was **only ever read to take a garment
-off the wrong person**, never to keep one on the right one:
+A top and shoes, and nothing between them. 0.53.0 only restored the wardrobe when
+the passage described **no** clothing at all — a partial outfit still replaced the
+whole thing.
 
-```js
-const outfit = subject.outfit.length ? subject.outfit : inheritedOutfit
-```
+And a partial outfit is the commoner case, for a reason your passage makes obvious:
+Jason was *fisting the back of her shirt*. The shirt is load-bearing in the prose, so
+the parser reports the shirt. Nobody had cause to mention shorts, so there were none.
 
-Passage says nothing about clothes → straight past the memory to the profile default.
-So Fanny changed outfits every time the prose stopped mentioning them, which is
-exactly your ten-messages-later problem.
+## Restored by zone
 
-The precedence is now:
+Garments now carry a zone — top, bottom, feet, legs, or full-body — and only the
+zones the passage left silent are filled in from what she was last seen wearing.
+What the passage *did* say is never touched.
 
-1. **What this passage says** — she changed, or is described. Wins outright.
-2. **What she was last seen in** — the passage is about what's happening, not what
-   she's wearing.
-3. **Her profile default** — nothing remembered yet.
+| the passage says | result |
+|---|---|
+| `t-shirt`, `sneakers` | **+ denim shorts** |
+| `cargo shorts` | **+ tank top** |
+| `red dress` | nothing — a dress covers both |
+| nothing at all | the whole remembered outfit (0.53.0) |
 
-```
-✓ outfit continuity · Fanny — the passage did not describe clothing, so what she
-  was last seen in was kept: denim shorts, tank top
-```
+Only top and bottom are restored. Shoes nobody mentioned are noise, not immersion.
 
-Changing clothes still works, undressing still works, and a transformation whose
-state says `omit` doesn't resurrect the old outfit.
+## Bareness is a decision, not an omission
 
-## Cars: not a token problem
+The obvious way to get this wrong is to dress someone the story deliberately
+undressed, so stated bare zones block the restore for exactly that zone:
 
-Worth saying plainly, because it changes what's worth trying. Anima has
-comparatively **few car-interior images, and the ones it has are overwhelmingly
-tight** — a face through a windscreen, two people from the waist up. Ask for
-`full body` in a car and it has to invent the geometry of a cabin it never learned:
-seats face the wrong way, the dashboard wraps, the door becomes a wall.
-
-More description can't fix that. It isn't short of instructions, it's short of
-training. So:
-
-**Framing is capped at `cowboy shot` inside a vehicle.** That's where its training
-actually lives. Applied before the widening logic and again after it, because "the
-scene needs legs" has to lose to "this model cannot draw a cabin".
+- `nude` → nothing restored at all
+- `topless` + shorts → stays topless
+- `bottomless` + t-shirt → stays bottomless
+- `barefoot` → stays barefoot
 
 ```
-✓ camera repair — narrowed full body to cowboy shot — this model has barely seen a
-  wide shot inside a vehicle and invents the cabin
+✓ outfit continuity · Price — the passage dressed only part of her (t-shirt,
+  sneakers); denim shorts restored from what she was last seen in
 ```
 
-**And the cabin tags are real now.** `car interior`, `vehicle interior`, `car seat`,
-`steering wheel`, `dashboard`, `windshield`, `seatbelt`, `rear-view mirror`,
-`driving`, plus bus, train, aeroplane and boat. None of these were in the vocabulary,
-so anything the parser wrote about a car was being demoted to caption prose — where
-it meant nothing to the model.
+## The thing to watch
 
-The cap also covers `cockpit`, `elevator`, `phone booth` and `shower stall`, which
-fail the same way for the same reason.
+This depends on her having been *seen* in the shorts — the wardrobe is written from
+compiled scenes, so the first image after installing has nothing to draw on. It
+should settle from the second image in a scene onward.
 
-**Honest expectation:** this should stop the worst of it — no more inventing a whole
-cabin — but a tight shot of two people in a car is still the model's best case, not
-a good case. If it's still wrong at cowboy shot, that's the ceiling rather than the
-prompt, and the answer would be a LoRA rather than more words.
+If she turns up half-dressed again, the trace line above is the one to send me: it
+says what the passage reported and what was restored, so I can tell a memory problem
+from a zone problem.
 
-## Try it
-
-Clothing is the one to watch: describe an outfit once, then play five or six turns
-that don't mention it. She should stay dressed.
-
-**42 suites · 1329 assertions · all green**, including a new `continuity` suite of 38.
+**42 suites · 1356 assertions · all green.**
