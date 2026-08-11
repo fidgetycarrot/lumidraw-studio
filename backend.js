@@ -872,7 +872,11 @@ function wardrobeLinesFor(rememberedState, profiles) {
     if (!profile || !profile.ref) continue
     const tags = uniqueStrings(outfits[profile.ref] || [])
     if (!tags.length) continue
-    lines.push({ name: profile.promptName || profile.anchor || profile.ref, tags })
+    // The ANCHOR, never the promptName. promptName exists for the image model —
+    // the "Fanny reads as slang, write Price" escape hatch — but the parser reads
+    // the story, and the story only ever says Fanny. A wardrobe line about "Price"
+    // cannot be bound to anyone in the passage, so it read as a stranger's clothes.
+    lines.push({ name: profile.anchor || profile.ref, tags })
   }
   return lines
 }
@@ -1013,7 +1017,7 @@ function buildAnimaParserInput(messages, targetIndex, target, settings, sceneSta
     // The wardrobe sentence is only worth its tokens when there is a wardrobe. A
     // scene with nothing but a location should not pay for advice about clothes.
     const wardrobeRule = (sceneState && (sceneState.outfits || []).length)
-      ? '\nAttire is kept for you. OMIT a subject\'s outfit array entirely when the CURRENT PASSAGE does not change it — silence means unchanged, and the wardrobe line above is used. Fill it in only when the passage changes, removes, or adds clothing, or when a time-skip ("later", "the next morning", "after dressing") means they would have changed. When you do fill it in, give the WHOLE outfit, not the one garment the passage mentioned. Never re-describe clothing that has not changed: a re-wording reads as a costume change to the image model.'
+      ? '\nAttire is kept for you. OMIT a subject\'s outfit array entirely when the CURRENT PASSAGE does not change it — silence means unchanged, and the wardrobe line above is used. Fill it in only when the passage changes, removes, or adds clothing, or when a time-skip ("later", "the next morning", "after dressing") means they would have changed. When you do fill it in, give the WHOLE outfit, not the one garment the passage mentioned. Never re-describe clothing that has not changed: a re-wording reads as a costume change to the image model. If the CURRENT PASSAGE clearly shows different clothes — a change, not a re-wording — report the passage\'s version; your report outranks the wardrobe line.'
       : ''
     sections.push('----- ESTABLISHED SCENE STATE — AUTHORITATIVE -----\n' +
       'This is where the story currently is. Use it for setting and lighting unless the CURRENT PASSAGE states that the characters moved or the light changed. Never invent a different place, and never describe a location that appears nowhere in this request.' +
@@ -3101,6 +3105,12 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
     const parts = []
     if (merged.corrected.length) parts.push(`re-worded garment(s) put back to what was established: ${merged.corrected.join('; ')}`)
     if (merged.restored.length) parts.push(`${merged.restored.join(', ')} restored for a zone the passage left silent`)
+    // A restored one-piece next to a reported single garment composes oddly —
+    // "sundress, jeans" — but covered-and-odd beats half-dressed. Said out loud so
+    // it is findable when it happens.
+    if (merged.restored.some((tag) => garmentZone(tag) === 'full') && subject.outfit.length) {
+      parts.push('note: a one-piece was kept alongside the reported garment — odd but covered')
+    }
     trace(`outfit continuity · ${who}`, 'applied', parts.join(' · '))
   }
   // A nude body in an nsfw scene shows its anatomy — that is what nude means. The
@@ -4339,7 +4349,7 @@ const WORN_CONDITION_RE = /^(?:blood[- ]?(?:covered|soaked|stained)|bloodied|blo
 const GARMENT_ZONES = [
   // Checked in order; the first match wins, so full-body garments must come first
   // or "dress" would register as a top.
-  { zone: 'full', re: /\b(?:dress|gown|robe|kimono|yukata|jumpsuit|overalls|bodysuit|leotard|swimsuit|bikini|catsuit|coveralls|apron dress|nightgown|cassock|habit)\b/i },
+  { zone: 'full', re: /\b(?:(?:sun|night|mini|maxi|slip)?dress|gown|robe|kimono|yukata|jumpsuit|overalls|bodysuit|leotard|swimsuit|bikini|catsuit|coveralls|nightgown|cassock|habit|romper|onesie)\b/i },
   { zone: 'bottom', re: /\b(?:shorts|pants|trousers|jeans|skirt|leggings|tights|slacks|chaps|breeches|hakama|loincloth|briefs|boxers|panties|thong|underwear bottom)\b/i },
   { zone: 'top', re: /\b(?:shirt|t-shirt|tank top|blouse|sweater|hoodie|jacket|coat|cardigan|vest|top|tunic|bra|camisole|crop top|pullover|blazer|poncho|cloak|corset|bustier|halter|bandeau|bodice|turtleneck|sweatshirt|jersey|smock|waistcoat|shrug|bolero|kimono jacket|haori)\b/i },
   { zone: 'feet', re: /\b(?:shoes|sneakers|boots|sandals|heels|slippers|socks|loafers|flats)\b/i },
@@ -4366,27 +4376,61 @@ const BARE_ZONE_RE = [
 // that differs from memory is a re-description, not a new outfit.
 const OUTFIT_CHANGE_RE = /\b(?:chang(?:e|es|ed|ing)|shrug(?:s|ged)? (?:on|into)|pull(?:s|ed|ing)? (?:on|off)|put(?:s|ting)? on|slip(?:s|ped|ping)? (?:on|out of|into)|strip(?:s|ped|ping)?|undress|undo(?:es|ne)?|unbutton|unzip|took off|takes? off|threw on|throws? on|dressed in|now wearing|swap(?:s|ped)|borrow(?:s|ed)|change of clothes|got dressed|redress)\b/i
 
+// The unit of "same garment" for drift detection. Head noun, folded across
+// spelling variants only — deliberately FINER than GARMENT_SYNONYMS, which exists
+// for grounding and lumps blouse/tank top/t-shirt together. For drift purposes
+// those are different garments: a parser told to report only changes that says
+// "tank top" over a remembered blouse means a change, not a re-wording.
+const FAMILY_ALIASES = [
+  [/\btee\b|\bt shirt\b/, 'shirt'],
+  [/\btrainers\b|\btennis shoes\b|\bkicks\b/, 'sneakers'],
+  [/\bcutoffs?\b|\bhot pants\b/, 'shorts'],
+  [/\bsundress\b|\bfrock\b|\bgown\b/, 'dress'],
+  [/\bdenims\b/, 'jeans'],
+]
+
+function garmentFamily(tag) {
+  const text = normalizeIdentityText(tag)
+  if (!text) return ''
+  for (const [re, canonical] of FAMILY_ALIASES) if (re.test(text)) return canonical
+  return text.split(/\s+/).pop()
+}
+
 function mergeOutfitByZone(reported, remembered, passage = '') {
   const worn = uniqueStrings(reported || [])
   const memory = uniqueStrings(remembered || [])
   if (!worn.length || !memory.length) return { outfit: worn, restored: [], corrected: [] }
 
-  // A zone that memory already covers is defended: "white shirt" becoming "baggy
-  // blue shirt" two turns later is the parser describing the same shirt again, and
-  // an image model reads a re-wording as a costume change. The passage saying she
-  // changed is the only thing that outranks the record.
+  // Memory's veto is limited to ADJECTIVE DRIFT: the same garment re-described.
+  // "white shirt" → "baggy blue shirt" is the parser wording the same shirt again,
+  // and a re-wording reads as a costume change to the image model — so within a
+  // garment family, memory's wording wins.
+  //
+  // A DIFFERENT family in the same zone — "tank top" where memory says "blouse" —
+  // is what a change looks like, and the parser was told to report the outfit only
+  // when it changed. Zone-matching erased those reports, which inverted the
+  // pipeline's own precedence (passage > memory) and made the record self-sealing:
+  // wrong memory → correction forces it onto the descriptor → the snapshot
+  // re-learns it → defended forever. A scan structurally could not fix a bad
+  // record; only the wardrobe panel could. Family-matching keeps the drift kill
+  // and gives the passage its crown back.
+  //
+  // OUTFIT_CHANGE_RE survives as an escape for the case family-matching cannot
+  // see: a same-family REAL change ("she changed into a fresh white blouse" over a
+  // remembered silk blouse). Its false positives — "changed the subject" — now
+  // merely skip the correction, which is the direction we already prefer.
   const changing = OUTFIT_CHANGE_RE.test(String(passage || ''))
   const corrected = []
   if (!changing) {
-    const memoryByZone = new Map()
+    const memoryByFamily = new Map()
     for (const tag of memory) {
-      const zone = garmentZone(tag)
-      if (zone && !memoryByZone.has(zone)) memoryByZone.set(zone, tag)
+      const family = garmentFamily(tag)
+      if (family && !memoryByFamily.has(family)) memoryByFamily.set(family, tag)
     }
     for (let i = 0; i < worn.length; i++) {
-      const zone = garmentZone(worn[i])
-      if (!zone || !memoryByZone.has(zone)) continue
-      const known = memoryByZone.get(zone)
+      const family = garmentFamily(worn[i])
+      if (!family || !memoryByFamily.has(family)) continue
+      const known = memoryByFamily.get(family)
       if (normalizeIdentityText(known) === normalizeIdentityText(worn[i])) continue
       corrected.push(`${worn[i]} → ${known}`)
       worn[i] = known
@@ -6133,7 +6177,7 @@ function negativeWith(presetNegative, extras) {
   return base ? `${base.replace(/[\s,]+$/, '')}, ${add.join(', ')}` : add.join(', ')
 }
 
-async function compileSceneWithPreset(sceneInput, preset, settings, userId, chatId, sourcePassage = '', contextText = '') {
+async function compileSceneWithPreset(sceneInput, preset, settings, userId, chatId, sourcePassage = '', contextText = '', digestLines = []) {
   const memoryEntry = await readSceneMemory(chatId, preset.name)
   // Author intent is the floor; verified memory is the current truth. A story
   // that has moved keeps its new location, but a chat with no history yet
@@ -6179,7 +6223,12 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
       (preset.useBreakSeparators === undefined && /\bBREAK\b/.test(String(preset.qualityTags || ''))),
   })
   // Remember whatever survived reconciliation as the story's location.
-  const groundingForMemory = [sourcePassage, contextText].filter(Boolean).join('\n')
+  // The digest counts as grounding. Its lines come from messages BEFORE the
+  // context window, so without this a digest-derived outfit — the cold-start
+  // answer, the thing the digest exists to produce — was always "rendered but NOT
+  // remembered": the wardrobe stayed empty, the digest fired again next scan, and
+  // cold start never self-healed.
+  const groundingForMemory = [sourcePassage, contextText, ...(digestLines || [])].filter(Boolean).join('\n')
   const establishedSetting = reconcileSetting(scene.setting, groundingForMemory, remembered).setting
   const establishedLighting = scrubUnsupportedPlaces(animaTagList(scene.lighting), groundingForMemory, 'lighting').tags
   // Record the wardrobe as compiled — after the ownership check, so a rejected
@@ -7196,9 +7245,15 @@ async function scanStoryCore(userId, options = {}) {
       const anchorForParser = tagsFrom(preset.sceneAnchor || '', 8)
       const profilesForState = await getStoryProfiles(preset, settings, userId, chatId)
       const wardrobeLines = wardrobeLinesFor(rememberedState, profilesForState)
-      // Somebody with no record is the only case the digest earns its tokens for.
+      // Somebody with no record is the only case the digest earns its tokens for —
+      // and only somebody in THIS scene. Character and persona always count; a cast
+      // member counts only when the passage names them, or a big cast would keep
+      // the digest firing forever for someone offstage.
       const knownCast = allKnownProfiles(profilesForState).filter((p) => p && p.ref)
-      const anyUnknown = !knownCast.length || knownCast.some((p) => !((rememberedState.outfits || {})[p.ref] || []).length)
+      const inThisScene = (p) => p.ref === 'character' || p.ref === 'persona' ||
+        (p.anchor && new RegExp('\\b' + escapeRegExp(String(p.anchor).split(/\s+/)[0]) + '\\b', 'i').test(passage))
+      const presentCast = knownCast.filter(inThisScene)
+      const anyUnknown = !presentCast.length || presentCast.some((p) => !((rememberedState.outfits || {})[p.ref] || []).length)
       const digest = anyUnknown ? clothingDigest(messages, targetIndex) : []
       if (digest.length) {
         spindle.log.info(`[lumidraw] clothing digest · ${digest.length} earlier mention(s) found in the last 30 messages, ` +
@@ -7300,7 +7355,7 @@ async function scanStoryCore(userId, options = {}) {
         parserImageIndex++
         assertStoryScanActive(scan)
         setStoryScanStage(scan, 'generating', `Sending image ${parserImageIndex} of ${acceptedParsed.length} to Draw Things.`)
-        const compiled = await compileSceneWithPreset(item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '')
+        const compiled = await compileSceneWithPreset(item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '', digest)
         const dims = aspectDims(preset.config, compiled.aspect)
         const parserAlt = markdownAltText(compiled.core)
         const entry = await generateAndUpload({
@@ -7620,11 +7675,12 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const profiles = await getStoryProfiles(preset, settings, userId, chatId)
   const reparseCast = allKnownProfiles(profiles).filter((p) => p && p.ref)
   const reparseUnknown = !reparseCast.length || reparseCast.some((p) => !((rememberedState.outfits || {})[p.ref] || []).length)
+  const reparseDigest = reparseUnknown ? clothingDigest(messages, targetIndex) : []
   const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, {
     setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorTags,
     lighting: rememberedState.lighting || [],
     outfits: wardrobeLinesFor(rememberedState, profiles),
-    clothingDigest: reparseUnknown ? clothingDigest(messages, targetIndex) : [],
+    clothingDigest: reparseDigest,
   })
   const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
     .replaceAll('{{max_images}}', String(settings.maxImages || 2))
@@ -7654,7 +7710,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
         continue
       }
       const compiled = await compileSceneWithPreset(
-        item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '')
+        item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '', reparseDigest)
       results.push({
         ok: true,
         anchor: item.anchor || '',

@@ -1,71 +1,85 @@
-# LumiDraw Studio 0.55.0
+# LumiDraw Studio 0.56.0 — install this one
 
-Includes 0.42.4 through 0.54.2 — everything since your last install.
+Includes everything through 0.55.0. This is the clothing-persistence release.
 
-Both things, and the manual one is first because it's the one you can lean on while
-you're out.
+## The advice was good, and its one-sentence version was the diagnosis
 
-## The wardrobe panel — Story tab
+*0.55 trusted the record more than the story, and the record was the least
+trustworthy thing in the pipeline.* I verified all three claims in code before
+building — every one reproduced, and 1a was worse than claimed (the old outfit
+layered itself *under* a reported sundress, three garments deep, because `sundress`
+had no zone).
 
-Under the auto-illustration status:
+The self-sealing loop was real: wrong memory → correction forces it onto the
+descriptor → the snapshot re-learns the corrected version → `garmentSupported`
+passes anything already in memory → defended forever. A scan structurally could not
+fix a bad record. Only the panel could — which is exactly what you observed.
 
-```
-Wardrobe of record — this chat                    ↻
+## What changed
 
-  Price     [ white shirt, denim shorts, sneakers ]
-  Jason     [ grey henley, work jeans             ]
+### 1. Memory's veto is now limited to adjective drift
 
-  [ Save wardrobe ]
-```
+Correction matches on garment **family** (head noun, folded across spelling
+variants), not zone:
 
-- **Edit a line and Save** — the next image uses it immediately. No scan needed.
-- **Clear a line** — LumiDraw forgets and re-learns from the next scan.
-- Placeholder text shows the character's profile default when nothing is recorded.
+| record says | parser reports | result |
+|---|---|---|
+| white shirt | baggy blue shirt | **white shirt** — same family, drift killed |
+| blouse | tank top | **tank top** — different family = a change; passage wins |
+| silk blouse | fresh white blouse + "she changed into…" | **fresh white blouse** — change verbs escape the drift kill |
 
-This is what images are built from when the passage doesn't describe clothing, and
-it **outranks the character's default outfit** — which is why editing that default
-wasn't fixing anything for you. It's scoped to this chat and preset, like the rest
-of scene memory.
+The family table is deliberately *finer* than the grounding synonyms: `blouse` and
+`t-shirt` are different families here, because a parser told to report the outfit
+only on change means it when it says one over the other.
 
-If a scan goes wrong while you're out: open the panel, type what she should be
-wearing, Save, carry on. That's the escape hatch.
+**One departure from the advice:** `OUTFIT_CHANGE_RE` stays, rather than being
+deleted. Family-matching cannot see a same-family real change (blouse → different
+blouse), and the regex's false positives — "changed the subject" — now merely skip
+the correction, which is the passage-wins direction anyway. Its failure mode
+switched sides, so it went from dangerous to cheap.
 
-## The clothing digest — 30 messages
+### 2. The digest's discoveries are learned
 
-Agreed on 30. When the wardrobe has **no record for someone in the scene**, LumiDraw
-scans back 30 messages and keeps only the sentences that mention clothing:
+Digest lines now count as grounding evidence in the memory write, on both the scan
+and re-parse paths. Cold start self-heals: the digest finds "she pulled on her denim
+shorts" thirty messages back, the outfit renders, **and it is remembered** — so the
+digest stops firing. Previously it was "rendered but NOT remembered" forever and the
+panel was the only write path that stuck.
 
-```
-[lumidraw] clothing digest · 2 earlier mention(s) found in the last 30 messages,
-because the wardrobe has no record for someone in this scene
-```
+### 3. Wardrobe lines use the anchor
 
-```
-- She pulled on her denim shorts and a white tank top before dawn.
-- Later she kicked off her sneakers by the door.
-```
+The parser was being told "**Price** is wearing…" about a passage that only ever
+says **Fanny**. It couldn't bind the line to anyone, treated it as a stranger's
+wardrobe, and guessed — a strong candidate for why your scans went bad while the
+plumbing was fine. The parser-facing name is always the anchor; `promptName` stays
+what it was built for, the image model.
 
-Oldest first, and the parser is told a later line undoes an earlier one — because
-that ordering is the whole reason a digest beats a wider window. Capped at ~900
-characters, so it costs roughly a fiftieth of what six full messages would.
+### Also in this pass
 
-**It stays out of the way when the record is populated.** A wardrobe that knows the
-answer is authoritative, and the digest on top of it would just be more material for
-the parser to second-guess itself with.
+- The digest fires only for cast **present in this scene** (character/persona
+  always; cast members only when the passage names them) — a big cast no longer
+  runs it forever for someone offstage.
+- The parser has a sanctioned dispute channel: *"If the CURRENT PASSAGE clearly
+  shows different clothes — a change, not a re-wording — report the passage's
+  version; your report outranks the wardrobe line."* With fix 1, that report flows
+  through and gets learned, so the record self-corrects.
+- `sundress`, `nightdress`, `minidress`, `romper` now zone as full-body garments.
+- The odd-but-covered composition (remembered one-piece kept alongside a reported
+  garment) gets a trace line: *"note: a one-piece was kept alongside the reported
+  garment — odd but covered."*
 
-Cards and out-of-character asides are stripped before the search, so Gabrielle's
-console can't contribute a crown.
+## One thing to do per existing chat
 
-## What I'd watch for
+Pre-0.56 records are still polluted and still defended until replaced. One pass with
+the wardrobe panel — correct or clear each line — and from then on the system keeps
+itself honest.
 
-**The panel is the thing to try first**, since it verifies everything else — if what
-it shows doesn't match what you'd expect, the record is the problem rather than the
-compiler, and you can fix it in place.
+## What the traces should show now
 
-**The digest is the least tested thing here.** It fires only on the cold-start case,
-and whether the parser reads a list of past clothing sentences well is something only
-a real turn will show. If it produces worse outfits than no digest at all, clearing
-that character's wardrobe line is what makes it fire again, and telling me so is what
-gets it removed.
+- `re-worded garment(s) put back` **only** on same-family drift.
+- Different-family reports passing through untouched, then `learned:` in the outfit
+  memory lines.
+- `rendered but NOT remembered` should stop appearing for digest-sourced outfits.
+  If it doesn't, the digest isn't reaching grounding — send me that line.
 
-**42 suites · 1470 assertions · all green.**
+**42 suites · 1482 assertions · all green.**
