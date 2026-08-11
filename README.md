@@ -1,66 +1,69 @@
-# LumiDraw Studio 0.51.2
+# LumiDraw Studio 0.52.0 — the story declares its own cast
 
-Includes 0.42.4 through 0.51.1.
+Includes 0.42.4 through 0.51.2.
 
-## No — and asking made me find the real bug
+Two pieces: a block to paste into KittyLotus (**CAST-BLOCK-for-preset.md**), and the
+LumiDraw side that reads it.
 
-You were right to push. The `isAssistant break` I fixed in 0.51.1 needs an assistant
-turn wedged between your question and the reply, and there wasn't one before #132.
-It could never have explained the first image pair.
+## Your instinct was right, and for a stronger reason than you gave
 
-So I ran your transcript through 0.51.1's own decision logic:
+You said the decision belongs preset-side because the story generator has to make the
+call when the prose doesn't describe someone. True — and there's a sharper version:
 
-```
-#132  would illustrate ✗
-#134  would illustrate ✗
-```
+**If LumiDraw decided, the story would never find out what was decided.** The next
+passage could give Mira black hair while every image shows her brown. Consistency has
+to flow both ways, so the choice has to live where the story can see it. That's the
+tracker, not my profile store.
 
-**Still broken, both turns.** Two bugs, compounding.
+## What I took from the preset file
 
-### 1. `[ooc]:` closes the bracket before the colon
+Even though it's Kitty's stock rather than your live setup, it gave me the conventions,
+which is what I needed:
 
-`stripOutOfCharacter` ran the delimited rule first. It matched `[ooc]` on its own,
-removed it, and left this behind:
+- Payloads are `<payload>` + `[MARKER]{json}[/MARKER]` — that's how `[REFRESH]` and
+  `[Motive Ledger]` work, so `[LUMICAST]` sits beside them rather than inventing a
+  new idea.
+- Lists are `+` delimited. Commas are accepted too, since a model asked for booru
+  tags reaches for them by habit.
+- Display regexes render or hide; prompt regexes strip from context.
 
-```
-": the gabrielle monitor packet on top doesn't seem to be rendering correctly."
-```
+**It also changed a design decision.** My first thought was to hang this off `<track>`
+as a `[cast]` child tag. But Native, RPGHUD and SillySim are three different tracker
+modules and I don't know which you run — so the block stands alone and works whichever
+is active.
 
-A line with no "ooc" left in it for the whole-line rule to find. The aside then read
-as ordinary prose. Line rule runs first now; a mid-line `[ooc: nice]` is still
-removed surgically.
+## The LumiDraw side
 
-### 2. The gate asked the wrong text
+A declaration becomes a **real cast profile**, as you chose: saved to the Characters
+tab, linked to the active preset, protected by the anatomy firewall and adjacency
+binding exactly like Sovi's.
 
-```js
-const promptingText = cleanParserMessageText(prompting.content, …)
-if (outOfCharacterVerdict(promptingText).ooc)
-```
-
-`cleanParserMessageText` **removes out-of-character markers.** So the gate was asking
-whether a marker was present in text specifically chosen to have none. It reads the
-raw message now.
-
-### Why every test I wrote passed anyway
-
-All my asides were short — *"[ooc]: brb"*, *"[ooc] can we back up a scene?"*. A short
-one strips to nothing, and empty text hit the `|| prompting.content` fallback, so the
-raw message got checked and the answer came out right by accident.
-
-Yours were sentences. They kept enough words to look like prose, never hit the
-fallback, and sailed through. The test suite was 96 assertions of the easy case.
-There are now assertions using your exact wording, and the end-to-end check runs both
-turns of the exchange:
+- **Absorbed before compiling**, so a character declared this turn is locked for
+  *this* image, not the next one.
+- **First declaration wins.** "Don't re-declare someone" is an instruction the model
+  often *can't* follow, because Strip Aged Payload Blocks removes its own past
+  declarations from context. Durability belongs with the record.
+- **Your own profiles are never overwritten.** A name matching your Characters tab
+  means yours wins.
+- **A declaration with no tags is ignored** rather than creating an empty profile.
+- **Cast slots raised 4 → 12.** Four was right when you filled them by hand; a story
+  that can introduce people needs headroom, and silently dropping the fifth person is
+  a mystery three sessions later. Prune in the Characters tab.
 
 ```
-#132  BLOCKED ✓
-#134  BLOCKED ✓
+[lumidraw] the story declared new cast: Mira — saved to the Characters tab and
+linked to "Fanny Price"
 ```
 
-## Keeping 0.51.1's fix too
+## Worth knowing before you try it
 
-The `isAssistant break` was a genuine hole even though it wasn't this one — a preset
-that posts a card as its own turn would have hidden your question from the gate. It
-stays fixed.
+**A wrong first guess sticks.** That's the cost of first-wins. It's a normal profile
+once it lands, so fix it in the Characters tab like any other.
 
-**41 suites · 1278 assertions · all green.**
+**I couldn't test the preset half.** The LumiDraw half has 30 assertions against the
+exact payload shape, but whether your story model reliably emits it — and whether it
+picks real Danbooru tags rather than prose — is something only a real turn will tell
+us. If it writes prose instead of tags, that's an instruction problem and I can tighten
+the block.
+
+**41 suites · 1291 assertions · all green.**

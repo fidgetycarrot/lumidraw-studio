@@ -1034,6 +1034,110 @@ function precedingUserMessage(messages, targetIndex, window = 8) {
   return null
 }
 
+// --- cast declared by the story ---------------------------------------------
+// When a character walks on undescribed, somebody has to decide what they look
+// like. That decision belongs to the story model, not to LumiDraw: if LumiDraw
+// invented an appearance, the story would never learn what was decided and the
+// next passage could contradict the picture. So the preset emits the decision and
+// LumiDraw locks it.
+//
+// Shape follows the preset's own payload convention — a marker, JSON, a closing
+// marker — so it sits alongside [REFRESH] and [Motive Ledger] rather than
+// introducing a new idea:
+//
+//   <payload>
+//   [LUMICAST]{"name":"Mira","count":"1girl","tags":"brown hair+freckles"}[/LUMICAST]
+//   </payload>
+const CAST_DECLARATION_RE = /\[LUMICAST\]\s*(\{[\s\S]*?\})\s*\[\/LUMICAST\]/gi
+
+function extractCastDeclarations(text) {
+  const found = []
+  CAST_DECLARATION_RE.lastIndex = 0
+  for (const match of String(text || '').matchAll(CAST_DECLARATION_RE)) {
+    let raw = null
+    try { raw = JSON.parse(sanitizeJsonText(match[1])) } catch (error) { continue }
+    if (!raw || typeof raw !== 'object') continue
+    const name = shortPhrase(raw.name || raw.anchor || '', 'cast name', 6, 64, true, true)
+    if (!name) continue
+    // "+" is this preset family's list delimiter; commas are accepted too because
+    // a model asked for booru tags will reach for commas by habit.
+    const list = (value) => uniqueStrings(String(value || '').split(/[+,]/).map((part) => animaTag(part)).filter(Boolean)).slice(0, 12)
+    found.push({
+      name,
+      countTag: shortPhrase(raw.count || raw.count_tag || raw.countTag || '', 'cast count tag', 3, 24, true),
+      appearance: list(raw.tags || raw.appearance),
+      outfit: list(raw.outfit || raw.clothing),
+    })
+  }
+  return found
+}
+
+// First declaration wins. The preset strips aged <payload> blocks from the model's
+// own context, so it cannot remember whom it already described and may declare the
+// same character twice with different hair. Durability belongs here, where the
+// record is, rather than in an instruction the model may not be able to follow.
+async function absorbCastDeclarations(messages, targetIndex, preset, window = 6) {
+  if (!Array.isArray(messages) || !preset) return { added: [], skipped: [] }
+  const start = Number.isInteger(targetIndex) ? Math.max(0, targetIndex - window) : 0
+  const end = Number.isInteger(targetIndex) ? targetIndex : messages.length - 1
+  const declared = []
+  for (let i = start; i <= end && i < messages.length; i++) {
+    const bits = messageBits(messages[i] || {})
+    if (typeof bits.content !== 'string') continue
+    declared.push(...extractCastDeclarations(bits.content))
+  }
+  if (!declared.length) return { added: [], skipped: [] }
+
+  const characters = await getCharacters()
+  const added = []
+  const skipped = []
+  let castIds = Array.isArray(preset.castLibraryIds) ? preset.castLibraryIds.slice() : []
+  for (const entry of declared) {
+    const key = normalizeIdentityText(entry.name)
+    const existing = characters.find((item) => normalizeIdentityText(item && item.name) === key)
+    if (existing) {
+      // Already known — including anyone you typed in yourself, whose version wins.
+      if (!castIds.includes(existing.id)) castIds.push(existing.id)
+      skipped.push(entry.name)
+      continue
+    }
+    if (!entry.appearance.length) { skipped.push(entry.name); continue }
+    const id = `cast_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    characters.push({
+      id,
+      name: entry.name,
+      profile: {
+        anchor: entry.name,
+        countTag: entry.countTag,
+        appearanceTags: entry.appearance.join(', '),
+        defaultOutfit: entry.outfit.join(', '),
+        // Recorded so the Characters tab can show where this came from, and so a
+        // profile you wrote is never mistaken for one the story invented.
+        declaredByStory: true,
+      },
+      updatedAt: Date.now(),
+    })
+    castIds.push(id)
+    added.push(entry.name)
+  }
+  if (!added.length && !skipped.length) return { added, skipped }
+  if (added.length) {
+    characters.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+    await saveCharacters(characters)
+  }
+  const nextIds = uniqueStrings(castIds)
+  if (nextIds.join('|') !== (preset.castLibraryIds || []).join('|')) {
+    const presets = await getPresets()
+    const index = presets.findIndex((item) => item && item.name === preset.name)
+    if (index >= 0) {
+      presets[index] = { ...presets[index], castLibraryIds: nextIds }
+      await savePresets(presets)
+      preset.castLibraryIds = nextIds
+    }
+  }
+  return { added, skipped }
+}
+
 function storyPreview(content, maxLength = 260) {
   const clean = stripLoomLedgers(stripThinking(content))
     .replace(TAG_RE, ' ')
@@ -2117,7 +2221,10 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
   // rules — first-class citizens of the same pipeline.
   const cast = []
   const takenRefs = new Set(['character', 'persona'])
-  const castIds = Array.isArray(preset.castLibraryIds) ? preset.castLibraryIds.slice(0, 4) : []
+  // Four was right when you filled these by hand. A story that can introduce its
+  // own cast needs headroom, and silently dropping the fifth person is the kind of
+  // thing that becomes a mystery three sessions later. Prune in the Characters tab.
+  const castIds = Array.isArray(preset.castLibraryIds) ? preset.castLibraryIds.slice(0, 12) : []
   for (let index = 0; index < castIds.length; index++) {
     const linked = characterLibrary.find((item) => item && item.id === castIds[index])
     if (!linked || !linked.profile) continue
@@ -6592,6 +6699,18 @@ async function scanStoryCore(userId, options = {}) {
     scan.chatId = String(chatId || options.chatId || '')
   }
   assertStoryScanActive(scan)
+
+  // The story may have introduced someone. Read that before compiling, so the new
+  // profile is locked for this very image rather than the next one.
+  try {
+    const absorbed = await absorbCastDeclarations(messages, targetIndex, preset)
+    if (absorbed.added.length) {
+      spindle.log.info('[lumidraw] the story declared new cast: ' + absorbed.added.join(', ') +
+        ' — saved to the Characters tab and linked to "' + preset.name + '"')
+    }
+  } catch (error) {
+    spindle.log.warn('[lumidraw] could not absorb declared cast: ' + error.message)
+  }
 
   // ------------------------- out-of-character messages ---------------------
   // Checked before either engine runs, so an aside costs no parser call and no
