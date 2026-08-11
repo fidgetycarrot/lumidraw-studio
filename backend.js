@@ -2924,7 +2924,7 @@ function nameReadsAsTag(name) {
   return ''
 }
 
-function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false) {
+function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false, rememberedOutfits = null) {
   const profile = profileForSubject(subject, profiles)
   if (profile) {
     if (profile.promptName) {
@@ -2971,7 +2971,26 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   const activeFeatures = resolvePartialFeatures(profile, subject.partialFeatures)
   const featureTags = activeFeatures.flatMap((feature) => feature.tags || [])
   const inheritedOutfit = profile && (!state || state.outfitPolicy !== 'omit') ? profile.defaultOutfit : []
-  const outfit = subject.outfit.length ? subject.outfit : inheritedOutfit
+  // What she was last seen wearing beats what her profile says she usually wears.
+  //
+  // A story describes an outfit once and then stops: the next nine passages are
+  // about what happens, not about denim shorts. The parser correctly reports no
+  // outfit for those, and this fell straight through to the profile default — so
+  // she changed clothes without the story saying so. The wardrobe was already being
+  // recorded every scene; it was only ever read to take a garment OFF the wrong
+  // person, never to put one back on the right one.
+  //
+  // Precedence: what this passage says > what she was last seen in > her default.
+  // A passage that does describe clothing still wins, so changing outfits works.
+  const rememberedOutfit = (!state || state.outfitPolicy !== 'omit')
+    ? uniqueStrings(((rememberedOutfits && rememberedOutfits[subject.ref]) || []))
+    : []
+  const outfit = subject.outfit.length ? subject.outfit
+    : (rememberedOutfit.length ? rememberedOutfit : inheritedOutfit)
+  if (!subject.outfit.length && rememberedOutfit.length) {
+    trace(`outfit continuity · ${(profile && profile.anchor) || subject.ref}`, 'applied',
+      `the passage did not describe clothing, so what she was last seen in was kept: ${rememberedOutfit.join(', ')}`)
+  }
   // A nude body in an nsfw scene shows its anatomy — that is what nude means. The
   // passage does not have to name it, and prose about a shower rarely does. Left
   // unnamed, the model has a nude figure with nothing anchoring the genitals, and
@@ -3316,6 +3335,13 @@ const BOORU_VOCAB = new Set([
   'pond', 'puddle', 'ruins', 'castle', 'church', 'temple', 'shrine', 'city', 'street',
   'alley', 'rooftop', 'road', 'path', 'bridge', 'fence', 'garden', 'courtyard', 'forest path',
   'room', 'bedroom', 'bathroom', 'kitchen', 'living room', 'classroom', 'library', 'office',
+  // Vehicle interiors. Every one of these is a real Danbooru tag, which matters
+  // more here than usual: the model has comparatively few car-interior images, so
+  // an invented phrase buys nothing and a real one is the only handle available.
+  'car interior', 'vehicle interior', 'car', 'motor vehicle', 'ground vehicle',
+  'driving', 'steering wheel', 'dashboard', 'windshield', 'car seat', 'seatbelt',
+  'rear-view mirror', 'car window', 'truck', 'bus interior', 'train interior',
+  'airplane interior', 'boat', 'motorcycle',
   'hallway', 'stairs', 'window', 'door', 'bed', 'chair', 'table', 'wall', 'floor', 'ceiling',
   'tent', 'campfire', 'fire', 'smoke', 'dust', 'debris', 'spider web', 'simple background',
   'transparent background', 'gradient background', 'white background', 'black background',
@@ -4841,6 +4867,25 @@ function sceneVisibleText(scene, descriptors) {
   return normalizeIdentityText(parts.filter(Boolean).join(' '))
 }
 
+// A car cabin is the hardest thing you can ask this model for, and not because the
+// prompt is too short. Anima has comparatively few car-interior images, and the ones
+// it has are overwhelmingly tight — a face through a windscreen, two people in the
+// front seats from the waist up. Ask for `full body` in a car and it has to invent
+// the geometry of a cabin it never learned: seats face the wrong way, the dashboard
+// wraps, the door becomes a wall.
+//
+// So the fix is not more description. It is asking for the shot the model has
+// actually seen. Framing is capped at `cowboy shot` inside a vehicle, which is where
+// its training lives, and the cabin tags carry the rest.
+const CONFINED_INTERIOR_RE = /\b(?:car interior|vehicle interior|car seat|steering wheel|dashboard|windshield|driving|driver's seat|passenger seat|bus interior|train interior|airplane interior|cockpit|elevator|phone booth|shower stall)\b/i
+const CONFINED_FRAMING_CAP = 2   // cowboy shot; see FRAMING_LEVELS
+
+function confinedInterior(scene, descriptors) {
+  const parts = [...(scene.setting || []), ...(scene.camera || []), scene.sceneStatement || '', scene.coreAction || '']
+  for (const item of descriptors || []) parts.push(...(item.pose || []), ...(item.action || []), item.subject.support || '')
+  return CONFINED_INTERIOR_RE.test(normalizeIdentityText(parts.filter(Boolean).join(' ')))
+}
+
 function requiredVisibleRegions(scene, descriptors) {
   const text = sceneVisibleText(scene, descriptors)
   const regions = new Set()
@@ -4920,8 +4965,28 @@ function repairCameraTags(cameraTags, scene, descriptors) {
   if (angles.dropped.length) {
     preNotes.push(`dropped conflicting view angle(s) ${angles.dropped.join(', ')} — the camera can only stand in one place`)
   }
+  // Applied before the widening logic below, and it also survives it: a confined
+  // interior caps the frame no matter what the scene claims it needs to show.
+  const confined = confinedInterior(scene, descriptors)
+  const capFraming = (list) => {
+    if (!confined) return { tags: list, note: '' }
+    const tooWide = list.filter((tag) => {
+      const level = framingLevelForTag(tag)
+      return level && level.level > CONFINED_FRAMING_CAP
+    })
+    if (!tooWide.length) return { tags: list, note: '' }
+    const kept = list.filter((tag) => !tooWide.includes(tag))
+    if (!kept.some((tag) => framingLevelForTag(tag))) kept.push('cowboy shot')
+    return {
+      tags: kept,
+      note: `narrowed ${tooWide.join(', ')} to cowboy shot — this model has barely seen a wide shot inside a vehicle and invents the cabin`,
+    }
+  }
+
   if (!required.size) {
-    return { tags: angles.kept, note: preNotes.join('; ') }
+    const capped = capFraming(angles.kept)
+    if (capped.note) preNotes.push(capped.note)
+    return { tags: capped.tags, note: preNotes.join('; ') }
   }
 
   const tags = [...angles.kept]
@@ -4964,6 +5029,17 @@ function repairCameraTags(cameraTags, scene, descriptors) {
         notes.push(`added framing "${widened.canonical}" (scene needs ${[...required].join(', ')})`)
         tags.push(widened.canonical)
       }
+    }
+  }
+
+  // The widening above may have just asked for a full body in a car. Re-cap after
+  // it, because "the scene needs legs" loses to "this model cannot draw a cabin".
+  {
+    const capped = capFraming(tags)
+    if (capped.note) {
+      tags.length = 0
+      tags.push(...capped.tags)
+      notes.push(capped.note)
     }
   }
 
@@ -5366,7 +5442,7 @@ const SUBJECT_BREAK_MARK = '\u0000SUBJECT_BREAK'
 
 function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null, breakInPreset = false } = {}) {
   traceReset()
-  let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true)).map((item) => ({
+  let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true, rememberedOutfits)).map((item) => ({
     ...item,
     // An unprofiled subject's name comes straight from the story, so a coined
     // creature gets grounded in a noun the model has actually been trained on.
