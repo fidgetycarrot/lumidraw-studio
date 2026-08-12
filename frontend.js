@@ -906,6 +906,19 @@ fangs = fangs, sharp teeth"></textarea></div>
             <div class="ld-help" style="margin-top:5px">The extension backend connects locally on your Mac, so catalog dropdowns still work while Lumiverse is open on your phone.</div>
           </div>
           <div class="ld-card">
+            <div class="ld-subtitle">Draw Things Cloud Compute</div>
+            <label class="ld-check"><input type="checkbox" class="ld-cloud-enabled" /> <span>Generate on Draw Things cloud instead of this Mac</span></label>
+            <div class="ld-row ld-mobile-stack" style="margin-top:7px">
+              <div><span class="ld-label">Relay host</span><input class="ld-cloud-host" value="127.0.0.1" /></div>
+              <div style="flex:0 0 120px"><span class="ld-label">Port</span><input class="ld-cloud-port" type="number" value="7864" /></div>
+            </div>
+            <div style="margin-top:7px"><span class="ld-label">Cloud model</span><input class="ld-cloud-model" placeholder="e.g. flux_2_klein_4b_q8p.ckpt or hf://…" /><div class="ld-hint">A <b>catalog</b> id or Hugging Face link — <b>not</b> a local filename. Cloud Compute only runs models from the Official or Community channels, which is why your local Anima file is refused.</div></div>
+            <label class="ld-check" style="margin-top:7px"><input type="checkbox" class="ld-cloud-fallback" checked /> <span>If cloud fails, generate locally instead of not at all</span></label>
+            <button class="ld-btn" data-act="test-cloud" style="margin-top:7px">Test cloud relay</button>
+            <div class="ld-status ld-cloud-status" style="margin-top:6px"></div>
+            <div class="ld-help" style="margin-top:5px">Needs <code>lumidraw-cloud-relay.mjs</code> running on this Mac. Your API key lives in that process and is never sent here. Free tier is 20 generations a month, Draw Things+ is 200.</div>
+          </div>
+          <div class="ld-card">
             <div class="ld-subtitle">Diagnostics</div>
             <button class="ld-btn" data-act="diagnose">Run diagnostics 🔍</button>
             <textarea class="ld-diag" readonly style="min-height:150px;display:none;margin-top:7px;font-family:monospace;font-size:11px"></textarea>
@@ -3850,6 +3863,11 @@ img[class*="inlineImage"] {
       port: $('.ld-port').value,
       bridgeHost: $('.ld-bridge-host').value,
       bridgePort: $('.ld-bridge-port').value,
+      cloudEnabled: $('.ld-cloud-enabled').checked,
+      cloudHost: $('.ld-cloud-host').value,
+      cloudPort: $('.ld-cloud-port').value,
+      cloudModel: $('.ld-cloud-model').value,
+      cloudFallback: $('.ld-cloud-fallback').checked,
       mode: $('.ld-mode').value,
       autoScan: $('.ld-autoscan').checked,
       parserEngine: $('.ld-parser-engine').value,
@@ -3975,7 +3993,7 @@ img[class*="inlineImage"] {
       pushSettings('Settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
     }, 900)
   }
-  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-overrides', '.ld-parser-maxtokens', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port']) {
+  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-overrides', '.ld-parser-maxtokens', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port', '.ld-cloud-host', '.ld-cloud-port', '.ld-cloud-model']) {
     const el = $(sel)
     if (el) el.addEventListener('input', () => {
       clearTimeout(settingsSaveTimer)
@@ -4025,6 +4043,35 @@ img[class*="inlineImage"] {
       setStatus('.ld-bridge-status', `Bridge ${result.health.version || ''} connected${count ? ` · ${count.models || 0} raw model files · ${count.loras || 0} LoRAs` : ''}.`, 'good')
     } catch (error) {
       setStatus('.ld-bridge-status', error.message, 'err')
+    }
+  })
+
+  $('[data-act="test-cloud"]').addEventListener('click', async () => {
+    setStatus('.ld-cloud-status', 'Checking the cloud relay…')
+    try {
+      await pushSettings()
+      const { cloud } = await call('cloud_status', {}, 15000)
+      if (!cloud.reachable) {
+        setStatus('.ld-cloud-status',
+          `No relay on ${$('.ld-cloud-host').value}:${$('.ld-cloud-port').value}. ` +
+          'Start it with: node lumidraw-cloud-relay.mjs', 'err')
+        return
+      }
+      if (!cloud.cli) {
+        setStatus('.ld-cloud-status',
+          'Relay is up, but media-generation-kit-cli was not found on its PATH. ' +
+          'Build it, or set LUMIDRAW_CLOUD_CLI to its path.', 'err')
+        return
+      }
+      if (!cloud.authenticated) {
+        setStatus('.ld-cloud-status',
+          'Relay and CLI are up, but the API key was not accepted. ' +
+          'Check DRAWTHINGS_API_KEY, or run `media-generation-kit-cli auth login`.', 'err')
+        return
+      }
+      setStatus('.ld-cloud-status', 'Relay connected and authenticated. Cloud generation is ready.', 'good')
+    } catch (error) {
+      setStatus('.ld-cloud-status', error.message, 'err')
     }
   })
 
@@ -4210,6 +4257,11 @@ img[class*="inlineImage"] {
       $('.ld-port').value = settings.port
       $('.ld-bridge-host').value = settings.bridgeHost || '127.0.0.1'
       $('.ld-bridge-port').value = settings.bridgePort || 7863
+      $('.ld-cloud-enabled').checked = !!settings.cloudEnabled
+      $('.ld-cloud-host').value = settings.cloudHost || '127.0.0.1'
+      $('.ld-cloud-port').value = settings.cloudPort || 7864
+      $('.ld-cloud-model').value = settings.cloudModel || ''
+      $('.ld-cloud-fallback').checked = settings.cloudFallback !== false
       $('.ld-mode').value = settings.mode || 'off'
       $('.ld-autoscan').checked = settings.autoScan !== false
       $('.ld-maximg').value = settings.maxImages || 2

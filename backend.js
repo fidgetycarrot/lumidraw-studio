@@ -46,6 +46,11 @@ const DEFAULT_SETTINGS = {
   stripImageDirectives: true, // remove dead ![...](/…/gen) image-request directives from the prompt context
   sizeChatImages: false,  // off by default: a custom Lumiverse stylesheet would fight it
   chatImageWidth: 500,    // px, only consulted when sizeChatImages is on
+  cloudEnabled: false,    // route generations to Draw Things Cloud Compute via the relay
+  cloudHost: '127.0.0.1', // the relay runs on the Lumiverse Mac, beside the Bridge
+  cloudPort: 7864,
+  cloudModel: '',         // cloud CATALOG id or hf:// link — never a local filename
+  cloudFallback: true,    // on any cloud failure, generate locally rather than not at all
 }
 
 const LEGACY_DEFAULT_PROTOCOL = `[Illustration protocol] You may illustrate key visual moments. When a scene deserves an image, include on its own line:
@@ -522,6 +527,184 @@ async function dtGenerate(settings, payload, attempt = 0) {
     spindle.log.warn(`[lumidraw] Draw Things returned ${res.json.images.length} images despite batch_count=1; keeping only the first.`)
   }
   return [res.json.images[0]]
+}
+
+// ---------------------------------------------------------------------------
+// Draw Things Cloud Compute — via the LumiDraw cloud relay
+// ---------------------------------------------------------------------------
+//
+// Why a relay rather than a direct client.
+//
+// Cloud Compute is not reachable over the HTTP API this extension speaks. That
+// was tested: Draw Things answers "Cloud Compute can only access models from
+// Official or Community channels. Your local models cannot be used for this
+// generation." — and it answers that even for a community model set on both
+// sides, while the identical settings run on cloud from inside the app. It is
+// the request path, not the configuration.
+//
+// The documented cloud path is gRPC, published as a Swift package
+// (MediaGenerationKit) and its example client, media-generation-kit-cli, which
+// takes `generate --cloud-compute --api-key`. LumiDraw is a zero-dependency
+// Spindle extension inside Lumiverse's Node process; it can neither speak gRPC
+// nor shell out to a Swift binary. So the transport lives in a small local
+// relay on the same Mac, and LumiDraw talks to it the way it already talks to
+// the Bridge: plain HTTP and JSON.
+//
+// The API key never enters Lumiverse. It is read from the relay's environment,
+// so it stays out of settings storage, out of the frontend, and out of any
+// settings dump pasted into a bug report. LumiDraw cannot leak a secret it was
+// never given.
+
+const CLOUD_RELAY_TIMEOUT_MS = 300000 // cloud is fast, but the queue is not always short
+
+function cloudRelayBaseUrl(settings) {
+  const host = String(settings.cloudHost || DEFAULT_SETTINGS.cloudHost).trim()
+  const port = Number(settings.cloudPort) || DEFAULT_SETTINGS.cloudPort
+  return `http://${host}:${port}`
+}
+
+function cloudEnabled(settings) {
+  return !!(settings && settings.cloudEnabled)
+}
+
+// The cloud catalog is not the local model folder. A local filename is exactly
+// what Cloud Compute refuses, so an unset cloud model is a configuration error
+// worth naming rather than a request worth sending.
+function cloudModelFor(settings, payload) {
+  const explicit = String((settings && settings.cloudModel) || '').trim()
+  if (explicit) return explicit
+  return ''
+}
+
+// Translate a Draw Things HTTP payload into the relay's flat request. Only keys
+// with a documented cloud equivalent cross over; the rest are dropped rather
+// than passed through hopefully, because the cloud stack rejects unknown keys
+// outright instead of ignoring them the way the local API mostly does.
+function cloudRequestFrom(payload, model) {
+  const num = (value, fallback) => {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : fallback
+  }
+  const request = {
+    model,
+    prompt: String(payload.prompt || ''),
+    negative_prompt: String(payload.negative_prompt || ''),
+    width: num(payload.width, 512),
+    height: num(payload.height, 768),
+    steps: num(payload.steps, 30),
+    guidance_scale: num(payload.guidance_scale ?? payload.guidanceScale, 5),
+    seed: num(payload.seed, -1),
+  }
+  const sampler = payload.sampler || payload.sampler_name
+  if (sampler) request.sampler = String(sampler)
+  const shift = payload.shift ?? payload.res_dpt_shift
+  if (shift !== undefined && shift !== null && shift !== '') request.shift = num(shift, undefined)
+  for (const key of Object.keys(request)) {
+    if (request[key] === undefined) delete request[key]
+  }
+  return request
+}
+
+// A relay that is not running is the ordinary case — Eric starts it when he
+// wants cloud — so it must read as "fall back", not as a failure.
+async function cloudRelayFetch(settings, path, options = {}, timeoutMs = 12000) {
+  const url = `${cloudRelayBaseUrl(settings)}${path}`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal })
+    const text = await res.text()
+    let json = null
+    try { json = JSON.parse(text) } catch { /* non-JSON body */ }
+    return { ok: res.ok, status: res.status, json, text }
+  } catch (err) {
+    const reason = err && err.name === 'AbortError'
+      ? `timed out after ${Math.round(timeoutMs / 1000)}s`
+      : (err && err.message) || String(err)
+    const error = new Error(`Could not reach the LumiDraw cloud relay at ${url} (${reason}).`)
+    error.relayUnreachable = true
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function cloudRelayStatus(settings) {
+  try {
+    const res = await cloudRelayFetch(settings, '/health', {}, 6000)
+    if (!res.ok || !res.json) return { reachable: false, reason: `relay answered HTTP ${res.status}` }
+    return {
+      reachable: true,
+      authenticated: !!res.json.authenticated,
+      cli: String(res.json.cli || ''),
+      remaining: res.json.remaining === undefined ? null : res.json.remaining,
+      reason: '',
+    }
+  } catch (err) {
+    return { reachable: false, reason: (err && err.message) || String(err) }
+  }
+}
+
+// Quota is the constraint that actually bites: 20 generations a month on the
+// free tier, 200 on Draw Things+. Running out is not a bug and must not read
+// like one, so it is raised as its own kind of failure.
+function cloudQuotaExhausted(raw) {
+  return /quota|exceeded|out of (?:credits|generations)|limit reached|insufficient/i.test(String(raw || ''))
+}
+
+async function cloudGenerate(settings, payload) {
+  const model = cloudModelFor(settings, payload)
+  if (!model) {
+    const error = new Error('No cloud model is set. Cloud Compute refuses a local filename, ' +
+      'so it needs a catalog model id (or an hf:// link) in Settings → Cloud.')
+    error.cloudMisconfigured = true
+    throw error
+  }
+  const request = cloudRequestFrom(payload, model)
+  spindle.log.info('[lumidraw] cloud generation · model=' + model +
+    ' · ' + request.width + '×' + request.height +
+    ' · ' + request.steps + ' steps · guidance ' + request.guidance_scale)
+  const res = await cloudRelayFetch(settings, '/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  }, CLOUD_RELAY_TIMEOUT_MS)
+  const raw = (res.json && (res.json.error || res.json.detail)) || res.text || ''
+  if (!res.ok || !res.json || !Array.isArray(res.json.images) || res.json.images.length === 0) {
+    if (cloudQuotaExhausted(raw)) {
+      const error = new Error('Draw Things cloud quota is used up for this period. ' +
+        'Free is 20 generations a month, Draw Things+ is 200; beyond that it is pay-as-you-go.')
+      error.cloudQuota = true
+      throw error
+    }
+    throw new Error(`Draw Things cloud rejected the generation: ${String(raw).slice(0, 400) || `HTTP ${res.status}`}`)
+  }
+  if (res.json.images.length > 1) {
+    spindle.log.warn(`[lumidraw] cloud returned ${res.json.images.length} images; keeping only the first.`)
+  }
+  return [res.json.images[0]]
+}
+
+// The single entry point both generation paths call. Local stays the default
+// and the fallback: an image that arrives slowly beats no image, and a chat
+// that stops illustrating because a relay was not running is a worse failure
+// than a slow one.
+async function generateImages(settings, payload, label = 'generation') {
+  if (!cloudEnabled(settings)) return { images: await dtGenerate(settings, payload), backend: 'local' }
+  try {
+    const images = await cloudGenerate(settings, payload)
+    return { images, backend: 'cloud' }
+  } catch (err) {
+    const message = (err && err.message) || String(err)
+    // Quota and misconfiguration are Eric's to fix, and silently spending
+    // local time on them would hide the thing he needs to see. Everything
+    // else — relay down, network blip, cloud error — falls back.
+    if (err && (err.cloudQuota || err.cloudMisconfigured) && !settings.cloudFallback) throw err
+    if (!settings.cloudFallback) throw err
+    spindle.log.warn(`[lumidraw] cloud ${label} failed, falling back to local Draw Things · ${message}`)
+    const images = await dtGenerate(settings, payload)
+    return { images, backend: 'local', fellBackFrom: message }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1694,7 +1877,7 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     spindle.log.info('[lumidraw] no model in the payload — Draw Things will use the model selected in its own UI')
   }
   const started = Date.now()
-  const images = await dtGenerate(settings, payloadOut)
+  const { images, backend, fellBackFrom } = await generateImages(settings, payloadOut, 'story generation')
   assertStoryScanActive(scan)
   const uploads = []
   for (const b64 of images) {
@@ -1714,6 +1897,11 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     negativePrompt: payloadOut.negative_prompt || '',
     seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
     images: uploads,
+    // Which machine drew it. Worth keeping: a cloud image and a local one from
+    // the same preset are not the same picture, and a silent fallback would
+    // otherwise be invisible in the history.
+    backend,
+    ...(fellBackFrom ? { fellBackFrom } : {}),
     // Everything needed to regenerate this image later and put the result back
     // where it came from: the owning message, and the exact recipe used.
     ...(origin && typeof origin === 'object' ? { origin } : {}),
@@ -7856,10 +8044,13 @@ spindle.onFrontendMessage(async (payload, userId) => {
           host: String(payload.host || prev.host || DEFAULT_SETTINGS.host).trim(),
           port: Number(payload.port) || prev.port || DEFAULT_SETTINGS.port,
         }
-        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost']) {
+        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel']) {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
         if (payload.bridgePort !== undefined) settings.bridgePort = Number(payload.bridgePort) || DEFAULT_SETTINGS.bridgePort
+        if (payload.cloudPort !== undefined) settings.cloudPort = Number(payload.cloudPort) || DEFAULT_SETTINGS.cloudPort
+        if (payload.cloudEnabled !== undefined) settings.cloudEnabled = !!payload.cloudEnabled
+        if (payload.cloudFallback !== undefined) settings.cloudFallback = !!payload.cloudFallback
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
         if (payload.useLoomLedger !== undefined) settings.useLoomLedger = !!payload.useLoomLedger
@@ -8457,6 +8648,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'cloud_status': {
+        const settings = await getSettings()
+        reply = ok(payload, requestId, { cloud: await cloudRelayStatus(settings) })
+        break
+      }
+
       case 'delete_preset': {
         const presets = (await getPresets()).filter((p) => p.name !== payload.name)
         await savePresets(presets)
@@ -8482,7 +8679,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           spindle.log.info('[lumidraw] Studio generation sent with no model — Draw Things will use the model selected in its own UI')
         }
         const started = Date.now()
-        const images = await dtGenerate(settings, payloadOut)
+        const { images } = await generateImages(settings, payloadOut, 'Studio generation')
 
         // Persist to Lumiverse's image library (tagged to this extension).
         // Operator-scoped installs require an explicit userId on user-owned
