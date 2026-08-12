@@ -1,66 +1,69 @@
-# LumiDraw Studio 0.59.0
+# LumiDraw Studio 0.60.0 — the truck cab prompt contradicted itself
 
-Includes 0.57.0 (cloud plumbing) and 0.58.0 (the scan queue).
+## The bug
 
-## Read this first: leave cloud switched off
+Your prompt contained both of these:
 
-The cloud path is built, tested and working — and **unusable for Anima.** The
-setting stays off by default and LumiDraw is unchanged for you in daily use.
+> *Price, chin tipped and eyes on sketchbook, **faces away from** Jason.*
 
-Proven working: a clean cloud image from `animagine_xl_v3.1_f16.ckpt` through the
-relay, with LoRAs, hires fix, sampler, shift and CLIP skip all crossing over
-correctly. The plumbing is sound.
+> `... @cherrymousestreet, **face-to-face, facing another**, car interior ...`
 
-Proven impossible: Anima.
+The caption says she faces away. The tag run says they're front to front. Anima
+resolved it toward the tags, which is why Jason is looking at her instead of at
+the road.
 
-```
-$ lumidraw-dt-cli --model "anima_base_1.0_f16.ckpt" --inspect
-resolveModel: nil
-inspectModel threw: unresolvedModelReference(query: "anima_base_1.0_f16.ckpt", suggestions: [])
+## Why
 
-$ lumidraw-dt-cli --model "animagine_xl_v3.1_f16.ckpt" --inspect
-resolveModel: Optional(... version: Optional("Stable Diffusion XL Base") ...)
+```js
+const FACING_RELATION_RE = ... '\\bfac(?:es|ing)\\b' ...          // matches "faces"
+const AWAY_RELATION_RE = /...|\bturn(?:s|ing) away\b|.../          // does NOT match "faces away"
 ```
 
-MediaGenerationKit resolves a model's **architecture client-side**, from the
-Official catalog only — 317 entries, none of them Community. Anima is a Community
-model. With no version, the pipeline configures the wrong architecture, the
-server generates happily, and the client decodes the result as rainbow static.
-That is exactly what both of your Anima attempts produced, including one stripped
-to nothing but model, size, steps and guidance.
+`FACING_RELATION_RE` matches the bare word **"faces"**, so *"faces away from
+Jason"* read as *facing*. The guard that would have suppressed it —
+`if (facesEach && !facesAway)` — never fired, because the away list caught
+"turns away" but not "faces away".
 
-**Animagine is not a workaround**, because your LoRAs are Anima LoRAs — one of
-them is literally named `..._illustrious_and_anima___anima_lora_f16.ckpt`, and
-`fanny_priceanimalora_lora_f16.ckpt` is your character. Neither loads on SDXL.
-Cloud without the character LoRA makes every picture of Fanny a stranger, which
-defeats the point of the whole app.
+**The single clearest statement that two people are not front-to-front was the
+one phrase that asserted they were.** Same class of bug as `self` → `elf`: a
+pattern matching a substring of the word that means the opposite.
 
-**So: don't subscribe to Draw Things+.** The thing you'd buy it for isn't
-available. Nothing about that is your setup's fault, and no amount of further
-client work changes it.
+## The fix
 
-## What you actually gained
+`AWAY_RELATION_RE` now covers faces/facing away, looks/looked away, turned away,
+glances away, averts, "away from", "over her shoulder", and "back turned".
 
-**0.58.0's scan queue**, which is the real fix for what slow generation was
-costing you. The old code gave a waiting message 5½ minutes and then threw it
-away un-illustrated — and at your speeds, two messages behind one slow scan meant
-the second was silently lost. It also had no ordering, which matters because
-scene memory learns in sequence. Both fixed, and both are local.
+Deliberately wide, because the failure directions aren't symmetric: a suppressed
+`face-to-face` costs a composition hint, an asserted one costs the pose the
+passage actually described.
 
-If cloud ever becomes possible, everything is already in place: set the model in
-Settings → Cloud, start the relay, tick the box.
+## Verification
 
-## The one thing that could reopen it
+**44 suites · 1634 assertions · all green**, with 20 new in `facing.mjs`.
 
-`cloud-cli-fix/BUG-REPORT.md` is a short, reproducible report for Draw Things.
-Community-channel resolution may well be a small change on their side — their own
-README already flags remote model listing as an unfinished area. Worth sending;
-not worth waiting for.
+Mutation-tested against the original regex — 7 of the new assertions fail with
+the old pattern and pass with the new one, so they're testing the fix rather than
+describing it. The suite also still requires `face-to-face` to fire for genuine
+front-to-front scenes (kissing, staring at, confronting, talking to), so this is
+a narrowing rather than a blanket disable.
 
-## Also in this release
+Also fixed: `cloud.mjs` was reading `lumidraw-cloud-relay.mjs`, which you deleted
+during cleanup, and broke the whole run. Relay assertions now skip when the file
+is absent instead of taking the suite down.
 
-Your recipe is now a test fixture — both LoRA weights, hires fix, the literal
-`shift: 2.003709` — so if cloud ever works, a change that silently drops the
-character LoRA fails a test instead of producing a stranger.
+## What this does NOT fix
 
-**44 suites · 1630 assertions · all green.**
+**Left/right placement.** Your prompt said *"Price is on the right and Jason is
+on the left"* and the image has them swapped. That instruction is prose only —
+there's no reliable Danbooru tag for left/right subject placement, so the model
+ignores it. Anima has no trained handle for it and I'd be inventing one.
+
+If it matters for a particular image, the honest fix is regenerating with a
+different seed until placement lands, rather than more prompt engineering.
+
+**"heels on dashboard"** also didn't land — her legs are up but her feet aren't
+on the dash. `feet on dashboard` isn't a well-populated booru tag, so it's a weak
+lever regardless.
+
+The cab itself is noticeably better than your earlier ones: mirror, headrests,
+windshield and dash are all coherent. The 0.53 framing cap is doing its job.

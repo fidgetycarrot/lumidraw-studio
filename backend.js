@@ -5049,7 +5049,25 @@ const FACING_RELATION_RE = new RegExp([
   '\\bcup(?:s|ping) the (?:face|cheek|chin)\\b',
 ].join('|'), 'i')
 
-const AWAY_RELATION_RE = /\bfrom behind\b|\bbehind\b|\bturn(?:s|ing) away\b|\bback to\b|\bbent over\b/i
+// "faces away from Jason" used to come out as face-to-face. FACING_RELATION_RE
+// matches the bare word "faces", and this list caught "turns away" but not
+// "faces away" — so the single clearest statement that two people are NOT
+// front-to-front was the one that asserted they were. The caption said she
+// faced away, the tag run said face-to-face, and the model believed the tags.
+//
+// Over-matching here is the safe direction: a suppressed face-to-face costs a
+// composition hint, an asserted one costs the pose the passage described.
+const AWAY_RELATION_RE = new RegExp([
+  '\\bfrom behind\\b', '\\bbehind\\b', '\\bback to\\b', '\\bbent over\\b',
+  '\\bfac(?:e|es|ing)\\s+away\\b',
+  '\\blook(?:s|ed|ing)\\s+away\\b',
+  '\\bturn(?:s|ed|ing)\\s+away\\b',
+  '\\bglanc(?:es|ed|ing)\\s+away\\b',
+  '\\baway from\\b',
+  '\\bavert(?:s|ed|ing)?\\b',
+  '\\bover (?:his|her|their) shoulder\\b',
+  '\\bback (?:is |was )?turned\\b',
+].join('|'), 'i')
 const LOW_POSTURE_RE = /\b(?:kneel\w*|sit\w*|seated|crouch\w*|squat\w*|lying|on (?:all fours|knees)|prone)\b/i
 const TALL_POSTURE_RE = /\b(?:stand\w*|upright|towering|looming)\b/i
 
