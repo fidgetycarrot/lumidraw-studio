@@ -1,116 +1,97 @@
-# LumiDraw Studio 0.57.0 — Draw Things Cloud Compute
+# LumiDraw Studio 0.58.0 — the scan queue
 
-Includes everything through 0.56.0.
+Includes 0.57.0 (Draw Things Cloud Compute) and everything before it.
 
-## Getting the API key
+## I went looking for a background queue and found a bug instead
 
-1. Go to **[api.drawthings.ai/dashboard](https://api.drawthings.ai/dashboard)** and sign in with
-   the account your Draw Things+ subscription is on. (Sign-in is Google.)
-2. Request a key. If you are not on Draw Things+ yet you can still get one — the
-   free tier issues a key too, just with a smaller allowance.
-3. Copy it. It is shown to you there; the dashboard is also where you top up if
-   you go past the included allowance.
+You said generation times were your biggest complaint. Looking at how a slow
+generation actually behaves, slowness was not only costing you time — **it was
+costing you pictures.**
 
-**The allowance is the thing to watch.** The key includes **20 generations a
-month on the free tier, 200 on Draw Things+**, and it is metered separately from
-the 40,000 compute units you get inside the app. Past that it is pay-as-you-go.
-At 2–3 images per story message, 200 is roughly 70–100 illustrated messages.
+Here is the code a story message ran when another scan already held the lane:
 
-## Read this before you subscribe
-
-Three things I could not settle from here, in the order they are likely to bite:
-
-**1. Anima almost certainly is not in the cloud catalog.** This is the big one.
-Cloud Compute runs models from the Official or Community channels only — that is
-the exact refusal you already hit: *"Cloud Compute can only access models from
-Official or Community channels. Your local models cannot be used for this
-generation."* Anima is your local file. If it is not offered in the cloud
-catalog, **cloud images will not look like your local ones** — different model,
-different tag behaviour, and every preset you have tuned is tuned for Anima. Your
-custom LoRA can be uploaded (`lora upload`, a Draw Things+ feature), but the base
-model cannot. Check the catalog on the dashboard before paying for a month.
-
-**2. The CLI has to be built from source.** The cloud path is gRPC, published as
-a Swift package. There is no REST endpoint, which is why LumiDraw could not just
-point at a URL. You build `media-generation-kit-cli` with Swift Package Manager.
-Worth knowing: a user hit Swift toolchain version mismatches building the sibling
-`draw-things-cli`, so this may not be a clean five minutes.
-
-**3. A cloud preset is a different preset.** Drop the turbo LoRA, guidance back
-to ~5–7, steps to 40. Cloud did 40 steps plus a LoRA in under a minute against
-your 47s for 17 turbo steps — but only if you stop asking it to run a turbo
-config it does not need.
-
-So: **get the free key first and test it end to end before subscribing.** 20
-generations is enough to find out whether the output is usable.
-
-## What shipped
-
-### The relay
-
-`lumidraw-cloud-relay.mjs`, included in this release. LumiDraw runs inside
-Lumiverse's Node process and can neither speak gRPC nor run a Swift binary, so
-the transport lives in a small local process instead — the same shape as the
-Bridge. Zero dependencies; runs on plain `node`.
-
-```bash
-export DRAWTHINGS_API_KEY="dt-..."
-node lumidraw-cloud-relay.mjs
+```js
+while (activeStoryScan) {
+  if (Date.now() - slotStarted > PARSER_TIMEOUT_MS + 90000) {
+    throw new Error('Automatic scan waited too long for the current story scan to finish.')
+  }
+  await wait(750)
+}
 ```
 
-**Your API key never reaches LumiDraw.** It is read from the environment in that
-process, and nothing sends it onward. It is not in settings storage, not in the
-frontend, not in a settings dump you might paste into a bug report, and it is
-redacted from the relay's own log. LumiDraw cannot leak a secret it was never
-given. `/health` reports only *whether* a key is present.
+**Two failures in four lines.**
 
-### Settings → Draw Things Cloud Compute
+### 1. The stopwatch
 
-```
-☐ Generate on Draw Things cloud instead of this Mac
+Five and a half minutes of waiting, then the message throws and is **never
+illustrated**. At roughly 47 seconds an image plus a parser call, a scan takes
+two to three minutes. Two messages arriving behind one slow scan meant the second
+one quietly died. You would have seen this as "sometimes it just doesn't
+illustrate a message" — with no error in the chat, because the failure happened
+in a background job.
 
-  Relay host [ 127.0.0.1 ]   Port [ 7864 ]
-  Cloud model [                              ]
-              a catalog id or hf:// link — not a local filename
+The faster your machine, the rarer this is. Which is exactly why buying cloud
+compute would have *hidden* this bug rather than fixed it.
 
-☑ If cloud fails, generate locally instead of not at all
+### 2. No order — and this one may matter more
 
-  [ Test cloud relay ]
-```
+Every waiting message ran its own 750ms timer. Whichever happened to test the
+condition first took the lane. **There was no queue, just a scramble.**
 
-**Test cloud relay** distinguishes the three ways this fails, because they have
-three different fixes: no relay running, relay up but CLI missing, or CLI up but
-the key was rejected.
+Scene memory is written by each scan in sequence — the wardrobe of record, the
+setting, the remembered outfits. Illustrating message 12 before message 11 teaches
+it stale state, and 0.56's grounded writes then *defend* what they learned.
 
-### Fallback is on by default
+I can't prove this caused any specific outfit drift you saw. But it is a
+mechanism by which the record could go wrong while every piece of the clothing
+pipeline behaved exactly as designed — and we spent 0.53 through 0.56 hunting
+drift on the assumption that ordering was a given.
 
-An image that arrives slowly beats no image. If the relay is not running, the
-network hiccups, or the cloud errors, the generation is done locally and the
-chat keeps illustrating. The history entry records `backend: 'cloud' | 'local'`
-and, on a fallback, why — so a silent downgrade is still visible after the fact.
+## What replaced it
 
-Two failures do **not** fall back silently into a shrug: **quota exhaustion**
-and **no cloud model set**. Both are yours to fix, and spending local time on
-them would hide the thing you need to see. Sending a local filename is
-specifically prevented rather than attempted, since that request is the one
-Cloud Compute is guaranteed to refuse.
+A real queue. First in, first out, **no stopwatch**. A message waits as long as
+the line ahead of it takes, and the per-scan watchdog remains the thing that
+bounds a scan that has genuinely hung.
+
+- **Ordering is guaranteed**, so scene memory learns in story order.
+- **A long wait is never a dropped message.** Waiting costs time, not pictures.
+- **The panel shows your place** — "Waiting to be illustrated — second in line" —
+  so a slow queue reads as a queue moving rather than the extension having died.
+- **Depth is capped at 12.** Past that the *oldest* waiter is dropped, named in
+  the log, and told how to get it back — if the queue is genuinely backed up, the
+  recent messages are the ones still on your screen.
+- **A message illustrated while it waited is not illustrated twice.** The check
+  re-runs after the wait, since you may have pressed Scan yourself.
+
+### One race worth naming
+
+The queue hands the lane over before the scan sets `activeStoryScan`. A manual
+Scan pressed inside that window could take the lane out from under the queued
+message, which would then be turned away as "busy" — reintroducing the exact
+silent loss the queue exists to stop. There is now a separate lane token held
+across that gap, and a manual scan in that window is told *"Press Scan again in a
+moment"* rather than being allowed to steal it.
 
 ## Verification
 
-**43 suites · 1571 assertions · all green** — 88 of them new in `cloud.mjs`.
+**44 suites · 1612 assertions · all green** — 41 new in `queue.mjs`.
 
-The new suite was mutation-tested rather than trusted for passing: I broke the
-fallback, the payload filter, the model guard and the quota detector in turn and
-confirmed each break was caught. The first attempt caught the fallback break by
-*crashing*, which would have taken every later assertion down with it — that is
-now a clean failure.
+Mutation-tested: I broke FIFO into LIFO, made the cap drop the newest instead of
+the oldest, and removed the lane token. Each break was caught.
 
-The relay was run for real: booted, health-checked, generated against a stand-in
-CLI, and checked afterwards for a leaked key in its log (none) and leftover temp
-files (none). `--seed -1` correctly omits the flag rather than sending -1.
+**A test failure I want to flag, because it nearly fooled me.** Under the
+lane-token mutation, the assertion "the lane is never held by two scans at once"
+*passed* — while a direct probe of the same mutation showed three scans running
+concurrently. The queue is module-level state, an earlier block had left the lane
+held, and that leaked state made a later block's assertion pass by accident. Every
+block now asserts the queue is clean before it starts, which turns contamination
+into its own visible failure. The mutation fails properly now.
 
-## Still worth doing
+That is the second time this project has produced a test that passed for the
+wrong reason. The first was the NUL byte in the scene-memory delimiter. Both were
+caught by trying to break the thing rather than by watching it pass.
 
-The cheaper fix I mentioned is still unbuilt: a **background queue**, so
-generation happens while you keep reading instead of while you wait. That costs
-nothing per month and helps whether or not cloud works out. Say the word.
+## Nothing here depends on the cloud build
+
+This is all local. Whether or not the Swift build finishes, whether or not Anima
+turns out to be usable on cloud, your messages now queue instead of racing.

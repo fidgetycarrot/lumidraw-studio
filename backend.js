@@ -6979,6 +6979,99 @@ async function quietLLMLegacy(system, user, settings, userId, scan = null) {
 let activeStoryScan = null
 let storyScanSequence = 0
 const autoScanJobs = new Map()
+
+// ---------------------------------------------------------------------------
+// The scan queue
+// ---------------------------------------------------------------------------
+//
+// There is one lane: one parser call and one Draw Things generation at a time.
+// What changed in 0.58.0 is what happens to everything else.
+//
+// Before, a waiting message polled `while (activeStoryScan)` every 750ms and
+// gave up after PARSER_TIMEOUT_MS + 90s — five and a half minutes — by throwing
+// "Automatic scan waited too long". At roughly a minute per image plus the
+// parser, two messages arriving behind one slow scan meant the second was
+// silently never illustrated. Slow generation was not only costing time, it was
+// costing pictures.
+//
+// The polling had a second and worse problem: no order. Several waiters all
+// woke on the same tick and whichever happened to test the condition first won.
+// Scene memory — the wardrobe of record, the setting, the remembered outfits —
+// is written by each scan in sequence, so illustrating message 12 before
+// message 11 teaches it the wrong state and the record then defends it. Some of
+// the outfit drift chased through 0.53–0.56 could have entered exactly here.
+//
+// So: a real queue. First in, first out, no stopwatch. A message waits as long
+// as the line in front of it takes, and the per-scan watchdog remains the thing
+// that bounds a scan that has genuinely hung.
+
+const SCAN_QUEUE_LIMIT = 12
+const scanWaiters = []
+let scanLaneHeld = false
+
+function scanQueueDepth() {
+  return scanWaiters.length + (scanLaneHeld || activeStoryScan ? 1 : 0)
+}
+
+function describeQueuePlace(index) {
+  if (index <= 0) return 'next in line'
+  if (index === 1) return 'second in line'
+  if (index === 2) return 'third in line'
+  return `${index + 1}th in line`
+}
+
+// Everyone still waiting is told where they now are, so a long wait reads as a
+// queue moving rather than as the extension having stopped.
+function broadcastQueuePositions() {
+  scanWaiters.forEach((waiter, index) => {
+    setAutoStatus(waiter.userId, {
+      mode: 'parser', status: 'waiting',
+      messageId: waiter.job.messageId, chatId: waiter.job.chatId, source: waiter.source,
+      note: `Waiting to be illustrated — ${describeQueuePlace(index)}.`,
+      queuePosition: index + 1,
+      queueDepth: scanQueueDepth(),
+    })
+  })
+}
+
+function pumpScanQueue() {
+  if (scanLaneHeld || activeStoryScan) return
+  const next = scanWaiters.shift()
+  if (!next) return
+  scanLaneHeld = true
+  next.resolve()
+  broadcastQueuePositions()
+}
+
+// The cap exists so a runaway event storm cannot grow the queue without bound.
+// The OLDEST waiter is dropped rather than the newest: if the queue is genuinely
+// backed up, the recent messages are the ones still on screen and worth
+// illustrating, and the dropped one is named rather than vanishing.
+function acquireScanLane(job, userId, source) {
+  return new Promise((resolve, reject) => {
+    scanWaiters.push({ job, userId, source, resolve, reject, enqueuedAt: Date.now() })
+    while (scanWaiters.length > SCAN_QUEUE_LIMIT) {
+      const dropped = scanWaiters.shift()
+      spindle.log.warn('[lumidraw] scan queue is full (' + SCAN_QUEUE_LIMIT + ') · dropping the oldest waiting message' +
+        (dropped.job.messageId ? ' · message=' + dropped.job.messageId : ''))
+      dropped.reject(new Error('The illustration queue is full (' + SCAN_QUEUE_LIMIT +
+        ' waiting). This message was dropped to keep up with newer ones; press Scan to illustrate it.'))
+    }
+    const position = scanWaiters.length - 1
+    if (position > 0 || scanLaneHeld || activeStoryScan) {
+      spindle.log.info('[lumidraw] queued for the scan lane · ' + describeQueuePlace(position) +
+        ' · depth=' + scanQueueDepth() + (job.messageId ? ' · message=' + job.messageId : ''))
+    }
+    pumpScanQueue()
+    broadcastQueuePositions()
+  })
+}
+
+function releaseScanLane() {
+  scanLaneHeld = false
+  pumpScanQueue()
+  broadcastQueuePositions()
+}
 const recentAutoScans = new Map()
 
 // CHARACTER_MESSAGE_RENDERED fires for every message the host renders,
@@ -7076,37 +7169,44 @@ function scheduleAutoStoryScan(userId, request = {}) {
       }
 
       // Do not lose an automatic message just because another manual/automatic
-      // scan owns the single Draw Things/parser lane. Wait for the lane instead.
-      const slotStarted = Date.now()
-      while (activeStoryScan) {
-        if (job.messageId && activeStoryScan.messageId === job.messageId) {
-          const result = { mode: 'parser', processed: 0, skipped: true, note: 'This message is already being scanned.' }
-          recentAutoScans.set(key, Date.now())
-          setAutoStatus(userId, {
-            mode: 'parser', status: 'joined', messageId: job.messageId, chatId: job.chatId, source,
-            note: result.note,
-          })
-          return result
-        }
-        if (Date.now() - slotStarted > PARSER_TIMEOUT_MS + 90000) {
-          throw new Error('Automatic scan waited too long for the current story scan to finish.')
-        }
+      // scan owns the single Draw Things/parser lane. Take a place in line.
+      if (job.messageId && activeStoryScan && activeStoryScan.messageId === job.messageId) {
+        const result = { mode: 'parser', processed: 0, skipped: true, note: 'This message is already being scanned.' }
+        recentAutoScans.set(key, Date.now())
         setAutoStatus(userId, {
-          mode: 'parser', status: 'waiting', messageId: job.messageId, chatId: job.chatId, source,
-          note: 'Waiting for the current story scan to finish.',
+          mode: 'parser', status: 'joined', messageId: job.messageId, chatId: job.chatId, source,
+          note: result.note,
         })
-        await wait(750)
+        return result
+      }
+      await acquireScanLane(job, userId, source)
+
+      let result
+      try {
+        // The wait may have been long. A manual Scan press, or the scan that
+        // was holding the lane, may have illustrated this message in the
+        // meantime — so ask again rather than illustrating it twice.
+        if (job.messageId && await wasProcessed(job.messageId)) {
+          const already = { mode: 'parser', processed: 0, skipped: true, note: 'This message was illustrated while it waited in the queue.' }
+          recentAutoScans.set(key, Date.now())
+          setAutoStatus(userId, { mode: 'parser', status: 'idle', messageId: job.messageId, chatId: job.chatId, source, note: already.note })
+          return already
+        }
+        const effectiveSource = uniqueStrings(job.sources || [job.source]).join('+') || source
+        result = await scanStory(userId, {
+          force: false,
+          auto: true,
+          _fromQueue: true,
+          source: effectiveSource,
+          messageId: job.messageId,
+          chatId: job.chatId,
+          expectedContent: job.expectedContent,
+        })
+      } finally {
+        releaseScanLane()
       }
 
       const effectiveSource = uniqueStrings(job.sources || [job.source]).join('+') || source
-      const result = await scanStory(userId, {
-        force: false,
-        auto: true,
-        source: effectiveSource,
-        messageId: job.messageId,
-        chatId: job.chatId,
-        expectedContent: job.expectedContent,
-      })
       const resultNote = String(result && result.note || '')
       // A saved message can become queryable a little later on some host builds.
       // Do not suppress a later lifecycle event for ten minutes when lookup was
@@ -7161,6 +7261,19 @@ async function scanStory(userId, options = {}) {
       activeStage: activeStoryScan.stage,
       activeMessageId: activeStoryScan.messageId,
       note: 'A story scan is already running' + (activeStoryScan.stage ? ' (' + activeStoryScan.stage + ')' : '') + '. LumiDraw skipped this duplicate request.',
+    }
+  }
+  // The lane token is held from the moment the queue picks a waiter until that
+  // scan finishes — a window that opens before `activeStoryScan` is set. Without
+  // this check a manual Scan pressed inside that window would take the lane out
+  // from under the queued message, which would then be turned away as "busy":
+  // exactly the silent loss the queue exists to stop.
+  if (scanLaneHeld && !(options && options._fromQueue)) {
+    return {
+      mode: 'busy',
+      processed: 0,
+      skipped: true,
+      note: 'An illustration from the queue is just starting. Press Scan again in a moment.',
     }
   }
   const scan = {
