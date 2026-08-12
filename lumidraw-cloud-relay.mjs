@@ -85,6 +85,30 @@ function run(args, timeoutMs = 30000, redact = []) {
   })
 }
 
+// Two clients are possible, and which one is present changes the flags.
+//
+//   'official'  media-generation-kit-cli — `generate --cloud-compute`, `auth state`
+//   'lumidraw'  lumidraw-dt-cli — flags only, `--check`
+//
+// The official client currently cannot be built at all: its source imports
+// CLICloudAuth, a module that exists in neither media-generation-kit nor
+// draw-things-community at the revision it pins. Until that is fixed upstream,
+// 'lumidraw' is the path that works — but the detection is by behaviour rather
+// than by filename, so a fixed official client is picked up with no change here.
+let cliStyle = ''
+
+async function detectCliStyle() {
+  if (cliStyle) return cliStyle
+  const check = await run(['--check'], 20000, [API_KEY])
+  // --check is unknown to the official client, which errors on it.
+  if (check.code === 0 || /^(ok|no-key)$/m.test(check.stdout.trim())) {
+    cliStyle = 'lumidraw'
+  } else {
+    cliStyle = 'official'
+  }
+  return cliStyle
+}
+
 async function cliPresent() {
   const res = await run(['--help'], 15000)
   // A missing binary surfaces as ENOENT on the spawn error, not as an exit code.
@@ -93,10 +117,12 @@ async function cliPresent() {
 }
 
 async function authState() {
-  const args = ['auth', 'state']
-  if (API_KEY) args.push('--api-key', API_KEY)
+  const style = await detectCliStyle()
+  const args = style === 'lumidraw' ? ['--check'] : ['auth', 'state']
+  if (API_KEY && style !== 'lumidraw') args.push('--api-key', API_KEY)
+  if (API_KEY && style === 'lumidraw') args.push('--api-key', API_KEY)
   const res = await run(args, 20000, [API_KEY])
-  return { ok: res.code === 0, detail: (res.stdout + res.stderr).trim().slice(0, 500) }
+  return { ok: res.code === 0, detail: (res.stdout + res.stderr).trim().slice(0, 500), style }
 }
 
 // --- generation ------------------------------------------------------------
@@ -118,12 +144,28 @@ function flagsFor(body) {
   if (body.seed !== undefined && Number(body.seed) >= 0) push('--seed', body.seed)
   push('--sampler', body.sampler)
   push('--shift', body.shift)
+  push('--clip-skip', body.clip_skip)
+  push('--strength', body.strength)
+  if (body.hires_fix) {
+    out.push('--hires-fix')
+    push('--hires-fix-width', body.hires_fix_width)
+    push('--hires-fix-height', body.hires_fix_height)
+    push('--hires-fix-strength', body.hires_fix_strength)
+  }
+  // The CLI takes --lora once per LoRA, as "file@weight".
+  for (const lora of Array.isArray(body.loras) ? body.loras : []) {
+    if (!lora || !lora.file) continue
+    const weight = Number.isFinite(Number(lora.weight)) ? Number(lora.weight) : 1
+    out.push('--lora', `${lora.file}@${weight}`)
+  }
   return out
 }
 
 async function generate(body) {
+  const style = await detectCliStyle()
   const file = path.join(os.tmpdir(), `lumidraw-cloud-${crypto.randomUUID()}.png`)
-  const args = ['generate', '--cloud-compute']
+  // The lumidraw client is cloud-only, so it has no subcommand and no mode flag.
+  const args = style === 'official' ? ['generate', '--cloud-compute'] : []
   if (API_KEY) args.push('--api-key', API_KEY)
   args.push(...flagsFor(body), '--output', file)
 
@@ -177,6 +219,7 @@ const server = http.createServer(async (req, res) => {
       cli,                                  // '' when the binary is missing
       keyPresent: !!API_KEY,                // never the key itself
       authenticated: auth.ok,
+      style: auth.style || '',
       detail: auth.detail,
     })
     return

@@ -576,10 +576,22 @@ function cloudModelFor(settings, payload) {
   return ''
 }
 
-// Translate a Draw Things HTTP payload into the relay's flat request. Only keys
-// with a documented cloud equivalent cross over; the rest are dropped rather
-// than passed through hopefully, because the cloud stack rejects unknown keys
-// outright instead of ignoring them the way the local API mostly does.
+// Translate a Draw Things HTTP payload into the relay's flat request.
+//
+// The crossing list is not a guess. It was read off a live cloud pipeline with
+// `lumidraw-dt-cli --dump-config`, which printed all 81 configuration fields
+// with their types — so `guidanceScale` is a Float, `seed` a UInt32, `clipSkip`
+// an Int, and the settings below are the ones that genuinely exist on the far
+// side. Everything else is dropped rather than passed through hopefully.
+//
+// LoRAs and hires fix DO cross. That is not a preference, it is what the
+// recipe requires: a saved cloud generation of Eric's showed two LoRAs — a
+// style LoRA at 0.8 and the Fanny/Price character LoRA at 0.4 — plus hires fix
+// on at 512×704. Drop the character LoRA and the person in the picture is a
+// stranger; drop hires fix and it is a different picture at the same size.
+//
+// Tiled decoding, compression artifacts and the refiner stay dropped: those are
+// local-performance settings a cloud GPU does not need.
 function cloudRequestFrom(payload, model) {
   const num = (value, fallback) => {
     const n = Number(value)
@@ -597,8 +609,45 @@ function cloudRequestFrom(payload, model) {
   }
   const sampler = payload.sampler || payload.sampler_name
   if (sampler) request.sampler = String(sampler)
-  const shift = payload.shift ?? payload.res_dpt_shift
-  if (shift !== undefined && shift !== null && shift !== '') request.shift = num(shift, undefined)
+  const optional = {
+    shift: payload.shift ?? payload.res_dpt_shift,
+    clip_skip: payload.clip_skip ?? payload.clipSkip,
+    strength: payload.strength,
+  }
+  for (const [key, value] of Object.entries(optional)) {
+    if (value !== undefined && value !== null && value !== '') request[key] = num(value, undefined)
+  }
+
+  // A LoRA entry is { file, weight } in a synced Draw Things config, but a
+  // hand-written preset may spell it name/model, and a bare string is legal
+  // too. Weight defaults to 1 rather than 0 — a LoRA at zero is a LoRA that
+  // silently did nothing.
+  const loras = Array.isArray(payload.loras) ? payload.loras : []
+  const cloudLoras = loras
+    .map((entry) => {
+      if (!entry) return null
+      if (typeof entry === 'string') return { file: entry, weight: 1 }
+      const file = entry.file || entry.name || entry.model || ''
+      if (!file) return null
+      const weight = num(entry.weight, 1)
+      return { file: String(file), weight }
+    })
+    .filter(Boolean)
+  if (cloudLoras.length) request.loras = cloudLoras
+
+  const hires = payload.hires_fix ?? payload.hiresFix
+  if (hires === true || hires === 'true' || hires === 1) {
+    request.hires_fix = true
+    const hiresOptional = {
+      hires_fix_width: payload.hires_fix_width ?? payload.hiresFixWidth,
+      hires_fix_height: payload.hires_fix_height ?? payload.hiresFixHeight,
+      hires_fix_strength: payload.hires_fix_strength ?? payload.hiresFixStrength,
+    }
+    for (const [key, value] of Object.entries(hiresOptional)) {
+      if (value !== undefined && value !== null && value !== '') request[key] = num(value, undefined)
+    }
+  }
+
   for (const key of Object.keys(request)) {
     if (request[key] === undefined) delete request[key]
   }
