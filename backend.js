@@ -1274,15 +1274,67 @@ function buildAnimaParserInput(messages, targetIndex, target, settings, sceneSta
   }
 }
 
-async function wasProcessed(messageId) {
-  const list = await spindle.storage.getJson(PROCESSED_FILE, { fallback: [] })
-  return list.includes(messageId)
+// A message id is not enough to identify what was illustrated.
+//
+// A SWIPE — asking the model to redo a reply — replaces the message's content
+// but keeps its id. The old content had images, so the id was in this list, so
+// the replacement was skipped as "already illustrated" and no image was ever
+// made. The log went silent because that check returns before anything is
+// logged, which made it look like the parser had run and then simply stopped.
+//
+// So an entry records WHICH TEXT was illustrated, not merely which message.
+// FNV-1a: stable across runs, no dependency, and this is a cache key rather
+// than anything security-bearing.
+function contentFingerprint(text) {
+  const value = String(text || '')
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
 }
 
-async function markProcessed(messageId) {
+function processedKey(messageId, content) {
+  return `${messageId}:${contentFingerprint(content)}`
+}
+
+// `migrate` is only passed by the authoritative caller — the one holding the
+// real message text. The early optimisation checks read with the event's copy
+// of the content, which can differ, and must not write a fingerprint from it.
+async function wasProcessed(messageId, content, { migrate = false } = {}) {
+  const id = String(messageId || '')
+  if (!id) return false
   const list = await spindle.storage.getJson(PROCESSED_FILE, { fallback: [] })
-  list.push(messageId)
-  await spindle.storage.setJson(PROCESSED_FILE, list.slice(-50), { indent: 0 })
+  // No content to compare: fall back to id-only, the pre-0.61 behaviour.
+  if (content === undefined || content === null) {
+    return list.some((entry) => entry === id || String(entry).startsWith(id + ':'))
+  }
+  if (list.includes(processedKey(id, content))) return true
+  // A bare id was written before fingerprinting existed. Treat it as a match —
+  // the far likelier reading is a replay of the same message than a swipe — and
+  // adopt the text we can see as its content, so the NEXT swipe is detected.
+  const legacy = list.indexOf(id)
+  if (legacy >= 0) {
+    if (migrate) {
+      list[legacy] = processedKey(id, content)
+      await spindle.storage.setJson(PROCESSED_FILE, list.slice(-50), { indent: 0 })
+    }
+    return true
+  }
+  return false
+}
+
+async function markProcessed(messageId, content) {
+  const id = String(messageId || '')
+  if (!id) return
+  const list = await spindle.storage.getJson(PROCESSED_FILE, { fallback: [] })
+  const keyed = processedKey(id, content)
+  // Drop any older record of this id — a swipe supersedes what came before, and
+  // keeping both wastes slots in a 50-entry window.
+  const pruned = list.filter((entry) => entry !== id && !String(entry).startsWith(id + ':'))
+  pruned.push(keyed)
+  await spindle.storage.setJson(PROCESSED_FILE, pruned.slice(-50), { indent: 0 })
 }
 
 function aspectDims(config, aspectStr) {
@@ -7228,9 +7280,19 @@ function scheduleAutoStoryScan(userId, request = {}) {
       // An event replay for an already-illustrated message (startup echoes,
       // re-renders, chat switches) is settled here from local storage, before
       // any scan widget, chat fetch, or message lookup is started.
-      if (job.messageId && await wasProcessed(job.messageId)) {
+      //
+      // Compared against the event's copy of the content, which may differ from
+      // the stored message. That is fine: a false "not illustrated" here costs
+      // one message fetch, and the authoritative check inside the scan — the one
+      // holding the real text — still stops it. A false "illustrated" is the
+      // expensive direction, and that is the one this cannot produce.
+      if (job.messageId && await wasProcessed(job.messageId, job.expectedContent || undefined)) {
         const result = { mode: 'parser', processed: 0, skipped: true, note: 'This message was already illustrated.' }
         recentAutoScans.set(key, Date.now())
+        // Logged, because this used to be the one path that returned in silence:
+        // the log showed the parser protocol injected, the trigger queued, and
+        // then nothing at all, which reads like a crash rather than a skip.
+        spindle.log.info('[lumidraw] auto scan skipped · this message was already illustrated · message=' + job.messageId)
         setAutoStatus(userId, { mode: 'parser', status: 'idle', messageId: job.messageId, chatId: job.chatId, source, note: result.note })
         return result
       }
@@ -7253,9 +7315,10 @@ function scheduleAutoStoryScan(userId, request = {}) {
         // The wait may have been long. A manual Scan press, or the scan that
         // was holding the lane, may have illustrated this message in the
         // meantime — so ask again rather than illustrating it twice.
-        if (job.messageId && await wasProcessed(job.messageId)) {
+        if (job.messageId && await wasProcessed(job.messageId, job.expectedContent || undefined)) {
           const already = { mode: 'parser', processed: 0, skipped: true, note: 'This message was illustrated while it waited in the queue.' }
           recentAutoScans.set(key, Date.now())
+          spindle.log.info('[lumidraw] auto scan skipped · illustrated while it waited in the queue · message=' + job.messageId)
           setAutoStatus(userId, { mode: 'parser', status: 'idle', messageId: job.messageId, chatId: job.chatId, source, note: already.note })
           return already
         }
@@ -7600,7 +7663,7 @@ async function scanStoryCore(userId, options = {}) {
 
   // ------------------------- parser: derive a prompt from prose -------------
   if (settings.mode === 'parser') {
-    if (!force && target.id && await wasProcessed(target.id)) {
+    if (!force && target.id && await wasProcessed(target.id, target.content, { migrate: true })) {
       return { mode: 'parser', note: 'This message was already illustrated — choose it again to force another parser run.' }
     }
     const usingCustom = !!(settings.parserInstruction && settings.parserInstruction.trim())
@@ -7679,7 +7742,7 @@ async function scanStoryCore(userId, options = {}) {
       }
       if (!parsed.length) {
         if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
-        if (target.id) await markProcessed(target.id)
+        if (target.id) await markProcessed(target.id, target.content)
         const storyDebug = await saveStoryDebug({ mode: 'parser', parserEngine: 'anima', subjectBinding: true, rawReply: out, entries: [], lastCompiledPrompt: '', contextPreview: parserInput.contextPreview, ledgerPreview: parserInput.ledgerPreview, contextMessageCount: parserInput.contextMessageCount, ledgerFound: parserInput.ledgerFound })
         return { mode: 'parser', messageId: String(target.id || ''), note: `Parser (${instrLabel}) judged no visual moment.`, storyDebug }
       }
@@ -7777,7 +7840,7 @@ async function scanStoryCore(userId, options = {}) {
       newContent = stripParserTrigger(newContent)
       newContent = stripParserTrigger(newContent)
     await updateMessageContent(target.id, target.contentKey, newContent, userId, chatId)
-      if (target.id) await markProcessed(target.id)
+      if (target.id) await markProcessed(target.id, target.content)
       const storyDebug = await saveStoryDebug({
         mode: 'parser',
         parserEngine: 'anima',
@@ -7813,7 +7876,7 @@ async function scanStoryCore(userId, options = {}) {
     setStoryScanStage(scan, 'compiling', 'Parser returned tags; preparing the final prompt.')
     if (/^\s*NONE\s*$/i.test(out)) {
       if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
-      if (target.id) await markProcessed(target.id)
+      if (target.id) await markProcessed(target.id, target.content)
       return { mode: 'parser', note: `Parser (${instrLabel}) judged no visual moment (NONE).` }
     }
     const looksLikeTags = (line) => {
@@ -7875,7 +7938,7 @@ async function scanStoryCore(userId, options = {}) {
     }
     if (topMds.length) newContent = `${topMds.join('\n\n')}\n\n${newContent}`
     await updateMessageContent(target.id, target.contentKey, newContent, userId, chatId)
-    if (target.id) await markProcessed(target.id)
+    if (target.id) await markProcessed(target.id, target.content)
     const storyDebug = await saveStoryDebug({
       mode: 'parser', parserEngine: 'legacy', subjectBinding: false, rawReply: out,
       entries: parsed.map((item, index) => ({ anchor: item.anchor, compiledPrompt: [lead, prefix, lines[index]].filter(Boolean).join(', ') })),

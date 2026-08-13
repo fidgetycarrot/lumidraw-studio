@@ -1,69 +1,75 @@
-# LumiDraw Studio 0.60.0 — the truck cab prompt contradicted itself
+# LumiDraw Studio 0.61.0 — swipes are illustrated again
 
-## The bug
+Includes 0.60.0 (the face-to-face contradiction).
 
-Your prompt contained both of these:
+## Your instinct was the diagnosis
 
-> *Price, chin tipped and eyes on sketchbook, **faces away from** Jason.*
+*"The only difference I can think of is this was a swiped message."* That was it.
 
-> `... @cherrymousestreet, **face-to-face, facing another**, car interior ...`
-
-The caption says she faces away. The tag run says they're front to front. Anima
-resolved it toward the tags, which is why Jason is looking at her instead of at
-the road.
-
-## Why
+A swipe replaces a message's **content** but keeps its **id**. LumiDraw recorded
+what it had illustrated as a bare list of message ids:
 
 ```js
-const FACING_RELATION_RE = ... '\\bfac(?:es|ing)\\b' ...          // matches "faces"
-const AWAY_RELATION_RE = /...|\bturn(?:s|ing) away\b|.../          // does NOT match "faces away"
+async function wasProcessed(messageId) {
+  const list = await spindle.storage.getJson(PROCESSED_FILE, { fallback: [] })
+  return list.includes(messageId)          // ← the id, and nothing else
+}
 ```
 
-`FACING_RELATION_RE` matches the bare word **"faces"**, so *"faces away from
-Jason"* read as *facing*. The guard that would have suppressed it —
-`if (facesEach && !facesAway)` — never fired, because the away list caught
-"turns away" but not "faces away".
+The original message had images, so its id was in that list. The swipe arrived
+with the same id, matched, and was skipped as *"already illustrated."* A brand
+new passage, never illustrated, silently discarded.
 
-**The single clearest statement that two people are not front-to-front was the
-one phrase that asserted they were.** Same class of bug as `self` → `elf`: a
-pattern matching a substring of the word that means the opposite.
+## Why the log looked like a crash
+
+This is the half that made it undiagnosable, and it's the part I'd fix even if
+swipes had never existed.
+
+That check returns **before any logging**. So the log showed the interceptor
+running, the protocol injected, the trigger queued, two triggers deduplicated —
+and then nothing at all. A successful skip and a crashed scan produced byte-for-
+byte identical output.
+
+Both skip paths now log. If this ever happens again you'll see:
+
+```
+[lumidraw] auto scan skipped · this message was already illustrated · message=277579c3-…
+```
+
+which is a sentence you can act on, rather than silence you have to guess at.
 
 ## The fix
 
-`AWAY_RELATION_RE` now covers faces/facing away, looks/looked away, turned away,
-glances away, averts, "away from", "over her shoulder", and "back turned".
+A record is now `messageId:fingerprint` — which message *and which text*. Same
+id with different content is a different record, so a swipe reads as unillustrated
+and gets its images.
 
-Deliberately wide, because the failure directions aren't symmetric: a suppressed
-`face-to-face` costs a composition hint, an asserted one costs the pose the
-passage actually described.
+Details worth knowing:
+
+- **Upgrading is quiet.** Records written before this version are bare ids. Those
+  are still honoured, so nothing gets re-illustrated on install — and the first
+  time one is read, the text it's read alongside is adopted as its content, so
+  the *next* swipe of that message is caught.
+- **Only the authoritative caller writes fingerprints.** The early check compares
+  against the event's copy of the content, which can differ from the stored
+  message. A wrong "not illustrated" there costs one message fetch and is caught
+  by the real check inside the scan. A wrong "illustrated" is the expensive
+  direction, and that path can't produce one.
+- **A superseded record is pruned**, not accumulated, so a heavily-swiped message
+  can't crowd out the 50-entry window.
+- Forcing a rescan by hand still bypasses the whole check, unchanged.
 
 ## Verification
 
-**44 suites · 1634 assertions · all green**, with 20 new in `facing.mjs`.
+**45 suites · 1663 assertions · all green**, 29 new in `swipe.mjs`.
 
-Mutation-tested against the original regex — 7 of the new assertions fail with
-the old pattern and pass with the new one, so they're testing the fix rather than
-describing it. The suite also still requires `face-to-face` to fire for genuine
-front-to-front scenes (kissing, staring at, confronting, talking to), so this is
-a narrowing rather than a blanket disable.
+Mutation-tested three ways — reverting the read to id-only, dropping content from
+the writes, and removing the log line. Each break was caught, including the
+silence, which is now itself a tested property.
 
-Also fixed: `cloud.mjs` was reading `lumidraw-cloud-relay.mjs`, which you deleted
-during cleanup, and broke the whole run. Relay assertions now skip when the file
-is absent instead of taking the suite down.
+## Note for the next time this happens
 
-## What this does NOT fix
-
-**Left/right placement.** Your prompt said *"Price is on the right and Jason is
-on the left"* and the image has them swapped. That instruction is prose only —
-there's no reliable Danbooru tag for left/right subject placement, so the model
-ignores it. Anima has no trained handle for it and I'd be inventing one.
-
-If it matters for a particular image, the honest fix is regenerating with a
-different seed until placement lands, rather than more prompt engineering.
-
-**"heels on dashboard"** also didn't land — her legs are up but her feet aren't
-on the dash. `feet on dashboard` isn't a well-populated booru tag, so it's a weak
-lever regardless.
-
-The cab itself is noticeably better than your earlier ones: mirror, headrests,
-windshield and dash are all coherent. The 0.53 framing cap is doing its job.
+The general shape here is worth remembering: *the log ended where the code
+returned early.* When a scan seems to vanish, the last line printed tells you
+which branch it took, and a branch that prints nothing is a branch that can hide
+a bug indefinitely. Every early return on the auto path now says so out loud.
