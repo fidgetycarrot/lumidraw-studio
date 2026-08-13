@@ -6434,8 +6434,60 @@ PARTIAL CHANGES ARE NOT STATE CHANGES. When a passage shows only SOME of a chara
 RELATIONS ARE THE ONLY CHANNEL FOR CONTACT — anything two subjects do to each other that is not written as a relation will not be drawn, so they are mandatory in a multi-subject scene. The FIRST relation establishes the base body arrangement: "straddles the lap of", "stands between the knees of", "leans over", "faces", "sits beside". Later ones name the clearest contact points, always as a visible hold plus the body part it takes: "pins the shoulders of", "grips the snout of", "bites the neck of", "braces both hands on the shoulders of". Verbs of motion or intensity — "fights", "attacks", "struggles with", "pounds", "thrusts", "presses into" — describe nothing an artist could draw; use the hold instead. Put the specifics in details: "claws hooked into the nose", "knuckles white".
 For seated, leaning, lying, or kneeling poses, name the visible support surface in "support". Use the camera tag "pov" only when ref "persona" is seen from the viewer's own eye position, and in that subject's pose include a cue such as "viewer hands visible" or "face out of frame".
 Set anatomy_visible true only when the passage explicitly names and visibly depicts that subject's saved anatomy; sexual context, lowered clothing, arousal, nudity, or post-sex context alone are not enough. Set anatomy_visible false for safe or sensitive scenes. LumiDraw alone controls saved anatomy.
+${DYNAMIC_GUIDANCE_MARKER}
 Known subject refs:
 ${profileSchemaHints(profiles)}`
+}
+
+// ---------------------------------------------------------------------------
+// The dynamic guidance slot
+// ---------------------------------------------------------------------------
+//
+// Borrowed from kittyafterdark/LumiSwarm-Studio, which marks one place in its
+// protocol with {{swarm_dynamic_guidance}} and inserts live instructions there.
+//
+// LumiDraw needed the same thing for a concrete reason. The static rules are
+// measured against a 10,100-character ceiling and currently sit at ~10,000. Any
+// new per-scene instruction — a named Look, an activated location's visual
+// canon — has nowhere to go: appending it to the rules breaks the budget, and
+// that budget is not arbitrary. It is what stops the instruction growing one
+// clause at a time until a small parser model stops following any of it.
+//
+// So live guidance is INSERTED at a marked point rather than appended, and the
+// ceiling keeps measuring what it was meant to measure: the rules I write, not
+// the scene the user happens to be in.
+//
+// Removing the marker from a custom instruction is supported and opts out of
+// every dynamic block — the same contract Swarm Studio documents.
+const DYNAMIC_GUIDANCE_MARKER = '{{dynamic_guidance}}'
+
+// The contributors. Deliberately empty in 0.62.0: this release ships the seam
+// and proves it, so the diff that adds named Looks is a change to THIS list and
+// nothing else. A feature that has to edit the instruction assembly to add one
+// sentence is a feature that will eventually edit it badly.
+function dynamicGuidanceBlocks(_context = {}) {
+  return []
+}
+
+// Each contributor returns a block or an empty string. A block with nothing to
+// say contributes nothing, rather than a header with an empty list under it.
+function composeDynamicGuidance(blocks) {
+  const kept = (blocks || [])
+    .map((block) => String(block || '').trim())
+    .filter(Boolean)
+  return kept.length ? kept.join('\n') : ''
+}
+
+// Insert at the marker. When a custom instruction has removed it, honour the
+// removal by default: silently appending what someone deliberately deleted is
+// worse than losing the guidance.
+function applyDynamicGuidance(instruction, guidance, { appendIfMissing = false } = {}) {
+  const text = String(instruction || '')
+  const block = String(guidance || '').trim()
+  if (!text.includes(DYNAMIC_GUIDANCE_MARKER)) {
+    return block && appendIfMissing ? `${text}\n${block}` : text
+  }
+  return text.replaceAll(DYNAMIC_GUIDANCE_MARKER, block)
 }
 
 function joinPromptParts(parts) {
@@ -7709,7 +7761,9 @@ async function scanStoryCore(userId, options = {}) {
         .replaceAll('{{max_images}}', String(settings.maxImages || 2))
         .replaceAll('{{min_images}}', String(settings.minImages || 0))
       const resolvedGuidance = await resolveMacros(guidance, userId, chatId)
-      const instruction = resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0)
+      const instruction = applyDynamicGuidance(
+        resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
+        composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings })))
       const instrLabel = usingCustom ? `custom guidance + structured compiler (${instruction.length} chars)` : 'structured subject compiler'
       setStoryScanStage(scan, 'parsing', 'Waiting for the selected parser model.')
       spindle.log.info('[lumidraw] Anima parser context · previous_messages=' + parserInput.contextMessageCount + ' · loom_ledger=' + (parserInput.ledgerFound ? 'found' : 'none'))
@@ -8116,8 +8170,10 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
     .replaceAll('{{max_images}}', String(settings.maxImages || 2))
     .replaceAll('{{min_images}}', String(settings.minImages || 0))
-  const instruction = (await resolveMacros(guidance, userId, chatId)) +
-    structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0)
+  const instruction = applyDynamicGuidance(
+    (await resolveMacros(guidance, userId, chatId)) +
+      structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
+    composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings })))
 
   const startedAt = Date.now()
   const report = {}

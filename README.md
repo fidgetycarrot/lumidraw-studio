@@ -1,75 +1,110 @@
-# LumiDraw Studio 0.61.0 — swipes are illustrated again
+# LumiDraw Studio 0.62.0 — foundation for Looks and Lorebook
 
-Includes 0.60.0 (the face-to-face contradiction).
+Release 1 of 4. **You will see no change in the app.** Everything here is
+groundwork the next two releases need, plus one thing that should have existed
+already.
 
-## Your instinct was the diagnosis
+Ideas borrowed from [kittyafterdark/LumiSwarm-Studio](https://github.com/kittyafterdark/LumiSwarm-Studio).
 
-*"The only difference I can think of is this was a swiped message."* That was it.
+## 1. Tests that drive the real message handler
 
-A swipe replaces a message's **content** but keeps its **id**. LumiDraw recorded
-what it had illustrated as a bare list of message ids:
+`hostmock.mjs` mocks the Spindle host — storage backed by a real Map, log
+capture, image uploads, chats, macros — and runs `onFrontendMessage` for real.
+
+This is the gap that let the swipe bug through. `harness.mjs` loads the backend
+with a no-op proxy and pulls out pure functions; it covers the compiler
+beautifully and **cannot reach the RPC path at all**. So everything behind the
+message handler has only ever been tested by asserting the source *contains* a
+pattern.
+
+Source patterns prove the code says the right thing. They can't prove it does
+it. `wasProcessed(messageId)` was correct, readable, well-commented code that
+returned the wrong answer for a real input — no grep would have caught it, and
+none did. A user report did.
+
+`rpc.mjs` now covers, for real: settings round-tripping through save and reload,
+the swipe fingerprint, legacy record migration, the pruning window, and the OOC
+verdict. 39 assertions, mutation-tested three ways.
+
+**Two things the mock corrected while I wrote it.** The handler doesn't *return*
+its reply, it calls `sendToFrontend` — and an unrecognised message type replies
+with **nothing at all**, deliberately, because Lumiverse broadcasts to every
+extension and answering another extension's message would be the bug. I'd
+assumed it returned an error. Both are now asserted.
+
+## 2. A safety scan
+
+`safety.mjs`, adapted from Kitty's `tests/safety-scan.mjs`. It asserts the
+backend reaches for no filesystem, subprocess, raw socket, worker, database,
+`Bun` system API, `process` control, or dynamic code execution — and that the
+frontend doesn't either.
+
+Two deliberate departures from hers:
+
+- **`Buffer.from(…, 'base64')` is blocked in Swarm Studio and required here** —
+  Draw Things returns base64 images. So rather than ban it, the scan pins that it
+  appears exactly twice and only ever decodes a generated image.
+- **Every declared permission is mapped to the host API that needs it**, so a
+  permission nobody exercises shows up as a failure rather than living forever in
+  a list nobody re-reads.
+
+It also asserts `spindle.json` and `package.json` agree on the version — the
+drift that showed you v0.42.3 for six releases, and which Kitty's repo currently
+has (1.0.16 vs 1.0.15).
+
+*Written wrong the first time and caught by its own run:* `spindle.chats[...]` is
+reached by bracket access, so a `spindle\.chats?\.` pattern reported three
+permissions as unused that are used. The scan detects on the object now.
+
+## 3. The dynamic guidance slot
+
+The reason this release exists.
+
+Your static parser rules are measured against a 10,100-character ceiling and sit
+at ~10,000. That ceiling isn't arbitrary — it's what stopped the instruction
+growing one clause at a time until a small parser model followed none of it. So a
+named Look, or an activated location's visual canon, **has nowhere to go**.
+
+`{{dynamic_guidance}}` marks one point in the schema where live guidance is
+inserted rather than appended, so the ceiling keeps measuring what it was meant
+to: the rules I write, not the scene you happen to be in. A 4,000-character
+dynamic block now reaches the parser without touching the static budget.
+
+Same contract Kitty documents: **removing the marker from a custom instruction
+opts out of every dynamic block.** Silently appending what someone deliberately
+deleted would be worse than losing the guidance.
+
+Both instruction assembly sites route through it — asserted, because if only one
+did, a Look would appear on the scan path and vanish on re-parse.
 
 ```js
-async function wasProcessed(messageId) {
-  const list = await spindle.storage.getJson(PROCESSED_FILE, { fallback: [] })
-  return list.includes(messageId)          // ← the id, and nothing else
+function dynamicGuidanceBlocks(_context = {}) {
+  return []          // ← Looks and Lorebook land here, and nowhere else
 }
 ```
 
-The original message had images, so its id was in that list. The swipe arrived
-with the same id, matched, and was skipped as *"already illustrated."* A brand
-new passage, never illustrated, silently discarded.
-
-## Why the log looked like a crash
-
-This is the half that made it undiagnosable, and it's the part I'd fix even if
-swipes had never existed.
-
-That check returns **before any logging**. So the log showed the interceptor
-running, the protocol injected, the trigger queued, two triggers deduplicated —
-and then nothing at all. A successful skip and a crashed scan produced byte-for-
-byte identical output.
-
-Both skip paths now log. If this ever happens again you'll see:
-
-```
-[lumidraw] auto scan skipped · this message was already illustrated · message=277579c3-…
-```
-
-which is a sentence you can act on, rather than silence you have to guess at.
-
-## The fix
-
-A record is now `messageId:fingerprint` — which message *and which text*. Same
-id with different content is a different record, so a swipe reads as unillustrated
-and gets its images.
-
-Details worth knowing:
-
-- **Upgrading is quiet.** Records written before this version are bare ids. Those
-  are still honoured, so nothing gets re-illustrated on install — and the first
-  time one is read, the text it's read alongside is adopted as its content, so
-  the *next* swipe of that message is caught.
-- **Only the authoritative caller writes fingerprints.** The early check compares
-  against the event's copy of the content, which can differ from the stored
-  message. A wrong "not illustrated" there costs one message fetch and is caught
-  by the real check inside the scan. A wrong "illustrated" is the expensive
-  direction, and that path can't produce one.
-- **A superseded record is pruned**, not accumulated, so a heavily-swiped message
-  can't crowd out the 50-entry window.
-- Forcing a rescan by hand still bypasses the whole check, unchanged.
+Empty on purpose. The next release should be a change to that list and nothing
+else; a feature that has to edit the instruction assembly to add one sentence is
+a feature that will eventually edit it badly.
 
 ## Verification
 
-**45 suites · 1663 assertions · all green**, 29 new in `swipe.mjs`.
+**48 suites · 1,763 assertions · all green.** 90 new across `rpc.mjs`,
+`safety.mjs` and `guidance.mjs`.
 
-Mutation-tested three ways — reverting the read to id-only, dropping content from
-the writes, and removing the log line. Each break was caught, including the
-silence, which is now itself a tested property.
+Mutation-tested: reverting the swipe fix, coercing `cloudFallback` with `||`,
+disabling the prune, deleting the marker, flipping the opt-out default, and
+routing only one assembly site through the slot. Every one caught.
 
-## Note for the next time this happens
+## Housekeeping
 
-The general shape here is worth remembering: *the log ended where the code
-returned early.* When a scan seems to vanish, the last line printed tells you
-which branch it took, and a branch that prints nothing is a branch that can hide
-a bug indefinitely. Every early return on the auto path now says so out loud.
+Your LumiDraw folder was empty when I started — the cleanup took more than the
+three files I listed. I restored it from the 0.61.0 release, so this build
+descends from that.
+
+## Next
+
+**Release 2 — Named Looks**, on the model you chose: Looks sit *above* the
+wardrobe rather than replacing it. Precedence becomes passage > Look > wardrobe >
+profile default, so the digest and family-correction work keeps earning its keep
+and nothing you have today is discarded.
