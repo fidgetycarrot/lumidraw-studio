@@ -1,110 +1,100 @@
-# LumiDraw Studio 0.62.0 — foundation for Looks and Lorebook
+# LumiDraw Studio 0.63.0 — Named Looks
 
-Release 1 of 4. **You will see no change in the app.** Everything here is
-groundwork the next two releases need, plus one thing that should have existed
-already.
+Release 2 of 4. Idea from
+[kittyafterdark/LumiSwarm-Studio](https://github.com/kittyafterdark/LumiSwarm-Studio).
 
-Ideas borrowed from [kittyafterdark/LumiSwarm-Studio](https://github.com/kittyafterdark/LumiSwarm-Studio).
+## What you get
 
-## 1. Tests that drive the real message handler
+In the character and persona editors, a **Named looks** field:
 
-`hostmock.mjs` mocks the Spindle host — storage backed by a real Map, log
-capture, image uploads, chats, macros — and runs `onFrontendMessage` for real.
-
-This is the gap that let the swipe bug through. `harness.mjs` loads the backend
-with a no-op proxy and pulls out pure functions; it covers the compiler
-beautifully and **cannot reach the RPC path at all**. So everything behind the
-message handler has only ever been tested by asserting the source *contains* a
-pattern.
-
-Source patterns prove the code says the right thing. They can't prove it does
-it. `wasProcessed(messageId)` was correct, readable, well-commented code that
-returned the wrong answer for a real input — no grep would have caught it, and
-none did. A user report did.
-
-`rpc.mjs` now covers, for real: settings round-tripping through save and reload,
-the swipe fingerprint, legacy record migration, the pruning window, and the OOC
-verdict. 39 assertions, mutation-tested three ways.
-
-**Two things the mock corrected while I wrote it.** The handler doesn't *return*
-its reply, it calls `sendToFrontend` — and an unrecognised message type replies
-with **nothing at all**, deliberately, because Lumiverse broadcasts to every
-extension and answering another extension's message would be the bug. I'd
-assumed it returned an error. Both are now asserted.
-
-## 2. A safety scan
-
-`safety.mjs`, adapted from Kitty's `tests/safety-scan.mjs`. It asserts the
-backend reaches for no filesystem, subprocess, raw socket, worker, database,
-`Bun` system API, `process` control, or dynamic code execution — and that the
-frontend doesn't either.
-
-Two deliberate departures from hers:
-
-- **`Buffer.from(…, 'base64')` is blocked in Swarm Studio and required here** —
-  Draw Things returns base64 images. So rather than ban it, the scan pins that it
-  appears exactly twice and only ever decodes a generated image.
-- **Every declared permission is mapped to the host API that needs it**, so a
-  permission nobody exercises shows up as a failure rather than living forever in
-  a list nobody re-reads.
-
-It also asserts `spindle.json` and `package.json` agree on the version — the
-drift that showed you v0.42.3 for six releases, and which Kitty's repo currently
-has (1.0.16 vs 1.0.15).
-
-*Written wrong the first time and caught by its own run:* `spindle.chats[...]` is
-reached by bracket access, so a `spindle\.chats?\.` pattern reported three
-permissions as unused that are used. The scan detects on the object now.
-
-## 3. The dynamic guidance slot
-
-The reason this release exists.
-
-Your static parser rules are measured against a 10,100-character ceiling and sit
-at ~10,000. That ceiling isn't arbitrary — it's what stopped the instruction
-growing one clause at a time until a small parser model followed none of it. So a
-named Look, or an activated location's visual canon, **has nowhere to go**.
-
-`{{dynamic_guidance}}` marks one point in the schema where live guidance is
-inserted rather than appended, so the ceiling keeps measuring what it was meant
-to: the rules I write, not the scene you happen to be in. A 4,000-character
-dynamic block now reaches the parser without touching the static budget.
-
-Same contract Kitty documents: **removing the marker from a custom instruction
-opts out of every dynamic block.** Silently appending what someone deliberately
-deleted would be worse than losing the guidance.
-
-Both instruction assembly sites route through it — asserted, because if only one
-did, a Look would appear on the scan path and vanish on re-parse.
-
-```js
-function dynamicGuidanceBlocks(_context = {}) {
-  return []          // ← Looks and Lorebook land here, and nowhere else
-}
+```
+formal = black evening gown, heels | aliases: gala, the gown | no: jeans
+swim   = blue bikini | aliases: the pool
 ```
 
-Empty on purpose. The next release should be a change to that list and nothing
-else; a feature that has to edit the instruction assembly to add one sentence is
-a feature that will eventually edit it badly.
+A Look is applied three ways, in this order:
+
+1. **The parser names it.** It now reports a `look` field per subject.
+2. **An alias appears in the prose.** "She smoothed *the gown*" selects `formal`
+   with no tagging required.
+3. **The default look**, when nothing else applies.
+
+Per-Look **negatives** are scoped to the scenes that Look is active in — *no
+jeans while she's in the gown* — and never persisted.
+
+## The design decision you made, and why it matters
+
+You picked **Looks above the wardrobe, not replacing it**. That turns out to hinge
+on one word:
+
+> A Look wins at the moment it **becomes** active. An unchanged Look yields to
+> the wardrobe.
+
+Both alternatives are worse in ways that are easy to miss:
+
+- If a Look overrode the wardrobe *every* scene, "she kicked off her sneakers"
+  would be undone by the very next image, and the entire 0.53–0.56 clothing chain
+  — the digest, family correction, zone merging — would become dead weight.
+- If it *never* overrode the wardrobe, selecting a Look would do nothing at all
+  while a stale record existed, which is exactly the sealed loop 0.56 fixed.
+
+So the precedence is now:
+
+```
+this passage  >  a Look that just became active  >  the wardrobe  >  her default
+```
+
+Everything you already had still works and still earns its keep.
+
+## Looks are clothes. States are bodies.
+
+Deliberately separate, and enforced. Mixing them is what made appearance states
+dangerous in the first place — switching one transforms the whole character. The
+parser is told in as many words: *"A look is a set of clothes, not a body. Never
+use it for a transformation, a mood, or a place."*
+
+An appearance state with `outfit=omit` — a transformation that has no clothes —
+suppresses the Look too.
+
+## Where the guidance went
+
+Straight into the slot 0.62.0 built. `dynamicGuidanceBlocks` gained exactly one
+entry and nothing else about instruction assembly changed, which was the point of
+building it first. The guidance says nothing at all when nobody in the cast has
+Looks, so the instruction budget is spent only when there's something to say.
+
+## Details worth knowing
+
+- **Alias matching is whole-word only.** "dressing-gowns" does not select a Look
+  aliased `gown` — the lesson `selectAppearanceState` learned when *werewolf*
+  matched a state named *Wolf*.
+- **The longest cue wins**, so `heavy coat` beats `coat`.
+- **A Look with no outfit is refused loudly** rather than saved. An empty Look
+  would silently strip a character when selected, which reads as a compiler bug
+  rather than an empty field.
+- **Every path is traced** — which Look, why it was chosen, and whether it set
+  the outfit or yielded. A character silently in the wrong clothes is the
+  recurring failure in this area, and the trace is how it gets diagnosed.
+- **A Look is remembered without a grounding check**, unlike an outfit. An outfit
+  is inferred from prose and can be wrong; a Look was *chosen*, so there's
+  nothing to corroborate — it just needs remembering, so the next scene can tell
+  "still in the gown" from "just put the gown on".
 
 ## Verification
 
-**48 suites · 1,763 assertions · all green.** 90 new across `rpc.mjs`,
-`safety.mjs` and `guidance.mjs`.
+**49 suites · 1,832 assertions · all green.** 60 new in `looks.mjs`.
 
-Mutation-tested: reverting the swipe fix, coercing `cloudFallback` with `||`,
-disabling the prune, deleting the marker, flipping the opt-out default, and
-routing only one assembly site through the slot. Every one caught.
+Mutation-tested on the three ways the precedence could be wrong: a Look that
+overrides every scene, a Look that never overrides, and substring alias matching.
+All three caught.
 
-## Housekeeping
-
-Your LumiDraw folder was empty when I started — the cleanup took more than the
-three files I listed. I restored it from the 0.61.0 release, so this build
-descends from that.
+I also deleted one assertion I'd written that was vacuous — it asserted an empty
+result from a profile that had no default, so it would have passed no matter what
+the code did.
 
 ## Next
 
-**Release 2 — Named Looks**, on the model you chose: Looks sit *above* the
-wardrobe rather than replacing it. Precedence becomes passage > Look > wardrobe >
-profile default, so the digest and family-correction work keeps earning its keep
-and nothing you have today is discarded.
+**Release 3 — Visual Lorebook.** Visual canon for places and objects, which is
+the real answer to the truck cab: you've been fixing settings by suppressing what
+the model gets wrong, and that fixes them by asserting what a place looks like.
+Needs the `world_books` permission, so it'll ask you to re-grant on install.

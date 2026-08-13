@@ -196,12 +196,13 @@ async function readSceneMemory(chatId, presetName) {
   return adopted
 }
 
-async function rememberSceneState(chatId, presetName, { setting = [], lighting = [], outfits = null } = {}) {
+async function rememberSceneState(chatId, presetName, { setting = [], lighting = [], outfits = null, looks = null } = {}) {
   const key = sceneMemoryKey(chatId, presetName)
   const tags = uniqueStrings(setting || []).slice(0, 6)
   const light = uniqueStrings(lighting || []).slice(0, 4)
   const wardrobe = outfits && typeof outfits === 'object' ? outfits : null
-  if (!key || (!tags.length && !light.length && !wardrobe)) return
+  const wornLooks = looks && typeof looks === 'object' ? looks : null
+  if (!key || (!tags.length && !light.length && !wardrobe && !wornLooks)) return
   try {
     const memory = await getSceneMemory()
     const previous = memory[key] || {}
@@ -212,10 +213,17 @@ async function rememberSceneState(chatId, presetName, { setting = [], lighting =
       const items = uniqueStrings(worn || []).slice(0, 6)
       if (items.length) mergedOutfits[ref] = items
     }
+    // Merged for the same reason as outfits: someone offstage this scene is
+    // still in whatever Look they were last put into.
+    const mergedLooks = { ...(previous.looks || {}) }
+    for (const [ref, name] of Object.entries(wornLooks || {})) {
+      if (String(name || '').trim()) mergedLooks[ref] = String(name).trim()
+    }
     memory[key] = {
       setting: tags.length ? tags : (previous.setting || []),
       lighting: light.length ? light : (previous.lighting || []),
       outfits: mergedOutfits,
+      looks: mergedLooks,
       at: Date.now(),
     }
     const keys = Object.keys(memory)
@@ -2469,6 +2477,132 @@ function parseAppearanceStateLine(line, label) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Named Looks
+// ---------------------------------------------------------------------------
+//
+// An appearance state changes the BODY — werewolf, human, half-shifted. A Look
+// changes the CLOTHES, and nothing else. They are deliberately separate: mixing
+// them was what made appearance states dangerous in the first place, because
+// switching one transformed the whole character.
+//
+// A Look is a named configuration ("formal", "swimwear", "armour") with:
+//   aliases  — phrases in prose that mean this Look, so it can be inferred
+//   outfit   — the garments it puts her in
+//   negative — what must not appear while she is wearing it
+//
+// Looks sit ABOVE the wardrobe of record rather than replacing it. Selecting a
+// Look SETS what she is wearing; from that point the ordinary wardrobe tracking
+// takes over, so "she kicked off her sneakers" still persists. The precedence is
+//
+//     this passage > a Look that just became active > the wardrobe > her default
+//
+// which keeps every bit of the 0.53–0.56 clothing work earning its keep.
+function normalizeLooks(value, label = 'look') {
+  const rawItems = Array.isArray(value) ? value : String(value || '').split(/\r?\n/)
+  const out = []
+  for (let index = 0; index < rawItems.length; index++) {
+    const raw = rawItems[index]
+    let look
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const name = shortPhrase(raw.name || '', `${label} ${index + 1} name`, 6, 64, false)
+      look = {
+        name,
+        aliases: shortList(raw.aliases || raw.recognition || [], `${label} ${name} aliases`, { maxItems: 12, maxWords: 8, maxChars: 80 }),
+        outfit: shortList(raw.outfit || raw.outfitTags || [], `${label} ${name} outfit`, { maxItems: 12, maxWords: 7, maxChars: 72 }),
+        negative: shortList(raw.negative || raw.negativeTags || [], `${label} ${name} negative`, { maxItems: 12, maxWords: 7, maxChars: 72 }),
+      }
+    } else {
+      look = parseLookLine(raw, `${label} ${index + 1}`)
+    }
+    if (!look) continue
+    if (!look.name) continue
+    // A Look with no clothes is not a Look. Allowing one would silently strip a
+    // character when it was selected, which reads as a bug in the compiler
+    // rather than as an empty field in an editor.
+    if (!look.outfit.length) throw new Error(`Look \u201c${look.name}\u201d needs at least one outfit tag.`)
+    const key = look.name.toLowerCase()
+    const existing = out.findIndex((item) => item.name.toLowerCase() === key)
+    if (existing >= 0) out[existing] = look
+    else out.push(look)
+  }
+  return out.slice(0, 16)
+}
+
+// "formal = black evening gown, heels | aliases: gala, the dress | no: jeans"
+function parseLookLine(raw, label) {
+  const line = String(raw || '').trim()
+  if (!line) return null
+  const [head, ...rest] = line.split('|')
+  const eq = head.indexOf('=')
+  if (eq < 0) return null
+  const name = shortPhrase(head.slice(0, eq), `${label} name`, 6, 64, false)
+  if (!name) return null
+  const look = {
+    name,
+    aliases: [],
+    outfit: shortList(head.slice(eq + 1), `${label} outfit`, { maxItems: 12, maxWords: 7, maxChars: 72 }),
+    negative: [],
+  }
+  for (const part of rest) {
+    const value = String(part || '').trim()
+    const alias = /^(?:aliases?|recognize|recognition)\s*:/i.exec(value)
+    if (alias) { look.aliases = shortList(value.slice(alias[0].length), `${label} aliases`, { maxItems: 12, maxWords: 8, maxChars: 80 }); continue }
+    const negative = /^(?:no|negative|not)\s*:/i.exec(value)
+    if (negative) { look.negative = shortList(value.slice(negative[0].length), `${label} negative`, { maxItems: 12, maxWords: 7, maxChars: 72 }) }
+  }
+  return look
+}
+
+function normalizeDefaultLook(value, looks) {
+  const requested = String(value || '').trim().toLowerCase()
+  if (!requested) return ''
+  const found = (looks || []).find((look) => look.name.toLowerCase() === requested)
+  return found ? found.name : ''
+}
+
+// Explicit beats inferred beats default, and every path reports WHY, because a
+// character silently in the wrong clothes is the failure this whole area keeps
+// producing and the trace is how it gets diagnosed.
+function selectLook(profile, subject, sourcePassage = '', report = null) {
+  const note = (look, reason) => {
+    if (report) { report.look = look ? look.name : ''; report.reason = reason }
+    return look
+  }
+  const looks = profile && Array.isArray(profile.looks) ? profile.looks : []
+  if (!looks.length) return note(null, 'no looks defined')
+
+  const requested = String((subject && (subject.look || subject.lookName)) || '').trim().toLowerCase()
+  if (requested) {
+    const direct = looks.find((look) => look.name.toLowerCase() === requested ||
+      (look.aliases || []).some((alias) => String(alias).toLowerCase() === requested))
+    if (direct) return note(direct, `parser asked for "${requested}"`)
+    if (report) report.unmatchedRequest = requested
+  }
+
+  // Whole-word matching only, and the longest cue wins — the same rules
+  // selectAppearanceState learned the hard way, where substring matching turned
+  // "werewolf" into full wolf form.
+  const passage = String(sourcePassage || '').toLowerCase()
+  const candidates = []
+  for (const look of looks) {
+    for (const phrase of [...(look.aliases || [])]) {
+      const value = String(phrase || '').trim().toLowerCase()
+      if (value.length < 3) continue
+      if (!new RegExp(`\\b${escapeRegExp(value)}\\b`).test(passage)) continue
+      candidates.push({ look, cue: value, words: value.split(/\s+/).length, length: value.length })
+    }
+  }
+  if (candidates.length) {
+    candidates.sort((a, b) => (b.words - a.words) || (b.length - a.length))
+    return note(candidates[0].look, `the passage says "${candidates[0].cue}"`)
+  }
+
+  const fallback = looks.find((look) => look.name === profile.defaultLook)
+  if (fallback) return note(fallback, 'the default look')
+  return note(null, 'nothing named or inferred, and no default')
+}
+
 function normalizeAppearanceStates(value, label = 'appearance state') {
   const rawItems = Array.isArray(value) ? value : String(value || '').split(/\r?\n/)
   const out = []
@@ -2516,6 +2650,7 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
   }
   if (countTag) appearance = appearance.filter((tag) => tag.toLowerCase() !== countTag.toLowerCase())
   const appearanceStates = normalizeAppearanceStates(source.appearanceStates || source.forms || '', `${fallbackRef} appearance state`)
+  const looks = normalizeLooks(source.looks || source.namedLooks || '', `${fallbackRef} look`)
   return {
     ref: fallbackRef,
     anchor: shortPhrase(source.anchor || '', `${fallbackRef} anchor`, 6, 64, true, true) || fallbackRef,
@@ -2532,6 +2667,8 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
     anatomyMode: normalizeAnatomyMode(source.anatomyMode),
     appearanceStates,
     defaultAppearanceState: normalizeDefaultAppearanceState(source.defaultAppearanceState || source.defaultForm || '', appearanceStates),
+    looks,
+    defaultLook: normalizeDefaultLook(source.defaultLook || '', looks),
   }
 }
 
@@ -2847,6 +2984,7 @@ function normalizeSceneSubject(raw, index) {
     action: shortList(source.action || [], `subject ${index + 1} action`, { maxItems: 10, maxWords: 8, maxChars: 80 }),
     support: shortPhrase(source.support || source.support_surface || source.supportSurface || '', `subject ${index + 1} support surface`, 7, 72, true),
     appearanceState: shortPhrase(source.appearance_state || source.appearanceState || source.form || '', `subject ${index + 1} appearance state`, 6, 64, true),
+    look: shortPhrase(source.look || source.look_name || source.lookName || '', `subject ${index + 1} look`, 6, 64, true),
     partialFeatures: shortList(source.partial_features || source.partialFeatures || [], `subject ${index + 1} partial features`, { maxItems: 6, maxWords: 6, maxChars: 64 }),
     anatomyVisible: source.anatomy_visible === true || source.anatomyVisible === true,
   }
@@ -3322,7 +3460,7 @@ function nameReadsAsTag(name) {
   return ''
 }
 
-function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false, rememberedOutfits = null) {
+function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false, rememberedOutfits = null, rememberedLooks = null) {
   const profile = profileForSubject(subject, profiles)
   if (profile) {
     if (profile.promptName) {
@@ -3383,9 +3521,28 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   const rememberedOutfit = (!state || state.outfitPolicy !== 'omit') && !ANONYMOUS_REF_RE.test(subject.ref || '')
     ? uniqueStrings(((rememberedOutfits && rememberedOutfits[subject.ref]) || []))
     : []
-  const merged = mergeOutfitByZone(subject.outfit, rememberedOutfit.length ? rememberedOutfit : inheritedOutfit, sourcePassage)
-  const outfit = subject.outfit.length ? merged.outfit
-    : (rememberedOutfit.length ? rememberedOutfit : inheritedOutfit)
+
+  // A named Look sits between the passage and the wardrobe. It does not replace
+  // the wardrobe — it SETS it, and only at the moment it becomes active.
+  //
+  // The distinction matters. If a Look overrode the wardrobe every scene, then
+  // "she kicked off her sneakers" would be undone by the next image, and the
+  // whole clothing-persistence chain would be dead weight. If it never overrode
+  // it, selecting a Look would do nothing while a stale record existed. So: a
+  // CHANGE of Look wins over the wardrobe; an unchanged Look yields to it.
+  const lookReport = {}
+  const look = (!state || state.outfitPolicy !== 'omit')
+    ? selectLook(profile, subject, sourcePassage, lookReport)
+    : null
+  const previousLook = String((rememberedLooks && rememberedLooks[subject.ref]) || '')
+  const lookChanged = !!look && look.name !== previousLook
+  const lookOutfit = look ? uniqueStrings(look.outfit) : []
+
+  const baseOutfit = lookChanged && lookOutfit.length
+    ? lookOutfit
+    : (rememberedOutfit.length ? rememberedOutfit : (lookOutfit.length ? lookOutfit : inheritedOutfit))
+  const merged = mergeOutfitByZone(subject.outfit, baseOutfit, sourcePassage)
+  const outfit = subject.outfit.length ? merged.outfit : baseOutfit
   const who = (profile && profile.anchor) || subject.ref
   if (!subject.outfit.length && rememberedOutfit.length) {
     trace(`outfit continuity · ${who}`, 'applied',
@@ -3408,6 +3565,15 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   // Anima fills that gap from the censored end of its training rather than leaving
   // it blank. This is not the parser inventing anatomy: LumiDraw still supplies
   // only what the profile saved, and only when something in the scene said "nude".
+  if (look) {
+    trace(`look \u00b7 ${who}`, lookChanged ? 'applied' : 'ran',
+      lookChanged
+        ? `“${look.name}” became active (${lookReport.reason}) and set the outfit: ${lookOutfit.join(', ')}`
+        : `“${look.name}” is already active (${lookReport.reason}); what she was last seen in stands`)
+  } else if (lookReport.unmatchedRequest) {
+    trace(`look \u00b7 ${who}`, 'warn',
+      `the parser asked for look “${lookReport.unmatchedRequest}”, which is not defined — ignored`)
+  }
   const nudeNow = statesNude(outfit, appearance, subject)
   const anatomyAllowed = profile && (
     profile.anatomyMode === 'always' ||
@@ -3442,6 +3608,7 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
     appearance: featureTags.length ? uniqueStrings([...appearance, ...featureTags]) : appearance,
     outfit, anatomy, countTag, named: !!profile,
     partialFeatures: activeFeatures,
+    look, lookChanged,
   }
 }
 
@@ -5663,14 +5830,18 @@ function repairCameraTags(cameraTags, scene, descriptors) {
 // question is answered by reading rather than by instrumenting.
 let LAST_COMPILE_TRACE = []
 let LAST_COMPILE_OUTFITS = {}
+let LAST_COMPILE_LOOKS = {}
 let LAST_COMPILE_NEGATIVES = []
 
-function traceReset() { LAST_COMPILE_TRACE = []; LAST_COMPILE_OUTFITS = {}; LAST_COMPILE_NEGATIVES = [] }
+function traceReset() { LAST_COMPILE_TRACE = []; LAST_COMPILE_OUTFITS = {}; LAST_COMPILE_LOOKS = {}; LAST_COMPILE_NEGATIVES = [] }
 function trace(rule, outcome, detail = '') {
   LAST_COMPILE_TRACE.push({ rule, outcome, detail: String(detail || '') })
 }
 function traceSnapshot() { return LAST_COMPILE_TRACE.slice() }
 function outfitSnapshot() { return { ...LAST_COMPILE_OUTFITS } }
+// Which Look each character ended the scene in, so the NEXT scene can tell a
+// change of Look from an unchanged one.
+function lookSnapshot() { return { ...LAST_COMPILE_LOOKS } }
 function negativeSnapshot() { return LAST_COMPILE_NEGATIVES.slice() }
 
 // Human-readable, for the Spindle log and the debug panel.
@@ -6039,9 +6210,9 @@ function applyPromptNames(text, profiles) {
 
 const SUBJECT_BREAK_MARK = '\u0000SUBJECT_BREAK'
 
-function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null, breakInPreset = false } = {}) {
+function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null, rememberedLooks = null, breakInPreset = false } = {}) {
   traceReset()
-  let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true, rememberedOutfits)).map((item) => ({
+  let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true, rememberedOutfits, rememberedLooks)).map((item) => ({
     ...item,
     // An unprofiled subject's name comes straight from the story, so a coined
     // creature gets grounded in a noun the model has actually been trained on.
@@ -6066,8 +6237,17 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   for (const item of descriptors) {
     const worn = (item.outfit || []).filter((tag) => !isNotClothing(tag))
     if (worn.length) LAST_COMPILE_OUTFITS[item.subject.ref] = worn
+    if (item.look && item.look.name) LAST_COMPILE_LOOKS[item.subject.ref] = item.look.name
   }
-  LAST_COMPILE_NEGATIVES = garmentDefence(descriptors)
+  // A Look can carry its own negatives — "no jeans while she is in the gown".
+  // Scoped to the scene the Look is active in, never persisted.
+  const lookNegatives = uniqueStrings(descriptors.flatMap((item) =>
+    (item.look && item.look.negative) || []))
+  LAST_COMPILE_NEGATIVES = uniqueStrings([...garmentDefence(descriptors), ...lookNegatives])
+  if (lookNegatives.length) {
+    trace('look negatives', 'applied',
+      `${lookNegatives.join(', ')} — carried by the active look(s)`)
+  }
   if (LAST_COMPILE_NEGATIVES.length) {
     trace('garment defence', 'applied',
       `negating ${LAST_COMPILE_NEGATIVES.join(', ')} — nobody in this scene wears them and the model's prior reaches for them`)
@@ -6403,8 +6583,12 @@ function profileSchemaHints(profiles) {
       const form = state.appearancePolicy === 'replace' ? ', a distinct physical form' : ''
       return `${state.name}${recognition ? ` (recognize: ${recognition}${form})` : form ? ` (${form.replace(/^, /, '')})` : ''}`
     }).join('; ')
+    const looks = (profile.looks || []).map((look) => {
+      const cues = (look.aliases || []).join(', ')
+      return `${look.name}${cues ? ` (cues: ${cues})` : ''}`
+    }).join('; ')
     const features = (profile.partialFeatures || []).map((feature) => feature.name).join('; ')
-    hints.push(`- ref "${ref}" means ${label || ref}. Do not output permanent appearance for this ref.${features ? ` Partial features available (use partial_features, NOT a state change, when only some of these are showing): ${features}.` : ''}${states ? ` Appearance states: ${states}. Use appearance_state with the exact state name only when the CURRENT PASSAGE shows that transformation happening or already in effect; otherwise omit it and LumiDraw uses the default “${profile.defaultAppearanceState || (profile.appearanceStates[0] && profile.appearanceStates[0].name) || ''}”. Never mix states. A passage that merely calls this character by their species, mentions a past or future transformation, or uses a figure of speech is NOT a transformation — keep the default state. When a state is not active, never describe this character with that form's vocabulary anywhere in the JSON, including scene_statement.` : ''}${aliases ? ` Named visual aliases: ${aliases}. Use the exact prop name when it is present.` : ''}`)
+    hints.push(`- ref "${ref}" means ${label || ref}. Do not output permanent appearance for this ref.${features ? ` Partial features available (use partial_features, NOT a state change, when only some of these are showing): ${features}.` : ''}${states ? ` Appearance states: ${states}. Use appearance_state with the exact state name only when the CURRENT PASSAGE shows that transformation happening or already in effect; otherwise omit it and LumiDraw uses the default “${profile.defaultAppearanceState || (profile.appearanceStates[0] && profile.appearanceStates[0].name) || ''}”. Never mix states. A passage that merely calls this character by their species, mentions a past or future transformation, or uses a figure of speech is NOT a transformation — keep the default state. When a state is not active, never describe this character with that form's vocabulary anywhere in the JSON, including scene_statement.` : ''}${looks ? ` Named looks (CLOTHING only, never the body): ${looks}. Set "look" to the exact saved name when the passage puts this character in one — by naming it, or by one of its cues. Omit it otherwise; LumiDraw keeps what they were last seen wearing. A look sets the clothes once, when it changes; it does not re-dress them every image.` : ''}${aliases ? ` Named visual aliases: ${aliases}. Use the exact prop name when it is present.` : ''}`)
   }
   return hints.join('\n')
 }
@@ -6416,7 +6600,7 @@ function structuredParserSchema(maxImages, profiles, minImages = 0) {
 STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
 Return ONLY one compact JSON object, no markdown and no prose.
 Write every scene in the EXACT field order shown below. The order is a survival order: if your reply is ever cut off, everything already written must still form a usable scene, so the mandatory core (safety, core_action, setting, subjects) comes FIRST and droppable refinements (camera, lighting, style) come LAST:
-{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","partial_features":["exact saved feature names currently showing, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["from the CAMERA list below only"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","look":"exact saved look name for known refs, or empty","partial_features":["exact saved feature names currently showing, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["from the CAMERA list below only"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 ${minImages > 0
   ? `Return between ${minImages} and ${maxImages} image objects. ${minImages} is a FLOOR: find that many distinct visual moments even when one dominates — a second character's reaction, a change of position, a detail shown close. Each needs its own anchor from a different part of the passage.`
   : `Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.`}
@@ -6465,8 +6649,29 @@ const DYNAMIC_GUIDANCE_MARKER = '{{dynamic_guidance}}'
 // and proves it, so the diff that adds named Looks is a change to THIS list and
 // nothing else. A feature that has to edit the instruction assembly to add one
 // sentence is a feature that will eventually edit it badly.
-function dynamicGuidanceBlocks(_context = {}) {
-  return []
+function dynamicGuidanceBlocks(context = {}) {
+  return [
+    looksGuidance(context.profiles),
+  ]
+}
+
+// Only says anything when somebody in the cast HAS looks. A rule about a feature
+// nobody uses is instruction budget spent on nothing, and the budget is the
+// reason this slot exists.
+function looksGuidance(profiles) {
+  const withLooks = allKnownProfiles(profiles || {}).filter((profile) => (profile.looks || []).length)
+  if (!withLooks.length) return ''
+  const lines = withLooks.map((profile) => {
+    const names = (profile.looks || []).map((look) => {
+      const cues = (look.aliases || []).join(', ')
+      return `"${look.name}"${cues ? ` — say this one when the passage mentions ${cues}` : ''}`
+    }).join('; ')
+    return `- ${profile.anchor}: ${names}.`
+  })
+  return ['NAMED LOOKS — set "look" ONLY when the CURRENT PASSAGE puts a character into one.',
+    'A look is a set of clothes, not a body. Never use it for a transformation, a mood, or a place.',
+    'Omit it when nothing in the passage changes what they are wearing; the previous outfit is kept for you.',
+    ...lines].join('\n')
 }
 
 // Each contributor returns a block or an empty string. A block with nothing to
@@ -6578,6 +6783,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
     rememberedSetting: remembered,
     contextText,
     rememberedOutfits: memoryEntry.outfits || null,
+    rememberedLooks: memoryEntry.looks || null,
     breakInPreset: preset.useBreakSeparators === true ||
       (preset.useBreakSeparators === undefined && /\bBREAK\b/.test(String(preset.qualityTags || ''))),
   })
@@ -6612,10 +6818,17 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
       if (learned.length) spindle.log.info(`[lumidraw] outfit memory · ${ref} — learned: ${learned.join(', ')}`)
     }
   }
+  const wornLooks = lookSnapshot()
   await rememberSceneState(chatId, preset.name, {
     setting: establishedSetting,
     lighting: establishedLighting,
     outfits: Object.keys(groundedOutfits).length ? groundedOutfits : null,
+    // Recorded without a grounding check, unlike outfits. An outfit is inferred
+    // from prose and can be wrong; a Look was chosen — named by the parser, or
+    // matched on an alias, or configured as the default — so there is nothing to
+    // corroborate. What it needs is to be REMEMBERED, so the next scene can tell
+    // "still in the gown" from "just put the gown on".
+    looks: Object.keys(wornLooks).length ? wornLooks : null,
   })
   // A sentence follows the quality header with a full stop, not a comma:
   // "masterpiece, best quality, @artist. Sovi is …" is the card's own shape.

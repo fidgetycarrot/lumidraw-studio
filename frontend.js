@@ -758,6 +758,10 @@ function realSetup(ctx) {
             <div><span class="ld-label">Appearance states / forms</span><textarea class="ld-persona-ed-states" style="min-height:92px" placeholder="Casual | casual clothes => t-shirt, jeans
 Armored [outfit=omit; subject=armored man] | armor, battle gear => heavy plate armor"></textarea></div>
             <div class="ld-help">One per line: <code>Name [count=1boy; outfit=inherit|omit; subject=optional phrase] | recognition phrases =&gt; appearance tags</code>. Only the selected state is injected.</div>
+            <div><span class="ld-label">Named looks (clothing)</span><textarea class="ld-persona-ed-looks" style="min-height:74px" placeholder="formal = black suit, tie | aliases: the suit
+gym = tank top, shorts | aliases: the gym"></textarea></div>
+            <div><span class="ld-label">Default look</span><input class="ld-persona-ed-default-look" placeholder="(none)" /></div>
+            <div class="ld-help">A <b>look</b> is clothing, not a body — use appearance states for transformations. One per line: <code>name = outfit tags | aliases: cues | no: negative tags</code>. A look is applied when the passage names it or an alias appears, then ordinary outfit tracking takes over.</div>
             <div><span class="ld-label">Partial features</span><textarea class="ld-persona-ed-features" style="min-height:48px" placeholder="wolf eyes = yellow eyes, slit pupils"></textarea></div>
             <div class="ld-help">Optional, one per line: <code>name = tags</code>. A feature is one piece of a transformation that can show on its own — <code>wolf eyes = yellow eyes, slit pupils</code>. The parser turns these on for a partial change ("only his eyes shifted") instead of switching the whole appearance state, which would transform the entire character.</div>
             <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-persona-ed-aliases" style="min-height:48px" placeholder="Named weapon = visual description"></textarea></div>
@@ -807,6 +811,9 @@ Armored [outfit=omit; subject=armored man] | armor, battle gear => heavy plate a
                 <div><span class="ld-label">Appearance states / forms</span><textarea class="ld-ed-char-states" style="min-height:92px" placeholder="Human [count=1boy; outfit=inherit; subject=adult human man] | human form, unshifted => broad shoulders, messy dark brown hair
 Hybrid [count=1boy; outfit=inherit; subject=humanoid werewolf] | hybrid form, half-shifted => wolf ears, partial muzzle, furred arms, claws, tail
 Wolf [count=1other; outfit=omit; appearance=replace; subject=massive wolf] | wolf form, fully shifted, on four paws => dark brown fur, amber eyes, quadruped"></textarea></div>
+                <div class="ld-row ld-mobile-stack"><div><span class="ld-label">Named looks (clothing)</span><textarea class="ld-ed-char-looks" style="min-height:74px" placeholder="formal = black evening gown, heels | aliases: gala, the gown | no: jeans
+swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>look</b> is a set of clothes, not a body — appearance states are for transformations. A look is applied when the passage names it or one of its <b>aliases</b> appears; from then on ordinary outfit tracking takes over, so an incidental change still sticks. Leave blank if you do not use them.</div></div>
+                <div style="flex:0 0 170px"><span class="ld-label">Default look</span><input class="ld-ed-char-default-look" placeholder="(none)" /><div class="ld-hint">Used when nothing names or implies one.</div></div></div>
                 <div class="ld-help">Optional, one per line: <code>Name [count=...; outfit=inherit|omit; appearance=inherit|replace; subject=...] | recognition phrases =&gt; appearance tags</code>. Shared traits stay under Permanent appearance; only one saved state is injected at a time. Use <code>appearance=replace</code> for a transformation that should drop the permanent traits entirely — a fully shifted werewolf otherwise keeps its human hair and eye colour alongside its fur.</div>
                 <div><span class="ld-label">Partial features</span><textarea class="ld-ed-char-features" style="min-height:48px" placeholder="wolf eyes = yellow eyes, slit pupils
 claws = claws, elongated nails
@@ -834,6 +841,9 @@ fangs = fangs, sharp teeth"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-persona-outfit" style="min-height:48px"></textarea></div>
                 <div><span class="ld-label">Default appearance state</span><input class="ld-ed-persona-default-state" placeholder="Default" /></div>
                 <div><span class="ld-label">Appearance states / forms</span><textarea class="ld-ed-persona-states" style="min-height:92px"></textarea></div>
+                <div class="ld-row ld-mobile-stack"><div><span class="ld-label">Named looks (clothing)</span><textarea class="ld-ed-persona-looks" style="min-height:74px" placeholder="formal = black evening gown, heels | aliases: gala, the gown | no: jeans
+swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>look</b> is a set of clothes, not a body — appearance states are for transformations. A look is applied when the passage names it or one of its <b>aliases</b> appears; from then on ordinary outfit tracking takes over, so an incidental change still sticks. Leave blank if you do not use them.</div></div>
+                <div style="flex:0 0 170px"><span class="ld-label">Default look</span><input class="ld-ed-persona-default-look" placeholder="(none)" /><div class="ld-hint">Used when nothing names or implies one.</div></div></div>
                 <div class="ld-help">Optional, one per line: <code>Name [count=...; outfit=inherit|omit; subject=...] | recognition phrases =&gt; appearance tags</code>.</div>
                 <div><span class="ld-label">Partial features</span><textarea class="ld-ed-persona-features" style="min-height:48px" placeholder="wolf eyes = yellow eyes, slit pupils"></textarea></div>
                 <div class="ld-help">Optional, one per line: <code>name = tags</code>. A feature is one piece of a transformation that can show on its own — <code>wolf eyes = yellow eyes, slit pupils</code>. The parser turns these on for a partial change ("only his eyes shifted") instead of switching the whole appearance state, which would transform the entire character.</div>
@@ -1823,6 +1833,23 @@ fangs = fangs, sharp teeth"></textarea></div>
     }).filter(Boolean).join('\n')
   }
 
+  // Looks are the CLOTHING analogue of appearance states, and edit the same way:
+  //   formal = black gown, heels | aliases: gala, the gown | no: jeans
+  function looksToText(value) {
+    if (!Array.isArray(value)) return String(value || '')
+    return value.map((look) => {
+      if (!look || typeof look !== 'object') return String(look || '').trim()
+      const outfit = Array.isArray(look.outfit) ? look.outfit.join(', ') : String(look.outfit || '')
+      if (!look.name || !outfit) return ''
+      const parts = [`${look.name} = ${outfit}`]
+      const aliases = Array.isArray(look.aliases) ? look.aliases.join(', ') : String(look.aliases || '')
+      if (aliases) parts.push(`aliases: ${aliases}`)
+      const negative = Array.isArray(look.negative) ? look.negative.join(', ') : String(look.negative || '')
+      if (negative) parts.push(`no: ${negative}`)
+      return parts.join(' | ')
+    }).filter(Boolean).join('\n')
+  }
+
   function profileFromPreset(preset, kind) {
     const p = preset || {}
     const profile = (kind === 'character' ? p.characterProfile : p.personaProfile) || {}
@@ -1837,6 +1864,8 @@ fangs = fangs, sharp teeth"></textarea></div>
       anatomyTags: profile.anatomyTags || '',
       anatomyMode: profile.anatomyMode || 'relevant',
       appearanceStates: appearanceStatesToText(profile.appearanceStates || profile.forms),
+      looks: looksToText(profile.looks),
+      defaultLook: profile.defaultLook || '',
       defaultAppearanceState: profile.defaultAppearanceState || profile.defaultForm || '',
     }
   }
@@ -1856,6 +1885,8 @@ fangs = fangs, sharp teeth"></textarea></div>
       anatomyTags: $(`.ld-ed-${prefix}-anatomy`).value.trim(),
       anatomyMode: $(`.ld-ed-${prefix}-anatomy-mode`).value || 'relevant',
       appearanceStates: $(`.ld-ed-${prefix}-states`).value.trim(),
+      looks: $(`.ld-ed-${prefix}-looks`).value.trim(),
+      defaultLook: $(`.ld-ed-${prefix}-default-look`).value.trim(),
       defaultAppearanceState: $(`.ld-ed-${prefix}-default-state`).value.trim(),
     }
   }
@@ -1875,6 +1906,8 @@ fangs = fangs, sharp teeth"></textarea></div>
     $(`.ld-ed-${prefix}-anatomy`).value = value.anatomyTags || ''
     $(`.ld-ed-${prefix}-anatomy-mode`).value = value.anatomyMode || 'relevant'
     $(`.ld-ed-${prefix}-states`).value = appearanceStatesToText(value.appearanceStates || value.forms)
+    $(`.ld-ed-${prefix}-looks`).value = looksToText(value.looks)
+    $(`.ld-ed-${prefix}-default-look`).value = value.defaultLook || ''
     $(`.ld-ed-${prefix}-default-state`).value = value.defaultAppearanceState || value.defaultForm || ''
   }
 
@@ -2000,6 +2033,8 @@ fangs = fangs, sharp teeth"></textarea></div>
       defaultOutfitTags: $('.ld-persona-ed-outfit').value.trim(),
       defaultAppearanceState: $('.ld-persona-ed-default-state').value.trim(),
       appearanceStates: $('.ld-persona-ed-states').value.trim(),
+      looks: $('.ld-persona-ed-looks').value.trim(),
+      defaultLook: $('.ld-persona-ed-default-look').value.trim(),
       visualAliases: $('.ld-persona-ed-aliases').value.trim(),
       partialFeatures: $('.ld-persona-ed-features').value.trim(),
       anatomyTags: $('.ld-persona-ed-anatomy').value.trim(),
@@ -2017,6 +2052,8 @@ fangs = fangs, sharp teeth"></textarea></div>
     $('.ld-persona-ed-outfit').value = value.defaultOutfitTags || ''
     $('.ld-persona-ed-default-state').value = value.defaultAppearanceState || value.defaultForm || ''
     $('.ld-persona-ed-states').value = appearanceStatesToText(value.appearanceStates || value.forms)
+    $('.ld-persona-ed-looks').value = looksToText(value.looks)
+    $('.ld-persona-ed-default-look').value = value.defaultLook || ''
     $('.ld-persona-ed-aliases').value = visualAliasesToText(value.visualAliases)
     $('.ld-persona-ed-features').value = partialFeaturesToText(value.partialFeatures)
     $('.ld-persona-ed-anatomy').value = value.anatomyTags || ''
