@@ -89,6 +89,7 @@ function realSetup(ctx) {
   let presets = []
   let personas = []
   let characters = []
+  let places = []
   let libEditorKind = 'persona' // which library the shared editor is writing to
   let editorCastIds = []        // additional cast member ids in the open preset editor
   let history = []
@@ -210,6 +211,12 @@ function realSetup(ctx) {
     }
     .ld-main-tab:hover { color: var(--lumiverse-text, #eceef4); }
     .ld-main-tab.ld-active { color: var(--lumiverse-text, #eceef4); background: var(--lumiverse-fill, #262833); }
+    .ld-settings-rail { display:flex; gap:4px; flex-wrap:wrap; margin:0 0 10px; }
+    .ld-settings-tab { flex:0 0 auto; padding:5px 11px; border-radius:7px; cursor:pointer;
+      border:1px solid var(--lumiverse-border, #333744); background:transparent;
+      color: var(--lumiverse-text-muted, #a2a5b4); font:inherit; font-size:12px; }
+    .ld-settings-tab:hover { color: var(--lumiverse-text, #eceef4); }
+    .ld-settings-tab.ld-active { color: var(--lumiverse-text, #eceef4); background: var(--lumiverse-fill, #262833); }
     .ld-x { background: none; border: none; color: var(--lumiverse-text-muted, #a2a5b4); cursor: pointer; font-size: 14px; padding: 2px 4px; }
     .ld-x:hover { color: #e5737f; }
     .ld-min { font-size: 20px; line-height: 1; padding: 2px 8px; }
@@ -513,7 +520,7 @@ function realSetup(ctx) {
         <nav class="ld-main-nav" aria-label="LumiDraw sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
-          <button class="ld-main-tab" data-tab="presets">Presets</button>
+          <button class="ld-main-tab" data-tab="presets">Cast &amp; presets</button>
           <button class="ld-main-tab" data-tab="settings">Settings</button>
         </nav>
         <button class="ld-x ld-fullscreen-toggle" title="Open fullscreen" aria-label="Open fullscreen" aria-pressed="false">⛶</button>
@@ -715,7 +722,7 @@ function realSetup(ctx) {
             <button class="ld-btn ld-compact" data-act="reset-protocol" style="margin-top:6px">Reset to default</button>
           </div>
           <div class="ld-card ld-story-debug">
-            <div class="ld-subtitle ld-parser-debug-title">Last parser result</div>
+            <div class="ld-subtitle ld-parser-debug-title">What the last scan produced</div>
             <div class="ld-help">Legacy mode shows the parser's direct tag prompt. Anima hybrid mode shows the bound JSON scene plus a mostly tag-based prompt with a few controlled natural-language anchors. Inline mode remains separate.</div>
             <span class="ld-label" style="margin-top:8px">Final Draw Things prompt</span>
             <textarea class="ld-story-final-prompt" readonly placeholder="No parser prompt has been generated yet."></textarea>
@@ -742,6 +749,14 @@ function realSetup(ctx) {
             <button class="ld-btn" data-act="new-persona" style="margin-top:8px">＋ New reusable persona</button>
             <div class="ld-status ld-persona-status" style="margin-top:6px"></div>
             <div class="ld-persona-list" style="display:flex;flex-direction:column;gap:6px;margin-top:8px"></div>
+          </div>
+          <div class="ld-card">
+            <div class="ld-subtitle">Places — what a location looks like</div>
+            <div class="ld-help">Give a recurring location its own tags once. When the story mentions it by name or by one of its cues, those tags become the setting — instead of the model re-inventing the room every image. One per line:<br /><code>name = setting tags | aliases: cues | no: negative tags</code></div>
+            <textarea class="ld-places" style="min-height:96px;margin-top:7px" placeholder="Jason's truck = truck interior, worn bench seat, dashboard, windshield | aliases: the truck, the cab, the pickup | no: car seat, bucket seat
+the diner = diner, booth seating, formica table, neon sign | aliases: the diner, Ruby's"></textarea>
+            <div class="ld-section-actions"><button class="ld-btn" data-act="save-places">Save places</button></div>
+            <div class="ld-status ld-places-status" style="margin-top:6px"></div>
           </div>
           <div class="ld-persona-editor ld-card" style="display:none">
             <div class="ld-subtitle ld-lib-ed-title">Persona library editor</div>
@@ -879,8 +894,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       </section>
 
       <section class="ld-view" data-view="settings">
+          <nav class="ld-settings-rail" role="tablist">
+            <button class="ld-settings-tab ld-active" data-settings-tab="connection">Connection</button>
+            <button class="ld-settings-tab" data-settings-tab="parser">Parser</button>
+            <button class="ld-settings-tab" data-settings-tab="advanced">Advanced</button>
+          </nav>
         <div class="ld-form-view">
-          <div class="ld-card">
+          <div data-settings-section="parser" class="ld-card">
             <div class="ld-subtitle">Parser connection</div>
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Connection</span><div style="display:flex;gap:6px;align-items:center"><select class="ld-parser-conn" style="flex:1"><option value="">— default connection —</option></select><button class="ld-btn ld-compact" data-act="refresh-parser-sources" title="Reload available parser connections">↻</button></div></div>
@@ -897,7 +917,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
               <div><span class="ld-label">Parser request overrides (JSON, advanced)</span><textarea class="ld-parser-overrides" style="min-height:64px;font-family:ui-monospace,monospace;font-size:12px" placeholder='{"reasoning":{"enabled":false}}'></textarea><div class="ld-hint">Merged into the parser request. Use this to force a provider-specific setting — most often turning reasoning off. Check the Spindle log for <code>reasoning_tokens=</code> after a scan to see whether it worked.</div></div>
             </div>
           </div>
-          <div class="ld-card">
+          <div data-settings-section="connection" class="ld-card">
             <div class="ld-subtitle">Draw Things API</div>
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Host</span><input class="ld-host" /></div>
@@ -905,7 +925,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             </div>
             <div class="ld-section-actions"><button class="ld-btn" data-act="save-settings">Save connections</button><button class="ld-btn" data-act="test">Test Draw Things</button></div>
           </div>
-          <div class="ld-card">
+          <div data-settings-section="connection" class="ld-card">
             <div class="ld-subtitle">LumiDraw Bridge catalog</div>
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Host</span><input class="ld-bridge-host" value="127.0.0.1" /></div>
@@ -915,7 +935,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-status ld-bridge-status" style="margin-top:6px"></div>
             <div class="ld-help" style="margin-top:5px">The extension backend connects locally on your Mac, so catalog dropdowns still work while Lumiverse is open on your phone.</div>
           </div>
-          <div class="ld-card">
+          <div data-settings-section="advanced" class="ld-card">
             <div class="ld-subtitle">Draw Things Cloud Compute</div>
             <label class="ld-check"><input type="checkbox" class="ld-cloud-enabled" /> <span>Generate on Draw Things cloud instead of this Mac</span></label>
             <div class="ld-row ld-mobile-stack" style="margin-top:7px">
@@ -928,7 +948,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-status ld-cloud-status" style="margin-top:6px"></div>
             <div class="ld-help" style="margin-top:5px">Needs <code>lumidraw-cloud-relay.mjs</code> running on this Mac. Your API key lives in that process and is never sent here. Free tier is 20 generations a month, Draw Things+ is 200.</div>
           </div>
-          <div class="ld-card">
+          <div data-settings-section="advanced" class="ld-card">
             <div class="ld-subtitle">Diagnostics</div>
             <button class="ld-btn" data-act="diagnose">Run diagnostics 🔍</button>
             <textarea class="ld-diag" readonly style="min-height:150px;display:none;margin-top:7px;font-family:monospace;font-size:11px"></textarea>
@@ -1848,6 +1868,47 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       if (negative) parts.push(`no: ${negative}`)
       return parts.join(' | ')
     }).filter(Boolean).join('\n')
+  }
+
+  // Places use the same line form as Looks, for the same reason: it is typeable,
+  // diffable, and pasteable between installs without a bespoke editor.
+  function placesToText(list) {
+    if (!Array.isArray(list)) return String(list || '')
+    return list.map((place) => {
+      if (!place || typeof place !== 'object') return String(place || '').trim()
+      const tags = Array.isArray(place.tags) ? place.tags.join(', ') : String(place.tags || '')
+      if (!place.name || !tags) return ''
+      const parts = [`${place.name} = ${tags}`]
+      const aliases = Array.isArray(place.aliases) ? place.aliases.join(', ') : String(place.aliases || '')
+      if (aliases) parts.push(`aliases: ${aliases}`)
+      const negative = Array.isArray(place.negative) ? place.negative.join(', ') : String(place.negative || '')
+      if (negative) parts.push(`no: ${negative}`)
+      return parts.join(' | ')
+    }).filter(Boolean).join('\n')
+  }
+
+  function placesFromText(text) {
+    return String(text || '').split(/\r?\n/).map((line) => {
+      const trimmed = line.trim()
+      if (!trimmed) return null
+      const [head, ...rest] = trimmed.split('|')
+      const eq = head.indexOf('=')
+      if (eq < 0) return null
+      const place = { name: head.slice(0, eq).trim(), tags: head.slice(eq + 1).trim(), aliases: '', negative: '' }
+      for (const part of rest) {
+        const value = part.trim()
+        const alias = /^(?:aliases?|cues?)\s*:/i.exec(value)
+        if (alias) { place.aliases = value.slice(alias[0].length).trim(); continue }
+        const negative = /^(?:no|negative|not)\s*:/i.exec(value)
+        if (negative) place.negative = value.slice(negative[0].length).trim()
+      }
+      return place.name && place.tags ? place : null
+    }).filter(Boolean)
+  }
+
+  function renderPlaces() {
+    const field = $('.ld-places')
+    if (field) field.value = placesToText(places)
   }
 
   function profileFromPreset(preset, kind) {
@@ -2877,6 +2938,36 @@ ${entry.prompt || ''}`.trim()
     drag = null
   })
 
+  // Settings was a flat scroll of five unrelated cards, where a cloud panel for a
+  // feature Eric does not use sat as prominently as the Draw Things connection he
+  // cannot work without.
+  //
+  // Sections are assigned by ATTRIBUTE, never by relocating markup. An earlier
+  // attempt did move blocks and silently carried a help paragraph away from its
+  // own checkbox — the kind of damage no syntax check catches and no test I could
+  // write would have seen. Tagging cannot lose a control, because it never
+  // touches one.
+  const SETTINGS_SECTION_KEY = 'lumidraw.settingsSection'
+
+  function setSettingsSection(name, persist = true) {
+    const next = ['connection', 'parser', 'advanced'].includes(name) ? name : 'connection'
+    for (const tab of dom.queryAll('.ld-settings-tab')) {
+      tab.classList.toggle('ld-active', tab.getAttribute('data-settings-tab') === next)
+    }
+    for (const card of dom.queryAll('[data-settings-section]')) {
+      card.style.display = card.getAttribute('data-settings-section') === next ? '' : 'none'
+    }
+    if (persist) {
+      try { localStorage.setItem(SETTINGS_SECTION_KEY, next) } catch { /* best effort */ }
+    }
+  }
+
+  for (const tab of dom.queryAll('.ld-settings-tab')) {
+    tab.addEventListener('click', () => setSettingsSection(tab.getAttribute('data-settings-tab')))
+  }
+  try { setSettingsSection(localStorage.getItem(SETTINGS_SECTION_KEY) || 'connection', false) }
+  catch { setSettingsSection('connection', false) }
+
   for (const tab of dom.queryAll('.ld-main-tab')) {
     tab.addEventListener('click', () => setMainView(tab.getAttribute('data-tab')))
   }
@@ -3580,6 +3671,20 @@ img[class*="inlineImage"] {
   }
   const loraSearch = $('.ld-lora-search')
   if (loraSearch) loraSearch.addEventListener('input', renderLoraLibrary)
+
+  $('[data-act="save-places"]').addEventListener('click', async () => {
+    try {
+      const result = await call('save_places', { places: placesFromText($('.ld-places').value) })
+      places = result.places || []
+      renderPlaces()
+      setStatus('.ld-places-status',
+        places.length ? `Saved ${places.length} place${places.length === 1 ? '' : 's'}.` : 'No places saved.', 'good')
+    } catch (error) {
+      // Re-rendering here would discard what they typed, which is the last thing
+      // anyone wants after a validation error.
+      setStatus('.ld-places-status', error.message, 'err')
+    }
+  })
 
   $('[data-act="new-persona"]').addEventListener('click', () => openPersonaEditor(null, 'persona'))
   $('[data-act="new-character"]').addEventListener('click', () => openPersonaEditor(null, 'character'))
@@ -4288,7 +4393,7 @@ img[class*="inlineImage"] {
     if (initialized) return true
     try {
       const res = await call('init', {}, 8000)
-      settings = res.settings; presets = res.presets; personas = res.personas || []; characters = res.characters || []; history = res.history; storyDebug = res.storyDebug || null; autoStatus = res.lastAutoStatus || null
+      settings = res.settings; presets = res.presets; personas = res.personas || []; characters = res.characters || []; places = res.places || []; history = res.history; storyDebug = res.storyDebug || null; autoStatus = res.lastAutoStatus || null
       defaults = res.defaults || defaults
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
@@ -4358,7 +4463,7 @@ img[class*="inlineImage"] {
           }, { force: true })
         }
       }
-      renderCharacterList(); renderPersonaList(); renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
+      renderCharacterList(); renderPersonaList(); renderPlaces(); renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
       loadWardrobe().catch(() => {})
       updateScanLabel()
       initialized = true

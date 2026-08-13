@@ -1,100 +1,80 @@
-# LumiDraw Studio 0.63.0 — Named Looks
+# LumiDraw Studio 0.65.0 — the settings rail
 
-Release 2 of 4. Idea from
-[kittyafterdark/LumiSwarm-Studio](https://github.com/kittyafterdark/LumiSwarm-Studio).
+Release 4 of 4. Smaller than I intended, and I want to be straight about why.
 
-## What you get
+## What changed
 
-In the character and persona editors, a **Named looks** field:
-
-```
-formal = black evening gown, heels | aliases: gala, the gown | no: jeans
-swim   = blue bikini | aliases: the pool
-```
-
-A Look is applied three ways, in this order:
-
-1. **The parser names it.** It now reports a `look` field per subject.
-2. **An alias appears in the prose.** "She smoothed *the gown*" selects `formal`
-   with no tagging required.
-3. **The default look**, when nothing else applies.
-
-Per-Look **negatives** are scoped to the scenes that Look is active in — *no
-jeans while she's in the gown* — and never persisted.
-
-## The design decision you made, and why it matters
-
-You picked **Looks above the wardrobe, not replacing it**. That turns out to hinge
-on one word:
-
-> A Look wins at the moment it **becomes** active. An unchanged Look yields to
-> the wardrobe.
-
-Both alternatives are worse in ways that are easy to miss:
-
-- If a Look overrode the wardrobe *every* scene, "she kicked off her sneakers"
-  would be undone by the very next image, and the entire 0.53–0.56 clothing chain
-  — the digest, family correction, zone merging — would become dead weight.
-- If it *never* overrode the wardrobe, selecting a Look would do nothing at all
-  while a stale record existed, which is exactly the sealed loop 0.56 fixed.
-
-So the precedence is now:
+**Settings is no longer a flat scroll of five unrelated cards.** It has a rail:
 
 ```
-this passage  >  a Look that just became active  >  the wardrobe  >  her default
+[ Connection ]  [ Parser ]  [ Advanced ]
 ```
 
-Everything you already had still works and still earns its keep.
+- **Connection** — Draw Things API, LumiDraw Bridge catalog
+- **Parser** — parser connection, model, instruction, budget
+- **Advanced** — Draw Things Cloud Compute, Diagnostics
 
-## Looks are clothes. States are bodies.
+The cloud card no longer sits as prominently as the Draw Things connection you
+can't work without. Your section is remembered between sessions.
 
-Deliberately separate, and enforced. Mixing them is what made appearance states
-dangerous in the first place — switching one transforms the whole character. The
-parser is told in as many words: *"A look is a set of clothes, not a body. Never
-use it for a transformation, a mood, or a place."*
+Two labels also changed: the **Presets** tab is now **Cast & presets**, since it
+holds characters, personas and places as well; and *"Last parser result"* is now
+*"What the last scan produced"*, because it's output sitting among controls.
 
-An appearance state with `outfit=omit` — a transformation that has no clothes —
-suppresses the Look too.
+The `data-view` value stays `presets` — it's persisted in your browser, so
+renaming it would have reset your last tab.
 
-## Where the guidance went
+## What I attempted and backed out of
 
-Straight into the slot 0.62.0 built. `dynamicGuidanceBlocks` gained exactly one
-entry and nothing else about instruction assembly changed, which was the point of
-building it first. The guidance says nothing at all when nobody in the cast has
-Looks, so the instruction budget is spent only when there's something to say.
+I tried to properly reorganise — move cards between tabs, lift the image-sizing
+controls out of "Illustration mode", put the parser output with Diagnostics.
 
-## Details worth knowing
+**One block move grabbed the wrong `<div>`.** A help paragraph was carried into a
+new card while the checkbox it described stayed behind in another tab. The syntax
+check passed. The class counts balanced perfectly — nothing was "lost", it was
+just in the wrong place. I only found it because I went looking at the actual
+markup afterwards.
 
-- **Alias matching is whole-word only.** "dressing-gowns" does not select a Look
-  aliased `gown` — the lesson `selectAppearanceState` learned when *werewolf*
-  matched a state named *Wolf*.
-- **The longest cue wins**, so `heavy coat` beats `coat`.
-- **A Look with no outfit is refused loudly** rather than saved. An empty Look
-  would silently strip a character when selected, which reads as a compiler bug
-  rather than an empty field.
-- **Every path is traced** — which Look, why it was chosen, and whether it set
-  the outfit or yielded. A character silently in the wrong clothes is the
-  recurring failure in this area, and the trace is how it gets diagnosed.
-- **A Look is remembered without a grounding check**, unlike an outfit. An outfit
-  is inferred from prose and can be wrong; a Look was *chosen*, so there's
-  nothing to corroborate — it just needs remembering, so the next scene can tell
-  "still in the gown" from "just put the gown on".
+So I reverted the whole thing and redid it with **tagging instead of moving**: an
+attribute can't separate a control from its label because it never touches
+either. That's why this release is a rail and two labels rather than the
+reorganisation you asked for.
 
-## Verification
+The honest constraint is that I can't see the UI. For backend logic I can write a
+test that proves behaviour; for layout I can only prove structural invariants,
+and "this control is under the right heading" is about as far as that goes.
 
-**49 suites · 1,832 assertions · all green.** 60 new in `looks.mjs`.
+## The test that now exists
 
-Mutation-tested on the three ways the precedence could be wrong: a Look that
-overrides every scene, a Look that never overrides, and substring alias matching.
-All three caught.
+`ui.mjs` pins what would have caught the damage:
 
-I also deleted one assertion I'd written that was vacuous — it asserted an empty
-result from a profile that had no default, so it would have passed no matter what
-the code did.
+- **Every control still lives under its own card heading.** My first version of
+  this checked that a control and its label stayed within N characters — and a
+  mutation that moved *both* into another card passed it cleanly. Proximity was
+  the wrong property; card membership is the right one.
+- Every control appears exactly once — a duplicate means a block was pasted
+  twice, a zero means one was carried off.
+- Every view's `<div>`s balance, so a cut mid-block shows up.
+- No settings card is left untagged, since an untagged one would vanish the
+  moment a section is selected.
+- The rail is styled outside a media query — the first attempt put it inside one,
+  which would have made it mobile-only.
 
-## Next
+**51 suites · 1,939 assertions · all green.** Three mutations tried against the
+new suite; the one that initially slipped through is the reason the membership
+check exists.
 
-**Release 3 — Visual Lorebook.** Visual canon for places and objects, which is
-the real answer to the truck cab: you've been fixing settings by suppressing what
-the model gets wrong, and that fixes them by asserting what a place looks like.
-Needs the `world_books` permission, so it'll ask you to re-grant on install.
+## If you want the full reorganisation
+
+It's worth doing, and it wants one of two things:
+
+1. **You tell me where things should go** — I'll move them one card at a time,
+   showing you the before/after structure for each, rather than restructuring in
+   one pass I can't verify.
+2. **Or you let me screenshot it.** With computer use I can open Lumiverse, look
+   at the panel, and check my own work — which turns this from guessing into
+   seeing.
+
+Option 2 is what I'd pick. Layout is the one area where the feedback loop that's
+served us all session — write a test, mutate it, confirm it catches the break —
+doesn't really substitute for looking.

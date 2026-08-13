@@ -17,6 +17,7 @@ const SETTINGS_FILE = 'settings.json'
 const PRESETS_FILE = 'presets.json'
 const PERSONAS_FILE = 'personas.json'
 const CHARACTERS_FILE = 'characters.json'
+const PLACES_FILE = 'places.json'
 const HISTORY_FILE = 'history.json'
 const STORY_DEBUG_FILE = 'story_debug.json'
 const SCENE_MEMORY_FILE = 'scene_memory.json'
@@ -132,6 +133,113 @@ async function getPersonas() {
 
 async function savePersonas(personas) {
   await spindle.storage.setJson(PERSONAS_FILE, personas, { indent: 2 })
+}
+
+// ---------------------------------------------------------------------------
+// Places — visual canon for locations and objects
+// ---------------------------------------------------------------------------
+//
+// The truck cab problem, approached from the other side. Every fix so far has
+// been SUPPRESSION: cap the framing because the model cannot draw a wide cabin,
+// drop a setting tag because nothing in the passage grounds it. Those stop the
+// wrong thing appearing; none of them says what the right thing looks like.
+//
+// A Place does. "Jason's truck" is a named location with canonical tags, and
+// when prose mentions it those tags ARE the setting — not a guess to be
+// second-guessed by settingTagSupported, because a Place was matched on its own
+// alias rather than inferred from a sentence.
+//
+// This is Kitty's Visual Lorebook idea without her host dependency. Swarm Studio
+// layers visual metadata onto Lumiverse world-book entries via the world_books
+// permission; LumiDraw has never touched that API and I cannot verify this
+// Lumiverse exposes it, so Places are stored by the extension. That keeps the
+// feature working regardless, needs no new permission, and leaves room to read
+// host lore later as an additional SOURCE of the same structure.
+async function getPlaces() {
+  const value = await spindle.storage.getJson(PLACES_FILE, { fallback: [] })
+  return Array.isArray(value) ? value : []
+}
+
+async function savePlaces(places) {
+  await spindle.storage.setJson(PLACES_FILE, Array.isArray(places) ? places : [], { indent: 2 })
+}
+
+// Same shape as a Look, deliberately: name, cues that select it, what it looks
+// like, and what must not appear in it.
+function normalizePlace(raw, index = 0) {
+  const source = raw && typeof raw === 'object' ? raw : {}
+  // Throws rather than skipping. A line with no name is a typo, and dropping it
+  // silently means the user's line vanishes from the editor with no explanation
+  // — the same reasoning as the empty-tags check below.
+  const name = shortPhrase(source.name || '', `place ${index + 1} name`, 8, 64, false)
+  const tags = shortList(source.tags || source.settingTags || '', `place ${name} tags`,
+    { maxItems: 10, maxWords: 7, maxChars: 72 })
+  if (!tags.length) throw new Error(`Place \u201c${name}\u201d needs at least one setting tag.`)
+  return {
+    name,
+    aliases: shortList(source.aliases || source.recognition || '', `place ${name} aliases`,
+      { maxItems: 12, maxWords: 8, maxChars: 80 }),
+    tags,
+    negative: shortList(source.negative || source.negativeTags || '', `place ${name} negative`,
+      { maxItems: 10, maxWords: 7, maxChars: 72 }),
+  }
+}
+
+function normalizePlaces(list) {
+  const out = []
+  const items = Array.isArray(list) ? list : []
+  for (let i = 0; i < items.length; i++) {
+    const place = normalizePlace(items[i], i)
+    if (!place) continue
+    const key = place.name.toLowerCase()
+    const existing = out.findIndex((item) => item.name.toLowerCase() === key)
+    if (existing >= 0) out[existing] = place
+    else out.push(place)
+  }
+  return out.slice(0, 40)
+}
+
+// Selected by its own name or an alias appearing in the passage, or by the
+// parser having already produced a setting tag that names it. Whole-word only
+// and longest-cue-wins, the same rules Looks and appearance states use — a Place
+// called "bar" must not match "barn".
+function selectPlace(places, sourcePassage = '', settingTags = [], report = null) {
+  const note = (place, reason) => {
+    if (report) { report.place = place ? place.name : ''; report.reason = reason }
+    return place
+  }
+  const list = Array.isArray(places) ? places : []
+  if (!list.length) return note(null, 'no places defined')
+
+  const haystack = [String(sourcePassage || ''), ...(settingTags || [])].join(' \n ').toLowerCase()
+  const candidates = []
+  for (const place of list) {
+    for (const phrase of [place.name, ...(place.aliases || [])]) {
+      const value = String(phrase || '').trim().toLowerCase()
+      if (value.length < 3) continue
+      if (!new RegExp(`\\b${escapeRegExp(value)}\\b`).test(haystack)) continue
+      candidates.push({ place, cue: value, words: value.split(/\s+/).length, length: value.length })
+    }
+  }
+  if (!candidates.length) return note(null, 'nothing in the passage names a saved place')
+  candidates.sort((a, b) => (b.words - a.words) || (b.length - a.length))
+  return note(candidates[0].place, `the passage says "${candidates[0].cue}"`)
+}
+
+// A Place's tags lead, because they are canon and the parser's are inference.
+// Reconciliation has already dropped the ungrounded guesses; whatever survived
+// is kept behind the canon so a genuinely new detail ("rain on the windshield")
+// is not thrown away.
+function applyPlaceSetting(reconciledSetting, place) {
+  if (!place) return { setting: animaTagList(reconciledSetting || []), added: [] }
+  const canon = animaTagList(place.tags)
+  const existing = animaTagList(reconciledSetting || [])
+  const lower = new Set(canon.map((tag) => tag.toLowerCase()))
+  const rest = existing.filter((tag) => !lower.has(tag.toLowerCase()))
+  return {
+    setting: uniqueStrings([...canon, ...rest]).slice(0, 8),
+    added: canon.filter((tag) => !existing.some((value) => value.toLowerCase() === tag.toLowerCase())),
+  }
 }
 
 async function getCharacters() {
@@ -5831,9 +5939,10 @@ function repairCameraTags(cameraTags, scene, descriptors) {
 let LAST_COMPILE_TRACE = []
 let LAST_COMPILE_OUTFITS = {}
 let LAST_COMPILE_LOOKS = {}
+let LAST_COMPILE_PLACE = ''
 let LAST_COMPILE_NEGATIVES = []
 
-function traceReset() { LAST_COMPILE_TRACE = []; LAST_COMPILE_OUTFITS = {}; LAST_COMPILE_LOOKS = {}; LAST_COMPILE_NEGATIVES = [] }
+function traceReset() { LAST_COMPILE_TRACE = []; LAST_COMPILE_OUTFITS = {}; LAST_COMPILE_LOOKS = {}; LAST_COMPILE_PLACE = ''; LAST_COMPILE_NEGATIVES = [] }
 function trace(rule, outcome, detail = '') {
   LAST_COMPILE_TRACE.push({ rule, outcome, detail: String(detail || '') })
 }
@@ -5842,6 +5951,7 @@ function outfitSnapshot() { return { ...LAST_COMPILE_OUTFITS } }
 // Which Look each character ended the scene in, so the NEXT scene can tell a
 // change of Look from an unchanged one.
 function lookSnapshot() { return { ...LAST_COMPILE_LOOKS } }
+function placeSnapshot() { return LAST_COMPILE_PLACE }
 function negativeSnapshot() { return LAST_COMPILE_NEGATIVES.slice() }
 
 // Human-readable, for the Spindle log and the debug panel.
@@ -6210,8 +6320,15 @@ function applyPromptNames(text, profiles) {
 
 const SUBJECT_BREAK_MARK = '\u0000SUBJECT_BREAK'
 
-function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null, rememberedLooks = null, breakInPreset = false } = {}) {
+function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null, rememberedLooks = null, places = [], breakInPreset = false } = {}) {
   traceReset()
+  // Matched before anything else uses it: the Place contributes to the negatives
+  // (assembled with the descriptors) as well as to the setting (reconciled
+  // later), and a value read before its own declaration is a crash rather than a
+  // subtle bug — which is exactly how this was caught.
+  const placeReport = {}
+  const matchedPlace = selectPlace(places, [sourcePassage, contextText].filter(Boolean).join('\n'), scene.setting, placeReport)
+
   let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true, rememberedOutfits, rememberedLooks)).map((item) => ({
     ...item,
     // An unprofiled subject's name comes straight from the story, so a coined
@@ -6243,7 +6360,12 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   // Scoped to the scene the Look is active in, never persisted.
   const lookNegatives = uniqueStrings(descriptors.flatMap((item) =>
     (item.look && item.look.negative) || []))
-  LAST_COMPILE_NEGATIVES = uniqueStrings([...garmentDefence(descriptors), ...lookNegatives])
+  const placeNegatives = matchedPlace ? uniqueStrings(matchedPlace.negative || []) : []
+  LAST_COMPILE_NEGATIVES = uniqueStrings([...garmentDefence(descriptors), ...lookNegatives, ...placeNegatives])
+  if (placeNegatives.length) {
+    trace('place negatives', 'applied',
+      `${placeNegatives.join(', ')} — ${matchedPlace.name} says these do not belong here`)
+  }
   if (lookNegatives.length) {
     trace('look negatives', 'applied',
       `${lookNegatives.join(', ')} — carried by the active look(s)`)
@@ -6468,6 +6590,21 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   if (settingCheck.note) spindle.log.warn('[lumidraw] setting continuity · ' + settingCheck.note)
   trace('setting continuity', settingCheck.note ? 'applied' : 'clean', settingCheck.note || `kept: ${settingCheck.setting.join(', ') || '(none)'}`)
 
+  // The Place was matched at the top of the compile — it feeds the negatives as
+  // well as the setting, and those are assembled earlier. Its tags are canon
+  // rather than inference, so they lead, and they are NOT run past
+  // settingTagSupported: that check exists to stop the parser inventing a
+  // kitchen, and has no business second-guessing a location the user wrote down.
+  if (matchedPlace) {
+    const placed = applyPlaceSetting(settingCheck.setting, matchedPlace)
+    settingCheck.setting = placed.setting
+    LAST_COMPILE_PLACE = matchedPlace.name
+    trace(`place · ${matchedPlace.name}`, placed.added.length ? 'applied' : 'clean',
+      placed.added.length
+        ? `${placeReport.reason}, so its saved look leads: ${placed.added.join(', ')}`
+        : `${placeReport.reason}; the scene already described it`)
+  }
+
   // A location can arrive through any atmosphere field, not just `setting`.
   const placeChecks = [
     scrubUnsupportedPlaces(cameraTags, groundingText, 'camera'),
@@ -6652,7 +6789,23 @@ const DYNAMIC_GUIDANCE_MARKER = '{{dynamic_guidance}}'
 function dynamicGuidanceBlocks(context = {}) {
   return [
     looksGuidance(context.profiles),
+    placesGuidance(context.places),
   ]
+}
+
+// Says nothing when no places are saved. The parser does not need to be told
+// about a feature this story does not use.
+function placesGuidance(places) {
+  const list = Array.isArray(places) ? places : []
+  if (!list.length) return ''
+  const lines = list.slice(0, 20).map((place) => {
+    const cues = (place.aliases || []).join(', ')
+    return `- ${place.name}${cues ? ` (also called: ${cues})` : ''}`
+  })
+  return ['SAVED PLACES — these locations have a known appearance.',
+    'When the passage happens in one, put its name or its usual words in "setting" and stop there.',
+    'Do not describe it yourself: LumiDraw already knows what it looks like and will fill in the details.',
+    ...lines].join('\n')
 }
 
 // Only says anything when somebody in the cast HAS looks. A rule about a feature
@@ -6778,12 +6931,14 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   const { artists, rest } = splitArtistTags(normalizeArtistTags(
     reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), scene.safety)
   ))
+  const savedPlaces = await getPlaces()
   const core = compileStructuredScene(scene, profiles, sourcePassage, {
     artistTags: artists,
     rememberedSetting: remembered,
     contextText,
     rememberedOutfits: memoryEntry.outfits || null,
     rememberedLooks: memoryEntry.looks || null,
+    places: savedPlaces,
     breakInPreset: preset.useBreakSeparators === true ||
       (preset.useBreakSeparators === undefined && /\bBREAK\b/.test(String(preset.qualityTags || ''))),
   })
@@ -7976,7 +8131,7 @@ async function scanStoryCore(userId, options = {}) {
       const resolvedGuidance = await resolveMacros(guidance, userId, chatId)
       const instruction = applyDynamicGuidance(
         resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
-        composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings })))
+        composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: await getPlaces() })))
       const instrLabel = usingCustom ? `custom guidance + structured compiler (${instruction.length} chars)` : 'structured subject compiler'
       setStoryScanStage(scan, 'parsing', 'Waiting for the selected parser model.')
       spindle.log.info('[lumidraw] Anima parser context · previous_messages=' + parserInput.contextMessageCount + ' · loom_ledger=' + (parserInput.ledgerFound ? 'found' : 'none'))
@@ -8386,7 +8541,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const instruction = applyDynamicGuidance(
     (await resolveMacros(guidance, userId, chatId)) +
       structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
-    composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings })))
+    composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: await getPlaces() })))
 
   const startedAt = Date.now()
   const report = {}
@@ -8538,11 +8693,11 @@ spindle.onFrontendMessage(async (payload, userId) => {
   try {
     switch (payload && payload.type) {
       case 'init': {
-        const [settings, presets, personas, characters, history, storyDebug] = await Promise.all([
-          getSettings(), getPresets(), getPersonas(), getCharacters(), getHistory(), getStoryDebug(),
+        const [settings, presets, personas, characters, history, storyDebug, places] = await Promise.all([
+          getSettings(), getPresets(), getPersonas(), getCharacters(), getHistory(), getStoryDebug(), getPlaces(),
         ])
         reply = ok(payload, requestId, {
-          settings, presets, personas, characters, history, storyDebug, lastAutoStatus,
+          settings, presets, personas, characters, history, storyDebug, places, lastAutoStatus,
           version: (spindle.manifest && spindle.manifest.version) || '',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })
@@ -9163,6 +9318,24 @@ spindle.onFrontendMessage(async (payload, userId) => {
       case 'cloud_status': {
         const settings = await getSettings()
         reply = ok(payload, requestId, { cloud: await cloudRelayStatus(settings) })
+        break
+      }
+
+      case 'save_places': {
+        // Validated on the way in, not on the way out: a Place with no tags
+        // would match a passage and then contribute nothing, which looks like
+        // the matcher is broken rather than like an empty field.
+        const places = normalizePlaces(Array.isArray(payload.places) ? payload.places : [])
+        await savePlaces(places)
+        spindle.log.info('[lumidraw] saved ' + places.length + ' place(s)')
+        reply = ok(payload, requestId, { places })
+        break
+      }
+
+      case 'delete_place': {
+        const places = (await getPlaces()).filter((place) => place && place.name !== payload.name)
+        await savePlaces(places)
+        reply = ok(payload, requestId, { places })
         break
       }
 
