@@ -2407,12 +2407,23 @@ function anatomyRequiredByAct(subject, scene) {
   if (!scene || !['nsfw', 'explicit'].includes(scene.safety)) return false
   const ref = String((subject && subject.ref) || '')
   if (!ref) return false
+  // The SCENE STATEMENT is where the act lives, and looking anywhere else was
+  // the first version's mistake. The parser is instructed to keep relation
+  // actions spatial — "straddles the lap of", "sits beside" — and to put the act
+  // in the statement using the clinical word: "[name] is performing fellatio on
+  // [name]." So a relation-only check almost never matched, and restricting the
+  // statement check to solo scenes excluded the two-person case it exists for.
   const statement = String(scene.sceneStatement || '')
+  if (ANATOMY_ACT_RE.test(statement)) {
+    // Everyone in the scene is a party to the act the statement names. The gate
+    // still requires anatomy_visible from the parser and saved anatomy on the
+    // profile, so this is the third of three conditions rather than a bypass.
+    if ((scene.subjects || []).some((item) => String((item && item.ref) || '') === ref)) return true
+  }
+  // A relation carrying the act as well — rarer, but free to honour.
   const relations = (scene.relations || []).filter((relation) =>
     ANATOMY_ACT_RE.test(`${(relation && relation.action) || ''} ${((relation && relation.details) || []).join(' ')}`))
   if (relations.some((relation) => relation.actor === ref || relation.target === ref)) return true
-  // A solo statement naming the act, with no relation carrying it.
-  if (ANATOMY_ACT_RE.test(statement) && (scene.subjects || []).length === 1) return true
   return false
 }
 
@@ -6080,6 +6091,10 @@ function redactedDiagnostic(scene, descriptors, extras = {}) {
       hasAction: !!(relation && relation.action),
       detailCount: ((relation && relation.details) || []).length,
     })),
+    // Whether the scene names a sexual act at all — the single fact that decides
+    // whether the anatomy gate can open for a clothed participant. Boolean, so
+    // it says nothing about what the act is.
+    actNamed: ANATOMY_ACT_RE.test(String((scene && scene.sceneStatement) || '')),
     // Both, because the DIFFERENCE is the diagnosis. Reporting only what the
     // parser asked for made a dropped pov look like a kept one, and sent me
     // looking for a bug the compiler had already fixed.

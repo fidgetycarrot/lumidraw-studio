@@ -1,82 +1,82 @@
-# LumiDraw Studio 0.68.0 — the missing half of the act
+# LumiDraw Studio 0.69.0 — I looked in the wrong field
 
-Your report found a real bug, and it's very likely the reason the positioning was
-wrong. It also caught a flaw in the report itself.
+0.68.0 didn't fire. Your report showed it plainly: still
+`persona anatomy "none"`, and **no `anatomy gate · Jason` line in the trace at
+all**.
 
-## What the report showed
+## Why it didn't fire
 
-```
-character  anatomy "penis"   profileAnatomy "penis"   anatomyVisible true
-persona    anatomy "none"    profileAnatomy "penis"   anatomyVisible true
-```
+I made the gate accept the act as ownership evidence — then looked for the act in
+the **relations**. LumiDraw's own instruction tells the parser to do the
+opposite:
 
-**The receiving partner's anatomy wasn't in the prompt at all.**
+> The FIRST relation establishes the base body arrangement: *"straddles the lap
+> of", "stands between the knees of", "leans over", "faces", "sits beside"*.
 
-The parser did its job — it set `anatomy_visible: true` for him. The gate then
-threw it away. `anatomyMode: relevant` needs one of two things: the subject is
-nude, or the passage names the anatomy *and* attributes it to him possessively.
-He's in jeans with an open fly, so not nude; and prose like "she took him in her
-mouth" names no anatomy at all.
+Relation actions are **spatial by design**. The act goes in the scene statement,
+with the clinical word — *"[name] is performing fellatio on [name]."* So my check
+searched a field the act is deliberately kept out of, and the one path that did
+read the statement was restricted to solo scenes, which excluded the two-person
+case it exists for.
 
-So LumiDraw asked Anima for an image of an act, with the thing the act is
-performed **on** absent from the description. The model had no anchor for what
-was physically happening between the two bodies — which is exactly when they come
-out arranged wrong. You were seeing the downstream symptom of a missing noun.
+It now reads the statement, and everyone in the scene is a party to the act it
+names. The gate still requires `anatomy_visible` from the parser and saved
+anatomy on the profile — this is the third of three conditions, not a bypass.
+Spatial relations alone still qualify nobody.
 
-## The fix
-
-**The act itself is the ownership evidence the gate was looking for.** If the
-scene names fellatio and he is the target of it, whose anatomy is involved isn't
-ambiguous.
-
-`anatomyRequiredByAct` now satisfies the gate when the scene is nsfw or explicit,
-a relation names an act that necessarily involves genitals, and the subject is a
-party to that relation. Scope is deliberate:
-
-- **Both actor and target count.** In these acts at least one participant's
-  anatomy is the subject of the image.
-- **An ordinary relation doesn't qualify.** "holds the hand of" in an explicit
-  scene changes nothing — otherwise every embrace would expose somebody.
-- **Safety still gates it.** Safe and sensitive scenes never reach this path.
-- The parser must still have set `anatomy_visible`, and the profile must still
-  have saved anatomy. This loosens one of three conditions, not all of them.
-
-## The flaw in my own diagnostic
-
-The report told you `camera: ["pov", "from above", "foreshortening"]` and I
-started building a case that `pov` was fighting your described arrangement.
-
-Then I checked where the report is captured: **before the POV filter runs.** With
-two subjects both described as visible figures, the compiler had almost certainly
-already dropped `pov` — the rule for that has existed for a while. I was reading
-the parser's *request* and treating it as what was *sent*, off my own instrument.
-
-The report now gives both, because the difference is the diagnosis:
+## The report gained one field
 
 ```
-"cameraRequested": ["pov", "from above", "foreshortening"],
-"cameraSent":      ["from above", "foreshortening"]
+"actNamed": true
 ```
 
-If those differ, a rule fired. If they don't, it didn't. Either way you can see
-it, which you couldn't before.
+Whether the scene statement names a sexual act at all — a boolean, so it says
+nothing about which. That single fact decides whether the gate can open for a
+clothed participant, and last round I had to *infer* it from the absence of a
+trace line. Now it's stated.
 
-## Worth trying on that scene
+## A test that encoded the bug
 
-Re-parse it once on 0.68.0. If the report now shows `persona anatomy "penis"`,
-the missing noun is back and the arrangement has a fair chance of landing. If it
-still shows `"none"`, send me the report again — the next suspect is the parser
-not marking a relation with an act term, and that's visible in `hasAction`.
+This assertion existed in 0.68.0 and passed:
 
-## Verification
+```js
+ok('but a two-subject statement needs the relation to say who', ...)
+```
 
-**52 suites · 2,020 assertions · all green.**
+The code agreed with it, so it was green. **Both were wrong** — that's a
+description of your scene, asserted as correct behaviour. A test written from
+the same misunderstanding as the code confirms the misunderstanding.
 
-Mutation-tested: the act gate removed, and the act filter widened so any relation
-qualifies. Both caught.
+That's what the report caught that no amount of mutation testing would have. The
+mutations all asked "does the code do what I meant?" and the answer stayed yes.
+Only the app could say "what you meant was wrong."
 
-One of my new assertions asserted the opposite of its own name — *"somebody not
-in the relation does not"* was checking that they **did**. The function was right;
-the test was wrong. That's the fourth test tonight that was wrong rather than the
-code, and the reason to keep saying so is that a green number is only worth what
-the assertions behind it are.
+## Try it again
+
+Re-parse and send the report. What I'm hoping for:
+
+```
+"actNamed": true
+persona  anatomy "penis"
+```
+
+plus an `anatomy gate · Jason` line in the trace. If `actNamed` comes back
+**false**, the parser isn't using a clinical act word in the statement, and the
+fix is in the instruction rather than the gate — different problem, and the
+report will now say which.
+
+## About the orientation
+
+Worth being straight: getting his anatomy into the prompt is necessary but may
+not be sufficient. "Sitting on his chest, facing away, performing the act" is
+three spatial facts at once, and Anima has to hold all of them against a strong
+prior for the conventional arrangement.
+
+If it's still wrong with the anatomy present, the next lever is the relation
+vocabulary — the first relation should be establishing "sits on the chest of"
+with a facing-away cue, and `hasAction` in the report tells us whether it's even
+trying. That's a further round, and it's fixable in the same way this was.
+
+**52 suites · 2,025 assertions · all green.** Mutation-tested three ways: the
+statement path removed, widened to any statement, and subject membership
+unchecked.
