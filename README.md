@@ -1,104 +1,72 @@
-# LumiDraw Studio 0.74.0 — all ten, and three places the spec was wrong
+# LumiDraw Studio 0.75.0 — the facing veto was firing on furniture
 
-Everything on the list is in. Three of them the existing tests pushed back on, and
-in each case the tests were right.
+The one I'd been offering for four rounds. Here's what it actually was.
 
----
+`face-to-face` and `facing another` aren't only orientation hints. They're two of
+the strongest statements in the whole prompt that **there are two separate
+bodies** — on Danbooru they overwhelmingly tag images of two distinct figures.
 
-## Diagnostics first
+0.60.0 widened the veto list to fix a real bug ("faces away from Jason" was
+coming out as face-to-face), and I wrote in the file:
 
-**Seeds.** Every image now records a real one. A seed Draw Things picks invisibly
-is a seed you can never reuse — "reuse seed" had nothing to reuse, and a CFG
-sweep was a reroll rather than a paired comparison.
+> Over-matching here is the safe direction: a suppressed face-to-face costs a
+> composition hint, an asserted one costs the pose the passage described.
 
-**CFG guard.** Every defence in the compiler is written into the *negative*
-prompt. At CFG 1 they're decoration. The log now says so rather than letting you
-debug a defence that can't fire.
+That was wrong. A suppressed face-to-face doesn't cost "a composition hint" — it
+removes the clearest thing the prompt says about there being two people. And bare
+`behind` matches a counter, a light, a table.
 
-**History keeps the evidence.** The compile trace and parsed scene are stored with
-the image that produced them, and `HISTORY_LIMIT` goes 24 → 80. Every diagnosis
-this project got wrong was made by reading code and guessing what the app did.
-This is also the end of `LAST_DIAGNOSTIC` being a single slot — a multi-image
-re-parse no longer overwrites its own evidence.
+## What it was doing
 
-## The friendly fire
+Same relation each time, only the sentence changed:
 
-`pants, trousers` in the negative while Jason wore joggers. `worn.has(rival)`
-couldn't see the conflict because the word "pants" never appears in "joggers." At
-CFG 1 that's a shrug; at CFG 3 it's a knife.
+```
+face-to-face, facing another  Price and Jason face each other in the kitchen.
+— NOTHING —                   Price faces Jason, the counter behind her.
+— NOTHING —                   Price faces Jason with light behind them.
+— NOTHING —                   Price faces Jason and steps away from the door.
+— NOTHING —                   Price faces Jason, standing behind the table.
+```
 
-The zones now know the modern vocabulary, and the bottom family isn't negated
-while someone's wearing bottoms.
+In prose full of furniture, those tags have been vanishing constantly.
 
-**Where the spec was wrong:** it counted a *full*-body garment as bottoms too.
-`props.mjs` caught it — a dress covers the legs, but nobody in the frame is
-wearing pants, so negating pants contradicts nothing and is exactly what the
-dress defence is *for*. Including `'full'` disarmed a defence that works. It's
-`'bottom'` only.
+## The change
 
-## The image quality changes
+`behind` now needs a **person** on both sides — a person verb before it, and not
+a piece of scenery after. `away from` needs a person after it. Everything that
+genuinely means "these two are not front-to-front" still vetoes:
 
-**Relation budget 2 → 3.** The first relation is the body arrangement by design,
-so a budget of two left one slot for everything the bodies were actually doing.
-The carry got amputated.
+| still suppresses | no longer suppresses |
+|---|---|
+| takes her **from behind** | the counter **behind her** |
+| **stands behind** Jason | **standing behind** the table |
+| **faces away** from Jason | light **behind** them |
+| **turns away** from him | steps **away from the** door |
+| **steps away from** Jason | moving **away from the** wall |
+| back is turned, over her shoulder | |
 
-**Core action.** Suppression keyed off *any* cross-subject relation existing — so
-a relation about where people stand deleted the act. It now requires a relation
-whose verb actually matches.
+The 0.60.0 bug stays fixed — that's asserted separately, because giving it back
+while fixing this would be the obvious way to make things worse.
 
-**Where the spec was wrong again:** letting it through exposed that the core
-action was never checked against the vocabulary. `replay.mjs` caught it —
-`"crouches low, claws extended, facing the alpha wolf"` is three phrases, none of
-them tags, and all three went straight into the tag run. It's partitioned now
-like everything else: what resolves is kept, what doesn't goes to the caption.
+## Two things the tests caught
 
-**Geometry tags.** `princess carry`, `straddling`, `hug`, `sitting on lap` — real
-Danbooru tags for arrangements the caption could only describe in prose.
-
-**Safety floor.** Underwear as the only bottom layer is not a "safe" image. The
-label drives the safety tag, the censorship defence and half the anatomy gating,
-so one step too low quietly disabled all three. Only ever raises.
-
-**Bulge.** Nothing said what a body with penis anatomy looks like under a single
-layer. Three conditions required, and it reads as a with-trait rather than a build
-modifier.
-
-## "The corin"
-
-A capitalized anchor is a name. `named` only gets set when the parser is
-confident, which it isn't for someone the story introduced in passing — but the
-capital letter is evidence the author already gave us.
-
-## Two things worth flagging
-
-**The instruction budget was at 10,094 of 10,100.** A six-character margin isn't
-a margin; whatever I added next was going to break it. I trimmed real redundancy
-(phrases saying the same thing twice) rather than shaving to fit, so there's
-about 30 characters of room now — and a test that fails at 10,085 rather than
-10,100, so the squeeze gets caught early.
-
-**A mutation exposed my own decorative tests.** Deleting `...geometryTags` from
-the tag run passed every geometry assertion I'd written — the table existed, the
-trace fired, and the tags went nowhere. Source patterns prove the code *says* the
-right thing. There are now behavioural tests that compile a scene and read the
-actual tag run for geometry, outdoors, bulge and the core action. The same
-mutation now fails four.
+- **"presses" and "crouches" take `-es`, not `-s`.** My verb pattern missed both.
+- **"standing behind the table" is the same scenery problem one level down** — I
+  fixed `away from` for scenery and then wrote `behind` without the same guard.
+  The test failed on exactly that sentence.
 
 ## Verification
 
-**56 suites · 2,272 assertions · all green.** 75 new in `cfgbatch.mjs`.
+**56 suites · 2,292 assertions · all green.** 22 new.
 
-Mutation-tested seven ways, all caught: seed made optional (6 failures), the
-friendly-fire guard removed (1), capitalized anchors back to descriptions (3),
-geometry tags cut from the run (4 — after the behavioural tests, 0 before), the
-bulge block deleted (6), outdoors never added (2), core action unfiltered (1).
+Mutation-tested three ways, all caught: bare `behind` restored (4 failures),
+`away from` loosened back to scenery (3), person-behind-person no longer vetoing
+(3).
 
-## Try it
+## Now go measure it
 
-The two you'll see immediately are the seed in the history entry and the CFG
-warning in the log. If the warning fires, that's the answer to why a negative
-looked ignored.
+You have seeds. Take a two-character scene, generate on 0.66 and on 0.75 at the
+same seed, and look. That's the first time this has been answerable by anything
+other than me guessing at code.
 
-## Still open
-
-The **0.60.0 `AWAY_RELATION_RE` revert** for the merged subjects.
+If the merging is still there, this wasn't the cause and I'll say so.

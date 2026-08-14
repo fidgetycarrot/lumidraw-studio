@@ -5701,15 +5701,31 @@ const FACING_RELATION_RE = new RegExp([
 // front-to-front was the one that asserted they were. The caption said she
 // faced away, the tag run said face-to-face, and the model believed the tags.
 //
-// Over-matching here is the safe direction: a suppressed face-to-face costs a
-// composition hint, an asserted one costs the pose the passage described.
+// 0.60.0 said "over-matching here is the safe direction". That was wrong, and it
+// took until Eric's "they're merged together into one person" to see why.
+//
+// face-to-face and facing another are not only orientation hints. They are two
+// of the strongest statements in the whole prompt that there are TWO SEPARATE
+// BODIES here — on Danbooru they overwhelmingly tag images of two distinct
+// figures. Suppressing them does not cost "a composition hint". It removes the
+// clearest thing the prompt says about there being two people.
+//
+// And bare \bbehind\b matched anything: "the counter behind her", "light behind
+// them", "standing behind the table". Bare \baway from\b matched "steps away
+// from the door". Neither says a word about which way the PEOPLE face, and in
+// ordinary prose full of furniture they fired constantly.
+//
+// So: a person verb is now required before "behind", and "away from" must be
+// followed by a person rather than a piece of scenery.
 const AWAY_RELATION_RE = new RegExp([
-  '\\bfrom behind\\b', '\\bbehind\\b', '\\bback to\\b', '\\bbent over\\b',
+  '\\bfrom behind\\b',
+  '\\b(?:stand|step|move|kneel|sit|crouch|press|lean|position|hover|loom)(?:s|es|ed|ing)?\\s+behind (?!the\\b|a\\b|an\\b|it\\b|its\\b)',
+  '\\bback to\\b', '\\bbent over\\b',
   '\\bfac(?:e|es|ing)\\s+away\\b',
   '\\blook(?:s|ed|ing)\\s+away\\b',
   '\\bturn(?:s|ed|ing)\\s+away\\b',
   '\\bglanc(?:es|ed|ing)\\s+away\\b',
-  '\\baway from\\b',
+  '\\baway from (?!the\\b|a\\b|an\\b|it\\b|its\\b)',
   '\\bavert(?:s|ed|ing)?\\b',
   '\\bover (?:his|her|their) shoulder\\b',
   '\\bback (?:is |was )?turned\\b',
