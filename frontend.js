@@ -3300,7 +3300,7 @@ img[class*="inlineImage"] {
     const box = $('.ld-wardrobe-rows')
     if (!box) return
     if (!rows || !rows.length) {
-      box.innerHTML = '<div class="ld-help" style="margin:0">Nothing recorded yet. It fills in from the next image.</div>'
+      box.innerHTML = '<div class="ld-help" style="margin:0">No characters here yet. Rows come from the active preset — the main character, the persona, and its cast list. Refresh reads this chat for [LUMICAST] declarations.</div>'
       return
     }
     box.innerHTML = rows.map((row) => {
@@ -3314,18 +3314,38 @@ img[class*="inlineImage"] {
     }).join('') + '<button class="ld-btn ld-compact" data-act="wardrobe-save" style="margin-top:4px">Save wardrobe</button>'
   }
 
-  async function loadWardrobe(quiet = true) {
+  // The wardrobe record is keyed by chat, but the settings panel is not opened by
+  // a chat event and so has never known which chat it is looking at. It sent
+  // nothing and let the backend guess with chats.getActive — and when the host
+  // does not answer that, the key collapses to '' and EVERY chat shares one
+  // wardrobe bucket. Two stories with the same cast then overwrite each other,
+  // invisibly, in both directions.
+  //
+  // The events already carry a chat id. Remembering the last one we saw is a far
+  // better answer than a guess, because it is the chat whose messages actually
+  // reached us.
+  let lastSeenChatId = ''
+
+  async function loadWardrobe(quiet = true, scan = false) {
     try {
-      const res = await call('wardrobe', {}, 15000)
+      const res = await call('wardrobe', { chatId: lastSeenChatId, scan }, 30000)
       renderWardrobeRows(res.rows)
-      if (!quiet) setStatus('.ld-wardrobe-status', `Read from "${res.preset || 'no preset'}".`, 'good')
+      if (quiet) return
+      const where = res.chatId
+        ? `Read from "${res.preset || 'no preset'}" · chat ${String(res.chatId).slice(-8)}`
+        : `Read from "${res.preset || 'no preset'}" · NO CHAT IDENTIFIED — every chat is sharing one wardrobe record`
+      const found = res.added && res.added.length ? ` Added from the story: ${res.added.join(', ')}.` : ''
+      setStatus('.ld-wardrobe-status', where + '.' + found, res.chatId ? 'good' : 'err')
     } catch (e) {
       setStatus('.ld-wardrobe-status', e.message, 'err')
     }
   }
 
   if ($('[data-act="wardrobe-refresh"]')) {
-    $('[data-act="wardrobe-refresh"]').addEventListener('click', () => loadWardrobe(false))
+    $('[data-act="wardrobe-refresh"]').addEventListener('click', () => {
+      setStatus('.ld-wardrobe-status', 'Reading this chat for cast declarations…', '')
+      loadWardrobe(false, true)
+    })
   }
   // The save button is created by renderWardrobeRows, so the listener is delegated.
   if ($('.ld-wardrobe-rows')) {
@@ -3337,7 +3357,7 @@ img[class*="inlineImage"] {
         set[input.getAttribute('data-ref')] = input.value
       }
       try {
-        const res = await call('wardrobe', { set }, 15000)
+        const res = await call('wardrobe', { set, chatId: lastSeenChatId }, 15000)
         renderWardrobeRows(res.rows)
         setStatus('.ld-wardrobe-status', 'Saved. The next image uses this.', 'good')
       } catch (e) {
@@ -4370,6 +4390,7 @@ img[class*="inlineImage"] {
             const messageId = payload.messageId || eventMessage.messageId || eventMessage.id
             const chatId = payload.chatId || eventMessage.chatId || (payload.chat && payload.chat.id)
             if (!messageId || !chatId) return
+            lastSeenChatId = String(chatId)
             ctx.sendToBackend({
               type: 'generation_ended', requestId: makeId(),
               messageId: String(messageId),
@@ -4392,6 +4413,7 @@ img[class*="inlineImage"] {
             const messageId = payload.messageId || eventMessage.messageId || eventMessage.id
             const chatId = payload.chatId || eventMessage.chatId || (payload.chat && payload.chat.id)
             if (!messageId || !chatId) return
+            lastSeenChatId = String(chatId)
             ctx.sendToBackend({
               type: 'character_message_rendered', requestId: makeId(),
               messageId: String(messageId),

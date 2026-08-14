@@ -4189,6 +4189,7 @@ const BOORU_VOCAB = new Set([
   'colored sclera', 'muscular', 'muscular male', 'scar', 'blood', 'wound', 'dirty',
   'sweaty', 'wet', 'veins', 'toned',
   // anatomy and acts, in the clinical register Danbooru uses
+  'ass',
   'penis', 'testicles', 'vagina', 'pussy', 'anus', 'nipples', 'breasts',
   'erection', 'flaccid', 'large penis', 'huge penis', 'veiny penis',
   'fellatio', 'cunnilingus', 'handjob', 'masturbation', 'male masturbation',
@@ -4220,12 +4221,64 @@ const BOORU_VOCAB = new Set([
   'hood', 'scarf', 'belt', 'pants', 'shorts', 'skirt', 'thighhighs', 'socks', 'barefoot',
   'bare shoulders', 'bare back', 'bare arms', 'bare legs', 'collar', 'jewelry', 'necklace',
   'earrings', 'glasses', 'round eyewear', 'hair ornament', 'ribbon', 'bandages',
+
+  // Contemporary clothing. The list above grew up around a fantasy story — robe,
+  // cloak, cape, armor, hood — and had no jeans, no t-shirt, no bra in it. Every
+  // ordinary modern garment was therefore falling through to the caption, where a
+  // tag-trained model can barely use it. "Joggers" is where Eric noticed it; the
+  // hole was 29 of the 30 commonest garments.
+  // tops
+  't-shirt', 'shirt tucked in', 'collared shirt', 'dress shirt', 'polo shirt',
+  'sleeveless shirt', 'off-shoulder shirt', 'crop top', 'tank top', 'camisole',
+  'tube top', 'halterneck', 'blouse', 'sweater', 'sweater vest', 'turtleneck',
+  'sweatshirt', 'hoodie', 'cardigan', 'vest', 'blazer', 'suit', 'formal',
+  'jersey', 'tracksuit',
+  // bottoms
+  'jeans', 'denim shorts', 'short shorts', 'sweatpants', 'track pants',
+  'yoga pants', 'leggings', 'pantyhose', 'capri pants', 'harem pants',
+  'cargo pants', 'baggy pants', 'miniskirt', 'pleated skirt', 'pencil skirt',
+  'long skirt', 'overalls',
+  // underwear and swim
+  'bra', 'sports bra', 'panties', 'thong', 'underwear', 'lingerie', 'boxers',
+  'briefs', 'bikini', 'bikini top', 'bikini bottom', 'swimsuit',
+  'one-piece swimsuit',
+  // footwear
+  'sneakers', 'high heels', 'sandals', 'loafers', 'slippers', 'thigh boots',
+  'knee boots', 'ankle boots',
+  // one-piece and at-home
+  'sundress', 'nightgown', 'pajamas', 'bathrobe', 'apron', 'towel',
+  'school uniform', 'serafuku',
 ])
 
 // Near-misses a language model reliably produces for a tag that does exist.
 // Rewriting is strictly better than demoting: the concept survives *and* lands
 // in the vocabulary the model was trained on.
 const BOORU_ALIASES = {
+  // Garments. "Joggers" is the case that prompted these: Anima has no such tag,
+  // so the word reached only the caption and the model drew whatever it liked.
+  // A jogger IS a sweatpant — the tapered cuff is a cut, not a garment class —
+  // so the tag anchors the class and the original phrase still rides along in
+  // the caption, where the cut can be described.
+  'joggers': 'sweatpants', 'jogger pants': 'sweatpants', 'jogging pants': 'sweatpants',
+  'jogging bottoms': 'sweatpants', 'sweat pants': 'sweatpants',
+  'track suit': 'tracksuit', 'trackpants': 'track pants', 'athletic pants': 'track pants',
+  'trousers': 'pants', 'slacks': 'pants', 'chinos': 'pants', 'khakis': 'pants',
+  'tee': 't-shirt', 'tee shirt': 't-shirt', 'tshirt': 't-shirt', 't shirt': 't-shirt',
+  'hoody': 'hoodie', 'hooded sweatshirt': 'hoodie', 'jumper': 'sweater',
+  'pullover': 'sweater', 'button-up': 'collared shirt', 'button down': 'collared shirt',
+  'button-down shirt': 'collared shirt', 'oxford shirt': 'collared shirt',
+  'denim pants': 'jeans', 'blue jeans': 'jeans', 'skinny jeans': 'jeans',
+  'jean shorts': 'denim shorts', 'cutoffs': 'denim shorts', 'cut-offs': 'denim shorts',
+  'cut-off shorts': 'denim shorts', 'daisy dukes': 'denim shorts',
+  'yoga leggings': 'leggings', 'tights': 'pantyhose', 'nylons': 'pantyhose',
+  'brassiere': 'bra', 'bralette': 'bra', 'underpants': 'panties', 'knickers': 'panties',
+  'undies': 'panties', 'boxer shorts': 'boxers', 'boxer briefs': 'boxers',
+  'trainers': 'sneakers', 'tennis shoes': 'sneakers', 'running shoes': 'sneakers',
+  'athletic shoes': 'sneakers', 'heels': 'high heels', 'stilettos': 'high heels',
+  'pumps': 'high heels', 'flip-flops': 'sandals', 'flip flops': 'sandals',
+  'pyjamas': 'pajamas', 'pjs': 'pajamas', 'nightie': 'nightgown',
+  'dressing gown': 'bathrobe', 'housecoat': 'bathrobe', 'robe': 'robe',
+  'summer dress': 'sundress', 'business suit': 'suit', 'waistcoat': 'vest',
   'front view': 'from front', 'frontal view': 'from front', 'facing forward': 'from front',
   'side view': 'from side', 'profile view': 'from side',
   'rear view': 'from behind', 'back view': 'from behind', 'view from behind': 'from behind',
@@ -4297,7 +4350,7 @@ const BOORU_ALIASES = {
   'jerking off': 'masturbation', 'stroking himself': 'male masturbation',
   'stroking herself': 'masturbation', 'jacking off': 'masturbation',
   'tits': 'breasts', 'boobs': 'breasts', 'chest': 'breasts',
-  'ass': 'ass', 'butt': 'ass', 'arse': 'ass',
+  'butt': 'ass', 'arse': 'ass', 'backside': 'ass', 'rear end': 'ass',
   'cum': 'cum', 'jizz': 'cum', 'spunk': 'cum', 'load': 'cum',
   'glow': 'glowing', 'glowed': 'glowing', 'aglow': 'glowing', 'luminous': 'glowing',
   'grayscale': 'greyscale', 'black and white': 'greyscale', 'monochromatic': 'monochrome',
@@ -9521,7 +9574,34 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const presets = await getPresets()
         const preset = presets.find((p) => p.name === settings.activePreset)
         const presetName = preset ? preset.name : ''
-        const chatId = String(payload.chatId || '').trim() || await resolveActiveChatId(userId)
+        // The panel sends the chat it last saw an event for. Falling back to the
+        // host's idea of "active" is the old behaviour and stays as a backstop,
+        // but when BOTH are empty sceneMemoryKey returns '' and every chat shares
+        // one wardrobe record — so that case is now said out loud rather than
+        // silently producing another story's clothes.
+        const chatId = String(payload.chatId || '').trim() || (await resolveActiveChatId(userId)) || ''
+        if (!chatId) {
+          spindle.log.info('[lumidraw] wardrobe: no chat could be identified — this record is shared across every chat')
+        }
+        // Refresh used to re-read the preset and nothing else, so a character the
+        // story introduced in THIS chat could never get a row: there was no path
+        // from "who is in this chat" to "who is in the panel". It now reads the
+        // whole chat for cast declarations before building the rows.
+        let added = []
+        let scanError = ''
+        if (payload.scan && preset) {
+          try {
+            const read = await fetchMessages(userId, chatId)
+            const messages = read.messages || []
+            const absorbed = await absorbCastDeclarations(messages, null, preset)
+            added = absorbed.added || []
+            spindle.log.info(`[lumidraw] wardrobe scan read ${messages.length} message(s)` +
+              (added.length ? ` and adopted ${added.join(', ')}` : ' and found no new cast declarations'))
+          } catch (error) {
+            scanError = error.message
+            spindle.log.info(`[lumidraw] wardrobe scan could not read the chat: ${error.message}`)
+          }
+        }
         const entry = await readSceneMemory(chatId, presetName)
         const profiles = preset ? await getStoryProfiles(preset, settings, userId, chatId) : null
 
@@ -9558,7 +9638,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           if (rows.some((row) => row.ref === ref)) continue
           rows.push({ ref, name: ref, tags: (tags || []).join(', '), fallback: '', orphan: true })
         }
-        reply = ok(payload, requestId, { rows, chatId, preset: presetName })
+        reply = ok(payload, requestId, { rows, chatId, preset: presetName, added, scanError })
         break
       }
 
