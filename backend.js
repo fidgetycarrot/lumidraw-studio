@@ -3111,6 +3111,7 @@ async function castSourceFor(preset, chatId) {
     castLibraryIds: Array.isArray(cast.castLibraryIds) ? cast.castLibraryIds : [],
     activeCastId: cast.id,
     activeCastName: cast.name,
+    fantasySetting: !!cast.fantasy,
   }
 }
 
@@ -3193,6 +3194,11 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
     character: await resolveProfile(character, userId, chatId),
     persona: await resolveProfile(persona, userId, chatId),
     cast,
+    // A property of the STORY, not of any one character — which is why it lives
+    // on the cast. Some defences are calibrated for a contemporary setting and
+    // are simply wrong in a fantasy one; no amount of regex can work out which
+    // kind of story this is, so it is asked rather than guessed.
+    fantasySetting: !!preset.fantasySetting,
   }
 }
 
@@ -7110,17 +7116,53 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   } else if (descriptors.some((item) => (item.anatomy || []).length)) {
     trace('anatomy defence', 'ran', 'anatomy is named but no unequipped female subject shares the frame')
   }
-  // Belt and braces for the same trap. Stripping the reflexive removes the usual
-  // source, but a character name, a preset phrase or a word I have not thought of
-  // can carry `elf` too. Negating it is free unless somebody in the scene is one.
-  const elfInCast = descriptors.some((item) =>
-    [...(item.appearance || []), item.noun || '', item.anchor || '', item.subject.booruCharacter || '']
-      .some((value) => /\b(?:elf|elves|elven|dark elf|high elf|half-elf|pointy ears|elf ears)\b/i.test(String(value || ''))))
-  if (!elfInCast) {
+  // "Negating it is free unless somebody in the scene is one." That sentence was
+  // written when the preset ran at CFG 1, where the negative prompt is
+  // decoration. At CFG 3 nothing in the negative is free: `elf, pointy ears` was
+  // pulling on every picture of two people in a kitchen, for a concept nothing in
+  // the scene had ever mentioned.
+  //
+  // The trap it guards is real but narrow — an INACTIVE form on a character who
+  // has an elf shape somewhere in their profile can bleed the word in. So the
+  // test is whether this cast has any such shape to bleed, not whether they
+  // happen to be one right now. A cast that has never heard of elves gets
+  // nothing added.
+  // "Negating it is free unless somebody in the scene is one." That was written
+  // when the preset ran at CFG 1, where the negative prompt is decoration. At
+  // CFG 3 nothing in the negative is free, and two people in a kitchen were
+  // carrying `elf, pointy ears` for a concept nothing in the scene had mentioned.
+  //
+  // The trap is real and the reason is precise: `elf` hides INSIDE ordinary
+  // words. "herself" and "shelf" both contain it, the reflexives are stripped but
+  // "shelf" cannot be — it is a real word doing real work — and `elf` is a strong
+  // Danbooru concept. So the evidence is whether those three letters actually
+  // appear in what is being sent. If they do not, there is nothing to counteract.
+  const elfHaystack = [
+    ...(scene.setting || []), scene.sceneStatement || '', scene.coreAction || '',
+    ...(scene.relations || []).map((r) => `${r.action || ''} ${(r.details || []).join(' ')}`),
+    ...descriptors.flatMap((item) => [
+      ...(item.appearance || []), ...(item.outfit || []), ...(item.pose || []),
+      ...(item.expression || []), ...(item.action || []),
+      item.noun || '', item.anchor || '', (item.subject && item.subject.booruCharacter) || '',
+    ]),
+  ].join(' ')
+  // Deliberately NOT \b-anchored. Word boundaries are what would miss "shelf",
+  // and missing "shelf" is the entire reason this exists.
+  const elfLurking = /elf/i.test(elfHaystack)
+  const ELF_RE = /\b(?:elf|elves|elven|dark elf|high elf|half-elf|pointy ears|pointed ears|elf ears)\b/i
+  const elfRendered = descriptors.some((item) =>
+    [...(item.appearance || []), item.noun || '', item.anchor || '',
+      (item.subject && item.subject.booruCharacter) || ''].some((value) => ELF_RE.test(String(value || ''))))
+  const fantasySetting = !!(profiles && profiles.fantasySetting)
+  if (fantasySetting) {
+    trace('elf defence', 'skipped', 'this cast is marked as a fantasy setting, where elves are not an error')
+  } else if (elfLurking && !elfRendered) {
     LAST_COMPILE_NEGATIVES = uniqueStrings([...LAST_COMPILE_NEGATIVES, 'elf', 'pointy ears'])
-    trace('elf defence', 'applied', 'nobody in this scene is an elf, so pointed ears are negated')
-  } else {
+    trace('elf defence', 'applied', 'the letters "elf" appear inside a word being sent, so pointed ears are negated')
+  } else if (elfRendered) {
     trace('elf defence', 'skipped', 'a subject in this scene is an elf')
+  } else {
+    trace('elf defence', 'skipped', 'nothing being sent contains the letters "elf" — nothing to counteract')
   }
   const censorship = censorshipDefence(descriptors, scene)
   if (censorship.negatives.length) {
@@ -10107,6 +10149,15 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.bind !== undefined) {
           await bindChatToCast(chatId, String(payload.bind || ''))
         }
+        if (payload.fantasy !== undefined && payload.castId) {
+          const casts = await getCasts()
+          const index = casts.findIndex((item) => item && item.id === String(payload.castId))
+          if (index >= 0) {
+            casts[index] = { ...casts[index], fantasy: !!payload.fantasy }
+            await saveCasts(casts)
+            spindle.log.info(`[lumidraw] cast "${casts[index].name}" is ${payload.fantasy ? 'now' : 'no longer'} a fantasy setting`)
+          }
+        }
         if (payload.rename && payload.castId) {
           const casts = await getCasts()
           const index = casts.findIndex((item) => item && item.id === String(payload.castId))
@@ -10145,6 +10196,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
             id: item.id,
             name: item.name,
             migratedFromPreset: item.migratedFromPreset || '',
+            fantasy: !!item.fantasy,
             character: (item.characterProfile && (item.characterProfile.promptName || item.characterProfile.anchor)) || '',
             persona: (item.personaProfile && (item.personaProfile.promptName || item.personaProfile.anchor)) || '',
             members: (item.castLibraryIds || [])

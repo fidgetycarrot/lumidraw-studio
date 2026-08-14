@@ -704,6 +704,10 @@ function realSetup(ctx) {
                   <select class="ld-cast-pick" style="flex:1"></select>
                   <button class="ld-btn ld-compact" data-act="cast-duplicate" title="Copy this cast and use the copy here, so the original story keeps its own">Copy</button>
                 </div>
+                <label style="display:flex;align-items:center;gap:6px;margin-top:5px;font-size:12px">
+                  <input type="checkbox" class="ld-cast-fantasy" />
+                  <span>Fantasy setting — don't treat elves as a mistake</span>
+                </label>
                 <div class="ld-help ld-cast-summary" style="margin-top:4px"></div>
                 <div class="ld-help">A cast is <strong>who</strong> is in this story. Your preset is <strong>what the picture looks like</strong> — model, LoRAs, steps, quality. Changing presets no longer changes who is in the scene, and a character the story introduces here stays here.</div>
                 <div class="ld-status ld-cast-status" style="font-size:11px"></div>
@@ -3360,6 +3364,8 @@ img[class*="inlineImage"] {
         `<option value="${esc(cast.id)}"${cast.id === res.boundId ? ' selected' : ''}>${esc(cast.name)}</option>`))
       .join('')
     const active = casts.find((cast) => cast.id === res.boundId)
+    const fantasyBox = $('.ld-cast-fantasy')
+    if (fantasyBox) fantasyBox.checked = !!(active && active.fantasy)
     const summary = $('.ld-cast-summary')
     if (summary) {
       const who = active
@@ -3395,6 +3401,16 @@ img[class*="inlineImage"] {
         ? 'This chat now uses that cast. Images and the wardrobe follow it.'
         : 'Unbound — this chat falls back to the preset.', 'good')
       loadWardrobe(true)
+    })
+  }
+  if ($('.ld-cast-fantasy')) {
+    $('.ld-cast-fantasy').addEventListener('change', async (event) => {
+      const castId = $('.ld-cast-pick') && $('.ld-cast-pick').value
+      if (!castId) { setStatus('.ld-cast-status', 'Bind a cast first.', 'err'); return }
+      await loadCasts({ castId, fantasy: event.target.checked })
+      setStatus('.ld-cast-status', event.target.checked
+        ? 'Fantasy setting. Elves and pointed ears will not be negated in this story.'
+        : 'Contemporary setting. Stray fantasy species will be negated again.', 'good')
     })
   }
   if ($('[data-act="cast-duplicate"]')) {
