@@ -21,6 +21,16 @@ const PLACES_FILE = 'places.json'
 const HISTORY_FILE = 'history.json'
 const STORY_DEBUG_FILE = 'story_debug.json'
 const SCENE_MEMORY_FILE = 'scene_memory.json'
+// A cast is WHO is in a story. A preset is WHAT the picture looks like. Those
+// change on completely different schedules — the visual settings are set once,
+// the cast changes per story — and welding them together is why switching
+// presets moved the wardrobe and why one chat's characters showed up in another.
+const CASTS_FILE = 'casts.json'
+const CHAT_CAST_FILE = 'chat_cast.json'
+// Written once, before the first migration, and never touched again. If any of
+// this is wrong, the original presets are recoverable from here without relying
+// on me having been careful.
+const PRESET_BACKUP_FILE = 'presets_backup_pre_cast.json'
 
 const DEFAULT_SETTINGS = {
   host: '127.0.0.1',
@@ -240,6 +250,107 @@ function applyPlaceSetting(reconciledSetting, place) {
     setting: uniqueStrings([...canon, ...rest]).slice(0, 8),
     added: canon.filter((tag) => !existing.some((value) => value.toLowerCase() === tag.toLowerCase())),
   }
+}
+
+async function getCasts() {
+  const value = await spindle.storage.getJson(CASTS_FILE, { fallback: [] })
+  return Array.isArray(value) ? value : []
+}
+
+async function saveCasts(casts) {
+  await spindle.storage.setJson(CASTS_FILE, casts, { indent: 2 })
+}
+
+async function getChatCastMap() {
+  const value = await spindle.storage.getJson(CHAT_CAST_FILE, { fallback: {} })
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+async function bindChatToCast(chatId, castId) {
+  const chat = String(chatId || '').trim()
+  if (!chat) return null
+  const map = await getChatCastMap()
+  if (castId) map[chat] = String(castId)
+  else delete map[chat]
+  await spindle.storage.setJson(CHAT_CAST_FILE, map, { indent: 2 })
+  spindle.log.info(`[lumidraw] chat ${chat} is now using cast ${castId || '(none — falls back to the preset)'}`)
+  return map
+}
+
+async function castForChat(chatId) {
+  const chat = String(chatId || '').trim()
+  if (!chat) return null
+  const map = await getChatCastMap()
+  const castId = map[chat]
+  if (!castId) return null
+  const casts = await getCasts()
+  return casts.find((item) => item && item.id === castId) || null
+}
+
+// Does this preset carry anybody?
+function presetHasCast(preset) {
+  if (!preset) return false
+  return !!(preset.characterProfile || preset.personaProfile || preset.characterLibraryId ||
+    preset.personaLibraryId || (Array.isArray(preset.castLibraryIds) && preset.castLibraryIds.length))
+}
+
+// COPY the people out of a preset into a cast. Deliberately a copy and not a
+// move: the preset keeps every field it had, so a migration that turns out to be
+// wrong loses nothing. The contract for this whole change is that your character
+// work is never deleted, only duplicated somewhere better.
+function castFromPreset(preset) {
+  return {
+    id: `cast_${normalizeIdentityText(preset.name || 'story').replace(/\s+/g, '_') || 'story'}`,
+    name: preset.name || 'Story cast',
+    characterProfile: preset.characterProfile ? { ...preset.characterProfile } : null,
+    personaProfile: preset.personaProfile ? { ...preset.personaProfile } : null,
+    characterLibraryId: preset.characterLibraryId || '',
+    personaLibraryId: preset.personaLibraryId || '',
+    characterTags: preset.characterTags || '',
+    personaTags: preset.personaTags || '',
+    castLibraryIds: Array.isArray(preset.castLibraryIds) ? [...preset.castLibraryIds] : [],
+    // Where this came from, so the UI can say so and so a re-run can recognise
+    // its own work rather than making a second copy.
+    migratedFromPreset: preset.name || '',
+    createdAt: Date.now(),
+  }
+}
+
+// Build the cast store from the presets that already exist.
+//
+// Three properties this must have, in order of how badly they would hurt:
+//   1. It never modifies a preset.
+//   2. It never overwrites a cast that already exists — running twice is a no-op,
+//      and a cast you have since EDITED is not reverted to the preset's version.
+//   3. It backs the presets up before doing anything at all.
+async function migratePresetsToCasts() {
+  const presets = await getPresets()
+  if (!Array.isArray(presets) || !presets.length) return { created: [], skipped: [] }
+
+  const existingBackup = await spindle.storage.getJson(PRESET_BACKUP_FILE, { fallback: null })
+  if (!existingBackup) {
+    await spindle.storage.setJson(PRESET_BACKUP_FILE, presets, { indent: 2 })
+    spindle.log.info(`[lumidraw] backed up ${presets.length} preset(s) before the cast migration`)
+  }
+
+  const casts = await getCasts()
+  const created = []
+  const skipped = []
+  for (const preset of presets) {
+    if (!presetHasCast(preset)) { skipped.push(preset.name || '(unnamed)'); continue }
+    const built = castFromPreset(preset)
+    if (casts.some((item) => item && item.id === built.id)) {
+      skipped.push(preset.name || '(unnamed)')
+      continue
+    }
+    casts.push(built)
+    created.push(built.name)
+  }
+  if (created.length) {
+    await saveCasts(casts)
+    spindle.log.info(`[lumidraw] cast migration created ${created.length}: ${created.join(', ')} — presets untouched`)
+  }
+  return { created, skipped }
 }
 
 async function getCharacters() {
@@ -2930,7 +3041,28 @@ function castMemberBelongsHere(entry, chatId) {
   return declaredIn === String(chatId || '')
 }
 
+// The seam. One function decides whether this chat's people come from a cast or
+// from the preset, and everything downstream is unchanged — which is why binding
+// nothing changes nothing. A chat with no cast behaves exactly as it did before.
+async function castSourceFor(preset, chatId) {
+  const cast = await castForChat(chatId)
+  if (!cast) return preset
+  return {
+    ...preset,
+    characterProfile: cast.characterProfile,
+    personaProfile: cast.personaProfile,
+    characterLibraryId: cast.characterLibraryId || '',
+    personaLibraryId: cast.personaLibraryId || '',
+    characterTags: cast.characterTags || '',
+    personaTags: cast.personaTags || '',
+    castLibraryIds: Array.isArray(cast.castLibraryIds) ? cast.castLibraryIds : [],
+    activeCastId: cast.id,
+    activeCastName: cast.name,
+  }
+}
+
 async function getStoryProfiles(preset, settings, userId, chatId) {
+  preset = await castSourceFor(preset, chatId)
   const needsLibrary = !!(preset.characterLibraryId || (Array.isArray(preset.castLibraryIds) && preset.castLibraryIds.length))
   const characterLibrary = needsLibrary ? await getCharacters() : []
 
@@ -9329,11 +9461,19 @@ spindle.onFrontendMessage(async (payload, userId) => {
   try {
     switch (payload && payload.type) {
       case 'init': {
-        const [settings, presets, personas, characters, history, storyDebug, places] = await Promise.all([
+        // Idempotent and non-destructive, so running it on every init is safe and
+        // means nobody has to find a button. It creates casts from presets that
+        // have people in them and modifies nothing.
+        try { await migratePresetsToCasts() } catch (error) {
+          spindle.log.warn('[lumidraw] cast migration skipped: ' + error.message)
+        }
+        const [settings, presets, personas, characters, history, storyDebug, places, casts, chatCast] = await Promise.all([
           getSettings(), getPresets(), getPersonas(), getCharacters(), getHistory(), getStoryDebug(), getPlaces(),
+          getCasts(), getChatCastMap(),
         ])
         reply = ok(payload, requestId, {
           settings, presets, personas, characters, history, storyDebug, places, lastAutoStatus,
+          casts, chatCast,
           version: (spindle.manifest && spindle.manifest.version) || '',
           defaults: { protocol: DEFAULT_PROTOCOL, parserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, legacyParserInstruction: LEGACY_DEFAULT_PARSER_INSTRUCTION, animaParserInstruction: DEFAULT_PARSER_INSTRUCTION },
         })

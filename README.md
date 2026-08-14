@@ -1,72 +1,74 @@
-# LumiDraw Studio 0.75.0 — the facing veto was firing on furniture
+# LumiDraw Studio 0.76.0 — casts, part 1 of 3: the data, and not losing yours
 
-The one I'd been offering for four rounds. Here's what it actually was.
+> "Build it. And I would love to not lose my character details and tags."
 
-`face-to-face` and `facing another` aren't only orientation hints. They're two of
-the strongest statements in the whole prompt that **there are two separate
-bodies** — on Danbooru they overwhelmingly tag images of two distinct figures.
+That second sentence is the specification. This release does the risky part —
+the data model and the migration — and does it in the one way that can't lose
+your work.
 
-0.60.0 widened the veto list to fix a real bug ("faces away from Jason" was
-coming out as face-to-face), and I wrote in the file:
+## The rule I held to
 
-> Over-matching here is the safe direction: a suppressed face-to-face costs a
-> composition hint, an asserted one costs the pose the passage described.
+**Nothing is ever removed from a preset.**
 
-That was wrong. A suppressed face-to-face doesn't cost "a composition hint" — it
-removes the clearest thing the prompt says about there being two people. And bare
-`behind` matches a counter, a light, a table.
+The migration *copies* your character data into a new cast store. It doesn't move
+it. Every preset keeps `characterProfile`, `personaProfile`, `castLibraryIds`,
+every field, byte for byte. If every idea in this redesign turns out to be wrong,
+your originals are still sitting exactly where they were.
 
-## What it was doing
+Before it touches anything it also writes `presets_backup_pre_cast.json` — a
+complete copy, written **once** and never overwritten, so even a later bug can't
+damage the record of what you started with.
 
-Same relation each time, only the sentence changed:
+## What's new
 
-```
-face-to-face, facing another  Price and Jason face each other in the kitchen.
-— NOTHING —                   Price faces Jason, the counter behind her.
-— NOTHING —                   Price faces Jason with light behind them.
-— NOTHING —                   Price faces Jason and steps away from the door.
-— NOTHING —                   Price faces Jason, standing behind the table.
-```
+- **`casts.json`** — a cast is *who is in a story*: main character, persona,
+  supporting cast, with all their tags, anatomy, looks, states and aliases.
+- **`chat_cast.json`** — which cast a chat is using.
+- **One seam.** `castSourceFor` decides whether a chat's people come from a cast
+  or from the preset. Everything downstream is unchanged.
 
-In prose full of furniture, those tags have been vanishing constantly.
+## Nothing changes yet — deliberately
 
-## The change
+A chat with no cast bound behaves **exactly** as it did before. Same people, same
+prompts, same everything. That's the whole reason this is safe to ship on its
+own: the machinery is in place and inert until part 2 gives you a way to bind a
+chat to a cast.
 
-`behind` now needs a **person** on both sides — a person verb before it, and not
-a piece of scenery after. `away from` needs a person after it. Everything that
-genuinely means "these two are not front-to-front" still vetoes:
+The migration runs on init, is idempotent, and creates one cast per preset that
+has people in it.
 
-| still suppresses | no longer suppresses |
-|---|---|
-| takes her **from behind** | the counter **behind her** |
-| **stands behind** Jason | **standing behind** the table |
-| **faces away** from Jason | light **behind** them |
-| **turns away** from him | steps **away from the** door |
-| **steps away from** Jason | moving **away from the** wall |
-| back is turned, over her shoulder | |
+## The failure I was most worried about
 
-The 0.60.0 bug stays fixed — that's asserted separately, because giving it back
-while fixing this would be the obvious way to make things worse.
+Not deletion — **reversion**. You fix a tag in a cast, init runs again, and the
+preset's stale copy overwrites your correction. That would look like the app
+eating your edits at random.
 
-## Two things the tests caught
-
-- **"presses" and "crouches" take `-es`, not `-s`.** My verb pattern missed both.
-- **"standing behind the table" is the same scenery problem one level down** — I
-  fixed `away from` for scenery and then wrote `behind` without the same guard.
-  The test failed on exactly that sentence.
+The migration never touches a cast that already exists. Rename it, rewrite every
+tag in it, and a hundred later inits leave it alone.
 
 ## Verification
 
-**56 suites · 2,292 assertions · all green.** 22 new.
+**57 suites · 2,357 assertions · all green.** 65 new in `cast2.mjs`, most of them
+about your data specifically: every field of a fully-loaded profile asserted
+individually through the migration — anchor, prompt name, count tag, appearance,
+default outfit, anatomy and its mode, noun, named flag, appearance states, looks,
+partial features, visual aliases, library links, supporting cast.
 
-Mutation-tested three ways, all caught: bare `behind` restored (4 failures),
-`away from` loosened back to scenery (3), person-behind-person no longer vetoing
-(3).
+Mutation-tested four ways: migration overwriting an edited cast (3 failures),
+backup overwritten on every init (1), the seam bypassed (3), shallow copy sharing
+references with the preset (4).
 
-## Now go measure it
+**That last one escaped the first time.** My deep-copy test was written against
+the host mock, which clones on every read and write — so aliasing was invisible
+and removing the spreads passed clean. It's tested against the function directly
+now, and the same mutation fails four.
 
-You have seeds. Take a two-character scene, generate on 0.66 and on 0.75 at the
-same seed, and look. That's the first time this has been answerable by anything
-other than me guessing at code.
+## What's next
 
-If the merging is still there, this wasn't the cause and I'll say so.
+- **Part 2** — the Cast tab, binding a chat to a cast, and `[LUMICAST]` filling
+  the chat's cast instead of a global list.
+- **Part 3** — wardrobe keyed by chat + cast, so changing visual presets stops
+  moving your characters' clothes. Then cast fields come out of the preset editor.
+
+You can install this now or wait for part 2 — it does nothing visible either way,
+which is the point.
