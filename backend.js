@@ -3756,8 +3756,15 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   const outfit = subject.outfit.length ? merged.outfit : baseOutfit
   const who = (profile && profile.anchor) || subject.ref
   if (!subject.outfit.length && rememberedOutfit.length) {
-    trace(`outfit continuity · ${who}`, 'applied',
-      `the passage did not describe clothing, so what she was last seen in was kept: ${rememberedOutfit.join(', ')}`)
+    // Reports what SURVIVED, not what was restored. It used to name the restored
+    // list, so a wardrobe full of things that are not clothing read as "kept:
+    // white shirt in hands, hickey on collarbone" while the outfit was in fact
+    // empty — the trace described the intent and the prompt did the opposite.
+    const survived = (outfit || []).filter((tag) => !isNotClothing(tag))
+    trace(`outfit continuity · ${who}`, survived.length ? 'applied' : 'warn',
+      survived.length
+        ? `the passage did not describe clothing, so what she was last seen in was kept: ${survived.join(', ')}`
+        : `nothing in the wardrobe was wearable (${rememberedOutfit.join(', ') || 'empty'}), so she is wearing nothing`)
   } else if (merged.restored.length || merged.corrected.length) {
     const parts = []
     if (merged.corrected.length) parts.push(`re-worded garment(s) put back to what was established: ${merged.corrected.join('; ')}`)
@@ -3792,7 +3799,20 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
     trace(`look \u00b7 ${who}`, 'warn',
       `the parser asked for look “${lookReport.unmatchedRequest}”, which is not defined — ignored`)
   }
-  const nudeNow = statesNude(outfit, appearance, subject)
+  // statesNude looks for a STATED bare tag. An empty outfit states nothing, so a
+  // character the filters have just stripped down to nothing did not count as
+  // nude and the anatomy gate stayed shut — which is exactly what happened once
+  // 0.70.0 correctly threw "white shirt in hands" out of the wardrobe: outfit
+  // went to zero, and she still rendered without the anatomy the parser had
+  // explicitly marked visible.
+  //
+  // Wearing nothing IS being nude, in an explicit scene, when the parser said so.
+  // All three conditions are required: no garments at all, safety already nsfw or
+  // explicit, and anatomy_visible set deliberately by the parser.
+  const wearingNothing = !(outfit || []).length &&
+    ['nsfw', 'explicit'].includes((sceneForAnatomy && sceneForAnatomy.safety) || '') &&
+    !!(subject && subject.anatomyVisible)
+  const nudeNow = statesNude(outfit, appearance, subject) || wearingNothing
   const anatomyAllowed = profile && (
     profile.anatomyMode === 'always' ||
     (profile.anatomyMode === 'relevant' && subject.anatomyVisible &&
