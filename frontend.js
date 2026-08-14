@@ -3307,9 +3307,19 @@ img[class*="inlineImage"] {
       const name = String(row.name || row.ref).replace(/[<>&]/g, '')
       const tags = String(row.tags || '').replace(/"/g, '&quot;')
       const hint = row.tags ? '' : (row.fallback ? `falls back to: ${String(row.fallback).replace(/[<>&]/g, '')}` : 'nothing recorded')
+      // A story-declared character can be removed; one you wrote by hand is only
+      // unlinked from this preset. The mark says which, so the button is never a
+      // surprise. "any chat" means it predates chat scoping and cannot be
+      // attributed — it will keep showing up everywhere until it goes.
+      const mark = row.unattributed ? '<span title="declared by a story, but before chat scoping existed — appears in every chat until removed" style="opacity:.55">  (any chat)</span>'
+        : row.declared ? '<span title="declared by this story" style="opacity:.55">  (story)</span>' : ''
+      const remove = row.id
+        ? `<button class="ld-btn ld-compact" data-act="wardrobe-drop" data-id="${row.id}" data-name="${name}" data-declared="${row.declared ? '1' : ''}" title="${row.declared ? 'Delete this character — the story invented it' : 'Unlink from this preset; the character itself is kept'}" style="padding:2px 7px">×</button>`
+        : ''
       return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
-        <span style="min-width:96px;font-size:12px;opacity:.8">${name}${row.orphan ? ' *' : ''}</span>
+        <span style="min-width:96px;font-size:12px;opacity:.8">${name}${row.orphan ? ' *' : ''}${mark}</span>
         <input class="ld-wardrobe-input" data-ref="${row.ref}" style="flex:1" value="${tags}" placeholder="${hint}" />
+        ${remove}
       </div>`
     }).join('') + '<button class="ld-btn ld-compact" data-act="wardrobe-save" style="margin-top:4px">Save wardrobe</button>'
   }
@@ -3350,6 +3360,23 @@ img[class*="inlineImage"] {
   // The save button is created by renderWardrobeRows, so the listener is delegated.
   if ($('.ld-wardrobe-rows')) {
     $('.ld-wardrobe-rows').addEventListener('click', async (event) => {
+      const drop = event.target.closest('[data-act="wardrobe-drop"]')
+      if (drop) {
+        const name = drop.getAttribute('data-name') || 'this character'
+        const declared = !!drop.getAttribute('data-declared')
+        const question = declared
+          ? `Delete ${name}? The story invented this one, so nothing you wrote is lost.`
+          : `Remove ${name} from this preset? The character itself is kept in the Characters tab.`
+        if (!window.confirm(question)) return
+        try {
+          const res = await call('wardrobe', { chatId: lastSeenChatId, remove: [drop.getAttribute('data-id')] }, 15000)
+          renderWardrobeRows(res.rows)
+          setStatus('.ld-wardrobe-status', `${name} removed.`, 'good')
+        } catch (e) {
+          setStatus('.ld-wardrobe-status', e.message, 'err')
+        }
+        return
+      }
       const button = event.target.closest('[data-act="wardrobe-save"]')
       if (!button) return
       const set = {}

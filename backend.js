@@ -1585,7 +1585,11 @@ function extractCastDeclarations(text) {
 // own context, so it cannot remember whom it already described and may declare the
 // same character twice with different hair. Durability belongs here, where the
 // record is, rather than in an instruction the model may not be able to follow.
-async function absorbCastDeclarations(messages, targetIndex, preset, window = 6) {
+// `chatId` is the fix for the leak Eric found: a character the story invents
+// belongs to the story that invented it. Before this it went into the preset's
+// cast list, the preset is global, and nothing ever took it out again — so every
+// character every chat ever declared showed up in every other chat forever.
+async function absorbCastDeclarations(messages, targetIndex, preset, chatId = '', window = 6) {
   if (!Array.isArray(messages) || !preset) return { added: [], skipped: [] }
   const start = Number.isInteger(targetIndex) ? Math.max(0, targetIndex - window) : 0
   const end = Number.isInteger(targetIndex) ? targetIndex : messages.length - 1
@@ -1620,9 +1624,14 @@ async function absorbCastDeclarations(messages, targetIndex, preset, window = 6)
         countTag: entry.countTag,
         appearanceTags: entry.appearance.join(', '),
         defaultOutfit: entry.outfit.join(', '),
-        // Recorded so the Characters tab can show where this came from, and so a
-        // profile you wrote is never mistaken for one the story invented.
+        // Recorded so a profile you wrote is never mistaken for one the story
+        // invented — and so removal can delete the story's inventions while never
+        // touching a character you typed in yourself.
         declaredByStory: true,
+        // Which story invented them. An entry without this is from before the
+        // scoping existed and cannot be attributed, so it stays visible
+        // everywhere, marked, until it is removed by hand.
+        declaredInChat: String(chatId || ''),
       },
       updatedAt: Date.now(),
     })
@@ -2883,6 +2892,24 @@ function castRefFor(anchor, index, taken) {
   return unique
 }
 
+// Who is allowed in this chat.
+//
+// A character you added by hand in the Characters tab is a deliberate choice and
+// stays global — you picked them, so they are yours everywhere. A character the
+// STORY invented belongs to the story that invented it, or the cast of every
+// chat is the union of the cast of all chats, which is what was happening.
+//
+// An entry declared before this scoping existed carries no chat and cannot be
+// attributed after the fact. Guessing would be worse than admitting it, so it
+// stays visible everywhere and the panel marks it for removal.
+function castMemberBelongsHere(entry, chatId) {
+  const profile = (entry && entry.profile) || {}
+  if (!profile.declaredByStory) return true
+  const declaredIn = String(profile.declaredInChat || '')
+  if (!declaredIn) return true
+  return declaredIn === String(chatId || '')
+}
+
 async function getStoryProfiles(preset, settings, userId, chatId) {
   const needsLibrary = !!(preset.characterLibraryId || (Array.isArray(preset.castLibraryIds) && preset.castLibraryIds.length))
   const characterLibrary = needsLibrary ? await getCharacters() : []
@@ -2924,9 +2951,17 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
     const linked = characterLibrary.find((item) => item && item.id === castIds[index])
     if (!linked || !linked.profile) continue
     if (linked.id === preset.characterLibraryId) continue // already the main character
+    if (!castMemberBelongsHere(linked, chatId)) continue
     const ref = castRefFor(linked.profile.anchor || linked.name, index, takenRefs)
     const profile = normalizeProfile(linked.profile, linked.profile.appearanceTags || '', ref)
-    cast.push(await resolveProfile(profile, userId, chatId))
+    const resolved = await resolveProfile(profile, userId, chatId)
+    // Provenance, additively. The compiler reads named fields and ignores these;
+    // the wardrobe panel needs them to know what it may remove and what it must
+    // never touch.
+    resolved.libraryId = linked.id
+    resolved.declaredByStory = !!linked.profile.declaredByStory
+    resolved.declaredInChat = String(linked.profile.declaredInChat || '')
+    cast.push(resolved)
   }
 
   return {
@@ -8378,7 +8413,7 @@ async function scanStoryCore(userId, options = {}) {
   // The story may have introduced someone. Read that before compiling, so the new
   // profile is locked for this very image rather than the next one.
   try {
-    const absorbed = await absorbCastDeclarations(messages, targetIndex, preset)
+    const absorbed = await absorbCastDeclarations(messages, targetIndex, preset, String(chatId || ''))
     if (absorbed.added.length) {
       spindle.log.info('[lumidraw] the story declared new cast: ' + absorbed.added.join(', ') +
         ' — saved to the Characters tab and linked to "' + preset.name + '"')
@@ -9593,7 +9628,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           try {
             const read = await fetchMessages(userId, chatId)
             const messages = read.messages || []
-            const absorbed = await absorbCastDeclarations(messages, null, preset)
+            const absorbed = await absorbCastDeclarations(messages, null, preset, chatId)
             added = absorbed.added || []
             spindle.log.info(`[lumidraw] wardrobe scan read ${messages.length} message(s)` +
               (added.length ? ` and adopted ${added.join(', ')}` : ' and found no new cast declarations'))
@@ -9602,6 +9637,35 @@ spindle.onFrontendMessage(async (payload, userId) => {
             spindle.log.info(`[lumidraw] wardrobe scan could not read the chat: ${error.message}`)
           }
         }
+        // Removing a cast member. The rule that keeps this safe: a character the
+        // STORY invented is deleted outright, because nothing of yours is in it.
+        // A character YOU added is only unlinked from this preset — never
+        // deleted, because you wrote it and I have no business throwing it away.
+        let removed = []
+        if (Array.isArray(payload.remove) && payload.remove.length && preset) {
+          const wanted = new Set(payload.remove.map((id) => String(id || '').trim()).filter(Boolean))
+          const characters = await getCharacters()
+          const keepIds = (preset.castLibraryIds || []).filter((id) => !wanted.has(String(id)))
+          const doomed = characters.filter((item) => item && wanted.has(String(item.id)) &&
+            item.profile && item.profile.declaredByStory)
+          if (doomed.length) {
+            await saveCharacters(characters.filter((item) => !doomed.includes(item)))
+          }
+          if (keepIds.join('|') !== (preset.castLibraryIds || []).join('|')) {
+            const all = await getPresets()
+            const index = all.findIndex((item) => item && item.name === preset.name)
+            if (index >= 0) {
+              all[index] = { ...all[index], castLibraryIds: keepIds }
+              await savePresets(all)
+              preset.castLibraryIds = keepIds
+            }
+          }
+          removed = [...wanted]
+          spindle.log.info(`[lumidraw] wardrobe removed ${removed.length} cast member(s)` +
+            (doomed.length ? `; ${doomed.map((item) => item.name).join(', ')} were the story's and were deleted` : '') +
+            `; the rest were only unlinked from "${preset.name}"`)
+        }
+
         const entry = await readSceneMemory(chatId, presetName)
         const profiles = preset ? await getStoryProfiles(preset, settings, userId, chatId) : null
 
@@ -9630,6 +9694,14 @@ spindle.onFrontendMessage(async (payload, userId) => {
             name: profile.promptName || profile.anchor || profile.ref,
             tags: (worn[profile.ref] || []).join(', '),
             fallback: (profile.defaultOutfit || []).join(', '),
+            // Only cast members carry a library id, so only they are removable —
+            // the main character and the persona come from the preset itself and
+            // there is nothing sensible to remove them from.
+            id: profile.libraryId || '',
+            declared: !!profile.declaredByStory,
+            // Declared before the scoping existed, so it cannot be attributed to
+            // a chat and will keep appearing in all of them until removed.
+            unattributed: !!profile.declaredByStory && !profile.declaredInChat,
           })
         }
         // Anything recorded against a ref with no profile — shown so nothing is
@@ -9638,7 +9710,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           if (rows.some((row) => row.ref === ref)) continue
           rows.push({ ref, name: ref, tags: (tags || []).join(', '), fallback: '', orphan: true })
         }
-        reply = ok(payload, requestId, { rows, chatId, preset: presetName, added, scanError })
+        reply = ok(payload, requestId, { rows, chatId, preset: presetName, added, scanError, removed })
         break
       }
 
