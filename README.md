@@ -1,95 +1,82 @@
-# LumiDraw Studio 0.66.0 — retries that differ, anatomy that holds, and a way to show me
+# LumiDraw Studio 0.68.0 — the missing half of the act
 
-Three things, and the third exists because of the point you made.
+Your report found a real bug, and it's very likely the reason the positioning was
+wrong. It also caught a flaw in the report itself.
 
-## 1. Re-parse was sending the identical request
+## What the report showed
 
-Not the model being stubborn. `reparseSourceMessage` rebuilt byte-for-byte the
-same instruction, with the same passage, to the same model. **The button said
-"try again"; the request said "do it again."**
+```
+character  anatomy "penis"   profileAnatomy "penis"   anatomyVisible true
+persona    anatomy "none"    profileAnatomy "penis"   anatomyVisible true
+```
 
-A parser has no memory between calls, so the only way to ask for something
-different is to show it what it already produced and say that was rejected. It
-now does exactly that — the previous prompt comes out of the history entry and
-goes back as a rejected attempt.
+**The receiving partner's anatomy wasn't in the prompt at all.**
 
-It escalates, too:
+The parser did its job — it set `anatomy_visible: true` for him. The gate then
+threw it away. `anatomyMode: relevant` needs one of two things: the subject is
+nude, or the passage names the anatomy *and* attributes it to him possessively.
+He's in jeans with an open fly, so not nude; and prose like "she took him in her
+mouth" names no anatomy at all.
 
-- **First retry** — read the same moment again, produce a *different* scene:
-  reconsider the body arrangement, who is where, the contact points, the framing.
-- **Second and beyond** — a small variation isn't enough; choose a **different
-  moment** of the passage entirely.
+So LumiDraw asked Anima for an image of an act, with the thing the act is
+performed **on** absent from the description. The model had no anchor for what
+was physically happening between the two bodies — which is exactly when they come
+out arranged wrong. You were seeing the downstream symptom of a missing noun.
 
-Every retry also points the parser at the **relations**, since an unusual
-arrangement is the most likely thing to have been read wrong.
+## The fix
 
-Attempts are counted per image, so pressing the button again pushes harder rather
-than rerolling the same dice. The status line tells you which attempt you're on.
+**The act itself is the ownership evidence the gate was looking for.** If the
+scene names fellatio and he is the target of it, whose anatomy is involved isn't
+ambiguous.
 
-## 2. The futanari with a vagina
+`anatomyRequiredByAct` now satisfies the gate when the scene is nsfw or explicit,
+a relation names an act that necessarily involves genitals, and the subject is a
+party to that relation. Scope is deliberate:
 
-There was a real gap. `anatomyDefence` guards a penis **bleeding onto a second,
-ordinary female subject**, and it deliberately exempts a character whose own
-identity is futanari — negating "futanari" on a futanari is negating who she is.
-That's correct, and it left the solo case completely uncovered.
+- **Both actor and target count.** In these acts at least one participant's
+  anatomy is the subject of the image.
+- **An ordinary relation doesn't qualify.** "holds the hand of" in an explicit
+  scene changes nothing — otherwise every embrace would expose somebody.
+- **Safety still gates it.** Safe and sensitive scenes never reach this path.
+- The parser must still have set `anatomy_visible`, and the profile must still
+  have saved anatomy. This loosens one of three conditions, not all of them.
 
-**Nothing in your prompt has ever said "not a vagina."** Anima's prior for a
-feminine body in an explicit scene supplies one unless told otherwise, and an
-unusual position gives it more room to fall back on that prior — which is exactly
-when you see it.
+## The flaw in my own diagnostic
 
-So there's now a second, separate defence that negates the female-genital family
-when **every** subject whose anatomy is being drawn has penis-family anatomy.
-Scope is deliberately tight:
+The report told you `camera: ["pov", "from above", "foreshortening"]` and I
+started building a case that `pov` was fighting your described arrangement.
 
-- A scene with a futanari **and** an ordinary woman negates nothing — her body is
-  not the error.
-- A character *defined* with female anatomy is protected even in a frame where
-  her anatomy isn't drawn, because a negative applies to the whole image.
-- Safe and sensitive scenes never get genital negatives at all.
+Then I checked where the report is captured: **before the POV filter runs.** With
+two subjects both described as visible figures, the compiler had almost certainly
+already dropped `pov` — the rule for that has existed for a while. I was reading
+the parser's *request* and treating it as what was *sent*, off my own instrument.
 
-The two defences stay separate and neither absorbed the other.
+The report now gives both, because the difference is the diagnosis:
 
-## 3. A diagnostic you can paste without pasting your story
+```
+"cameraRequested": ["pov", "from above", "foreshortening"],
+"cameraSent":      ["from above", "foreshortening"]
+```
 
-You said it plainly: I make a fix, you send the app's actual output, and my
-diagnosis changes. That happened three times tonight — the OOC gate, the swipe,
-the cloud model. Every one of those, my reading of the code was wrong and the
-output corrected it.
+If those differ, a rule fired. If they don't, it didn't. Either way you can see
+it, which you couldn't before.
 
-The answer to "this scene is explicit" is **not** for me to trust the code
-reading more. The code reading is what kept being wrong.
+## Worth trying on that scene
 
-**Settings → Advanced → Diagnostics → "Copy report for Claude (no story text)"**
-
-It emits structure only:
-
-- safety level, aspect, camera tags
-- per subject: ref, count tag, **anatomy family** (`penis` / `female` / `none`),
-  the profile's family, anatomy mode, whether anatomy was visible, active look,
-  appearance state, and **counts** of outfit and appearance tags
-- relations as shape only — has actor, has target, has action, how many details
-- the negative prompt, which is where an anatomy failure shows up: either the
-  guard didn't fire, or it fired and the model ignored it
-- the compile trace, with detail kept for structural rules and **omitted** for
-  anything that could carry prose
-
-No passage, no scene statement, no caption, no prompt, no relation text. Tested:
-the suite builds a report from a scene containing an explicit relation and
-asserts none of the outfit, appearance, or relation strings appear in the output.
-
-That turns "we fly blind" into "we fly on instruments." If the next image is
-wrong, send me that and I can tell you whether the guard fired.
+Re-parse it once on 0.68.0. If the report now shows `persona anatomy "penis"`,
+the missing noun is back and the arrangement has a fair chance of landing. If it
+still shows `"none"`, send me the report again — the next suspect is the parser
+not marking a relation with an act term, and that's visible in `hasAction`.
 
 ## Verification
 
-**52 suites · 1,992 assertions · all green.** 52 new in `retry.mjs`.
+**52 suites · 2,020 assertions · all green.**
 
-Mutation-tested: solo futanari unprotected, retry stops escalating, and the
-ordinary-woman exemption removed.
+Mutation-tested: the act gate removed, and the act filter widened so any relation
+qualifies. Both caught.
 
-**That last one initially passed, which meant the guard was dead code** — the
-`allPenis` check already covered it. Rather than leave a check that couldn't
-fail, I made it load-bearing: it now reads the *saved profile* rather than the
-rendered descriptor, which is the genuinely different question. Same class of
-thing as the `if (!name) return null` I deleted in 0.64.0.
+One of my new assertions asserted the opposite of its own name — *"somebody not
+in the relation does not"* was checking that they **did**. The function was right;
+the test was wrong. That's the fourth test tonight that was wrong rather than the
+code, and the reason to keep saying so is that a green number is only worth what
+the assertions behind it are.

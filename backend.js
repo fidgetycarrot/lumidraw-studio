@@ -2375,6 +2375,47 @@ function statesNude(outfit, appearance, subject) {
   return parts.some((tag) => NUDE_STATE_RE.test(String(tag || '')))
 }
 
+// The gate was too strict for the scene it matters most in.
+//
+// From a real report: an explicit fellatio scene, two subjects. The futanari's
+// anatomy resolved (she is nude, so nudeNow carried it). The RECEIVING partner's
+// did not — profileAnatomy "penis", anatomyVisible true, rendered anatomy
+// "none". He is in jeans with an open fly, so nudeNow is false, and the prose
+// says "she took him in her mouth" rather than naming the anatomy possessively,
+// so anatomyExplicitlyMentioned with requireOwnership found nothing.
+//
+// The result is an image of an act with the thing the act is performed ON absent
+// from the prompt entirely. The model then has no anchor for what is physically
+// happening, which is exactly when the bodies come out arranged wrong.
+//
+// The act itself is the ownership evidence requireOwnership was looking for. If
+// the scene names fellatio and he is the target of it, whose anatomy is involved
+// is not ambiguous.
+const ANATOMY_ACT_RE = new RegExp([
+  '\\bfellatio\\b', '\\birrumatio\\b', '\\bdeepthroat\\w*\\b', '\\bblow ?job\\b',
+  '\\boral sex\\b', '\\bcunnilingus\\b', '\\bpaizuri\\b', '\\bhandjob\\b',
+  '\\bpenetrat\\w+\\b', '\\bvaginal\\b', '\\banal sex\\b', '\\bintercourse\\b',
+  '\\bcowgirl position\\b', '\\bmating press\\b', '\\bsex\\b',
+].join('|'), 'i')
+
+// True when the scene names an act that necessarily involves this subject's
+// genitals AND this subject is a party to it. Both actor and target count: in
+// the acts above, at least one participant's anatomy is the subject of the
+// image, and the parser has already had to set anatomy_visible for the gate to
+// be consulted at all.
+function anatomyRequiredByAct(subject, scene) {
+  if (!scene || !['nsfw', 'explicit'].includes(scene.safety)) return false
+  const ref = String((subject && subject.ref) || '')
+  if (!ref) return false
+  const statement = String(scene.sceneStatement || '')
+  const relations = (scene.relations || []).filter((relation) =>
+    ANATOMY_ACT_RE.test(`${(relation && relation.action) || ''} ${((relation && relation.details) || []).join(' ')}`))
+  if (relations.some((relation) => relation.actor === ref || relation.target === ref)) return true
+  // A solo statement naming the act, with no relation carrying it.
+  if (ANATOMY_ACT_RE.test(statement) && (scene.subjects || []).length === 1) return true
+  return false
+}
+
 function anatomyExplicitlyMentioned(anatomyTags, passage, anchor = '', requireOwnership = false) {
   const text = String(passage || '')
   if (!text.trim()) return false
@@ -3227,6 +3268,37 @@ function synthesizeRelation(subjects) {
   return { actor: actor.ref, target: target.ref, action, details: [], synthesized: true }
 }
 
+// Images are INSERTED at their anchor's position in the prose, but they were
+// NUMBERED by the parser's array order — and nothing made those agree. So the
+// moment that appears first on screen could be "image 2" everywhere in the app:
+// in the scan status, in the history, and in the picker used to redo one. Asking
+// to redo the first moment then redid the second.
+//
+// The parser is not told to return moments in passage order and there is no
+// reason it should — it reads the whole passage before writing anything. Sorting
+// here is the fix, not a stricter instruction, because it holds however the
+// model chooses to answer.
+function orderScenesByPassage(items, passage) {
+  const text = String(passage || '')
+  const lower = text.toLowerCase()
+  const positionOf = (item) => {
+    const anchor = String((item && item.anchor) || '').trim()
+    if (!anchor) return Number.MAX_SAFE_INTEGER
+    let at = text.indexOf(anchor)
+    if (at < 0) at = lower.indexOf(anchor.toLowerCase())
+    // An anchor that is not in the passage cannot be placed by position. It goes
+    // last rather than first, so a hallucinated anchor never renumbers the real
+    // moments ahead of it.
+    return at < 0 ? Number.MAX_SAFE_INTEGER : at
+  }
+  // Decorated sort: ties keep the parser's own order, which is the only other
+  // signal available.
+  return (items || [])
+    .map((item, index) => ({ item, index, at: positionOf(item) }))
+    .sort((a, b) => (a.at - b.at) || (a.index - b.index))
+    .map((entry) => entry.item)
+}
+
 function assessStructuredScene(scene) {
   const source = scene && typeof scene === 'object' ? scene : {}
   const subjects = Array.isArray(source.subjects) ? source.subjects : []
@@ -3568,7 +3640,9 @@ function nameReadsAsTag(name) {
   return ''
 }
 
-function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false, rememberedOutfits = null, rememberedLooks = null) {
+// `scene` is optional and last: every existing caller keeps working, and the
+// anatomy gate simply has no act evidence when it is absent.
+function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false, rememberedOutfits = null, rememberedLooks = null, sceneForAnatomy = null) {
   const profile = profileForSubject(subject, profiles)
   if (profile) {
     if (profile.promptName) {
@@ -3686,7 +3760,8 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   const anatomyAllowed = profile && (
     profile.anatomyMode === 'always' ||
     (profile.anatomyMode === 'relevant' && subject.anatomyVisible &&
-      (anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, profile.anchor, requireAnatomyOwner) || nudeNow))
+      (anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, profile.anchor, requireAnatomyOwner) ||
+        nudeNow || anatomyRequiredByAct(subject, sceneForAnatomy)))
   )
   if (profile && profile.anatomyMode === 'relevant' && subject.anatomyVisible && nudeNow &&
       !anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, profile.anchor, requireAnatomyOwner)) {
@@ -5978,7 +6053,7 @@ function anatomyFamily(tags) {
   return 'other'
 }
 
-function redactedDiagnostic(scene, descriptors) {
+function redactedDiagnostic(scene, descriptors, extras = {}) {
   const steps = traceSnapshot()
   return {
     version: (spindle.manifest && spindle.manifest.version) || '',
@@ -6005,7 +6080,11 @@ function redactedDiagnostic(scene, descriptors) {
       hasAction: !!(relation && relation.action),
       detailCount: ((relation && relation.details) || []).length,
     })),
-    camera: ((scene && scene.camera) || []).slice(0, 6),
+    // Both, because the DIFFERENCE is the diagnosis. Reporting only what the
+    // parser asked for made a dropped pov look like a kept one, and sent me
+    // looking for a bug the compiler had already fixed.
+    cameraRequested: ((scene && scene.camera) || []).slice(0, 6),
+    cameraSent: (extras.cameraSent || []).slice(0, 6),
     place: placeSnapshot(),
     // The negative prompt is a tag list, and it is where an anatomy failure shows
     // up — either the guard did not fire, or it fired and the model ignored it.
@@ -6433,7 +6512,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   const placeReport = {}
   const matchedPlace = selectPlace(places, [sourcePassage, contextText].filter(Boolean).join('\n'), scene.setting, placeReport)
 
-  let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true, rememberedOutfits, rememberedLooks)).map((item) => ({
+  let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true, rememberedOutfits, rememberedLooks, scene)).map((item) => ({
     ...item,
     // An unprofiled subject's name comes straight from the story, so a coined
     // creature gets grounded in a noun the model has actually been trained on.
@@ -6478,7 +6557,6 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     trace('garment defence', 'applied',
       `negating ${LAST_COMPILE_NEGATIVES.join(', ')} — nobody in this scene wears them and the model's prior reaches for them`)
   }
-  LAST_DIAGNOSTIC = redactedDiagnostic(scene, descriptors)
   const anatomyNegatives = anatomyDefence(descriptors, scene)
   const femaleNegatives = femaleAnatomyDefence(descriptors, scene)
   if (femaleNegatives.length) {
@@ -6700,6 +6778,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   }
   const repaired = repairCameraTags(povFiltered, scene, descriptors)
   const cameraTags = animaTagList(repaired.tags)
+  LAST_DIAGNOSTIC = redactedDiagnostic(scene, descriptors, { cameraSent: cameraTags })
   if (repaired.note) spindle.log.info('[lumidraw] camera repair · ' + repaired.note)
   trace('camera repair', repaired.note ? 'applied' : 'clean', repaired.note || 'framing and view angles already consistent')
   const groundingText = [sourcePassage, contextText].filter(Boolean).join('\n')
@@ -8319,7 +8398,10 @@ async function scanStoryCore(userId, options = {}) {
 
       const mds = []
       const debugEntries = []
-      const limitedParsed = parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2)))
+      // Ordered by where each anchor falls in the passage BEFORE anything is
+      // numbered, so "image 1 of 3" means the first moment of the scene.
+      const limitedParsed = orderScenesByPassage(
+        parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2))), passage)
       const acceptedParsed = []
       for (let i = 0; i < limitedParsed.length; i++) {
         const item = limitedParsed[i]
@@ -8714,7 +8796,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
 
   const results = []
   if (!parseError) {
-    for (const item of parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2)))) {
+    for (const item of orderScenesByPassage(parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2))), passage)) {
       const assessment = assessStructuredScene(item.scene)
       if (!assessment.valid) {
         results.push({ ok: false, anchor: item.anchor || '', note: `Incomplete scene — ${assessment.summary}.` })
