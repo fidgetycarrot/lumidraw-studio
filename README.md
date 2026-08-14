@@ -1,95 +1,90 @@
-# LumiDraw Studio 0.66.0 — retries that differ, anatomy that holds, and a way to show me
+# LumiDraw Studio 0.70.0 — clothes can come off now
 
-Three things, and the third exists because of the point you made.
+Three fixes for one bug: **nothing in the compiler had ever read the passage for
+clothing being removed.**
 
-## 1. Re-parse was sending the identical request
+The rule is "silence means unchanged", and the wardrobe restores what she was
+last seen in. That's right for *"she's still in her jeans"* and wrong in exactly
+one direction for *"she pulled her shirt off"* — undressing is narrated as an
+**action**, the parser has a perfectly good field for actions, so it writes the
+pose and leaves `outfit` empty. Silence. She gets dressed again.
 
-Not the model being stubborn. `reparseSourceMessage` rebuilt byte-for-byte the
-same instruction, with the same passage, to the same model. **The button said
-"try again"; the request said "do it again."**
+Which is why the failure was always the same way round: **stuck dressed, never
+stuck naked**, and obvious in your prose while invisible to the app.
 
-A parser has no memory between calls, so the only way to ask for something
-different is to show it what it already produced and say that was rejected. It
-now does exactly that — the previous prompt comes out of the history entry and
-goes back as a rejected attempt.
+## 1. The compiler reads removal
 
-It escalates, too:
+`undressedZones` reads the passage for what came off:
 
-- **First retry** — read the same moment again, produce a *different* scene:
-  reconsider the body arrangement, who is where, the contact points, the framing.
-- **Second and beyond** — a small variation isn't enough; choose a **different
-  moment** of the passage entirely.
+- *naked, nude, stripped, undressed* → everything
+- *pulled her shirt off* → the top zone
+- *kicked off her sneakers* → feet
+- *shoved her shorts down* → bottom
 
-Every retry also points the parser at the **relations**, since an unusual
-arrangement is the most likely thing to have been read wrong.
+Deliberately narrow. **"He took her hand"** isn't undressing, **"she pulled on a
+clean shirt"** isn't removal, and a garment merely *mentioned* in a neighbouring
+sentence isn't taken off — removal is matched per sentence so a cue in one clause
+can't claim a garment from another.
 
-Attempts are counted per image, so pressing the button again pushes harder rather
-than rerolling the same dice. The status line tells you which attempt you're on.
+A one-piece goes with any zone it covers: a dress can't survive *"he pulled the
+dress off her shoulders"* just because the cue named the top half.
 
-## 2. The futanari with a vagina
+## 2. The profile default is suppressed too
 
-There was a real gap. `anatomyDefence` guards a penis **bleeding onto a second,
-ordinary female subject**, and it deliberately exempts a character whose own
-identity is futanari — negating "futanari" on a futanari is negating who she is.
-That's correct, and it left the solo case completely uncovered.
+This is the part I got wrong on the first pass. Clearing the wardrobe wasn't
+enough — the fallback chain just walked on to her **default outfit** and dressed
+her again. The undress was being defeated one line below where I'd fixed it.
 
-**Nothing in your prompt has ever said "not a vagina."** Anima's prior for a
-feminine body in an explicit scene supplies one unless told otherwise, and an
-unusual position gives it more room to fall back on that prior — which is exactly
-when you see it.
+Removal is now applied to whichever source is selected, so wardrobe *and* default
+both lose the garments. And a fully bare subject with nothing reported gets
+**`nude` stated** rather than an empty outfit: empty says nothing and lets the
+model choose, but the passage said something, so the prompt should too.
 
-So there's now a second, separate defence that negates the female-genital family
-when **every** subject whose anatomy is being drawn has penis-family anatomy.
-Scope is deliberately tight:
+## 3. The wardrobe stops eating things that aren't clothes
 
-- A scene with a futanari **and** an ordinary woman negates nothing — her body is
-  not the error.
-- A character *defined* with female anatomy is protected even in a frame where
-  her anatomy isn't drawn, because a negative applies to the whole image.
-- Safe and sensitive scenes never get genital negatives at all.
+Your record held **"white shirt in hands"** and **"hickey on collarbone"**.
+Neither is worn. The first got in because:
 
-The two defences stay separate and neither absorbed the other.
+```js
+if (GARMENT_RE.test(text)) return false   // sees "shirt", stops looking
+```
 
-## 3. A diagnostic you can paste without pasting your story
+"in hands" explicitly says it *isn't* being worn, and nothing read that far. Then
+`garmentSupported` — *"anything already established is grounded by definition"* —
+made it certify itself forever. That's the sealed loop of 0.56 in a different
+hat, and it's why the panel was the only cure.
 
-You said it plainly: I make a fix, you send the app's actual output, and my
-diagnosis changes. That happened three times tonight — the OOC gate, the swipe,
-the cloud model. Every one of those, my reading of the code was wrong and the
-output corrected it.
+Carried garments (*in hands, over one arm, draped, discarded, on the floor,
+clutched*) and skin marks (*hickey, handprint, welt, tan line*) are now checked
+**before** the garment word, because the garment word winning is the entire
+problem.
 
-The answer to "this scene is explicit" is **not** for me to trust the code
-reading more. The code reading is what kept being wrong.
+## 4. The parser is told, but only when it matters
 
-**Settings → Advanced → Diagnostics → "Copy report for Claude (no story text)"**
+A block in the dynamic slot, emitted **only when a wardrobe record exists** —
+with nothing remembered there's nothing to wrongly restore:
 
-It emits structure only:
+> Silence means unchanged, so an outfit you leave empty means she is still
+> dressed. If the passage takes clothing off you MUST report the outfit — "nude",
+> "topless", "bottomless", or what remains. Putting the removal in pose or action
+> instead will put her clothes back on.
 
-- safety level, aspect, camera tags
-- per subject: ref, count tag, **anatomy family** (`penis` / `female` / `none`),
-  the profile's family, anatomy mode, whether anatomy was visible, active look,
-  appearance state, and **counts** of outfit and appearance tags
-- relations as shape only — has actor, has target, has action, how many details
-- the negative prompt, which is where an anatomy failure shows up: either the
-  guard didn't fire, or it fired and the model ignored it
-- the compile trace, with detail kept for structural rules and **omitted** for
-  anything that could carry prose
+## Still do this once
 
-No passage, no scene statement, no caption, no prompt, no relation text. Tested:
-the suite builds a report from a scene containing an explicit relation and
-asserts none of the outfit, appearance, or relation strings appear in the output.
-
-That turns "we fly blind" into "we fly on instruments." If the next image is
-wrong, send me that and I can tell you whether the guard fired.
+Clear Fanny's wardrobe line in the panel. The new checks stop *new* pollution;
+they don't retroactively clean what's already recorded, and "white shirt in
+hands" will keep being restored until it's gone.
 
 ## Verification
 
-**52 suites · 1,992 assertions · all green.** 52 new in `retry.mjs`.
+**53 suites · 2,072 assertions · all green.** 47 new in `undress.mjs`.
 
-Mutation-tested: solo futanari unprotected, retry stops escalating, and the
-ordinary-woman exemption removed.
+Mutation-tested four ways. Two findings worth naming:
 
-**That last one initially passed, which meant the guard was dead code** — the
-`allPenis` check already covered it. Rather than leave a check that couldn't
-fail, I made it load-bearing: it now reads the *saved profile* rather than the
-rendered descriptor, which is the genuinely different question. Same class of
-thing as the `if (!name) return null` I deleted in 0.64.0.
+- **One mutation "passed" because my escaping never applied it.** Re-run
+  properly, it failed. A mutation that doesn't mutate proves nothing, and I only
+  noticed by checking the source for the string I thought I'd changed.
+- **Another passed because the fix was redundant** — I'd applied removal in two
+  places, so deleting one changed nothing. That's the third decorative check I've
+  written tonight. There's now exactly one application point, and killing it
+  fails four assertions.

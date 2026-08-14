@@ -2375,6 +2375,58 @@ function statesNude(outfit, appearance, subject) {
   return parts.some((tag) => NUDE_STATE_RE.test(String(tag || '')))
 }
 
+// The gate was too strict for the scene it matters most in.
+//
+// From a real report: an explicit fellatio scene, two subjects. The futanari's
+// anatomy resolved (she is nude, so nudeNow carried it). The RECEIVING partner's
+// did not — profileAnatomy "penis", anatomyVisible true, rendered anatomy
+// "none". He is in jeans with an open fly, so nudeNow is false, and the prose
+// says "she took him in her mouth" rather than naming the anatomy possessively,
+// so anatomyExplicitlyMentioned with requireOwnership found nothing.
+//
+// The result is an image of an act with the thing the act is performed ON absent
+// from the prompt entirely. The model then has no anchor for what is physically
+// happening, which is exactly when the bodies come out arranged wrong.
+//
+// The act itself is the ownership evidence requireOwnership was looking for. If
+// the scene names fellatio and he is the target of it, whose anatomy is involved
+// is not ambiguous.
+const ANATOMY_ACT_RE = new RegExp([
+  '\\bfellatio\\b', '\\birrumatio\\b', '\\bdeepthroat\\w*\\b', '\\bblow ?job\\b',
+  '\\boral sex\\b', '\\bcunnilingus\\b', '\\bpaizuri\\b', '\\bhandjob\\b',
+  '\\bpenetrat\\w+\\b', '\\bvaginal\\b', '\\banal sex\\b', '\\bintercourse\\b',
+  '\\bcowgirl position\\b', '\\bmating press\\b', '\\bsex\\b',
+].join('|'), 'i')
+
+// True when the scene names an act that necessarily involves this subject's
+// genitals AND this subject is a party to it. Both actor and target count: in
+// the acts above, at least one participant's anatomy is the subject of the
+// image, and the parser has already had to set anatomy_visible for the gate to
+// be consulted at all.
+function anatomyRequiredByAct(subject, scene) {
+  if (!scene || !['nsfw', 'explicit'].includes(scene.safety)) return false
+  const ref = String((subject && subject.ref) || '')
+  if (!ref) return false
+  // The SCENE STATEMENT is where the act lives, and looking anywhere else was
+  // the first version's mistake. The parser is instructed to keep relation
+  // actions spatial — "straddles the lap of", "sits beside" — and to put the act
+  // in the statement using the clinical word: "[name] is performing fellatio on
+  // [name]." So a relation-only check almost never matched, and restricting the
+  // statement check to solo scenes excluded the two-person case it exists for.
+  const statement = String(scene.sceneStatement || '')
+  if (ANATOMY_ACT_RE.test(statement)) {
+    // Everyone in the scene is a party to the act the statement names. The gate
+    // still requires anatomy_visible from the parser and saved anatomy on the
+    // profile, so this is the third of three conditions rather than a bypass.
+    if ((scene.subjects || []).some((item) => String((item && item.ref) || '') === ref)) return true
+  }
+  // A relation carrying the act as well — rarer, but free to honour.
+  const relations = (scene.relations || []).filter((relation) =>
+    ANATOMY_ACT_RE.test(`${(relation && relation.action) || ''} ${((relation && relation.details) || []).join(' ')}`))
+  if (relations.some((relation) => relation.actor === ref || relation.target === ref)) return true
+  return false
+}
+
 function anatomyExplicitlyMentioned(anatomyTags, passage, anchor = '', requireOwnership = false) {
   const text = String(passage || '')
   if (!text.trim()) return false
@@ -3227,6 +3279,37 @@ function synthesizeRelation(subjects) {
   return { actor: actor.ref, target: target.ref, action, details: [], synthesized: true }
 }
 
+// Images are INSERTED at their anchor's position in the prose, but they were
+// NUMBERED by the parser's array order — and nothing made those agree. So the
+// moment that appears first on screen could be "image 2" everywhere in the app:
+// in the scan status, in the history, and in the picker used to redo one. Asking
+// to redo the first moment then redid the second.
+//
+// The parser is not told to return moments in passage order and there is no
+// reason it should — it reads the whole passage before writing anything. Sorting
+// here is the fix, not a stricter instruction, because it holds however the
+// model chooses to answer.
+function orderScenesByPassage(items, passage) {
+  const text = String(passage || '')
+  const lower = text.toLowerCase()
+  const positionOf = (item) => {
+    const anchor = String((item && item.anchor) || '').trim()
+    if (!anchor) return Number.MAX_SAFE_INTEGER
+    let at = text.indexOf(anchor)
+    if (at < 0) at = lower.indexOf(anchor.toLowerCase())
+    // An anchor that is not in the passage cannot be placed by position. It goes
+    // last rather than first, so a hallucinated anchor never renumbers the real
+    // moments ahead of it.
+    return at < 0 ? Number.MAX_SAFE_INTEGER : at
+  }
+  // Decorated sort: ties keep the parser's own order, which is the only other
+  // signal available.
+  return (items || [])
+    .map((item, index) => ({ item, index, at: positionOf(item) }))
+    .sort((a, b) => (a.at - b.at) || (a.index - b.index))
+    .map((entry) => entry.item)
+}
+
 function assessStructuredScene(scene) {
   const source = scene && typeof scene === 'object' ? scene : {}
   const subjects = Array.isArray(source.subjects) ? source.subjects : []
@@ -3568,7 +3651,9 @@ function nameReadsAsTag(name) {
   return ''
 }
 
-function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false, rememberedOutfits = null, rememberedLooks = null) {
+// `scene` is optional and last: every existing caller keeps working, and the
+// anatomy gate simply has no act evidence when it is absent.
+function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomyOwner = false, rememberedOutfits = null, rememberedLooks = null, sceneForAnatomy = null) {
   const profile = profileForSubject(subject, profiles)
   if (profile) {
     if (profile.promptName) {
@@ -3626,9 +3711,16 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   //
   // Precedence: what this passage says > what she was last seen in > her default.
   // A passage that does describe clothing still wins, so changing outfits works.
-  const rememberedOutfit = (!state || state.outfitPolicy !== 'omit') && !ANONYMOUS_REF_RE.test(subject.ref || '')
+  const rememberedRaw = (!state || state.outfitPolicy !== 'omit') && !ANONYMOUS_REF_RE.test(subject.ref || '')
     ? uniqueStrings(((rememberedOutfits && rememberedOutfits[subject.ref]) || []))
     : []
+  // Removal is applied ONCE, to whichever source ends up selected below — not
+  // here as well. Doing both was redundant: a wardrobe cleared here merely fell
+  // through to the profile default, which then had to be cleared anyway, so this
+  // copy could be deleted with no test failing. A check that cannot fail is
+  // decoration, and this file has produced two of those tonight already.
+  const undressed = { zones: undressedZones(sourcePassage), removed: [] }
+  const rememberedOutfit = rememberedRaw
 
   // A named Look sits between the passage and the wardrobe. It does not replace
   // the wardrobe — it SETS it, and only at the moment it becomes active.
@@ -3646,9 +3738,20 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   const lookChanged = !!look && look.name !== previousLook
   const lookOutfit = look ? uniqueStrings(look.outfit) : []
 
-  const baseOutfit = lookChanged && lookOutfit.length
+  const baseSelected = lookChanged && lookOutfit.length
     ? lookOutfit
     : (rememberedOutfit.length ? rememberedOutfit : (lookOutfit.length ? lookOutfit : inheritedOutfit))
+  // Applied to whatever was SELECTED, not only to the wardrobe. Clearing the
+  // remembered outfit alone left the fallback chain intact, so the profile
+  // default walked straight in and dressed her again — the undress was defeated
+  // one line further down than it was fixed.
+  const baseAfterUndress = undressRemembered(baseSelected, sourcePassage)
+  // A fully bare subject with nothing reported gets "nude" stated rather than an
+  // empty outfit. Empty says nothing and lets the model choose; the passage said
+  // something, so the prompt should too.
+  const baseOutfit = undressed.zones.includes('all') && !subject.outfit.length && !baseAfterUndress.outfit.length
+    ? ['nude']
+    : baseAfterUndress.outfit
   const merged = mergeOutfitByZone(subject.outfit, baseOutfit, sourcePassage)
   const outfit = subject.outfit.length ? merged.outfit : baseOutfit
   const who = (profile && profile.anchor) || subject.ref
@@ -3673,6 +3776,13 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   // Anima fills that gap from the censored end of its training rather than leaving
   // it blank. This is not the parser inventing anatomy: LumiDraw still supplies
   // only what the profile saved, and only when something in the scene said "nude".
+  const undressedAll = uniqueStrings([...undressed.removed, ...baseAfterUndress.removed])
+  if (undressedAll.length) {
+    trace(`undressed \u00b7 ${who}`, 'applied',
+      undressed.zones.includes('all')
+        ? `the passage says she is bare, so nothing was restored (dropped: ${undressedAll.join(', ')})`
+        : `the passage removes ${undressed.zones.join(', ')}, so ${undressedAll.join(', ')} was not restored`)
+  }
   if (look) {
     trace(`look \u00b7 ${who}`, lookChanged ? 'applied' : 'ran',
       lookChanged
@@ -3686,7 +3796,8 @@ function subjectDescriptor(subject, profiles, sourcePassage = '', requireAnatomy
   const anatomyAllowed = profile && (
     profile.anatomyMode === 'always' ||
     (profile.anatomyMode === 'relevant' && subject.anatomyVisible &&
-      (anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, profile.anchor, requireAnatomyOwner) || nudeNow))
+      (anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, profile.anchor, requireAnatomyOwner) ||
+        nudeNow || anatomyRequiredByAct(subject, sceneForAnatomy)))
   )
   if (profile && profile.anatomyMode === 'relevant' && subject.anatomyVisible && nudeNow &&
       !anatomyExplicitlyMentioned(profile.anatomy, sourcePassage, profile.anchor, requireAnatomyOwner)) {
@@ -5031,11 +5142,85 @@ function mergeOutfitByZone(reported, remembered, passage = '') {
   return { outfit: uniqueStrings([...worn, ...restored]), restored, corrected }
 }
 
+// ---------------------------------------------------------------------------
+// Undressing
+// ---------------------------------------------------------------------------
+//
+// The parser is told "silence means unchanged", and the wardrobe restores what
+// she was last seen in. That rule is right for "she is still in her jeans" and
+// wrong in exactly one direction for "she pulled her shirt off": undressing is
+// narrated as an ACTION, the parser has a perfectly good field for actions, so
+// it writes the pose and leaves outfit empty. Silence. She gets dressed again.
+//
+// Nothing in the compiler has ever read the passage for removal, so the failure
+// is always the same way round — stuck dressed, never stuck naked — which is why
+// it is obvious in the prose and invisible to the app.
+const UNDRESS_FULL_RE = /\b(?:naked|nude|stark naked|fully undressed|stripped bare|nothing on|not a stitch|bare skin|in the nude)\b/i
+// A removal verb, then up to a few words, then the garment. Deliberately narrow:
+// "took off" reads as removal, "took her hand" does not.
+const UNDRESS_VERB_RE = /\b(?:pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|strip(?:s|ped|ping)?|shrug(?:s|ged|ging)?|tug(?:s|ged|ging)?|yank(?:s|ed|ing)?|shove(?:s|d)?|push(?:es|ed|ing)?|kick(?:s|ed|ing)?|slip(?:s|ped|ping)?|work(?:s|ed|ing)?|toss(?:es|ed|ing)?|discard(?:s|ed|ing)?|shed(?:s|ding)?|drop(?:s|ped|ping)?|unbutton(?:s|ed|ing)?|unzip(?:s|ped|ping)?|unhook(?:s|ed|ing)?|unclasp(?:s|ed|ing)?|remove(?:s|d)?|take(?:s)?|took|lose(?:s)?|lost)\b[^.!?\n]{0,24}?\b(?:off|out of|down|away|aside)\b/i
+
+// Reads the passage for what came OFF. Returns the zones to clear, or 'all'.
+function undressedZones(passage) {
+  const text = String(passage || '')
+  if (!text.trim()) return []
+  if (UNDRESS_FULL_RE.test(text)) return ['all']
+  const zones = new Set()
+  // Look at each sentence separately, so a removal in one clause cannot claim a
+  // garment mentioned in another.
+  for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
+    // Checked BEFORE the verb gate: "she stripped and got in" carries no
+    // off/down/away particle, so the gate rejected the sentence and the
+    // bare-strip case below could never be reached.
+    if (/\b(?:strip(?:s|ped|ping)?|undress(?:es|ed|ing)?|disrobe(?:s|d|ing)?)\b/i.test(sentence) &&
+        !/\bstrip(?:s|ped|ping)? (?:of|away) /i.test(sentence)) return ['all']
+    if (!UNDRESS_VERB_RE.test(sentence)) continue
+    for (const entry of GARMENT_ZONES) {
+      if (entry.re.test(normalizeIdentityText(sentence))) zones.add(entry.zone)
+    }
+  }
+  return [...zones]
+}
+
+// What she was last seen in, minus what the passage just took off. This is the
+// counterpart to mergeOutfitByZone: that one puts garments BACK, this one takes
+// them off, and neither is any use without the other.
+function undressRemembered(remembered, passage) {
+  const zones = undressedZones(passage)
+  if (!zones.length) return { outfit: uniqueStrings(remembered || []), removed: [], zones }
+  if (zones.includes('all')) {
+    return { outfit: [], removed: uniqueStrings(remembered || []), zones }
+  }
+  const kept = []
+  const removed = []
+  for (const tag of uniqueStrings(remembered || [])) {
+    const zone = garmentZone(tag)
+    // A one-piece is removed by ANY zone it covers — a dress cannot survive
+    // "she pulled her dress off" merely because the cue named the top half.
+    if (zone && (zones.includes(zone) || zone === 'full')) removed.push(tag)
+    else kept.push(tag)
+  }
+  return { outfit: kept, removed, zones }
+}
+
+// A garment being CARRIED is not a garment being worn. "white shirt in hands"
+// contains the word shirt, so the garment check below said "clothing" and it
+// went into the wardrobe of record — where garmentSupported then treated it as
+// grounded by definition, so it could never be dislodged. Checked first, because
+// the whole problem is that the garment word wins.
+const NOT_WORN_RE = /\b(?:in (?:the |her |his |their |one |both )?hands?|in hand|held|holding|carr(?:y|ies|ied|ying)|over (?:one|her|his|their) (?:arm|shoulder)|draped|discarded|balled up|crumpled|on the floor|on the ground|puddled|abandoned|clutched|tucked under)\b/i
+// Marks on skin are not clothing either, and BODY_PART_RE does not name them.
+const SKIN_MARK_RE = /\b(?:hickey|hickeys|love bite|handprint|fingerprints?|lipstick mark|welt|welts|rash|freckles?|blush|tan line|tan lines)\b/i
+
 function isNotClothing(value) {
   const text = normalizeIdentityText(value)
   if (!text) return true
   if (BARE_STATE_RE.test(text)) return false
   if (WORN_CONDITION_RE.test(text)) return true
+  // Before the garment check, never after: these phrases CONTAIN garment words
+  // and that is exactly why they got through.
+  if (NOT_WORN_RE.test(text)) return true
+  if (SKIN_MARK_RE.test(text)) return true
   if (GARMENT_RE.test(text)) return false
   if (isPovStagingCue(text)) return true
   if (BODY_PART_RE.test(text)) return true
@@ -5978,7 +6163,7 @@ function anatomyFamily(tags) {
   return 'other'
 }
 
-function redactedDiagnostic(scene, descriptors) {
+function redactedDiagnostic(scene, descriptors, extras = {}) {
   const steps = traceSnapshot()
   return {
     version: (spindle.manifest && spindle.manifest.version) || '',
@@ -6005,7 +6190,15 @@ function redactedDiagnostic(scene, descriptors) {
       hasAction: !!(relation && relation.action),
       detailCount: ((relation && relation.details) || []).length,
     })),
-    camera: ((scene && scene.camera) || []).slice(0, 6),
+    // Whether the scene names a sexual act at all — the single fact that decides
+    // whether the anatomy gate can open for a clothed participant. Boolean, so
+    // it says nothing about what the act is.
+    actNamed: ANATOMY_ACT_RE.test(String((scene && scene.sceneStatement) || '')),
+    // Both, because the DIFFERENCE is the diagnosis. Reporting only what the
+    // parser asked for made a dropped pov look like a kept one, and sent me
+    // looking for a bug the compiler had already fixed.
+    cameraRequested: ((scene && scene.camera) || []).slice(0, 6),
+    cameraSent: (extras.cameraSent || []).slice(0, 6),
     place: placeSnapshot(),
     // The negative prompt is a tag list, and it is where an anatomy failure shows
     // up — either the guard did not fire, or it fired and the model ignored it.
@@ -6433,7 +6626,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   const placeReport = {}
   const matchedPlace = selectPlace(places, [sourcePassage, contextText].filter(Boolean).join('\n'), scene.setting, placeReport)
 
-  let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true, rememberedOutfits, rememberedLooks)).map((item) => ({
+  let descriptors = scene.subjects.map((subject) => subjectDescriptor(subject, profiles, sourcePassage, true, rememberedOutfits, rememberedLooks, scene)).map((item) => ({
     ...item,
     // An unprofiled subject's name comes straight from the story, so a coined
     // creature gets grounded in a noun the model has actually been trained on.
@@ -6478,7 +6671,6 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     trace('garment defence', 'applied',
       `negating ${LAST_COMPILE_NEGATIVES.join(', ')} — nobody in this scene wears them and the model's prior reaches for them`)
   }
-  LAST_DIAGNOSTIC = redactedDiagnostic(scene, descriptors)
   const anatomyNegatives = anatomyDefence(descriptors, scene)
   const femaleNegatives = femaleAnatomyDefence(descriptors, scene)
   if (femaleNegatives.length) {
@@ -6700,6 +6892,7 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   }
   const repaired = repairCameraTags(povFiltered, scene, descriptors)
   const cameraTags = animaTagList(repaired.tags)
+  LAST_DIAGNOSTIC = redactedDiagnostic(scene, descriptors, { cameraSent: cameraTags })
   if (repaired.note) spindle.log.info('[lumidraw] camera repair · ' + repaired.note)
   trace('camera repair', repaired.note ? 'applied' : 'clean', repaired.note || 'framing and view angles already consistent')
   const groundingText = [sourcePassage, contextText].filter(Boolean).join('\n')
@@ -6905,6 +7098,7 @@ const DYNAMIC_GUIDANCE_MARKER = '{{dynamic_guidance}}'
 // sentence is a feature that will eventually edit it badly.
 function dynamicGuidanceBlocks(context = {}) {
   return [
+    undressGuidance(context.wardrobe),
     looksGuidance(context.profiles),
     placesGuidance(context.places),
     retryGuidance(context.retry),
@@ -6959,6 +7153,23 @@ function placesGuidance(places) {
 // Only says anything when somebody in the cast HAS looks. A rule about a feature
 // nobody uses is instruction budget spent on nothing, and the budget is the
 // reason this slot exists.
+// "Silence means unchanged" is the rule that lets the wardrobe work at all, and
+// it has one blind spot: clothing coming OFF is also a change, and it is narrated
+// as an action. The parser has a field for actions, so that is where it goes, and
+// outfit stays empty — which reads as "no change" and she is dressed again.
+//
+// Only emitted when there IS a wardrobe to contradict. With nothing remembered
+// there is nothing to wrongly restore, and the budget is better spent elsewhere.
+function undressGuidance(wardrobe) {
+  const hasRecord = wardrobe && Object.values(wardrobe).some((list) => (list || []).length)
+  if (!hasRecord) return ''
+  return [
+    'CLOTHING COMING OFF IS A CHANGE. Silence means unchanged, so an outfit you leave empty means she is still dressed.',
+    'If the passage takes clothing off — fully or partly — you MUST report the outfit: "nude", "topless", "bottomless", or the garments that REMAIN.',
+    'Putting the removal in pose or action instead will put her clothes back on.',
+  ].join('\n')
+}
+
 function looksGuidance(profiles) {
   const withLooks = allKnownProfiles(profiles || {}).filter((profile) => (profile.looks || []).length)
   if (!withLooks.length) return ''
@@ -8279,7 +8490,7 @@ async function scanStoryCore(userId, options = {}) {
       const resolvedGuidance = await resolveMacros(guidance, userId, chatId)
       const instruction = applyDynamicGuidance(
         resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
-        composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: await getPlaces() })))
+        composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: await getPlaces(), wardrobe: (rememberedState && rememberedState.outfits) || null })))
       const instrLabel = usingCustom ? `custom guidance + structured compiler (${instruction.length} chars)` : 'structured subject compiler'
       setStoryScanStage(scan, 'parsing', 'Waiting for the selected parser model.')
       spindle.log.info('[lumidraw] Anima parser context · previous_messages=' + parserInput.contextMessageCount + ' · loom_ledger=' + (parserInput.ledgerFound ? 'found' : 'none'))
@@ -8319,7 +8530,10 @@ async function scanStoryCore(userId, options = {}) {
 
       const mds = []
       const debugEntries = []
-      const limitedParsed = parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2)))
+      // Ordered by where each anchor falls in the passage BEFORE anything is
+      // numbered, so "image 1 of 3" means the first moment of the scene.
+      const limitedParsed = orderScenesByPassage(
+        parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2))), passage)
       const acceptedParsed = []
       for (let i = 0; i < limitedParsed.length; i++) {
         const item = limitedParsed[i]
@@ -8694,7 +8908,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const instruction = applyDynamicGuidance(
     (await resolveMacros(guidance, userId, chatId)) +
       structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
-    composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: await getPlaces(), retry })))
+    composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: await getPlaces(), retry, wardrobe: (rememberedState && rememberedState.outfits) || null })))
   if (retry) {
     spindle.log.info(`[lumidraw] re-parse attempt ${retry.attempt} · the previous reading was sent back as rejected`)
   }
@@ -8714,7 +8928,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
 
   const results = []
   if (!parseError) {
-    for (const item of parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2)))) {
+    for (const item of orderScenesByPassage(parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2))), passage)) {
       const assessment = assessStructuredScene(item.scene)
       if (!assessment.valid) {
         results.push({ ok: false, anchor: item.anchor || '', note: `Incomplete scene — ${assessment.summary}.` })
