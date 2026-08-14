@@ -1,80 +1,95 @@
-# LumiDraw Studio 0.65.0 — the settings rail
+# LumiDraw Studio 0.66.0 — retries that differ, anatomy that holds, and a way to show me
 
-Release 4 of 4. Smaller than I intended, and I want to be straight about why.
+Three things, and the third exists because of the point you made.
 
-## What changed
+## 1. Re-parse was sending the identical request
 
-**Settings is no longer a flat scroll of five unrelated cards.** It has a rail:
+Not the model being stubborn. `reparseSourceMessage` rebuilt byte-for-byte the
+same instruction, with the same passage, to the same model. **The button said
+"try again"; the request said "do it again."**
 
-```
-[ Connection ]  [ Parser ]  [ Advanced ]
-```
+A parser has no memory between calls, so the only way to ask for something
+different is to show it what it already produced and say that was rejected. It
+now does exactly that — the previous prompt comes out of the history entry and
+goes back as a rejected attempt.
 
-- **Connection** — Draw Things API, LumiDraw Bridge catalog
-- **Parser** — parser connection, model, instruction, budget
-- **Advanced** — Draw Things Cloud Compute, Diagnostics
+It escalates, too:
 
-The cloud card no longer sits as prominently as the Draw Things connection you
-can't work without. Your section is remembered between sessions.
+- **First retry** — read the same moment again, produce a *different* scene:
+  reconsider the body arrangement, who is where, the contact points, the framing.
+- **Second and beyond** — a small variation isn't enough; choose a **different
+  moment** of the passage entirely.
 
-Two labels also changed: the **Presets** tab is now **Cast & presets**, since it
-holds characters, personas and places as well; and *"Last parser result"* is now
-*"What the last scan produced"*, because it's output sitting among controls.
+Every retry also points the parser at the **relations**, since an unusual
+arrangement is the most likely thing to have been read wrong.
 
-The `data-view` value stays `presets` — it's persisted in your browser, so
-renaming it would have reset your last tab.
+Attempts are counted per image, so pressing the button again pushes harder rather
+than rerolling the same dice. The status line tells you which attempt you're on.
 
-## What I attempted and backed out of
+## 2. The futanari with a vagina
 
-I tried to properly reorganise — move cards between tabs, lift the image-sizing
-controls out of "Illustration mode", put the parser output with Diagnostics.
+There was a real gap. `anatomyDefence` guards a penis **bleeding onto a second,
+ordinary female subject**, and it deliberately exempts a character whose own
+identity is futanari — negating "futanari" on a futanari is negating who she is.
+That's correct, and it left the solo case completely uncovered.
 
-**One block move grabbed the wrong `<div>`.** A help paragraph was carried into a
-new card while the checkbox it described stayed behind in another tab. The syntax
-check passed. The class counts balanced perfectly — nothing was "lost", it was
-just in the wrong place. I only found it because I went looking at the actual
-markup afterwards.
+**Nothing in your prompt has ever said "not a vagina."** Anima's prior for a
+feminine body in an explicit scene supplies one unless told otherwise, and an
+unusual position gives it more room to fall back on that prior — which is exactly
+when you see it.
 
-So I reverted the whole thing and redid it with **tagging instead of moving**: an
-attribute can't separate a control from its label because it never touches
-either. That's why this release is a rail and two labels rather than the
-reorganisation you asked for.
+So there's now a second, separate defence that negates the female-genital family
+when **every** subject whose anatomy is being drawn has penis-family anatomy.
+Scope is deliberately tight:
 
-The honest constraint is that I can't see the UI. For backend logic I can write a
-test that proves behaviour; for layout I can only prove structural invariants,
-and "this control is under the right heading" is about as far as that goes.
+- A scene with a futanari **and** an ordinary woman negates nothing — her body is
+  not the error.
+- A character *defined* with female anatomy is protected even in a frame where
+  her anatomy isn't drawn, because a negative applies to the whole image.
+- Safe and sensitive scenes never get genital negatives at all.
 
-## The test that now exists
+The two defences stay separate and neither absorbed the other.
 
-`ui.mjs` pins what would have caught the damage:
+## 3. A diagnostic you can paste without pasting your story
 
-- **Every control still lives under its own card heading.** My first version of
-  this checked that a control and its label stayed within N characters — and a
-  mutation that moved *both* into another card passed it cleanly. Proximity was
-  the wrong property; card membership is the right one.
-- Every control appears exactly once — a duplicate means a block was pasted
-  twice, a zero means one was carried off.
-- Every view's `<div>`s balance, so a cut mid-block shows up.
-- No settings card is left untagged, since an untagged one would vanish the
-  moment a section is selected.
-- The rail is styled outside a media query — the first attempt put it inside one,
-  which would have made it mobile-only.
+You said it plainly: I make a fix, you send the app's actual output, and my
+diagnosis changes. That happened three times tonight — the OOC gate, the swipe,
+the cloud model. Every one of those, my reading of the code was wrong and the
+output corrected it.
 
-**51 suites · 1,939 assertions · all green.** Three mutations tried against the
-new suite; the one that initially slipped through is the reason the membership
-check exists.
+The answer to "this scene is explicit" is **not** for me to trust the code
+reading more. The code reading is what kept being wrong.
 
-## If you want the full reorganisation
+**Settings → Advanced → Diagnostics → "Copy report for Claude (no story text)"**
 
-It's worth doing, and it wants one of two things:
+It emits structure only:
 
-1. **You tell me where things should go** — I'll move them one card at a time,
-   showing you the before/after structure for each, rather than restructuring in
-   one pass I can't verify.
-2. **Or you let me screenshot it.** With computer use I can open Lumiverse, look
-   at the panel, and check my own work — which turns this from guessing into
-   seeing.
+- safety level, aspect, camera tags
+- per subject: ref, count tag, **anatomy family** (`penis` / `female` / `none`),
+  the profile's family, anatomy mode, whether anatomy was visible, active look,
+  appearance state, and **counts** of outfit and appearance tags
+- relations as shape only — has actor, has target, has action, how many details
+- the negative prompt, which is where an anatomy failure shows up: either the
+  guard didn't fire, or it fired and the model ignored it
+- the compile trace, with detail kept for structural rules and **omitted** for
+  anything that could carry prose
 
-Option 2 is what I'd pick. Layout is the one area where the feedback loop that's
-served us all session — write a test, mutate it, confirm it catches the break —
-doesn't really substitute for looking.
+No passage, no scene statement, no caption, no prompt, no relation text. Tested:
+the suite builds a report from a scene containing an explicit relation and
+asserts none of the outfit, appearance, or relation strings appear in the output.
+
+That turns "we fly blind" into "we fly on instruments." If the next image is
+wrong, send me that and I can tell you whether the guard fired.
+
+## Verification
+
+**52 suites · 1,992 assertions · all green.** 52 new in `retry.mjs`.
+
+Mutation-tested: solo futanari unprotected, retry stops escalating, and the
+ordinary-woman exemption removed.
+
+**That last one initially passed, which meant the guard was dead code** — the
+`allPenis` check already covered it. Rather than leave a check that couldn't
+fail, I made it load-bearing: it now reads the *saved profile* rather than the
+rendered descriptor, which is the genuinely different question. Same class of
+thing as the `if (!name) return null` I deleted in 0.64.0.

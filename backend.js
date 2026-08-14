@@ -5940,6 +5940,7 @@ let LAST_COMPILE_TRACE = []
 let LAST_COMPILE_OUTFITS = {}
 let LAST_COMPILE_LOOKS = {}
 let LAST_COMPILE_PLACE = ''
+let LAST_DIAGNOSTIC = null
 let LAST_COMPILE_NEGATIVES = []
 
 function traceReset() { LAST_COMPILE_TRACE = []; LAST_COMPILE_OUTFITS = {}; LAST_COMPILE_LOOKS = {}; LAST_COMPILE_PLACE = ''; LAST_COMPILE_NEGATIVES = [] }
@@ -5955,6 +5956,68 @@ function placeSnapshot() { return LAST_COMPILE_PLACE }
 function negativeSnapshot() { return LAST_COMPILE_NEGATIVES.slice() }
 
 // Human-readable, for the Spindle log and the debug panel.
+// A diagnostic you can paste to me without pasting your story.
+//
+// Every time my reading of the code was wrong tonight, the app's own output is
+// what corrected it. That loop breaks when the scene is explicit and cannot be
+// shared — and "be more confident about the code" is not the fix, because being
+// confident about the code is precisely what kept being wrong.
+//
+// So: structure, never prose. Counts, tag families, which rules fired and why.
+// No passage, no scene statement, no caption, no relation text, no prompt.
+const TRACE_DETAIL_ALLOWED = /^(?:setting|place|look|outfit|garment|camera|framing|anatomy|trait merge|scenery|negative|safety|creature|wardrobe)/i
+
+function anatomyFamily(tags) {
+  const joined = (tags || []).join(' ')
+  if (!joined.trim()) return 'none'
+  const penis = PENIS_ANATOMY_RE.test(joined)
+  const female = FEMALE_ANATOMY_RE.test(joined)
+  if (penis && female) return 'both'
+  if (penis) return 'penis'
+  if (female) return 'female'
+  return 'other'
+}
+
+function redactedDiagnostic(scene, descriptors) {
+  const steps = traceSnapshot()
+  return {
+    version: (spindle.manifest && spindle.manifest.version) || '',
+    safety: (scene && scene.safety) || '',
+    aspect: (scene && scene.aspect) || '',
+    subjects: (descriptors || []).map((item) => ({
+      ref: (item.subject && item.subject.ref) || '',
+      countTag: item.countTag || '',
+      // Whether anatomy is present and of what family — never the tags.
+      anatomy: anatomyFamily(item.anatomy),
+      profileAnatomy: anatomyFamily((item.profile && item.profile.anatomy) || []),
+      anatomyMode: (item.profile && item.profile.anatomyMode) || '',
+      anatomyVisible: !!(item.subject && item.subject.anatomyVisible),
+      look: (item.look && item.look.name) || '',
+      lookChanged: !!item.lookChanged,
+      appearanceState: (item.appearanceState && item.appearanceState.name) || '',
+      outfitCount: (item.outfit || []).length,
+      appearanceCount: (item.appearance || []).length,
+    })),
+    // Counts only. A relation's action is the most likely thing to be explicit.
+    relations: ((scene && scene.relations) || []).map((relation) => ({
+      hasActor: !!(relation && relation.actor),
+      hasTarget: !!(relation && relation.target),
+      hasAction: !!(relation && relation.action),
+      detailCount: ((relation && relation.details) || []).length,
+    })),
+    camera: ((scene && scene.camera) || []).slice(0, 6),
+    place: placeSnapshot(),
+    // The negative prompt is a tag list, and it is where an anatomy failure shows
+    // up — either the guard did not fire, or it fired and the model ignored it.
+    negatives: negativeSnapshot(),
+    trace: steps.map((step) => ({
+      rule: step.rule,
+      outcome: step.outcome,
+      detail: TRACE_DETAIL_ALLOWED.test(step.rule) ? step.detail : '(omitted)',
+    })),
+  }
+}
+
 function formatCompileTrace(steps) {
   const mark = { applied: '✓', clean: '·', skipped: '–', warn: '!' }
   return (steps || []).map((step) =>
@@ -6259,6 +6322,47 @@ function censorshipDefence(descriptors, scene) {
   return { positive: UNCENSORED_TAG, negatives: CENSOR_NEGATIVES.slice() }
 }
 
+// The OTHER anatomy failure, and the one that actually breaks immersion: the
+// futanari renders with a vagina.
+//
+// anatomyDefence below solves a different problem — a penis BLEEDING onto a
+// second, ordinary female subject — and it deliberately exempts a character
+// whose own identity is futanari, because negating "futanari" on a futanari is
+// negating who she is. Correct, and it leaves this case completely uncovered.
+//
+// Nothing in the prompt has ever said "not a vagina". Anima's prior for a
+// feminine body in an explicit scene supplies one unless told otherwise, and an
+// unusual position gives it more room to fall back on that prior, which is
+// exactly when Eric sees it.
+//
+// Scope is deliberately tight: this fires only when EVERY subject whose anatomy
+// is being drawn has penis-family anatomy. A scene with a futanari and an
+// ordinary woman must not negate the woman's own body.
+const FEMALE_GENITAL_NEGATIVES = ['pussy', 'vagina', 'clitoris', 'labia', 'vulva']
+const FEMALE_ANATOMY_RE = /\b(?:pussy|vagina|vulva|clitoris|labia)\b/i
+
+function femaleAnatomyDefence(descriptors, scene) {
+  if (!scene || !['nsfw', 'explicit'].includes(scene.safety)) return []
+  const rendered = (descriptors || []).filter((item) => (item.anatomy || []).length)
+  if (!rendered.length) return []
+  const allPenis = rendered.every((item) =>
+    (item.anatomy || []).some((tag) => PENIS_ANATOMY_RE.test(String(tag || ''))))
+  if (!allPenis) return []
+  // Checked against the SAVED profile, not the rendered descriptor. Against the
+  // descriptor it would be dead code — allPenis above already covers anyone whose
+  // female anatomy is being drawn — and a check that cannot fail is decoration.
+  //
+  // The profile is the meaningful question: if a character in this scene is
+  // DEFINED as having female genitalia, negating the word is wrong even in a
+  // frame where her anatomy is not the subject, because the negative applies to
+  // the whole image.
+  const anyFemaleAnatomy = (descriptors || []).some((item) =>
+    [...((item.profile && item.profile.anatomy) || []), ...(item.anatomy || [])]
+      .some((tag) => FEMALE_ANATOMY_RE.test(String(tag || ''))))
+  if (anyFemaleAnatomy) return []
+  return FEMALE_GENITAL_NEGATIVES.slice()
+}
+
 function anatomyDefence(descriptors, scene) {
   if (!scene || !['nsfw', 'explicit'].includes(scene.safety)) return []
   const items = descriptors || []
@@ -6374,7 +6478,20 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     trace('garment defence', 'applied',
       `negating ${LAST_COMPILE_NEGATIVES.join(', ')} — nobody in this scene wears them and the model's prior reaches for them`)
   }
+  LAST_DIAGNOSTIC = redactedDiagnostic(scene, descriptors)
   const anatomyNegatives = anatomyDefence(descriptors, scene)
+  const femaleNegatives = femaleAnatomyDefence(descriptors, scene)
+  if (femaleNegatives.length) {
+    trace('anatomy · female genitalia negated', 'applied',
+      `${femaleNegatives.join(', ')} — every subject whose anatomy is drawn here has a penis, and nothing in the prompt otherwise says she has not got one`)
+  }
+  if (femaleNegatives.length) {
+    LAST_COMPILE_NEGATIVES = uniqueStrings([...LAST_COMPILE_NEGATIVES, ...femaleNegatives])
+  }
+  if (LAST_DIAGNOSTIC) {
+    // Re-read after the defences have run; the negative list is the point.
+    LAST_DIAGNOSTIC.negatives = negativeSnapshot()
+  }
   if (anatomyNegatives.length) {
     LAST_COMPILE_NEGATIVES = uniqueStrings([...LAST_COMPILE_NEGATIVES, ...anatomyNegatives])
     trace('anatomy defence', 'applied',
@@ -6790,11 +6907,42 @@ function dynamicGuidanceBlocks(context = {}) {
   return [
     looksGuidance(context.profiles),
     placesGuidance(context.places),
+    retryGuidance(context.retry),
   ]
 }
 
 // Says nothing when no places are saved. The parser does not need to be told
 // about a feature this story does not use.
+// Re-parse used to send byte-for-byte the same instruction and the same passage
+// to the same model, and then act surprised when the same JSON came back. The
+// button said "try again"; the request said "do it again".
+//
+// The parser has no memory between calls, so the only way to ask for something
+// DIFFERENT is to show it what it already produced and say that was rejected.
+// This is the one piece of information it was missing.
+//
+// Escalating: the first retry asks for a different reading of the same moment,
+// the second asks for a different MOMENT. Pressing the button repeatedly should
+// widen the search rather than reroll the same dice.
+function retryGuidance(retry) {
+  if (!retry || !retry.previousPrompt) return ''
+  const attempt = Math.max(1, Number(retry.attempt) || 1)
+  const lines = [
+    'THIS IS A RETRY. Your previous reading of this passage was REJECTED by the user.',
+    'Previous attempt:',
+    `"""${String(retry.previousPrompt).slice(0, 700)}"""`,
+  ]
+  if (attempt >= 2) {
+    lines.push('This is retry ' + attempt + '. Earlier retries were also rejected, so a small variation is not enough:',
+      'choose a DIFFERENT MOMENT of the passage — a different beat, a different subject in focus, or a different point in the action.')
+  } else {
+    lines.push('Read the same moment again and produce a DIFFERENT scene: reconsider the body arrangement, who is where, ' +
+      'the contact points, and the framing. Do not restate the previous attempt with reworded tags.')
+  }
+  lines.push('Pay particular attention to the RELATIONS: an unusual arrangement is the most likely thing to have been read wrong.')
+  return lines.join('\n')
+}
+
 function placesGuidance(places) {
   const list = Array.isArray(places) ? places : []
   if (!list.length) return ''
@@ -8538,10 +8686,18 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
     .replaceAll('{{max_images}}', String(settings.maxImages || 2))
     .replaceAll('{{min_images}}', String(settings.minImages || 0))
+  // What the rejected attempt actually produced. The history entry is the only
+  // record of it, and without it a retry is just the same request again.
+  const retry = source && source.prompt
+    ? { previousPrompt: String(source.prompt), attempt: Math.max(1, Number(overrides.attempt) || 1) }
+    : null
   const instruction = applyDynamicGuidance(
     (await resolveMacros(guidance, userId, chatId)) +
       structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
-    composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: await getPlaces() })))
+    composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: await getPlaces(), retry })))
+  if (retry) {
+    spindle.log.info(`[lumidraw] re-parse attempt ${retry.attempt} · the previous reading was sent back as rejected`)
+  }
 
   const startedAt = Date.now()
   const report = {}
@@ -9312,6 +9468,18 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const characters = (await getCharacters()).filter((item) => item && item.id !== id)
         await saveCharacters(characters)
         reply = ok(payload, requestId, { characters })
+        break
+      }
+
+      case 'diagnostic_report': {
+        if (!LAST_DIAGNOSTIC) {
+          reply = ok(payload, requestId, { report: '', note: 'Generate or re-parse an image first — this reports on the last compile.' })
+          break
+        }
+        // Refreshed here rather than cached at compile time, so the negative
+        // list reflects everything that ran.
+        const report = { ...LAST_DIAGNOSTIC, negatives: negativeSnapshot() }
+        reply = ok(payload, requestId, { report: JSON.stringify(report, null, 2) })
         break
       }
 

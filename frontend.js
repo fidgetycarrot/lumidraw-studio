@@ -90,6 +90,8 @@ function realSetup(ctx) {
   let personas = []
   let characters = []
   let places = []
+  // url -> how many times its passage has been re-parsed this session
+  const reparseAttempts = new Map()
   let libEditorKind = 'persona' // which library the shared editor is writing to
   let editorCastIds = []        // additional cast member ids in the open preset editor
   let history = []
@@ -951,6 +953,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           <div data-settings-section="advanced" class="ld-card">
             <div class="ld-subtitle">Diagnostics</div>
             <button class="ld-btn" data-act="diagnose">Run diagnostics 🔍</button>
+            <button class="ld-btn" data-act="safe-report" style="margin-top:7px">Copy report for Claude (no story text)</button>
+            <div class="ld-help">Structure only — subject counts, anatomy family, which rules fired, the negative prompt, and the trace. No passage, no scene statement, no caption, no prompt. Safe to paste when the scene is not.</div>
+            <textarea class="ld-safe-report" readonly style="min-height:150px;display:none;margin-top:7px;font-family:monospace;font-size:11px"></textarea>
             <textarea class="ld-diag" readonly style="min-height:150px;display:none;margin-top:7px;font-family:monospace;font-size:11px"></textarea>
           </div>
           <div class="ld-status ld-settings-status"></div>
@@ -3087,7 +3092,14 @@ ${entry.prompt || ''}`.trim()
     info.textContent = ''
     picker.style.display = 'none'
     picker.innerHTML = ''
-    setStatus('.ld-lightbox-regen-status', 'Re-reading the original passage with the current parser model — nothing is being generated.')
+    // Attempts are counted per SOURCE image. Re-parse used to send an identical
+    // request every time; the backend now shows the parser what it produced last
+    // and asks for something different, and the count decides how hard it pushes.
+    const attempt = (reparseAttempts.get(item.image.url) || 0) + 1
+    reparseAttempts.set(item.image.url, attempt)
+    setStatus('.ld-lightbox-regen-status', attempt > 1
+      ? `Re-reading the passage — attempt ${attempt}. The previous ${attempt - 1} reading${attempt > 2 ? 's were' : ' was'} sent back as rejected, so it will look for a different moment.`
+      : 'Re-reading the original passage with the current parser model — nothing is being generated.')
     try {
       const res = await call('reparse_image', {
         imageUrl: item.image.url,
@@ -3095,6 +3107,7 @@ ${entry.prompt || ''}`.trim()
         // model should not require committing to it first.
         parserModel: $('.ld-parser-model') ? $('.ld-parser-model').value.trim() : undefined,
         parserConnection: $('.ld-parser-conn') ? $('.ld-parser-conn').value : undefined,
+        attempt,
       }, 300000)
       const results = Array.isArray(res.results) ? res.results : []
       const usable = results.filter((entry) => entry && entry.ok)
@@ -3683,6 +3696,22 @@ img[class*="inlineImage"] {
       // Re-rendering here would discard what they typed, which is the last thing
       // anyone wants after a validation error.
       setStatus('.ld-places-status', error.message, 'err')
+    }
+  })
+
+  $('[data-act="safe-report"]').addEventListener('click', async () => {
+    try {
+      const res = await call('diagnostic_report', {})
+      const field = $('.ld-safe-report')
+      field.style.display = 'block'
+      field.value = res.report || res.note || 'Nothing to report yet.'
+      field.select()
+      try { document.execCommand('copy') } catch { /* selection is enough */ }
+      setStatus('.ld-settings-status', res.report
+        ? 'Copied. It contains no story text — counts, tag families, rule outcomes and the negative prompt only.'
+        : (res.note || ''), res.report ? 'good' : 'err')
+    } catch (error) {
+      setStatus('.ld-settings-status', error.message, 'err')
     }
   })
 
