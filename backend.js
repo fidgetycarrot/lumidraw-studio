@@ -3176,7 +3176,7 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
     const linked = characterLibrary.find((item) => item && item.id === castIds[index])
     if (!linked || !linked.profile) continue
     if (linked.id === preset.characterLibraryId) continue // already the main character
-    if (!castMemberBelongsHere(linked, chatId)) continue
+    if (!preset.activeCastId && !castMemberBelongsHere(linked, chatId)) continue
     const ref = castRefFor(linked.profile.anchor || linked.name, index, takenRefs)
     const profile = normalizeProfile(linked.profile, linked.profile.appearanceTags || '', ref)
     const resolved = await resolveProfile(profile, userId, chatId)
@@ -9986,7 +9986,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // but when BOTH are empty sceneMemoryKey returns '' and every chat shares
         // one wardrobe record — so that case is now said out loud rather than
         // silently producing another story's clothes.
-        const chatId = String(payload.chatId || '').trim() || (await resolveActiveChatId(userId)) || ''
+        const chatId = (await resolveActiveChatId(userId)) || String(payload.chatId || '').trim() || ''
         if (!chatId) {
           spindle.log.info('[lumidraw] wardrobe: no chat could be identified — this record is shared across every chat')
         }
@@ -10017,25 +10017,40 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (Array.isArray(payload.remove) && payload.remove.length && preset) {
           const wanted = new Set(payload.remove.map((id) => String(id || '').trim()).filter(Boolean))
           const characters = await getCharacters()
-          const keepIds = (preset.castLibraryIds || []).filter((id) => !wanted.has(String(id)))
+          // Remove from wherever the rows CAME from. This was written in 0.73
+          // against preset.castLibraryIds; two releases later the cast became the
+          // source of the rows and nobody moved the removal, so the × edited a
+          // list the panel no longer reads and appeared to do nothing.
+          const boundCast = await castForChat(chatId)
+          const source = boundCast || preset
+          const keepIds = (source.castLibraryIds || []).filter((id) => !wanted.has(String(id)))
           const doomed = characters.filter((item) => item && wanted.has(String(item.id)) &&
             item.profile && item.profile.declaredByStory)
           if (doomed.length) {
             await saveCharacters(characters.filter((item) => !doomed.includes(item)))
           }
-          if (keepIds.join('|') !== (preset.castLibraryIds || []).join('|')) {
-            const all = await getPresets()
-            const index = all.findIndex((item) => item && item.name === preset.name)
-            if (index >= 0) {
-              all[index] = { ...all[index], castLibraryIds: keepIds }
-              await savePresets(all)
-              preset.castLibraryIds = keepIds
+          if (keepIds.join('|') !== (source.castLibraryIds || []).join('|')) {
+            if (boundCast) {
+              const casts = await getCasts()
+              const index = casts.findIndex((item) => item && item.id === boundCast.id)
+              if (index >= 0) {
+                casts[index] = { ...casts[index], castLibraryIds: keepIds }
+                await saveCasts(casts)
+              }
+            } else {
+              const all = await getPresets()
+              const index = all.findIndex((item) => item && item.name === preset.name)
+              if (index >= 0) {
+                all[index] = { ...all[index], castLibraryIds: keepIds }
+                await savePresets(all)
+                preset.castLibraryIds = keepIds
+              }
             }
           }
           removed = [...wanted]
-          spindle.log.info(`[lumidraw] wardrobe removed ${removed.length} cast member(s)` +
-            (doomed.length ? `; ${doomed.map((item) => item.name).join(', ')} were the story's and were deleted` : '') +
-            `; the rest were only unlinked from "${preset.name}"`)
+          spindle.log.info(`[lumidraw] removed ${removed.length} from ` +
+            (boundCast ? `the cast "${boundCast.name}"` : `the preset "${preset.name}"`) +
+            (doomed.length ? `; ${doomed.map((item) => item.name).join(', ')} were the story's and were deleted` : ''))
         }
 
         const entry = await readSceneMemory(chatId, presetName)
@@ -10088,7 +10103,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
       // Which cast is this chat using, and what is in it.
       case 'casts': {
-        const chatId = String(payload.chatId || '').trim() || (await resolveActiveChatId(userId)) || ''
+        const chatId = (await resolveActiveChatId(userId)) || String(payload.chatId || '').trim() || ''
         if (payload.bind !== undefined) {
           await bindChatToCast(chatId, String(payload.bind || ''))
         }
@@ -10119,9 +10134,13 @@ spindle.onFrontendMessage(async (payload, userId) => {
         }
         const [casts, map, characters] = await Promise.all([getCasts(), getChatCastMap(), getCharacters()])
         const boundId = chatId ? (map[chatId] || '') : ''
+        const sharedWith = boundId
+          ? Object.entries(map).filter(([chat, id]) => id === boundId && chat !== chatId).length
+          : 0
         reply = ok(payload, requestId, {
           chatId,
           boundId,
+          sharedWith,
           casts: casts.map((item) => ({
             id: item.id,
             name: item.name,

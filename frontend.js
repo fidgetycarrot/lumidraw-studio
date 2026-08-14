@@ -3324,8 +3324,9 @@ img[class*="inlineImage"] {
       // unlinked from this preset. The mark says which, so the button is never a
       // surprise. "any chat" means it predates chat scoping and cannot be
       // attributed — it will keep showing up everywhere until it goes.
-      const mark = row.unattributed ? '<span title="declared by a story, but before chat scoping existed — appears in every chat until removed" style="opacity:.55">  (any chat)</span>'
-        : row.declared ? '<span title="declared by this story" style="opacity:.55">  (story)</span>' : ''
+      const mark = row.declared
+        ? '<span title="added by the story rather than by you — × deletes it" style="opacity:.55">  (story)</span>'
+        : ''
       const remove = row.id
         ? `<button class="ld-btn ld-compact" data-act="wardrobe-drop" data-id="${row.id}" data-name="${name}" data-declared="${row.declared ? '1' : ''}" title="${row.declared ? 'Delete this character — the story invented it' : 'Unlink from this preset; the character itself is kept'}" style="padding:2px 7px">×</button>`
         : ''
@@ -3361,9 +3362,17 @@ img[class*="inlineImage"] {
     const active = casts.find((cast) => cast.id === res.boundId)
     const summary = $('.ld-cast-summary')
     if (summary) {
-      summary.textContent = active
+      const who = active
         ? [active.character, active.persona, ...(active.members || [])].filter(Boolean).join(' · ') || 'Nobody in this cast yet.'
         : 'No cast bound — this chat is using whoever is in the active preset.'
+      // Sharing a cast is legitimate — the same two people really can be in two
+      // stories — but it means a character one story introduces joins the other's
+      // list too. Copy is the answer, and it is one button away.
+      const shared = res.sharedWith > 0
+        ? `  ·  shared with ${res.sharedWith} other chat${res.sharedWith === 1 ? '' : 's'}: a character introduced in either one joins both. Press Copy to give this story its own.`
+        : ''
+      summary.textContent = who + shared
+      summary.style.color = res.sharedWith > 0 ? 'var(--ld-warn, #d9a441)' : ''
     }
   }
 
