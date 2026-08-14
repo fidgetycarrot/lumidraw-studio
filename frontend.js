@@ -821,8 +821,11 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <div class="ld-ed-loras" style="display:flex;flex-direction:column;gap:5px"></div>
             <button class="ld-btn ld-compact" data-act="ed-addlora" style="margin-top:5px">＋ LoRA</button>
             <span class="ld-label" style="margin-top:9px">Quality tags (always first)</span><input class="ld-ed-quality" />
-            <details class="ld-profile-block" open>
-              <summary>Main character identity profile</summary>
+            <div class="ld-help" style="margin-top:11px;padding:7px 9px;border-radius:6px;background:var(--ld-soft, rgba(255,255,255,.04))">
+              <strong>Characters have moved.</strong> Who is in a story is now a <strong>cast</strong>, set per chat in the Story tab — so changing this preset no longer changes who is in the scene or what they are wearing. The two profiles below still work and are still the fallback for a chat with no cast bound. Nothing here has been deleted or altered.
+            </div>
+            <details class="ld-profile-block">
+              <summary>Main character identity profile <span style="opacity:.55">(fallback — casts take precedence)</span></summary>
               <div class="ld-profile-fields">
                 <div><span class="ld-label">Character source</span><select class="ld-ed-char-link"><option value="">Local profile stored in this preset</option></select></div>
                 <div class="ld-help">Link a reusable character from the library, or keep a local one-off character in this preset. Linked library profiles are edited from the Character Library above.</div>

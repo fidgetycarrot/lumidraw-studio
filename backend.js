@@ -396,10 +396,43 @@ async function getSceneMemory() {
 // first preset to ask for one adopts it, and the unscoped entry is removed, so the
 // upgrade keeps continuity for whoever is using the chat now without leaving a
 // shared entry behind for the next preset to inherit.
+// What the wardrobe is keyed by.
+//
+// It was the PRESET name, which meant changing your model moved your characters'
+// clothes — the visual settings were acting as an identity for what people are
+// wearing. With a cast bound, the cast is the identity, which is what it should
+// always have been.
+//
+// The `cast:` prefix keeps the two namespaces apart, so a preset that happens to
+// be named like a cast id cannot collide with one.
+async function sceneScopeFor(chatId, presetName) {
+  const cast = await castForChat(chatId)
+  return cast ? `cast:${cast.id}` : String(presetName || '')
+}
+
 async function readSceneMemory(chatId, presetName) {
   const memory = await getSceneMemory()
-  const scoped = sceneMemoryKey(chatId, presetName)
+  const scope = await sceneScopeFor(chatId, presetName)
+  const scoped = sceneMemoryKey(chatId, scope)
   if (scoped && memory[scoped]) return memory[scoped]
+
+  // Re-keying would otherwise strand every outfit already recorded. The old
+  // preset-keyed entry is COPIED across the first time the new key is asked for,
+  // and deliberately left where it was — same rule as the preset migration, for
+  // the same reason.
+  const presetKey = sceneMemoryKey(chatId, presetName)
+  if (scoped && presetKey && presetKey !== scoped && memory[presetKey]) {
+    const carried = memory[presetKey]
+    try {
+      memory[scoped] = { ...carried, at: Date.now() }
+      await spindle.storage.setJson(SCENE_MEMORY_FILE, memory, { indent: 2 })
+      spindle.log.info('[lumidraw] the wardrobe for this chat now belongs to its cast rather than its ' +
+        `preset "${presetName}". What was recorded has been carried over; the old entry is left in place.`)
+    } catch (error) {
+      spindle.log.warn('[lumidraw] could not carry the wardrobe over: ' + error.message)
+    }
+    return carried
+  }
   const legacy = String(chatId || '').trim()
   if (!legacy || !memory[legacy] || legacy === scoped) return {}
   const adopted = memory[legacy]
@@ -416,7 +449,7 @@ async function readSceneMemory(chatId, presetName) {
 }
 
 async function rememberSceneState(chatId, presetName, { setting = [], lighting = [], outfits = null, looks = null } = {}) {
-  const key = sceneMemoryKey(chatId, presetName)
+  const key = sceneMemoryKey(chatId, await sceneScopeFor(chatId, presetName))
   const tags = uniqueStrings(setting || []).slice(0, 6)
   const light = uniqueStrings(lighting || []).slice(0, 4)
   const wardrobe = outfits && typeof outfits === 'object' ? outfits : null
@@ -10010,7 +10043,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
         if (payload.set && typeof payload.set === 'object') {
           const memory = await getSceneMemory()
-          const key = sceneMemoryKey(chatId, presetName)
+          const key = sceneMemoryKey(chatId, await sceneScopeFor(chatId, presetName))
           const previous = memory[key] || entry || {}
           const outfits = { ...(previous.outfits || {}) }
           for (const [ref, value] of Object.entries(payload.set)) {
