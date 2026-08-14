@@ -700,6 +700,16 @@ function realSetup(ctx) {
               <div class="ld-help ld-story-last-status">Auto illustrations idle.</div>
               <div style="margin-top:11px;padding-top:9px;border-top:1px solid var(--ld-border, rgba(255,255,255,.08))">
                 <div style="display:flex;align-items:center;gap:8px">
+                  <span class="ld-label" style="margin:0">Cast — this chat</span>
+                  <select class="ld-cast-pick" style="flex:1"></select>
+                  <button class="ld-btn ld-compact" data-act="cast-duplicate" title="Copy this cast and use the copy here, so the original story keeps its own">Copy</button>
+                </div>
+                <div class="ld-help ld-cast-summary" style="margin-top:4px"></div>
+                <div class="ld-help">A cast is <strong>who</strong> is in this story. Your preset is <strong>what the picture looks like</strong> — model, LoRAs, steps, quality. Changing presets no longer changes who is in the scene, and a character the story introduces here stays here.</div>
+                <div class="ld-status ld-cast-status" style="font-size:11px"></div>
+              </div>
+              <div style="margin-top:11px;padding-top:9px;border-top:1px solid var(--ld-border, rgba(255,255,255,.08))">
+                <div style="display:flex;align-items:center;gap:8px">
                   <span class="ld-label" style="margin:0">Wardrobe of record — this chat</span>
                   <button class="ld-btn ld-compact" data-act="wardrobe-refresh" title="Read what LumiDraw currently believes everyone is wearing">↻</button>
                 </div>
@@ -3336,6 +3346,56 @@ img[class*="inlineImage"] {
   // reached us.
   let lastSeenChatId = ''
 
+  function renderCasts(res) {
+    const pick = $('.ld-cast-pick')
+    if (!pick) return
+    const casts = res.casts || []
+    const esc = (value) => String(value || '').replace(/[<>&"]/g, '')
+    pick.innerHTML = ['<option value="">(none — fall back to the preset)</option>']
+      .concat(casts.map((cast) =>
+        `<option value="${esc(cast.id)}"${cast.id === res.boundId ? ' selected' : ''}>${esc(cast.name)}</option>`))
+      .join('')
+    const active = casts.find((cast) => cast.id === res.boundId)
+    const summary = $('.ld-cast-summary')
+    if (summary) {
+      summary.textContent = active
+        ? [active.character, active.persona, ...(active.members || [])].filter(Boolean).join(' · ') || 'Nobody in this cast yet.'
+        : 'No cast bound — this chat is using whoever is in the active preset.'
+    }
+  }
+
+  async function loadCasts(payload = {}) {
+    try {
+      const res = await call('casts', { chatId: lastSeenChatId, ...payload }, 15000)
+      renderCasts(res)
+      return res
+    } catch (e) {
+      setStatus('.ld-cast-status', e.message, 'err')
+      return null
+    }
+  }
+
+  if ($('.ld-cast-pick')) {
+    $('.ld-cast-pick').addEventListener('change', async (event) => {
+      const res = await loadCasts({ bind: event.target.value })
+      if (!res) return
+      setStatus('.ld-cast-status', res.boundId
+        ? 'This chat now uses that cast. Images and the wardrobe follow it.'
+        : 'Unbound — this chat falls back to the preset.', 'good')
+      loadWardrobe(true)
+    })
+  }
+  if ($('[data-act="cast-duplicate"]')) {
+    $('[data-act="cast-duplicate"]').addEventListener('click', async () => {
+      const current = $('.ld-cast-pick') && $('.ld-cast-pick').value
+      if (!current) { setStatus('.ld-cast-status', 'Pick a cast to copy first.', 'err'); return }
+      const res = await loadCasts({ duplicate: current })
+      if (!res) return
+      setStatus('.ld-cast-status', 'Copied. This chat uses the copy; the original story keeps its own.', 'good')
+      loadWardrobe(true)
+    })
+  }
+
   async function loadWardrobe(quiet = true, scan = false) {
     try {
       const res = await call('wardrobe', { chatId: lastSeenChatId, scan }, 30000)
@@ -3354,6 +3414,7 @@ img[class*="inlineImage"] {
   if ($('[data-act="wardrobe-refresh"]')) {
     $('[data-act="wardrobe-refresh"]').addEventListener('click', () => {
       setStatus('.ld-wardrobe-status', 'Reading this chat for cast declarations…', '')
+      loadCasts()
       loadWardrobe(false, true)
     })
   }
@@ -4542,6 +4603,7 @@ img[class*="inlineImage"] {
         }
       }
       renderCharacterList(); renderPersonaList(); renderPlaces(); renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
+      loadCasts().catch(() => {})
       loadWardrobe().catch(() => {})
       updateScanLabel()
       initialized = true

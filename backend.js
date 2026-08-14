@@ -1730,7 +1730,14 @@ async function absorbCastDeclarations(messages, targetIndex, preset, chatId = ''
   const characters = await getCharacters()
   const added = []
   const skipped = []
-  let castIds = Array.isArray(preset.castLibraryIds) ? preset.castLibraryIds.slice() : []
+  // Where does a character the story invents belong? In the cast of the story
+  // that invented it. Writing into preset.castLibraryIds — which is global and
+  // shared by every chat — is what made one story's cast turn up in another, and
+  // 0.73.0 could only paper over it by filtering the polluted list at read time.
+  // With a cast bound, there is nothing to filter: it never gets in.
+  const boundCast = await castForChat(chatId)
+  let castIds = Array.isArray((boundCast || preset).castLibraryIds)
+    ? (boundCast || preset).castLibraryIds.slice() : []
   for (const entry of declared) {
     const key = normalizeIdentityText(entry.name)
     const existing = characters.find((item) => normalizeIdentityText(item && item.name) === key)
@@ -1770,6 +1777,19 @@ async function absorbCastDeclarations(messages, targetIndex, preset, chatId = ''
     await saveCharacters(characters)
   }
   const nextIds = uniqueStrings(castIds)
+  if (boundCast) {
+    if (nextIds.join('|') !== (boundCast.castLibraryIds || []).join('|')) {
+      const casts = await getCasts()
+      const index = casts.findIndex((item) => item && item.id === boundCast.id)
+      if (index >= 0) {
+        casts[index] = { ...casts[index], castLibraryIds: nextIds }
+        await saveCasts(casts)
+        spindle.log.info(`[lumidraw] ${added.join(', ') || 'cast'} joined the cast "${boundCast.name}" — this chat only`)
+      }
+    }
+    // The preset is not touched at all on this path. That is the point.
+    return { added, skipped }
+  }
   if (nextIds.join('|') !== (preset.castLibraryIds || []).join('|')) {
     const presets = await getPresets()
     const index = presets.findIndex((item) => item && item.name === preset.name)
@@ -3061,7 +3081,27 @@ async function castSourceFor(preset, chatId) {
   }
 }
 
+// "Then I would really never have to do anything." A chat that has never been
+// bound gets bound the first time it resolves people, to the cast that came from
+// the preset it is already using. That is not a behaviour change — it is the
+// same people it would have got from the fallback — it just makes them THIS
+// chat's people from then on, so the next story cannot inherit them.
+async function autoBindChat(preset, chatId) {
+  const chat = String(chatId || '').trim()
+  if (!chat || !preset) return null
+  const map = await getChatCastMap()
+  if (map[chat]) return null
+  const casts = await getCasts()
+  const match = casts.find((item) => item && item.migratedFromPreset === preset.name) ||
+    casts.find((item) => item && item.name === preset.name)
+  if (!match) return null
+  await bindChatToCast(chat, match.id)
+  spindle.log.info(`[lumidraw] chat ${chat} had no cast, so it adopted "${match.name}" from its preset`)
+  return match
+}
+
 async function getStoryProfiles(preset, settings, userId, chatId) {
+  await autoBindChat(preset, chatId)
   preset = await castSourceFor(preset, chatId)
   const needsLibrary = !!(preset.characterLibraryId || (Array.isArray(preset.castLibraryIds) && preset.castLibraryIds.length))
   const characterLibrary = needsLibrary ? await getCharacters() : []
@@ -10010,6 +10050,56 @@ spindle.onFrontendMessage(async (payload, userId) => {
           rows.push({ ref, name: ref, tags: (tags || []).join(', '), fallback: '', orphan: true })
         }
         reply = ok(payload, requestId, { rows, chatId, preset: presetName, added, scanError, removed })
+        break
+      }
+
+      // Which cast is this chat using, and what is in it.
+      case 'casts': {
+        const chatId = String(payload.chatId || '').trim() || (await resolveActiveChatId(userId)) || ''
+        if (payload.bind !== undefined) {
+          await bindChatToCast(chatId, String(payload.bind || ''))
+        }
+        if (payload.rename && payload.castId) {
+          const casts = await getCasts()
+          const index = casts.findIndex((item) => item && item.id === String(payload.castId))
+          if (index >= 0) {
+            casts[index] = { ...casts[index], name: shortPhrase(payload.rename, 'cast name', 8, 64, false, true) }
+            await saveCasts(casts)
+          }
+        }
+        // Duplicating is how you start a new story from an existing cast without
+        // touching the one you already have. Cheaper and far safer than editing.
+        if (payload.duplicate) {
+          const casts = await getCasts()
+          const source = casts.find((item) => item && item.id === String(payload.duplicate))
+          if (source) {
+            const copy = JSON.parse(JSON.stringify(source))
+            copy.id = `cast_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+            copy.name = `${source.name} copy`
+            copy.migratedFromPreset = ''
+            copy.createdAt = Date.now()
+            casts.push(copy)
+            await saveCasts(casts)
+            if (chatId) await bindChatToCast(chatId, copy.id)
+            spindle.log.info(`[lumidraw] duplicated cast "${source.name}" and bound this chat to the copy`)
+          }
+        }
+        const [casts, map, characters] = await Promise.all([getCasts(), getChatCastMap(), getCharacters()])
+        const boundId = chatId ? (map[chatId] || '') : ''
+        reply = ok(payload, requestId, {
+          chatId,
+          boundId,
+          casts: casts.map((item) => ({
+            id: item.id,
+            name: item.name,
+            migratedFromPreset: item.migratedFromPreset || '',
+            character: (item.characterProfile && (item.characterProfile.promptName || item.characterProfile.anchor)) || '',
+            persona: (item.personaProfile && (item.personaProfile.promptName || item.personaProfile.anchor)) || '',
+            members: (item.castLibraryIds || [])
+              .map((id) => (characters.find((c) => c && c.id === id) || {}).name)
+              .filter(Boolean),
+          })),
+        })
         break
       }
 

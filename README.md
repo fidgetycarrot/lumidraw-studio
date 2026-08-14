@@ -1,74 +1,67 @@
-# LumiDraw Studio 0.76.0 — casts, part 1 of 3: the data, and not losing yours
+# LumiDraw Studio 0.77.0 — casts, part 2 of 3: the binding, and the payoff
 
-> "Build it. And I would love to not lose my character details and tags."
+Part 1 built the data. This is where it starts doing something.
 
-That second sentence is the specification. This release does the risky part —
-the data model and the migration — and does it in the one way that can't lose
-your work.
+## The payoff
 
-## The rule I held to
+A character the story invents now goes into **the cast of the story that invented
+it.** Not into `preset.castLibraryIds`, which is global and shared by every chat.
 
-**Nothing is ever removed from a preset.**
+That's the whole architecture in one sentence. 0.73.0 could only *filter* a
+polluted global list at read time, because the pollution was already in the
+preset. With a cast bound there's nothing to filter — it never gets in.
 
-The migration *copies* your character data into a new cast store. It doesn't move
-it. Every preset keeps `characterProfile`, `personaProfile`, `castLibraryIds`,
-every field, byte for byte. If every idea in this redesign turns out to be wrong,
-your originals are still sitting exactly where they were.
+Your original complaint — *"it still shows characters from the old chat"* — is
+now structurally impossible rather than defended against.
 
-Before it touches anything it also writes `presets_backup_pre_cast.json` — a
-complete copy, written **once** and never overwritten, so even a later bug can't
-damage the record of what you started with.
+## Cast — this chat
 
-## What's new
+A new control above the wardrobe, in the Story panel:
 
-- **`casts.json`** — a cast is *who is in a story*: main character, persona,
-  supporting cast, with all their tags, anatomy, looks, states and aliases.
-- **`chat_cast.json`** — which cast a chat is using.
-- **One seam.** `castSourceFor` decides whether a chat's people come from a cast
-  or from the preset. Everything downstream is unchanged.
+- **Pick the cast** this chat uses. Switch chats, the cast follows.
+- **Copy** — start a new story from an existing cast without touching the one you
+  already have. Editing a shared cast is the dangerous move; copying is cheap.
+- A one-line summary of who's actually in it.
 
-## Nothing changes yet — deliberately
+## You shouldn't have to touch it
 
-A chat with no cast bound behaves **exactly** as it did before. Same people, same
-prompts, same everything. That's the whole reason this is safe to ship on its
-own: the machinery is in place and inert until part 2 gives you a way to bind a
-chat to a cast.
+> "Then I would really never have to do anything."
 
-The migration runs on init, is idempotent, and creates one cast per preset that
-has people in it.
+A chat that's never been bound **binds itself** the first time it resolves
+people, to the cast that came from the preset it's already using. That isn't a
+behaviour change — it's the same people the fallback would have given you — it
+just makes them *this chat's* people from then on, so the next story can't
+inherit them.
 
-## The failure I was most worried about
+And it binds **once**. If it re-bound on every image, unbinding by hand would be
+undone by the next picture.
 
-Not deletion — **reversion**. You fix a tag in a cast, init runs again, and the
-preset's stale copy overwrites your correction. That would look like the app
-eating your edits at random.
+## The promise still holds
 
-The migration never touches a cast that already exists. Rename it, rewrite every
-tag in it, and a hundred later inits leave it alone.
+`presets.json` is still byte-identical after migration, after a scan that adopts
+two new characters, and after rebinding. That's asserted at the end of part 2,
+not just part 1 — the guarantee has to survive the code that came after it.
+
+Your visual preset is now purely visual in practice: changing it no longer
+changes who's in the scene.
 
 ## Verification
 
-**57 suites · 2,357 assertions · all green.** 65 new in `cast2.mjs`, most of them
-about your data specifically: every field of a fully-loaded profile asserted
-individually through the migration — anchor, prompt name, count tag, appearance,
-default outfit, anatomy and its mode, noun, named flag, appearance states, looks,
-partial features, visual aliases, library links, supporting cast.
+**57 suites · 2,389 assertions · all green.** 96 in `cast2.mjs`.
 
-Mutation-tested four ways: migration overwriting an edited cast (3 failures),
-backup overwritten on every init (1), the seam bypassed (3), shallow copy sharing
-references with the preset (4).
+Mutation-tested four ways: declarations routed back into the shared preset (5
+failures), chats never auto-binding (2), auto-bind overriding a manual choice
+(3) — and one that **wasn't caught.**
 
-**That last one escaped the first time.** My deep-copy test was written against
-the host mock, which clones on every read and write — so aliasing was invisible
-and removing the spreads passed clean. It's tested against the function directly
-now, and the same mutation fails four.
+Making the cast duplicate a shallow copy instead of a deep one passed everything.
+I checked rather than papering over it: the copy is serialized to JSON before
+anything can observe the shared reference, so the aliasing is genuinely
+unobservable through the storage boundary. The deep copy stays because it's
+correct practice, but I'm not going to claim a test proves it when it can't.
 
-## What's next
+## What's left
 
-- **Part 2** — the Cast tab, binding a chat to a cast, and `[LUMICAST]` filling
-  the chat's cast instead of a global list.
-- **Part 3** — wardrobe keyed by chat + cast, so changing visual presets stops
-  moving your characters' clothes. Then cast fields come out of the preset editor.
-
-You can install this now or wait for part 2 — it does nothing visible either way,
-which is the point.
+**Part 3** — the wardrobe keyed by chat + cast rather than chat + preset, so
+switching visual presets stops moving your characters' clothes. Then the cast
+fields come out of the preset editor, and the split is complete in the UI as well
+as the data.
