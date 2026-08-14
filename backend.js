@@ -70,7 +70,7 @@ const LEGACY_DEFAULT_PARSER_INSTRUCTION = `You convert a story passage into ONE 
 
 const DEFAULT_PARSER_INSTRUCTION = `Choose the strongest visual moment in the story passage. Prefer one image, but you may choose up to {{max_images}} distinct moments. Extract a compact visual skeleton: subjects, current clothing, expressions, poses, support surfaces, the base body arrangement, direct contact points, setting, camera, and lighting. Every value is a lowercase Danbooru/Gelbooru-style tag, never hedged prose. Do not rewrite permanent character identity or invent anatomy. LumiDraw compiles this into an Anima prompt itself: a tag run in Anima's trained order, followed by a natural-language caption block that names each character and describes their appearance, which is Anima's documented remedy for traits bleeding between characters. Give it clean scene state and let it own the wording.`
 const V0181_ANIMA_PARSER_INSTRUCTION = `Choose the strongest visual moment in the story passage. Prefer one image, but you may choose up to {{max_images}} distinct moments. Describe only scene state: which subjects are present, their current outfit, pose, expression, active-voice interaction, setting, camera, and lighting. Do not rewrite permanent character identity or invent anatomy. LumiDraw will append a strict JSON schema and compile the final image prompt itself.`
-const HISTORY_LIMIT = 24
+const HISTORY_LIMIT = 80
 
 // Keys we copy from a synced Draw Things config into a preset, and the only
 // keys (besides prompt/negative_prompt/seed) we send back in a generation
@@ -479,8 +479,23 @@ function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
 
   payload.prompt = prompt || ''
   if (negativePrompt) payload.negative_prompt = negativePrompt
+  // A seed Draw Things picks invisibly is a seed you can never reuse. Leaving the
+  // field off meant every story image was a one-off: the fix panel's "reuse seed"
+  // had nothing to reuse, and a CFG sweep was a reroll rather than a comparison.
   const parsedSeed = Number(seed)
-  if (Number.isFinite(parsedSeed) && parsedSeed >= 0) payload.seed = parsedSeed
+  payload.seed = Number.isFinite(parsedSeed) && parsedSeed >= 0
+    ? parsedSeed
+    : Math.floor(Math.random() * 4294967296)
+
+  // Negatives do almost nothing at very low guidance. Every defence in this file
+  // — the anatomy firewall, the garment substitutes, the censorship guard — is
+  // written into the negative prompt, so on a CFG-1 preset they are decoration.
+  // Worth saying out loud rather than debugging a defence that cannot fire.
+  const cfg = Number(payload.guidance_scale ?? 1)
+  if (payload.negative_prompt && cfg <= 1.5) {
+    spindle.log.warn('[lumidraw] CFG ' + cfg + ' — negatives are nearly or fully inert ' +
+      'at this guidance; defence negatives will not fire on this preset.')
+  }
 
   // Story and manual actions in LumiDraw are one-image operations. Draw Things
   // otherwise may reuse the batch count currently selected in its own UI.
@@ -2090,7 +2105,7 @@ function needleEncodings(needle) {
   ])
 }
 
-async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, seed, origin }, userId, scan = null) {
+async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, seed, origin, debug }, userId, scan = null) {
   assertStoryScanActive(scan)
   const settings = await getSettings()
   const merged = dims ? { ...config, ...dims } : config
@@ -2132,6 +2147,11 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     // where it came from: the owning message, and the exact recipe used.
     ...(origin && typeof origin === 'object' ? { origin } : {}),
     recipe: { config: merged || null, extra: extra || null },
+    // The compile trace and the parsed scene, kept with the image they produced.
+    // Every diagnosis this project has got wrong was made by reading the code and
+    // guessing what the app did; the trace says what it actually did, and it used
+    // to exist only until the next image overwrote LAST_DIAGNOSTIC.
+    ...(debug ? { trace: debug.trace || [], scene: debug.scene || null } : {}),
   }
   assertStoryScanActive(scan)
   const history = await pushHistory(entry)
@@ -4180,6 +4200,7 @@ const BOORU_VOCAB = new Set([
   'bokeh', 'gradient', 'glitch', 'scanlines', 'pixel art', 'official art', 'colorful',
   'muted color', 'pale color', 'dark', 'bright', 'crosshatching', 'stippling',
   // setting and background
+  'bulletin board', 'gate', 'poster (object)',
   'outdoors', 'indoors', 'forest', 'tree', 'bamboo forest', 'grass', 'field', 'flower',
   'flower field', 'petals', 'falling petals', 'leaf', 'fallen leaves', 'moss', 'vines',
   'roots', 'mushroom', 'crystal', 'rock', 'cliff', 'mountain', 'valley', 'meadow', 'swamp',
@@ -4289,6 +4310,7 @@ const BOORU_VOCAB = new Set([
 // Rewriting is strictly better than demoting: the concept survives *and* lands
 // in the vocabulary the model was trained on.
 const BOORU_ALIASES = {
+  'notice board': 'bulletin board', 'lantern post': 'lantern',
   // Garments. "Joggers" is the case that prompted these: Anima has no such tag,
   // so the word reached only the caption and the model drew whatever it liked.
   // A jogger IS a sweatpant — the tapered cuff is a cut, not a garment class —
@@ -5133,7 +5155,7 @@ const GARMENT_ZONES = [
   // Checked in order; the first match wins, so full-body garments must come first
   // or "dress" would register as a top.
   { zone: 'full', re: /\b(?:(?:sun|night|mini|maxi|slip)?dress|gown|robe|kimono|yukata|jumpsuit|overalls|bodysuit|leotard|swimsuit|bikini|catsuit|coveralls|nightgown|cassock|habit|romper|onesie)\b/i },
-  { zone: 'bottom', re: /\b(?:shorts|pants|trousers|jeans|skirt|leggings|tights|slacks|chaps|breeches|hakama|loincloth|briefs|boxers|panties|thong|underwear bottom)\b/i },
+  { zone: 'bottom', re: /\b(?:shorts|pants|trousers|jeans|skirt|leggings|tights|slacks|chaps|breeches|hakama|loincloth|briefs|boxers|panties|thong|underwear bottom|joggers|sweatpants|track pants|cargo pants|capri pants|yoga pants)\b/i },
   { zone: 'top', re: /\b(?:shirt|t-shirt|tank top|blouse|sweater|hoodie|jacket|coat|cardigan|vest|top|tunic|bra|camisole|crop top|pullover|blazer|poncho|cloak|corset|bustier|halter|bandeau|bodice|turtleneck|sweatshirt|jersey|smock|waistcoat|shrug|bolero|kimono jacket|haori)\b/i },
   { zone: 'feet', re: /\b(?:shoes|sneakers|boots|sandals|heels|slippers|socks|loafers|flats)\b/i },
   { zone: 'legs', re: /\b(?:thighhighs|stockings|kneehighs|garter)\b/i },
@@ -5386,14 +5408,18 @@ function withArticleList(tags) {
 function displayName(item, lead = true) {
   const anchor = String((item && item.anchor) || '').trim()
   if (!anchor) return lead ? 'The subject' : 'the subject'
-  if (item && item.named) return sentenceName(anchor)
+  // A capitalized anchor is a NAME. "Corin" became "the corin" because nothing
+  // had flagged `named`, and the parser only sets it when it is confident —
+  // which it is not for a character the story introduced in passing. The capital
+  // letter is the evidence the author already gave us; it costs nothing to read.
+  if ((item && item.named) || /^[A-Z]/.test(anchor)) return sentenceName(anchor)
   return `${lead ? 'The' : 'the'} ${anchor.toLowerCase()}`
 }
 
 // Trait nouns take "a/an" and belong in the "with …" list. A bare one-word
 // trait that names no body part ("hooded", "tall") is an adjective and must
 // not become "a hooded".
-const TRAIT_NOUN_RE = /\b(?:hair|eyes?|ears?|mouth|lips?|teeth|fangs?|tongue|nose|brows?|beard|stubble|skin|freckles?|moles?|scars?|tattoos?|piercings?|glasses|goggles|monocle|eyepatch|horns?|wings?|tails?|claws?|markings?|birthmarks?|build|figure|frame|fur|pelt|snout|muzzle|mane|paws?|hooves|whiskers|scales|feathers|antlers|talons?|paw pads|wrinkles?|dimples?|lashes|bun|braids?|ponytails?|twintails?|bangs)\b/
+const TRAIT_NOUN_RE = /\b(?:hair|eyes?|ears?|mouth|lips?|teeth|fangs?|tongue|nose|brows?|beard|stubble|skin|freckles?|moles?|scars?|tattoos?|piercings?|glasses|goggles|monocle|eyepatch|horns?|wings?|tails?|claws?|markings?|birthmarks?|build|figure|frame|fur|pelt|snout|muzzle|mane|paws?|hooves|whiskers|scales|feathers|antlers|talons?|paw pads|wrinkles?|dimples?|lashes|bun|braids?|ponytails?|twintails?|bangs|bulges?)\b/
 
 // Nonhuman-form descriptors that really are adjectives, so a transformation
 // state does not compile to "a digitigrade werewolf with a quadruped build".
@@ -6572,18 +6598,43 @@ const GARMENT_SUBSTITUTES = {
   'leotard': ['pants', 'trousers'],
 }
 
+// Two bodies arranged a particular way. Every one of these is a real Danbooru
+// tag with a large post count, which is the whole reason to prefer it: the
+// caption says "he carries her" and the model half-listens, the tag says
+// `princess carry` and the model has seen a hundred thousand of them.
+const GEOMETRY_TAG_RULES = [
+  [/\bprincess carr/i, 'princess carry'],
+  [/\bcarr(?:y|ies|ied|ying)\b/i, 'carrying'],
+  [/\bstraddl/i, 'straddling'],
+  [/\bhugg/i, 'hug'],
+  [/\bholding hands\b/i, 'holding hands'],
+  [/\bkiss(?:es|ing)?\b/i, 'kiss'],
+  [/\b(?:sits?|sitting) on (?:his|her|their) lap\b/i, 'sitting on lap'],
+]
+
 function garmentDefence(descriptors) {
   const worn = new Set()
+  let bottomCovered = false
   for (const item of descriptors || []) {
     for (const garment of item.outfit || []) {
       const head = animaTag(garment).split(/\s+/).pop()
       if (head) worn.add(head)
+      // 'bottom' only, NOT 'full'. A dress covers the legs but nobody in the
+      // frame is wearing PANTS, so negating the pants family contradicts nothing
+      // visible — and that negative is the whole point of the dress defence.
+      // props.mjs caught this: including 'full' disarmed a defence that works.
+      if (garmentZone(garment) === 'bottom') bottomCovered = true
     }
   }
   const negatives = []
   for (const head of worn) {
     for (const rival of GARMENT_SUBSTITUTES[head] || []) {
-      // Never negate something somebody in this scene is actually wearing.
+      // Joggers are pants even though the word "pants" never appears in the tag,
+      // so "worn.has(rival)" could not see the conflict — and `pants, trousers`
+      // went into the negative while Jason was wearing joggers. At CFG 1 that is
+      // a shrug; at CFG 3 it is a knife. Negating the bottom family while
+      // somebody in the frame is wearing bottoms is friendly fire.
+      if (bottomCovered && garmentZone(rival) === 'bottom') continue
       if (worn.has(rival) || negatives.includes(rival)) continue
       negatives.push(rival)
     }
@@ -6596,7 +6647,15 @@ function garmentDefence(descriptors) {
 // standing in a frame where a penis is named can be given one. Nothing in the
 // positive prompt says whose body it is not. The negative can.
 const FEMALE_COUNT_RE = /\b(?:\d+girls?|multiple girls)\b/i
+const OUTDOORS_CUE_RE = /\b(?:city|street|alley|gate|forest|beach|field|garden|park|rooftop|courtyard|meadow|plaza)\b/i
+
 const PENIS_ANATOMY_RE = /\b(?:penis|testicles|erection)\b/i
+
+// "Is anything covering the bottom half, and is it more than underwear?" Two
+// questions the compiler had no way to ask, which is why underwear-only read as
+// fully dressed to every check downstream.
+const OUTER_BOTTOM_RE = /\b(?:shorts|pants|trousers|jeans|skirt|leggings|tights|joggers|sweatpants|track pants|overalls|dress|gown|robe|tunic|hakama|slacks)\b/i
+const UNDERWEAR_BOTTOM_RE = /\b(?:panties|briefs|boxers|thong)\b/i
 // A character whose own identity blurs this is not protected against it: negating
 // futanari on a trap or a futa is negating who she is.
 const BLURRED_IDENTITY_RE = /\b(?:futanari|futa|dickgirl|newhalf|trap|otoko no ko|femboy|cuntboy|intersex)\b/i
@@ -6756,6 +6815,37 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   }))
 
   descriptors = stripBorrowedOutfit(descriptors, rememberedOutfits)
+
+  // Underwear as the only bottom layer is not a "safe" image, whatever the
+  // parser labelled it. The label drives the safety tag, the censorship defence
+  // and half the anatomy gating, so getting it one step too low quietly disables
+  // all three. This only ever raises it.
+  const exposedUnderwear = descriptors.some((item) => {
+    const outfit = item.outfit || []
+    return !outfit.some((tag) => OUTER_BOTTOM_RE.test(tag)) &&
+      outfit.some((tag) => UNDERWEAR_BOTTOM_RE.test(tag))
+  })
+  if (scene.safety === 'safe' && exposedUnderwear) {
+    scene = { ...scene, safety: 'sensitive' }
+    trace('safety floor', 'applied', 'underwear is the only bottom layer; safe → sensitive')
+  }
+
+  // Nothing in the prompt said what a body with penis anatomy looks like under a
+  // single layer, so the model drew a flat front. The tag exists and Anima knows
+  // it. Three conditions, all required: the anatomy, no outer bottom over it, and
+  // underwear actually present — a bare subject is handled by the anatomy path.
+  for (const item of descriptors) {
+    if (!['sensitive', 'nsfw', 'explicit'].includes(scene.safety)) break
+    const hasPenisAnatomy =
+      (item.anatomy || []).some((tag) => PENIS_ANATOMY_RE.test(tag)) ||
+      (((item.profile || {}).anatomy) || []).some((tag) => PENIS_ANATOMY_RE.test(tag))
+    if (!hasPenisAnatomy) continue
+    if ((item.outfit || []).some((tag) => OUTER_BOTTOM_RE.test(tag))) continue
+    if (!(item.outfit || []).some((tag) => UNDERWEAR_BOTTOM_RE.test(tag))) continue
+    item.appearance = uniqueStrings([...(item.appearance || []), 'bulge'])
+    trace('bulge', 'applied', 'no outer bottom over penis anatomy; bulge stated')
+  }
+
   for (const item of descriptors) {
     const worn = (item.outfit || []).filter((tag) => !isNotClothing(tag))
     if (worn.length) LAST_COMPILE_OUTFITS[item.subject.ref] = worn
@@ -6921,7 +7011,11 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
       }
       const sentence = relationSentence(relation, byRef)
       if (sentence) { prose.push(sentence); crossRelationCount++; renderedRelations++ }
-      if (renderedRelations >= 2) break
+      // Was 2. The FIRST relation is the body arrangement by design — "straddles
+      // the lap of", "stands between the knees of" — so a budget of two left
+      // exactly one slot for everything the bodies were actually DOING. The
+      // carry got amputated. Three keeps the arrangement and still bounds it.
+      if (renderedRelations >= 3) break
     }
 
     // Named-prop ownership only. Signature exclusivity sentences are dropped:
@@ -7005,6 +7099,14 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   trace('camera repair', repaired.note ? 'applied' : 'clean', repaired.note || 'framing and view angles already consistent')
   const groundingText = [sourcePassage, contextText].filter(Boolean).join('\n')
   const settingCheck = reconcileSetting(scene.setting, groundingText, rememberedSetting)
+  // Anima's indoor/outdoor prior is strong and `outdoors` is one of the most
+  // populated tags on Danbooru. A setting that names a street and never says
+  // "outdoors" leaves that prior free to put walls around it.
+  if (settingCheck.setting.some((tag) => OUTDOORS_CUE_RE.test(tag)) &&
+      !settingCheck.setting.includes('outdoors')) {
+    settingCheck.setting.unshift('outdoors')
+    trace('outdoors', 'applied', 'setting names an outdoor place but never says so')
+  }
   if (settingCheck.note) spindle.log.warn('[lumidraw] setting continuity · ' + settingCheck.note)
   trace('setting continuity', settingCheck.note ? 'applied' : 'clean', settingCheck.note || `kept: ${settingCheck.setting.join(', ') || '(none)'}`)
 
@@ -7071,10 +7173,47 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
     trace('orientation', 'clean', 'nothing in the scene said which way they face')
   }
 
+  // Suppressing the core action whenever ANY cross-subject relation rendered was
+  // too blunt: a relation about where they stand does not describe what they are
+  // doing, so the act was being dropped because an unrelated sentence existed.
+  // Only a relation whose verb actually matches the core action covers it.
+  const coreActionCovered = multi && (scene.relations || []).some((relation) =>
+    relation.action && scene.coreAction && verbStemsMatch(relation.action, scene.coreAction))
+
+  // Multi-subject geometry the caption states in prose but the tag run never
+  // named. Anima knows these arrangements as tags and has a strong prior for the
+  // conventional one, so the tag is worth far more than the sentence.
+  const geometryText = [
+    scene.sceneStatement || '', scene.coreAction || '',
+    ...(scene.relations || []).map((r) => `${r.action || ''} ${(r.details || []).join(' ')}`),
+  ].join(' ')
+  const geometryTags = multi
+    ? GEOMETRY_TAG_RULES.filter(([re]) => re.test(geometryText)).map(([, tag]) => tag)
+    : []
+  if (geometryTags.length) trace('geometry tags', 'applied', geometryTags.join(', '))
+
+  // The core action was never checked against the vocabulary — it simply went
+  // into the run. That was invisible while multi-subject scenes suppressed it
+  // entirely; letting it through correctly exposed it, and a core action like
+  // "crouches low, claws extended, facing the alpha wolf" is three phrases, none
+  // of them a tag. It gets the same treatment as everything else: what resolves
+  // is kept, what does not goes to the caption — or stays only when there is no
+  // caption to go to.
+  const coreActionSplit = scene.coreAction && !coreActionCovered
+    ? partitionBooruTags(animaTagList([scene.coreAction]))
+    : { kept: [], demoted: [] }
+  const coreActionTags = [...coreActionSplit.kept, ...(tagOnly ? coreActionSplit.demoted : [])]
+  if (coreActionSplit.demoted.length) {
+    trace('core action', 'applied',
+      `${coreActionSplit.kept.join(', ') || 'nothing'} kept as tags; ` +
+      `not real tags: ${coreActionSplit.demoted.join(', ')}`)
+  }
+
   const generalTags = animaTagList([
     ...facing.tags,
+    ...geometryTags,
     ...(multi ? [] : safeRelationDetails),
-    ...(scene.coreAction && !(multi && crossRelationCount) ? [scene.coreAction] : []),
+    ...coreActionTags,
     ...(multi ? [] : supportTags(descriptors, scene)),
     ...atmosphere.kept,
     ...(tagOnly ? atmosphere.demoted : []),
@@ -7153,9 +7292,9 @@ function structuredParserSchema(maxImages, profiles, minImages = 0) {
   return `
 
 STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
-Return ONLY one compact JSON object, no markdown and no prose.
+Return ONLY one compact JSON object — no markdown, no prose.
 Write every scene in the EXACT field order shown below. The order is a survival order: if your reply is ever cut off, everything already written must still form a usable scene, so the mandatory core (safety, core_action, setting, subjects) comes FIRST and droppable refinements (camera, lighting, style) come LAST:
-{"images":[{"anchor":"5-12 exact consecutive words copied from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence naming the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"required only for other refs","appearance_state":"exact saved state name for known refs or empty","look":"exact saved look name for known refs, or empty","partial_features":["exact saved feature names currently showing, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["from the CAMERA list below only"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+{"images":[{"anchor":"5-12 exact consecutive words from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence: the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"other refs only — the name exactly as written, capitals kept","appearance_state":"exact saved state name, or empty","look":"exact saved look name, or empty","partial_features":["saved feature names showing now, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions, not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["from the CAMERA list below only"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 ${minImages > 0
   ? `Return between ${minImages} and ${maxImages} image objects. ${minImages} is a FLOOR: find that many distinct visual moments even when one dominates — a second character's reaction, a change of position, a detail shown close. Each needs its own anchor from a different part of the passage.`
   : `Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.`}
@@ -8515,6 +8654,7 @@ async function scanStoryCore(userId, options = {}) {
         } else {
           entry = await generateAndUpload({
             prompt: compiled.prompt,
+            debug: { trace: compiled.trace, scene: compiled.scene },
             negativePrompt: preset.negativePrompt,
             config: preset.config,
             extra: preset.extra,
@@ -8683,6 +8823,7 @@ async function scanStoryCore(userId, options = {}) {
         const parserAlt = markdownAltText(compiled.core)
         const entry = await generateAndUpload({
           prompt: compiled.prompt,
+          debug: { trace: compiled.trace, scene: compiled.scene },
           negativePrompt: negativeWith(preset.negativePrompt, compiled.garmentNegatives),
           config: preset.config,
           extra: preset.extra,
@@ -9049,6 +9190,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
         anchor: item.anchor || '',
         sceneStatement: (compiled.scene && compiled.scene.sceneStatement) || '',
         prompt: compiled.prompt,
+        debug: { trace: compiled.trace, scene: compiled.scene },
         core: compiled.core,
         aspect: compiled.aspect || '',
         negativePrompt: negativeWith(preset.negativePrompt, compiled.garmentNegatives),
@@ -9429,7 +9571,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
             const compiled = await compileInlineBody(body, preset, settings, userId, chatId)
             const dims = aspectDims(preset.config, aspect || compiled.aspect)
             const entry = await generateAndUpload({
-              prompt: compiled.prompt, negativePrompt: preset.negativePrompt, config: preset.config, extra: preset.extra, dims,
+              prompt: compiled.prompt,
+              debug: { trace: compiled.trace, scene: compiled.scene }, negativePrompt: preset.negativePrompt, config: preset.config, extra: preset.extra, dims,
             }, userId)
             pregenCache.set(fp, entry)
             if (pregenCache.size > 8) pregenCache.delete(pregenCache.keys().next().value)
