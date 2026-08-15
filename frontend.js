@@ -4324,7 +4324,7 @@ img[class*="inlineImage"] {
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger']) {
+  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-direct-mode']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-parser-conn') {

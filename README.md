@@ -1,70 +1,44 @@
-# LumiDraw Studio 0.84.0 — direct mode, wired
+# LumiDraw Studio 0.85.0 — the toggle didn't save
 
-The toggle is real now. **Off by default** — installing this changes nothing
-until you turn it on.
+You turned it on. It didn't stick. That's why yesterday's prompt was still
+compiler output.
 
-## Turning it on
+## What happened
 
-**Settings → Story**, above the image counts:
+The settings panel auto-saves on change, but only for controls named in an
+explicit selector list. I added the checkbox, wired it into the save payload,
+made it restore on load — and never added it to the list that *triggers* a save.
 
-> ☐ **Direct mode** — let the parser write the prompt
+So it rendered correctly, read correctly, restored correctly, and was never asked
+to write. **Direct mode shipped permanently off with no way to turn it on.**
 
-When it's on, the parser gets your character sheets, the wardrobe of record, the
-place, your banned words and the fantasy flag, and writes the finished Danbooru
-prompt. The compiler doesn't run — not skipped, never reached; the return is
-before it, and there's an assertion on that ordering.
+Every source assertion I wrote passed, because each was individually true. Nothing
+checked that the four halves were connected to each other.
 
-Your preset's quality tags still lead the prompt and your negative still trails
-it. Those are yours and they're the one part that should be identical in every
-image.
+One line. `.ld-direct-mode` is in the list now, and there are four assertions that
+hold the halves together rather than checking them one at a time.
 
-## Always include
+## About the test I didn't write
 
-New field on each character, under the identity fields:
+I tried three times to write a general sweep — *every checkbox in the save
+payload must also be in the trigger list* — and got it wrong three different ways:
+matched the wrong list of two similar ones, asserted a rule that isn't actually
+true (several controls save through their own handlers), and then a listener
+regex that doesn't match how they're really bound.
 
-> **Always include (direct mode)** — `futanari`
+Three wrong versions is the signal that I don't understand the invariant well
+enough to assert it. A fourth attempt would just be tuned until it went green,
+which is exactly how a decorative test gets written. So it's not there, and the
+reason is in the file.
 
-Whatever you type there is checked after the parser writes and **added back if
-missing**. Never rewritten, never removed. It lands at the front of that
-character's run so proximity binds it to the right body, and it's skipped
-entirely for a character who isn't in that shot — a locked tag stapled onto
-somebody else is worse than a missing one.
+The four specific assertions are real and would catch this regression.
 
-Empty by default. For Fanny, type `futanari`.
+## Now try it
 
-## What driving it uncovered
+Install, tick **Direct mode**, and check it's still ticked after a reload — that's
+the thing that was broken. Then run the Corin/Price scene.
 
-Wiring it through the real handler threw **`origin is not defined`** on the first
-scan. That variable is assembled at the upload site in the compiler path and
-doesn't exist as early as direct mode needs it. Reading the code had not caught
-it — I'd passed a name that looked right.
+If the clothing still swaps in direct mode, sides are worth investigating. If it
+doesn't, that was the compiler and there's nothing to fix.
 
-That's the third time this project that driving the handler found something
-source-reading missed, and it's why the mock exists.
-
-## The part that isn't finished
-
-**I could not complete the end-to-end image assertion.** The run is proven to
-reach Draw Things with a built prompt, and every piece — parsing, the lock,
-placement, scoping, the context, the rules — is covered at the unit level. But
-the mock's image step didn't complete before I ran out of room, so "the lock
-fired inside the actually-generated prompt" and "the quality tags led it" are
-**not** verified end-to-end.
-
-That's the weakest seam in this release and the first thing I'd finish. I've left
-a comment saying so in `direct.mjs` rather than quietly trimming the test into
-something that passes for the wrong reason.
-
-## Verification
-
-**58 suites · 2,537 assertions · all green.** 75 in `direct.mjs`.
-
-Mutations caught across both parts: the lock ignoring whether the character is in
-the shot, restored tags landing at the end instead of in her run, the prompt
-being normalised on the way in.
-
-## What to do
-
-Turn it on, put `futanari` in Fanny's Always include, and run a scene. If it's
-worse for something, turn it off — your old pipeline is untouched and the seed is
-recorded either way, so you can compare properly.
+**58 suites · 2,543 assertions · all green.**
