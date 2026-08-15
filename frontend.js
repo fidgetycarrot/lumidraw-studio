@@ -722,6 +722,13 @@ function realSetup(ctx) {
                 <div class="ld-status ld-wardrobe-status" style="font-size:11px"></div>
               </div>
             </div>
+            <div style="margin-top:11px;padding:8px 9px;border-radius:6px;background:var(--ld-soft, rgba(255,255,255,.04))">
+              <label style="display:flex;align-items:center;gap:6px">
+                <input type="checkbox" class="ld-direct-mode" />
+                <span><strong>Direct mode</strong> — let the parser write the prompt</span>
+              </label>
+              <div class="ld-help" style="margin-top:4px">The parser gets your character sheets, the wardrobe of record and the place, and writes the finished Danbooru prompt itself. None of the compiler runs: no garment substitutes, no inferred orientation, no species negatives. Only your <strong>Always include</strong> tags are checked, and they are only ever added back, never rewritten. Off = the existing pipeline, unchanged.</div>
+            </div>
             <div class="ld-row" style="margin-top:9px">
               <div><span class="ld-label">Minimum images (0 = model decides)</span><input class="ld-minimg" type="number" min="0" max="4" step="1" /></div>
               <div><span class="ld-label">Maximum images</span><input class="ld-maximg" type="number" min="1" max="4" step="1" /></div>
@@ -839,6 +846,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
                 </div>
                   <div style="margin-top:7px"><span class="ld-label">Name in prompts (optional)</span><input class="ld-ed-char-promptname" placeholder="Price" /><div class="ld-hint">Only needed when the name means something to the image model — "Fanny" is booru slang, "Rose" draws roses. A surname does not help; use a name without the word at all.</div></div>
                 <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-char-subject" placeholder="adult woman" /></div>
+                <div><span class="ld-label">Always include (direct mode)</span><input class="ld-ed-char-identity" placeholder="futanari" /></div>
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-chartags" style="min-height:58px" placeholder="feminine appearance, tall, curvy, long black hair, green eyes"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-char-outfit" style="min-height:48px" placeholder="black fitted jacket, dark trousers"></textarea></div>
                 <div><span class="ld-label">Default appearance state</span><input class="ld-ed-char-default-state" placeholder="Human" /></div>
@@ -1941,6 +1949,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       anchor: profile.anchor || '',
       countTag: profile.countTag || '',
       subject: profile.subject || '',
+      identityTags: profile.identityTags || '',
       appearanceTags: profile.appearanceTags || legacyTags || '',
       defaultOutfitTags: profile.defaultOutfitTags || '',
       visualAliases: visualAliasesToText(profile.visualAliases),
@@ -1961,6 +1970,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       promptName: $(`.ld-ed-${prefix}-promptname`) ? $(`.ld-ed-${prefix}-promptname`).value.trim() : '',
       countTag: $(`.ld-ed-${prefix}-count`).value.trim(),
       subject: $(`.ld-ed-${prefix}-subject`).value.trim(),
+      // The one fact that must never drift. Checked after the parser writes, and
+      // only ever put back — never used to rewrite anything it chose.
+      identityTags: $(`.ld-ed-${prefix}-identity`) ? $(`.ld-ed-${prefix}-identity`).value.trim() : '',
       appearanceTags: $(appearanceSelector).value.trim(),
       defaultOutfitTags: $(`.ld-ed-${prefix}-outfit`).value.trim(),
       visualAliases: $(`.ld-ed-${prefix}-aliases`).value.trim(),
@@ -2018,7 +2030,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   function setCharacterFieldsLinked(linked) {
     const selectors = [
-      '.ld-ed-char-anchor', '.ld-ed-char-count', '.ld-ed-char-subject', '.ld-ed-chartags',
+      '.ld-ed-char-anchor', '.ld-ed-char-count', '.ld-ed-char-subject', '.ld-ed-char-identity', '.ld-ed-chartags',
       '.ld-ed-char-outfit', '.ld-ed-char-default-state', '.ld-ed-char-states',
       '.ld-ed-char-aliases', '.ld-ed-char-features', '.ld-ed-char-anatomy', '.ld-ed-char-anatomy-mode',
     ]
@@ -4187,6 +4199,7 @@ img[class*="inlineImage"] {
       maxImages: $('.ld-maximg').value,
       minImages: $('.ld-minimg').value,
       autoCharTags: $('.ld-chartags').checked,
+      directMode: $('.ld-direct-mode') ? $('.ld-direct-mode').checked : false,
       stripImageDirectives: $('.ld-strip-directives').checked,
       sizeChatImages: $('.ld-size-images') ? $('.ld-size-images').checked : false,
       chatImageWidth: $('.ld-image-width') ? Number($('.ld-image-width').value) || 500 : 500,
@@ -4576,6 +4589,7 @@ img[class*="inlineImage"] {
       $('.ld-maximg').value = settings.maxImages || 2
       $('.ld-minimg').value = settings.minImages || 0
       $('.ld-chartags').checked = settings.autoCharTags !== false
+      if ($('.ld-direct-mode')) $('.ld-direct-mode').checked = settings.directMode === true
       $('.ld-strip-directives').checked = settings.stripImageDirectives !== false
       if ($('.ld-size-images')) {
         const width = Number(settings.chatImageWidth) || 500

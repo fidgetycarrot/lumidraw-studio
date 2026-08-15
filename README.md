@@ -1,46 +1,70 @@
-# LumiDraw Studio 0.82.0 — "Fantasy setting" checkbox
+# LumiDraw Studio 0.84.0 — direct mode, wired
 
-## Why 0.81.0 wasn't enough for you
+The toggle is real now. **Off by default** — installing this changes nothing
+until you turn it on.
 
-I made the elf defence evidence-based: fire only when the letters `elf` actually
-appear in what's being sent, because `shelf` hides them and can't be stripped.
+## Turning it on
 
-In an isekai chat that's **worse**, not better. Fantasy prose is full of those
-letters — shelf, himself, herself, elsewhere — and it's a world where elves are
-supposed to exist. The evidence check would fire *more often* there, negating a
-species your story might be actively trying to draw.
+**Settings → Story**, above the image counts:
 
-No regex can work out which kind of story you're in. So it's asked.
+> ☐ **Direct mode** — let the parser write the prompt
 
-## The checkbox
+When it's on, the parser gets your character sheets, the wardrobe of record, the
+place, your banned words and the fantasy flag, and writes the finished Danbooru
+prompt. The compiler doesn't run — not skipped, never reached; the return is
+before it, and there's an assertion on that ordering.
 
-In the Cast panel, under the picker:
+Your preset's quality tags still lead the prompt and your negative still trails
+it. Those are yours and they're the one part that should be identical in every
+image.
 
-> ☐ **Fantasy setting — don't treat elves as a mistake**
+## Always include
 
-Tick it for your isekai chat and `elf, pointy ears` never enters the negative for
-that story, whatever the prose contains. Your contemporary chat keeps the guard.
+New field on each character, under the identity fields:
 
-It lives on the **cast** because it's a fact about the story, and the cast is the
-per-story object we built in 0.76–0.78. Bind a cast, tick the box, done — it
-follows the chat like everything else.
+> **Always include (direct mode)** — `futanari`
+
+Whatever you type there is checked after the parser writes and **added back if
+missing**. Never rewritten, never removed. It lands at the front of that
+character's run so proximity binds it to the right body, and it's skipped
+entirely for a character who isn't in that shot — a locked tag stapled onto
+somebody else is worse than a missing one.
+
+Empty by default. For Fanny, type `futanari`.
+
+## What driving it uncovered
+
+Wiring it through the real handler threw **`origin is not defined`** on the first
+scan. That variable is assembled at the upload site in the compiler path and
+doesn't exist as early as direct mode needs it. Reading the code had not caught
+it — I'd passed a name that looked right.
+
+That's the third time this project that driving the handler found something
+source-reading missed, and it's why the mock exists.
+
+## The part that isn't finished
+
+**I could not complete the end-to-end image assertion.** The run is proven to
+reach Draw Things with a built prompt, and every piece — parsing, the lock,
+placement, scoping, the context, the rules — is covered at the unit level. But
+the mock's image step didn't complete before I ran out of room, so "the lock
+fired inside the actually-generated prompt" and "the quality tags led it" are
+**not** verified end-to-end.
+
+That's the weakest seam in this release and the first thing I'd finish. I've left
+a comment saying so in `direct.mjs` rather than quietly trimming the test into
+something that passes for the wrong reason.
 
 ## Verification
 
-**57 suites · 2,460 assertions · all green.**
+**58 suites · 2,537 assertions · all green.** 75 in `direct.mjs`.
 
-Mutation-tested two ways, both caught: the flag ignored (2 failures), every story
-treated as fantasy (4). The second matters as much as the first — a flag that's
-always on is the same as no defence, and 0.81.0's behaviour has to survive for
-your other chat.
+Mutations caught across both parts: the lock ignoring whether the character is in
+the shot, restored tags landing at the end instead of in her run, the prompt
+being normalised on the way in.
 
-## Worth saying
+## What to do
 
-This is the fourth defence in two days that was calibrated for one kind of story
-and wrong in another — joggers, the facing veto, the blanket elf negative, and
-now the setting. The pattern is consistent: I wrote a rule that was true for the
-scene in front of me and made it unconditional.
-
-The fantasy flag is the first one that admits the app can't know. If you hit more
-of these, that's probably the shape of the fix — a fact about the story, asked
-once, rather than another regex trying to infer it.
+Turn it on, put `futanari` in Fanny's Always include, and run a scene. If it's
+worse for something, turn it off — your old pipeline is untouched and the seed is
+recorded either way, so you can compare properly.

@@ -49,6 +49,7 @@ const DEFAULT_SETTINGS = {
   maxImages: 2,           // max illustrations per story message
   minImages: 0,           // required illustrations per reply (0 = model's discretion)
   autoCharTags: true,     // use active character image tags as a profile fallback
+  directMode: false,      // the parser writes the finished prompt; the compiler does not run
   subjectBinding: false,  // legacy compatibility mirror of parserEngine === 'anima'
   dtModelsPath: '',       // retained for compatibility with older settings
   bridgeHost: '127.0.0.1', // native LumiDraw Bridge runs on the Lumiverse Mac
@@ -3012,6 +3013,10 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
     promptName: shortPhrase(source.promptName || '', `${fallbackRef} prompt name`, 6, 64, true, true),
     countTag,
     subject: shortPhrase(source.subject || '', `${fallbackRef} subject phrase`, 8, 72, true),
+    // Direct mode's only rule. normalizeProfile builds a fresh object from named
+    // fields, so a field that is not listed here simply does not survive — which
+    // is how the lock would have silently locked nothing.
+    identityTags: animaTagList(String(source.identityTags || '').split(',')).slice(0, 6).join(', '),
     appearance: shortList(appearance, `${fallbackRef} appearance`, { maxItems: 32, maxWords: 7, maxChars: 72 }),
     defaultOutfit: shortList(source.defaultOutfitTags || '', `${fallbackRef} default outfit`, { maxItems: 12, maxWords: 7, maxChars: 72 }),
     visualAliases: normalizeVisualAliases(source.visualAliases || source.namedVisualAliases || '', `${fallbackRef} visual alias`),
@@ -7011,6 +7016,254 @@ function applyPromptNames(text, profiles) {
 
 const SUBJECT_BREAK_MARK = '\u0000SUBJECT_BREAK'
 
+// ===========================================================================
+// DIRECT MODE
+//
+// Eric, after an A/B at a fixed seed: "That's an immediately better image."
+//
+// The compiler below this comment takes clean structured JSON from a capable
+// model and runs it through roughly forty transformations — trait merging,
+// creature grounding, alias rewriting, garment substitutes, orientation
+// inference, four separate defences. Every one was written in response to one
+// bad picture. Together they produced prompts no person would write:
+//
+//     "a tusks orc woman with a large orc woman, sword pulled from ground and
+//      chin jerked aside, laughing and throwing, an open mouth"
+//
+// And they fought each other. Joggers against the pants negative, the facing
+// veto against a bookshelf, the elf negative against an isekai. Those were not
+// unrelated bugs; that is what a pile of independent rules does once it is big
+// enough.
+//
+// Direct mode gives the writing back to the model that can read. LumiDraw
+// supplies context, holds it to the handful of facts the author has actually
+// declared, and sends. Nothing rewrites the model's tags.
+//
+// THE ONE RULE THAT SURVIVES, and why:
+//
+// When I hand-wrote the prompt that beat the compiler, I left `futanari` off
+// Fanny — the single most important fact about her — and the picture was wrong
+// in exactly the way the old anatomy firewall existed to prevent. A model
+// writing prose-to-tags will make that mistake for the same reason I did:
+// identity facts do not feel like part of the sentence. So one check remains,
+// and it does not rewrite anything. It asks whether the tags the author marked
+// as non-negotiable are present, and puts back the ones that are not.
+// ===========================================================================
+
+// Turn the prompts the parser wrote into images. Everything the compiler used to
+// do between "the model has spoken" and "send it" is gone: no scene graph, no
+// defences, no substitutions. Quality tags in front, the author's negative
+// behind, the identity lock in the middle, send.
+async function runDirectImages(images, ctx) {
+  const { preset, profiles, userId, chatId, scan, rawReply, parserInput, target } = ctx
+  // Built here rather than passed in: `origin` is assembled at the upload site in
+  // the compiler path and does not exist this early. Passing a name that is not
+  // in scope is how the first wiring attempt threw `origin is not defined` on the
+  // very first real scan — caught by driving it through the handler rather than
+  // reading the code and assuming.
+  const origin = {
+    messageId: String((target && target.id) || ''),
+    chatId: String(chatId || ''),
+    contentKey: (target && target.contentKey) || '',
+    presetName: preset.name || '',
+  }
+  const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
+  const results = []
+  const traceLines = []
+  const trace = (label, status, detail) => traceLines.push({ label, status, detail })
+
+  for (let index = 0; index < images.length; index++) {
+    assertStoryScanActive(scan)
+    const image = images[index]
+    const locked = applyIdentityLock(image.prompt, profiles, trace)
+    const banned = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
+    const body = banned.join(', ').replace(/\s*,\s*BREAK\s*,\s*/g, ' BREAK ').trim()
+    // The preset's own quality tags still lead — they are the author's, and they
+    // are the one part of the prompt that should be identical in every image.
+    const prompt = joinPromptParts([preset.qualityTags, prefix, body])
+    trace('direct prompt', 'applied',
+      `${image.prompt.length} chars from the parser, sent as ${prompt.length}`)
+
+    const dims = aspectDims(preset.config, image.aspect)
+    const entry = await generateAndUpload({
+      prompt,
+      negativePrompt: preset.negativePrompt || '',
+      config: preset.config,
+      extra: preset.extra,
+      dims,
+      origin: { ...origin, mode: 'direct', alt: markdownAltText(prompt) },
+      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, aspect: image.aspect } },
+    }, userId, scan)
+    results.push({ ok: true, entry, anchor: image.anchor, prompt })
+  }
+
+  await saveStoryDebug({
+    mode: 'direct',
+    parserEngine: 'direct',
+    rawReply,
+    error: '',
+    entries: results.map((item) => ({ anchor: item.anchor, prompt: item.prompt })),
+    lastCompiledPrompt: results.length ? results[results.length - 1].prompt : '',
+    contextPreview: parserInput.contextPreview,
+    ledgerPreview: parserInput.ledgerPreview,
+    contextMessageCount: parserInput.contextMessageCount,
+    ledgerFound: parserInput.ledgerFound,
+    trace: traceLines,
+  })
+  spindle.log.info(`[lumidraw] direct mode produced ${results.length} image(s); the compiler did not run`)
+  return { mode: 'direct', processed: results.length, results, messageId: target && target.id }
+}
+
+const DIRECT_RULES = `
+You are writing the FINAL image prompt. Do not describe the scene in prose and
+do not return a scene graph — return the prompt itself, in Danbooru tag style,
+because the image model was trained on booru tags and reads nothing else well.
+
+FORMAT — return ONLY this JSON, compact, no markdown:
+{"images":[{"anchor":"5-12 exact consecutive words copied from the CURRENT PASSAGE","prompt":"the finished prompt","aspect":"3:4|4:3|1:1|16:9|9:16"}]}
+
+WRITING THE PROMPT:
+- AT MOST TWO characters. Three or more is where this model falls apart, so
+  choose the two whose moment carries the scene and leave the rest out. Fewer
+  people is a better picture, not a less faithful one.
+- Separate each character with " BREAK ". One contiguous run per character:
+  count tag, then who they are, then what they wear, then what they are doing.
+  Never mention one character inside another's run.
+- Common Danbooru tags only. Short comma-separated phrases. If a concept has no
+  tag, leave it out rather than writing a sentence — a story beat the model
+  cannot draw only competes with the one it can.
+- Open with the shared frame: count tags, setting, time, camera framing.
+- Copy the character sheets EXACTLY for identity and clothing. They are the
+  author's, not suggestions, and a character must look the same in every image.
+- One clear action. Not three.
+
+NEVER: prose sentences, invented tags, a character's name as a tag, repeating a
+species or garment word more than once, or anything from the banned list.
+`
+
+// The context the parser needs to write a good prompt, in the plainest form
+// that survives a language model reading it. This is what LumiDraw is FOR now:
+// knowing who is in this chat, what they were last seen wearing, where they are.
+function directContext(profiles, { wardrobe = null, places = [], banned = '', fantasy = false } = {}) {
+  const lines = []
+  for (const profile of allKnownProfiles(profiles)) {
+    if (!profile) continue
+    const name = profile.promptName || profile.anchor || profile.ref
+    const worn = (wardrobe && wardrobe[profile.ref] && wardrobe[profile.ref].length)
+      ? wardrobe[profile.ref] : (profile.defaultOutfit || [])
+    const lock = identityLockFor(profile)
+    lines.push([
+      `${name}: ${profile.countTag || ''}`,
+      (profile.appearance || []).join(', '),
+      lock.length ? `ALWAYS INCLUDE: ${lock.join(', ')}` : '',
+      worn.length ? `wearing: ${worn.join(', ')}` : '',
+    ].filter(Boolean).join(' | '))
+  }
+  const place = (places || []).filter(Boolean).slice(0, 1)
+    .map((item) => `Place — ${item.name}: ${(item.setting || []).join(', ')}`)
+  return [
+    'CHARACTER SHEETS (copy identity and clothing exactly):',
+    ...lines,
+    ...place,
+    banned ? `NEVER USE THESE: ${banned}` : '',
+    fantasy
+      ? 'This is a FANTASY setting. Non-human species are correct here, not errors.'
+      : '',
+  ].filter(Boolean).join('\n')
+}
+
+function buildDirectInstruction(profiles, options = {}) {
+  return [DIRECT_RULES.trim(), '', directContext(profiles, options)].join('\n')
+}
+
+// The scene the parser writes, with nothing but structural checks. `prompt` is
+// taken verbatim — the entire point of this mode is that nothing downstream
+// rewrites it.
+function parseDirectImages(raw, maxImages = 2) {
+  let text = extractParserText(raw)
+  const parsed = (() => {
+    try { return JSON.parse(sanitizeJsonText(text)) } catch { /* fall through */ }
+    const match = /\{[\s\S]*\}/.exec(text)
+    if (!match) return null
+    try { return JSON.parse(sanitizeJsonText(match[0])) } catch { return null }
+  })()
+  if (!parsed || !Array.isArray(parsed.images)) return { images: [], error: 'no images array in the reply' }
+  const images = []
+  for (const item of parsed.images.slice(0, Math.max(1, maxImages))) {
+    if (!item || typeof item !== 'object') continue
+    const prompt = String(item.prompt || '').trim()
+    if (!prompt) continue
+    images.push({
+      anchor: String(item.anchor || '').trim(),
+      prompt,
+      aspect: VALID_ASPECTS.has(String(item.aspect || '')) ? String(item.aspect) : '3:4',
+    })
+  }
+  return { images, error: images.length ? '' : 'no usable prompt in the reply' }
+}
+
+// Which tags must be present whenever this character is in the picture.
+//
+// Explicit, never inferred. `identityTags` is the author's list; the noun is
+// used only when they have not written one, because "a futanari" IS the fact in
+// Fanny's case and pretending otherwise would just lose it. An empty list locks
+// nothing — a character with no declared non-negotiables is entirely the
+// parser's to describe.
+function identityLockFor(profile) {
+  if (!profile) return []
+  const declared = Array.isArray(profile.identityTags) ? profile.identityTags
+    : String(profile.identityTags || '').split(',')
+  // Explicit only. I first wrote a fallback that inferred the lock from the
+  // character's noun, and it was the same mistake as everything else tonight —
+  // guessing a rule from one example. Fanny's `futanari` lives in her appearance
+  // tags, not a noun field, so the inference found nothing and would have found
+  // the wrong thing for somebody else. Empty locks nothing, and that is correct:
+  // the sheet is already in the parser's context, so the lock is a backstop for
+  // drift, not the mechanism.
+  return animaTagList(declared).slice(0, 6)
+}
+
+// Is this character in this prompt at all? Their name is not in it — names are
+// not tags — so identity is matched on the tags that describe them.
+function subjectPresentIn(prompt, profile) {
+  const text = String(prompt || '').toLowerCase()
+  const marks = [...(profile.appearance || []), ...(profile.defaultOutfit || [])]
+  const hits = marks.filter((tag) => tag && text.includes(String(tag).toLowerCase())).length
+  return hits >= 2
+}
+
+// The only thing that touches what the parser wrote, and it only ever ADDS.
+function applyIdentityLock(prompt, profiles, trace = null) {
+  let text = String(prompt || '')
+  const restored = []
+  for (const profile of allKnownProfiles(profiles)) {
+    const required = identityLockFor(profile)
+    if (!required.length) continue
+    if (!subjectPresentIn(text, profile)) continue
+    const missing = required.filter((tag) => !new RegExp(`(^|,\\s*)${escapeForRegex(tag)}\\s*(,|$| BREAK)`, 'i').test(text))
+    if (!missing.length) continue
+    // Placed at the front of that character's run, where proximity binds it to
+    // the right body — appending to the end of the whole prompt would let the
+    // model attach it to whoever was named last.
+    const who = (profile.appearance || []).find((tag) => text.toLowerCase().includes(String(tag).toLowerCase()))
+    if (who) {
+      const at = text.toLowerCase().indexOf(String(who).toLowerCase())
+      text = `${text.slice(0, at)}${missing.join(', ')}, ${text.slice(at)}`
+    } else {
+      text = `${text}, ${missing.join(', ')}`
+    }
+    restored.push(`${profile.anchor || profile.ref}: ${missing.join(', ')}`)
+  }
+  if (restored.length && trace) {
+    trace('identity lock', 'applied', `put back what the parser dropped — ${restored.join('; ')}`)
+  }
+  return { prompt: text, restored }
+}
+
+function escapeForRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null, rememberedLooks = null, places = [], breakInPreset = false } = {}) {
   traceReset()
   // Matched before anything else uses it: the Place contributes to the negatives
@@ -8999,15 +9252,38 @@ async function scanStoryCore(userId, options = {}) {
         .replaceAll('{{max_images}}', String(settings.maxImages || 2))
         .replaceAll('{{min_images}}', String(settings.minImages || 0))
       const resolvedGuidance = await resolveMacros(guidance, userId, chatId)
-      const instruction = applyDynamicGuidance(
-        resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
-        composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: await getPlaces(), wardrobe: (rememberedState && rememberedState.outfits) || null })))
-      const instrLabel = usingCustom ? `custom guidance + structured compiler (${instruction.length} chars)` : 'structured subject compiler'
+      // DIRECT MODE. The parser writes the finished prompt instead of a scene
+      // graph, and none of the compiler below runs. Off by default; your existing
+      // pipeline is untouched until you turn it on.
+      const directMode = settings.directMode === true
+      const savedPlacesForParser = await getPlaces()
+      const instruction = directMode
+        ? buildDirectInstruction(profiles, {
+          wardrobe: (rememberedState && rememberedState.outfits) || null,
+          places: savedPlacesForParser,
+          banned: preset.bannedTags || '',
+          fantasy: !!profiles.fantasySetting,
+        })
+        : applyDynamicGuidance(
+          resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
+          composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: savedPlacesForParser, wardrobe: (rememberedState && rememberedState.outfits) || null })))
+      const instrLabel = directMode
+        ? `direct mode — the parser writes the prompt (${instruction.length} chars)`
+        : (usingCustom ? `custom guidance + structured compiler (${instruction.length} chars)` : 'structured subject compiler')
       setStoryScanStage(scan, 'parsing', 'Waiting for the selected parser model.')
       spindle.log.info('[lumidraw] Anima parser context · previous_messages=' + parserInput.contextMessageCount + ' · loom_ledger=' + (parserInput.ledgerFound ? 'found' : 'none'))
       const out = await quietLLM(instruction, parserInput.input, settings, userId, true, scan)
       assertStoryScanActive(scan)
       setStoryScanStage(scan, 'compiling', 'Parser returned structured JSON; compiling the Anima prompt.')
+      if (directMode) {
+        const direct = parseDirectImages(out, settings.maxImages || 2)
+        if (!direct.images.length) {
+          throw new Error(`Direct mode: ${direct.error || 'the parser returned no usable prompt'}`)
+        }
+        return await runDirectImages(direct.images, {
+          target, preset, profiles, userId, chatId, scan, rawReply: out, parserInput,
+        })
+      }
       let parsed
       try {
         parsed = parseParserScenes(out, settings.maxImages || 2, profiles)
@@ -9611,6 +9887,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.cloudFallback !== undefined) settings.cloudFallback = !!payload.cloudFallback
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
+        if (payload.directMode !== undefined) settings.directMode = !!payload.directMode
         if (payload.useLoomLedger !== undefined) settings.useLoomLedger = !!payload.useLoomLedger
         if (payload.stripImageDirectives !== undefined) settings.stripImageDirectives = !!payload.stripImageDirectives
         if (payload.sizeChatImages !== undefined) settings.sizeChatImages = !!payload.sizeChatImages
