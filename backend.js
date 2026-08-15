@@ -7075,6 +7075,13 @@ async function runDirectImages(images, ctx) {
   for (let index = 0; index < images.length; index++) {
     assertStoryScanActive(scan)
     const image = images[index]
+    // THE WATCHDOG. "compiling" is budgeted at 60 seconds because in the compiler
+    // path it is a fast local operation — the generate step moves the stage to
+    // 'generating' first. Direct mode did the whole run, image included, while
+    // the stage still said 'compiling', so an 80-second generation on a laptop
+    // was killed by a timer meant for string manipulation.
+    setStoryScanStage(scan, 'generating',
+      `Sending image ${index + 1} of ${images.length} to Draw Things.`)
     const locked = applyIdentityLock(image.prompt, profiles, trace)
     const banned = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
     const body = banned.join(', ').replace(/\s*,\s*BREAK\s*,\s*/g, ' BREAK ').trim()
@@ -7097,6 +7104,7 @@ async function runDirectImages(images, ctx) {
     results.push({ ok: true, entry, anchor: image.anchor, prompt })
   }
 
+  setStoryScanStage(scan, 'inserting', 'Adding generated images to the story message.')
   await saveStoryDebug({
     mode: 'direct',
     parserEngine: 'direct',
