@@ -3330,6 +3330,8 @@ img[class*="inlineImage"] {
   // --- wardrobe of record -----------------------------------------------------
   // The compiler corrects the parser toward what it remembers, so a wrong record
   // is worse than no record: it is defended. This is the correction.
+  let wardrobeLibrary = []
+
   function renderWardrobeRows(rows) {
     const box = $('.ld-wardrobe-rows')
     if (!box) return
@@ -3348,12 +3350,23 @@ img[class*="inlineImage"] {
       const mark = row.declared
         ? '<span title="added by the story rather than by you — × deletes it" style="opacity:.55">  (story)</span>'
         : ''
+      // Swap a story-invented character for one you wrote. The story's version is
+      // a guess at somebody you may already have properly written elsewhere — in
+      // a lorebook, say — and this is how you say "use mine".
+      const swap = row.id
+        ? `<select class="ld-wardrobe-swap" data-id="${row.id}" title="Use a character from your library instead" style="max-width:120px">` +
+          `<option value="">— use mine —</option>` +
+          wardrobeLibrary.filter((item) => item.id !== row.id)
+            .map((item) => `<option value="${String(item.id).replace(/"/g, '')}">${String(item.name || '').replace(/[<>&]/g, '')}</option>`)
+            .join('') + '</select>'
+        : ''
       const remove = row.id
         ? `<button class="ld-btn ld-compact" data-act="wardrobe-drop" data-id="${row.id}" data-name="${name}" data-declared="${row.declared ? '1' : ''}" title="${row.declared ? 'Delete this character — the story invented it' : 'Unlink from this preset; the character itself is kept'}" style="padding:2px 7px">×</button>`
         : ''
       return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
         <span style="min-width:96px;font-size:12px;opacity:.8">${name}${row.orphan ? ' *' : ''}${mark}</span>
         <input class="ld-wardrobe-input" data-ref="${row.ref}" style="flex:1" value="${tags}" placeholder="${hint}" />
+        ${swap}
         ${remove}
       </div>`
     }).join('') + '<button class="ld-btn ld-compact" data-act="wardrobe-save" style="margin-top:4px">Save wardrobe</button>'
@@ -3444,6 +3457,7 @@ img[class*="inlineImage"] {
   async function loadWardrobe(quiet = true, scan = false) {
     try {
       const res = await call('wardrobe', { chatId: lastSeenChatId, scan }, 30000)
+      wardrobeLibrary = res.library || []
       renderWardrobeRows(res.rows)
       if (quiet) return
       const where = res.chatId
@@ -3465,7 +3479,23 @@ img[class*="inlineImage"] {
   }
   // The save button is created by renderWardrobeRows, so the listener is delegated.
   if ($('.ld-wardrobe-rows')) {
+    $('.ld-wardrobe-rows').addEventListener('change', async (event) => {
+      const swapEl = event.target.closest('.ld-wardrobe-swap')
+      if (!swapEl || !swapEl.value) return
+      const from = swapEl.getAttribute('data-id')
+      const label = swapEl.options[swapEl.selectedIndex].textContent
+      try {
+        const res = await call('wardrobe', { chatId: lastSeenChatId, replace: { from, to: swapEl.value } }, 15000)
+        wardrobeLibrary = res.library || wardrobeLibrary
+        renderWardrobeRows(res.rows)
+        setStatus('.ld-wardrobe-status', `Now using your saved ${label}. The story's version was replaced.`, 'good')
+      } catch (e) {
+        setStatus('.ld-wardrobe-status', e.message, 'err')
+      }
+    })
     $('.ld-wardrobe-rows').addEventListener('click', async (event) => {
+      const swapEl = event.target.closest('.ld-wardrobe-swap')
+      if (swapEl) return
       const drop = event.target.closest('[data-act="wardrobe-drop"]')
       if (drop) {
         const name = drop.getAttribute('data-name') || 'this character'

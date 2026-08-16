@@ -2411,9 +2411,27 @@ async function chatOccupants(userId, chatId) {
     out.characterId = String(chat.characterId || chat.character_id ||
       (Array.isArray(chat.characterIds) && chat.characterIds[0]) ||
       (Array.isArray(chat.characters) && ((chat.characters[0] || {}).id || chat.characters[0])) || '')
+    // Eric's DTO, from the log: id, character_id, name, metadata, created_at,
+    // updated_at. No persona field at the top level at all — so if it is anywhere
+    // it is inside `metadata`, which is the only opaque one. Rather than guess a
+    // key inside it, walk it for anything persona-shaped and log what was there.
+    const meta = (chat.metadata && typeof chat.metadata === 'object') ? chat.metadata : {}
+    out.metaKeys = Object.keys(meta)
+    const fromMeta = () => {
+      for (const [key, value] of Object.entries(meta)) {
+        if (!/persona/i.test(key)) continue
+        if (typeof value === 'string' && value.trim()) return value.trim()
+        if (value && typeof value === 'object') {
+          const inner = value.id || value.personaId || value.persona_id || value.name
+          if (inner) return String(inner)
+        }
+      }
+      return ''
+    }
     out.personaId = String(chat.personaId || chat.persona_id ||
       (chat.persona && (chat.persona.id || chat.persona)) ||
-      (Array.isArray(chat.personas) && ((chat.personas[0] || {}).id || chat.personas[0])) || '')
+      (Array.isArray(chat.personas) && ((chat.personas[0] || {}).id || chat.personas[0])) ||
+      fromMeta() || '')
   } catch (error) {
     spindle.log.warn('[lumidraw] could not read the chat occupants: ' + error.message)
   }
@@ -3294,7 +3312,8 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
     } else if (occupants.personaId) {
       spindle.log.info(`[lumidraw] the chat names persona ${occupants.personaId} but it could not be read; keeping the cast's`)
     } else if (occupants.chatKeys.length) {
-      spindle.log.info('[lumidraw] the chat DTO names no persona. Keys: ' + occupants.chatKeys.join(', '))
+      spindle.log.info('[lumidraw] the chat DTO names no persona. Keys: ' + occupants.chatKeys.join(', ') +
+        ' · metadata: ' + ((occupants.metaKeys || []).join(', ') || '(empty)'))
     }
   }
 
@@ -10494,6 +10513,46 @@ spindle.onFrontendMessage(async (payload, userId) => {
             spindle.log.info(`[lumidraw] wardrobe scan could not read the chat: ${error.message}`)
           }
         }
+        // Swapping a cast member for one from your library.
+        //
+        // The story declares a character with whatever tags it invented. If you
+        // already HAVE that person written properly — Fanny lives in a lorebook
+        // here, not on the character card — the invented version is a worse
+        // duplicate. This replaces it in the cast list, and deletes the story's
+        // copy because nothing of yours was in it.
+        let swapped = ''
+        if (payload.replace && payload.replace.from && payload.replace.to && preset) {
+          const from = String(payload.replace.from)
+          const to = String(payload.replace.to)
+          const boundCast = await castForChat(chatId)
+          const source = boundCast || preset
+          const ids = (source.castLibraryIds || []).map((id) => (String(id) === from ? to : String(id)))
+          const characters = await getCharacters()
+          const doomed = characters.find((item) => item && String(item.id) === from &&
+            item.profile && item.profile.declaredByStory)
+          if (doomed) await saveCharacters(characters.filter((item) => item !== doomed))
+          if (boundCast) {
+            const casts = await getCasts()
+            const index = casts.findIndex((item) => item && item.id === boundCast.id)
+            if (index >= 0) {
+              casts[index] = { ...casts[index], castLibraryIds: uniqueStrings(ids) }
+              await saveCasts(casts)
+            }
+          } else {
+            const all = await getPresets()
+            const index = all.findIndex((item) => item && item.name === preset.name)
+            if (index >= 0) {
+              all[index] = { ...all[index], castLibraryIds: uniqueStrings(ids) }
+              await savePresets(all)
+              preset.castLibraryIds = uniqueStrings(ids)
+            }
+          }
+          swapped = to
+          const named = (characters.find((item) => String(item.id) === to) || {}).name || to
+          spindle.log.info(`[lumidraw] cast swap · using your saved "${named}" instead of the story's version` +
+            (doomed ? `; the story's ${doomed.name} was deleted` : ''))
+        }
+
         // Removing a cast member. The rule that keeps this safe: a character the
         // STORY invented is deleted outright, because nothing of yours is in it.
         // A character YOU added is only unlinked from this preset — never
@@ -10582,7 +10641,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
           if (rows.some((row) => row.ref === ref)) continue
           rows.push({ ref, name: ref, tags: (tags || []).join(', '), fallback: '', orphan: true })
         }
-        reply = ok(payload, requestId, { rows, chatId, preset: presetName, added, scanError, removed })
+        const library = (await getCharacters()).map((item) => ({
+          id: item.id, name: item.name, story: !!(item.profile && item.profile.declaredByStory),
+        }))
+        reply = ok(payload, requestId, { rows, chatId, preset: presetName, added, scanError, removed, swapped, library })
         break
       }
 
