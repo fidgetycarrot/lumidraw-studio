@@ -1,49 +1,43 @@
-# LumiDraw Studio 0.91.0 — swap a cast member, and the persona hunt
+# LumiDraw Studio 0.92.0 — it was saved. It just never told you where.
 
-## Your log answered the persona question
+## Where Fanny was
 
-```
-the chat DTO names no persona. Keys: id, character_id, name, metadata, created_at, updated_at
-```
+**In your Characters tab, the whole time.** When LUMICAST fires it writes a real,
+editable character into your library — same list as your Fanny Price.
 
-**There is no persona field on the chat.** Only `character_id`. So it isn't a
-matter of me guessing the wrong name — it genuinely isn't there, except possibly
-inside `metadata`, which is the one opaque field left.
+Two things hid it:
 
-Rather than guess a key inside it, this walks `metadata` for anything
-persona-shaped — `personaId`, `persona_id`, `persona: {id|name}`,
-`activePersonaId`, or any key matching `/persona/i`. Five shapes, all tested.
+1. **The panel reads that library exactly once, at init.** A story that invents
+   somebody mid-chat writes an entry the panel is never told about, so the tab
+   keeps rendering the list from the moment it opened. You'd have had to close
+   and reopen Lumiverse to see her.
+2. **No wardrobe row said where its tags came from.** Even looking straight at
+   the row that produced those tags, there was nothing to follow.
 
-And the log now prints the **metadata keys** as well:
+## What changed
 
-> `the chat DTO names no persona. Keys: … · metadata: theme, lastRead`
+**Every wardrobe read now refreshes the Characters tab.** No reopening.
 
-If it still says no persona, send me that metadata list. If metadata is empty
-too, then Lumiverse simply doesn't record a persona per chat, and the honest
-answer is that the cast has to supply it — which is what it does today.
+**Each row says where its tags live**, on hover:
 
-## Swap a cast member for one you wrote
+- *a saved character — click to edit it* → the name is a link; clicking it jumps
+  to Cast & presets and opens that character
+- *stored in the active preset* / *stored in the bound cast* → the leads, which
+  aren't library entries and have nothing to open
 
-> "Fanny Price is in this story, she's just part of the lorebooks instead of the
-> character card. I'd want to pull her character tags over even though the
-> lumicast fired for her with its own tags."
+So the row that made the image now takes you to the thing that owns it.
 
-Every cast row now has a small **— use mine —** picker listing your character
-library. Choose your saved Fanny Price and she replaces the story's invented
-version in the cast; the story's copy is deleted, since nothing of yours was in
-it.
+## Still true from 0.91
 
-Same safety rule as removal: **a character you wrote is never deleted.** Swapping
-one of yours for another only unlinks the first. There's a test.
+The **— use mine —** picker on each cast row. Now that you can *see* the story's
+Fanny, the picker is how you replace her with yours — and if you'd rather just
+fix her tags in place, the link gets you there instead.
 
-Works on a bound cast or a preset, whichever the chat is using.
+## Verification
 
-## Also visible in your log
+**58 suites · 2,657 assertions · all green.**
 
-> `character comes from the chat: The Remote`
-
-The world card is in the character slot, as expected. If it starts appearing as a
-person in your images, tell me — the fix is small, but I'm not writing it on
-speculation.
-
-**58 suites · 2,641 assertions · all green.**
+Mutation-tested four ways, all caught: the reply dropping the library (3
+failures — the original bug, reproduced), every row claiming to be a library
+entry (2), the panel ignoring the refresh (1), the swap select falling through
+to the link (1).

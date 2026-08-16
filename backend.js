@@ -10599,6 +10599,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
         const entry = await readSceneMemory(chatId, presetName)
         const profiles = preset ? await getStoryProfiles(preset, settings, userId, chatId) : null
+        const boundCastForRows = await castForChat(chatId)
 
         if (payload.set && typeof payload.set === 'object') {
           const memory = await getSceneMemory()
@@ -10629,6 +10630,15 @@ spindle.onFrontendMessage(async (payload, userId) => {
             // the main character and the persona come from the preset itself and
             // there is nothing sensible to remove them from.
             id: profile.libraryId || '',
+            // WHERE THE TAGS LIVE. "lumidraw has the Fanny character saved
+            // somehow, somewhere cause the image it produced used the lumicast
+            // tags. But I can't find where it is to edit it."
+            //
+            // It was findable — it is a row in the Characters tab — but nothing
+            // on screen said so, and the panel's copy of that tab was stale
+            // anyway. A row that produced tags should say where they came from
+            // and take you there.
+            source: profile.libraryId ? 'library' : (boundCastForRows ? 'cast' : 'preset'),
             declared: !!profile.declaredByStory,
             // Declared before the scoping existed, so it cannot be attributed to
             // a chat and will keep appearing in all of them until removed.
@@ -10641,10 +10651,17 @@ spindle.onFrontendMessage(async (payload, userId) => {
           if (rows.some((row) => row.ref === ref)) continue
           rows.push({ ref, name: ref, tags: (tags || []).join(', '), fallback: '', orphan: true })
         }
-        const library = (await getCharacters()).map((item) => ({
+        const characterLib = await getCharacters()
+        const library = characterLib.map((item) => ({
           id: item.id, name: item.name, story: !!(item.profile && item.profile.declaredByStory),
         }))
-        reply = ok(payload, requestId, { rows, chatId, preset: presetName, added, scanError, removed, swapped, library })
+        // The panel reads the character library ONCE, at init. A story that
+        // invents somebody mid-chat writes a new entry the panel never hears
+        // about, so the Characters tab keeps showing the list from when it
+        // opened — which is why a character that demonstrably exists could not
+        // be found. Every wardrobe reply now carries the current library.
+        reply = ok(payload, requestId, { rows, chatId, preset: presetName, added, scanError, removed, swapped,
+          library, characters: characterLib })
         break
       }
 

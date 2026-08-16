@@ -3363,8 +3363,23 @@ img[class*="inlineImage"] {
       const remove = row.id
         ? `<button class="ld-btn ld-compact" data-act="wardrobe-drop" data-id="${row.id}" data-name="${name}" data-declared="${row.declared ? '1' : ''}" title="${row.declared ? 'Delete this character — the story invented it' : 'Unlink from this preset; the character itself is kept'}" style="padding:2px 7px">×</button>`
         : ''
+      // WHERE THESE TAGS LIVE, and a way to get there. "LumiDraw has the Fanny
+      // character saved somehow, somewhere cause the image it produced used the
+      // lumicast tags. But I can't find where it is to edit it." A row that
+      // produced tags but gives no route to the thing that owns them is the
+      // difference between saved and editable.
+      const where = row.source === 'library'
+        ? 'a saved character — click to edit it'
+        : row.source === 'cast'
+          ? 'stored in the bound cast — edit under Cast & presets'
+          : row.source === 'preset'
+            ? 'stored in the active preset — edit under Cast & presets'
+            : 'no profile behind this row — only a wardrobe note'
+      const opener = (row.source === 'library' && row.id)
+        ? `<a href="#" class="ld-wardrobe-open" data-id="${row.id}" title="${where}" style="min-width:96px;font-size:12px;opacity:.8;text-decoration:underline;cursor:pointer">${name}${row.orphan ? ' *' : ''}${mark}</a>`
+        : `<span title="${where}" style="min-width:96px;font-size:12px;opacity:.8">${name}${row.orphan ? ' *' : ''}${mark}</span>`
       return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
-        <span style="min-width:96px;font-size:12px;opacity:.8">${name}${row.orphan ? ' *' : ''}${mark}</span>
+        ${opener}
         <input class="ld-wardrobe-input" data-ref="${row.ref}" style="flex:1" value="${tags}" placeholder="${hint}" />
         ${swap}
         ${remove}
@@ -3458,6 +3473,12 @@ img[class*="inlineImage"] {
     try {
       const res = await call('wardrobe', { chatId: lastSeenChatId, scan }, 30000)
       wardrobeLibrary = res.library || []
+      // The Characters tab was loaded once, at init. A story that invents
+      // somebody mid-chat writes a real, editable character the panel never
+      // hears about — so the tab keeps showing the list from when it opened and
+      // the new entry looks like it does not exist. It did; it was just never
+      // sent. Any wardrobe read now refreshes it.
+      if (Array.isArray(res.characters)) { characters = res.characters; renderCharacterList() }
       renderWardrobeRows(res.rows)
       if (quiet) return
       const where = res.chatId
@@ -3487,6 +3508,7 @@ img[class*="inlineImage"] {
       try {
         const res = await call('wardrobe', { chatId: lastSeenChatId, replace: { from, to: swapEl.value } }, 15000)
         wardrobeLibrary = res.library || wardrobeLibrary
+        if (Array.isArray(res.characters)) { characters = res.characters; renderCharacterList() }
         renderWardrobeRows(res.rows)
         setStatus('.ld-wardrobe-status', `Now using your saved ${label}. The story's version was replaced.`, 'good')
       } catch (e) {
@@ -3496,6 +3518,14 @@ img[class*="inlineImage"] {
     $('.ld-wardrobe-rows').addEventListener('click', async (event) => {
       const swapEl = event.target.closest('.ld-wardrobe-swap')
       if (swapEl) return
+      // Take me to the thing that owns these tags.
+      const open = event.target.closest('.ld-wardrobe-open')
+      if (open) {
+        event.preventDefault()
+        setMainView('presets')
+        openPersonaEditor(open.getAttribute('data-id'), 'character')
+        return
+      }
       const drop = event.target.closest('[data-act="wardrobe-drop"]')
       if (drop) {
         const name = drop.getAttribute('data-name') || 'this character'
