@@ -1,62 +1,53 @@
-# LumiDraw Studio 0.93.0 — the declaration was being read as prose
+# LumiDraw Studio 0.94.0 — "no wait", and Elliot
 
-## You were right, and I was chasing the wrong thing twice
+## Yes, I see the "2boys, no wait, 1girl, 1boy"
 
-There is **no invented character.** Nothing was saved. Your two screenshots
-together show exactly what happened:
+The parser started writing a two-boy scene, realised it was a girl and a boy, and
+wrote the correction **into** the prompt instead of over it. Draw Things received
+a literal `no wait` **and** a count tag the model had already abandoned, fighting
+the one it settled on.
 
-```
-[LUMICAST]{"name":"Fanny Price","count":"1boy","tags":"blue hair+long hair+
- hair down+blue eyes+slender+otokonoko","outfit":"sheer harem silks+gold
- jewelry+anklet+barefoot"}[/LUMICAST]
-```
+Fixed with two narrow rules, and deliberately nothing else:
 
-```
-… BREAK 1boy, Fanny Price, blue hair, long hair, hair down, blue eyes,
-slender, otokonoko, sheer harem silks, gold jewelry, anklet, barefoot …
-```
+1. A self-correction marker is never a Danbooru tag. Dropped.
+2. A **count** tag before such a marker in the same run is the attempt the model
+   just abandoned. Dropped.
 
-Verbatim, in declaration order.
+Only counts. A scene tag written before the model changed its mind about the
+count is still a scene tag, and sweeping everything to the left would lose real
+work. `hallway, 2boys, no wait, 1girl` → `hallway, 1girl`.
 
-**The LUMICAST block was being sent to the parser as story prose.** In direct
-mode the parser writes the prompt from the passage — and a block of ready-made
-booru tags sitting *in* the passage is the easiest thing in it to copy.
+Direct mode's verbatim promise stands: a prompt with no artifacts comes back
+byte-identical, and that's the assertion I leaned on hardest. A tag that merely
+*contains* a marker word — `waiting`, `waist`, `actually cute` — is not a marker.
 
-You couldn't find that character to edit because it doesn't exist. LumiDraw had
-already matched the name to the Fanny Price *you* wrote and correctly put yours
-in the cast — that's why the log said "no **new** cast declarations" and why
-there's only one in your list. Your sheet was right there. The declaration text
-just overrode it on the way past.
+## And Elliot — the more interesting one
 
-## The fix, and where it should have been obvious
+Look at the two runs in that prompt. Fanny's is detailed and correct: `futanari,
+small breasts, blue hair, thick thighs, bulge`. That's a real sheet being copied.
+Elliot's is `1boy, short hair, t-shirt` — generic invention, and `short hair`
+directly contradicts his `medium hair, messy hair`.
 
-One line in `cleanParserMessageText` — the function that already strips thinking
-blocks, utility cards and out-of-character asides before the parser sees
-anything. The line directly above the fix reads:
+**His sheet was never in the context.** The persona slot has never resolved to
+him, and it can't: your chat DTO is `id, character_id, name, metadata,
+created_at, updated_at`. There is no persona on a chat, and 0.91's metadata walk
+found nothing either. No amount of key-guessing produces a field that isn't
+there.
 
-> *Before the tag strip, so an aside can never reach the parser as story prose
-> and become scenery.*
+So it's asked once and remembered. New **Playing as** picker in the Cast panel,
+above the fantasy checkbox. Pick Elliot; this chat is played as Elliot. It's per
+**chat**, not per cast, so a new story doesn't inherit whoever the last one was
+played as — which is the thing that pinned Jason to everything.
 
-Same bug. Same function. One line away. I went looking for a hidden character
-store twice instead of asking what text the parser actually receives.
-
-Absorption is unaffected — it still reads the raw message, so declarations are
-picked up exactly as before. It's only the parser's copy that's cleaned.
-
-## Also in this release (from 0.92)
-
-- **A card with no visual tags no longer evicts a written character.** Your
-  "The Remote" world card was taking the lead slot.
-- **Add to cast** picker in the wardrobe panel, writing to the cast the chat
-  actually reads — the preset editor's list was a no-op for a bound chat.
-- Rows show the tags they contribute; the Characters tab marks story-invented
-  entries.
+It beats the cast's persona and is applied last, so nothing can overwrite your
+choice with a guess.
 
 ## Verification
 
-**58 suites · 2,711 assertions · all green.**
+**58 suites · 2,752 assertions · all green.**
 
-Mutations caught: the declaration reaching the parser again (8 failures), an
-over-broad strip eating the prose after the block (3), the tagless card evicting
-the lead (5), never taking chat leads (13), the add writing to the wrong store
-(2).
+Mutations caught: the marker surviving into the prompt (7 failures — the reported
+bug), the repair sweeping every tag left of the marker instead of only counts
+(2), markers matching substrings so `waiting` and `waist` get eaten (1), and the
+chosen persona being applied before the chat probe where a guess could overwrite
+it (whole suite).

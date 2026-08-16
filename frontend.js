@@ -704,6 +704,11 @@ function realSetup(ctx) {
                   <select class="ld-cast-pick" style="flex:1"></select>
                   <button class="ld-btn ld-compact" data-act="cast-duplicate" title="Copy this cast and use the copy here, so the original story keeps its own">Copy</button>
                 </div>
+                <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+                  <span class="ld-label" style="margin:0;flex:0 0 auto">Playing as</span>
+                  <select class="ld-chat-persona" style="flex:1"></select>
+                </div>
+                <div class="ld-help" style="margin-top:3px">Who <em>you</em> are in this chat. Lumiverse does not record a persona per chat, so LumiDraw cannot read it — pick once and it is remembered for this chat only. This beats the cast's persona, so a new story is not stuck with whoever the last one was played as.</div>
                 <label style="display:flex;align-items:center;gap:6px;margin-top:5px;font-size:12px">
                   <input type="checkbox" class="ld-cast-fantasy" />
                   <span>Fantasy setting — don't treat elves as a mistake</span>
@@ -3433,6 +3438,13 @@ img[class*="inlineImage"] {
         `<option value="${esc(cast.id)}"${cast.id === res.boundId ? ' selected' : ''}>${esc(cast.name)}</option>`))
       .join('')
     const active = casts.find((cast) => cast.id === res.boundId)
+    const personaPick = $('.ld-chat-persona')
+    if (personaPick) {
+      personaPick.innerHTML = ['<option value="">(none — use the cast\'s persona)</option>']
+        .concat((res.personas || []).map((item) =>
+          `<option value="${esc(item.id)}"${item.id === res.personaId ? ' selected' : ''}>${esc(item.name)}</option>`))
+        .join('')
+    }
     const fantasyBox = $('.ld-cast-fantasy')
     if (fantasyBox) fantasyBox.checked = !!(active && active.fantasy)
     const summary = $('.ld-cast-summary')
@@ -3472,6 +3484,20 @@ img[class*="inlineImage"] {
       loadWardrobe(true)
     })
   }
+  if ($('.ld-chat-persona')) {
+    $('.ld-chat-persona').addEventListener('change', async (event) => {
+      const label = event.target.options[event.target.selectedIndex].textContent
+      try {
+        const res = await call('casts', { chatId: lastSeenChatId, persona: event.target.value }, 15000)
+        renderCasts(res)
+        loadWardrobe(true)
+        setStatus('.ld-cast-status', event.target.value
+          ? `This chat is played as ${label}.`
+          : "This chat falls back to the cast's persona.", 'good')
+      } catch (e) { setStatus('.ld-cast-status', e.message, 'err') }
+    })
+  }
+
   if ($('.ld-cast-fantasy')) {
     $('.ld-cast-fantasy').addEventListener('change', async (event) => {
       const castId = $('.ld-cast-pick') && $('.ld-cast-pick').value

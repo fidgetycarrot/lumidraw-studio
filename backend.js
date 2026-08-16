@@ -31,6 +31,13 @@ const CHAT_CAST_FILE = 'chat_cast.json'
 // this is wrong, the original presets are recoverable from here without relying
 // on me having been careful.
 const PRESET_BACKUP_FILE = 'presets_backup_pre_cast.json'
+// WHO YOU ARE PLAYING, per chat. The host's chat DTO has no persona field at all
+// — Eric's reads `id, character_id, name, metadata, created_at, updated_at` —
+// so there is nothing to read and no amount of key-guessing will produce one.
+// The cast's persona then follows you into every new chat, which is how a story
+// with Elliot in it kept generating Jason, and later a persona with no sheet at
+// all. When the host cannot say, the answer is to ask once and remember.
+const CHAT_PERSONA_FILE = 'chat_persona.json'
 
 const DEFAULT_SETTINGS = {
   host: '127.0.0.1',
@@ -277,6 +284,32 @@ async function bindChatToCast(chatId, castId) {
   await spindle.storage.setJson(CHAT_CAST_FILE, map, { indent: 2 })
   spindle.log.info(`[lumidraw] chat ${chat} is now using cast ${castId || '(none — falls back to the preset)'}`)
   return map
+}
+
+async function getChatPersonaMap() {
+  const value = await spindle.storage.getJson(CHAT_PERSONA_FILE, { fallback: {} })
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+async function bindChatToPersona(chatId, personaId) {
+  const chat = String(chatId || '').trim()
+  if (!chat) return null
+  const map = await getChatPersonaMap()
+  if (personaId) map[chat] = String(personaId)
+  else delete map[chat]
+  await spindle.storage.setJson(CHAT_PERSONA_FILE, map, { indent: 2 })
+  spindle.log.info(`[lumidraw] chat ${chat} is now played as persona ${personaId || '(none — falls back to the cast)'}`)
+  return map
+}
+
+async function personaForChat(chatId) {
+  const chat = String(chatId || '').trim()
+  if (!chat) return null
+  const map = await getChatPersonaMap()
+  const id = map[chat]
+  if (!id) return null
+  const personas = await getPersonas()
+  return personas.find((item) => item && String(item.id) === String(id)) || null
 }
 
 async function castForChat(chatId) {
@@ -3382,6 +3415,18 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
       spindle.log.info('[lumidraw] the chat DTO names no persona. Keys: ' + occupants.chatKeys.join(', ') +
         ' · metadata: ' + ((occupants.metaKeys || []).join(', ') || '(empty)'))
     }
+  }
+
+  // AN EXPLICIT CHOICE OUTRANKS EVERY GUESS, and is applied last so nothing can
+  // overwrite it. The host does not record a persona per chat, so this is the
+  // only route by which a new chat can be played as somebody new — without it,
+  // the cast's persona follows you forever and the parser is handed either the
+  // wrong person or, once the leads stopped defaulting, nobody at all.
+  const chosenPersona = await personaForChat(chatId)
+  if (chosenPersona && chosenPersona.profile) {
+    leadPersona = normalizeProfile(chosenPersona.profile,
+      chosenPersona.profile.appearanceTags || '', 'persona')
+    spindle.log.info(`[lumidraw] persona: you chose "${chosenPersona.name}" for this chat`)
   }
 
   return {
@@ -7429,6 +7474,54 @@ function buildDirectInstruction(profiles, options = {}) {
 // The scene the parser writes, with nothing but structural checks. `prompt` is
 // taken verbatim — the entire point of this mode is that nothing downstream
 // rewrites it.
+// A model thinking out loud is not a tag.
+//
+//   "…, BREAK, 2boys,  no wait,  1girl,  1boy,  hallway, …"
+//
+// The parser started writing a two-boy scene, realised it was a girl and a boy,
+// and wrote the correction into the prompt instead of over it. Both halves then
+// went to Draw Things: a literal "no wait", and a count tag it had just
+// abandoned, fighting the one it settled on.
+//
+// Direct mode's promise is that the prompt is taken VERBATIM, and that stands —
+// this removes model artifacts, it does not rewrite content. Two narrow rules,
+// and nothing else:
+//
+//   1. A self-correction marker is never a Danbooru tag. Drop it.
+//   2. A COUNT tag before such a marker in the same run is the attempt the model
+//      just abandoned. Drop it. Only counts — a scene tag written before the
+//      model changed its mind about the count is still a scene tag, and
+//      throwing away everything to the left would lose real work.
+//
+// A prompt with no markers in it comes through untouched, which is the case that
+// matters most and the one that is asserted hardest.
+const SELF_CORRECTION_RE = /^(?:oh\s+)?(?:no\s+wait|wait|actually|scratch that|correction|i mean|nevermind|never mind|oops|sorry|hold on|let me redo|on second thought)$/i
+// Deliberately its own pattern rather than the compiler's COUNT_TAG_RE: this one
+// also has to recognise `solo`, `multiple girls` and `2+girls`, which a parser
+// writing freehand will reach for and the compiler's never had to.
+const DIRECT_COUNT_TAG_RE = /^(?:\d+\+?(?:girls?|boys?|others?|people)|multiple (?:girls|boys)|solo|no humans)$/i
+
+function repairDirectPrompt(prompt) {
+  const runs = String(prompt || '').split(/\bBREAK\b/)
+  const dropped = []
+  const repaired = runs.map((run) => {
+    const tags = run.split(',').map((tag) => tag.trim())
+    const markers = tags.map((tag) => SELF_CORRECTION_RE.test(tag))
+    if (!markers.some(Boolean)) return run
+    const lastMarker = markers.lastIndexOf(true)
+    const kept = []
+    for (let index = 0; index < tags.length; index++) {
+      const tag = tags[index]
+      if (!tag) continue
+      if (markers[index]) { dropped.push(tag); continue }
+      if (index < lastMarker && DIRECT_COUNT_TAG_RE.test(tag)) { dropped.push(tag); continue }
+      kept.push(tag)
+    }
+    return ' ' + kept.join(', ') + ' '
+  }).join('BREAK')
+  return { prompt: dropped.length ? repaired.replace(/\s+/g, ' ').trim() : String(prompt || ''), dropped }
+}
+
 function parseDirectImages(raw, maxImages = 2) {
   let text = extractParserText(raw)
   const parsed = (() => {
@@ -7441,8 +7534,12 @@ function parseDirectImages(raw, maxImages = 2) {
   const images = []
   for (const item of parsed.images.slice(0, Math.max(1, maxImages))) {
     if (!item || typeof item !== 'object') continue
-    const prompt = String(item.prompt || '').trim()
-    if (!prompt) continue
+    const written = String(item.prompt || '').trim()
+    if (!written) continue
+    const { prompt, dropped } = repairDirectPrompt(written)
+    if (dropped.length) {
+      spindle.log.info(`[lumidraw] direct · the parser corrected itself mid-prompt; dropped ${dropped.join(', ')}`)
+    }
     images.push({
       anchor: String(item.anchor || '').trim(),
       prompt,
@@ -10751,6 +10848,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.bind !== undefined) {
           await bindChatToCast(chatId, String(payload.bind || ''))
         }
+        // WHO YOU ARE PLAYING in this chat. The host records no persona, so this
+        // is the only way to say it, and it is per chat rather than per cast so a
+        // new story does not inherit whoever the last one was played as.
+        if (payload.persona !== undefined) {
+          await bindChatToPersona(chatId, String(payload.persona || ''))
+        }
         if (payload.fantasy !== undefined && payload.castId) {
           const casts = await getCasts()
           const index = casts.findIndex((item) => item && item.id === String(payload.castId))
@@ -10785,7 +10888,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
             spindle.log.info(`[lumidraw] duplicated cast "${source.name}" and bound this chat to the copy`)
           }
         }
-        const [casts, map, characters] = await Promise.all([getCasts(), getChatCastMap(), getCharacters()])
+        const [casts, map, characters, personaList, personaMap] = await Promise.all([
+          getCasts(), getChatCastMap(), getCharacters(), getPersonas(), getChatPersonaMap()])
         const boundId = chatId ? (map[chatId] || '') : ''
         const sharedWith = boundId
           ? Object.entries(map).filter(([chat, id]) => id === boundId && chat !== chatId).length
@@ -10794,6 +10898,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           chatId,
           boundId,
           sharedWith,
+          personaId: chatId ? (personaMap[chatId] || '') : '',
+          personas: personaList.map((item) => ({ id: item.id, name: item.name })),
           casts: casts.map((item) => ({
             id: item.id,
             name: item.name,
