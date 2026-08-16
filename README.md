@@ -1,43 +1,62 @@
-# LumiDraw Studio 0.92.0 — it was saved. It just never told you where.
+# LumiDraw Studio 0.93.0 — the declaration was being read as prose
 
-## Where Fanny was
+## You were right, and I was chasing the wrong thing twice
 
-**In your Characters tab, the whole time.** When LUMICAST fires it writes a real,
-editable character into your library — same list as your Fanny Price.
+There is **no invented character.** Nothing was saved. Your two screenshots
+together show exactly what happened:
 
-Two things hid it:
+```
+[LUMICAST]{"name":"Fanny Price","count":"1boy","tags":"blue hair+long hair+
+ hair down+blue eyes+slender+otokonoko","outfit":"sheer harem silks+gold
+ jewelry+anklet+barefoot"}[/LUMICAST]
+```
 
-1. **The panel reads that library exactly once, at init.** A story that invents
-   somebody mid-chat writes an entry the panel is never told about, so the tab
-   keeps rendering the list from the moment it opened. You'd have had to close
-   and reopen Lumiverse to see her.
-2. **No wardrobe row said where its tags came from.** Even looking straight at
-   the row that produced those tags, there was nothing to follow.
+```
+… BREAK 1boy, Fanny Price, blue hair, long hair, hair down, blue eyes,
+slender, otokonoko, sheer harem silks, gold jewelry, anklet, barefoot …
+```
 
-## What changed
+Verbatim, in declaration order.
 
-**Every wardrobe read now refreshes the Characters tab.** No reopening.
+**The LUMICAST block was being sent to the parser as story prose.** In direct
+mode the parser writes the prompt from the passage — and a block of ready-made
+booru tags sitting *in* the passage is the easiest thing in it to copy.
 
-**Each row says where its tags live**, on hover:
+You couldn't find that character to edit because it doesn't exist. LumiDraw had
+already matched the name to the Fanny Price *you* wrote and correctly put yours
+in the cast — that's why the log said "no **new** cast declarations" and why
+there's only one in your list. Your sheet was right there. The declaration text
+just overrode it on the way past.
 
-- *a saved character — click to edit it* → the name is a link; clicking it jumps
-  to Cast & presets and opens that character
-- *stored in the active preset* / *stored in the bound cast* → the leads, which
-  aren't library entries and have nothing to open
+## The fix, and where it should have been obvious
 
-So the row that made the image now takes you to the thing that owns it.
+One line in `cleanParserMessageText` — the function that already strips thinking
+blocks, utility cards and out-of-character asides before the parser sees
+anything. The line directly above the fix reads:
 
-## Still true from 0.91
+> *Before the tag strip, so an aside can never reach the parser as story prose
+> and become scenery.*
 
-The **— use mine —** picker on each cast row. Now that you can *see* the story's
-Fanny, the picker is how you replace her with yours — and if you'd rather just
-fix her tags in place, the link gets you there instead.
+Same bug. Same function. One line away. I went looking for a hidden character
+store twice instead of asking what text the parser actually receives.
+
+Absorption is unaffected — it still reads the raw message, so declarations are
+picked up exactly as before. It's only the parser's copy that's cleaned.
+
+## Also in this release (from 0.92)
+
+- **A card with no visual tags no longer evicts a written character.** Your
+  "The Remote" world card was taking the lead slot.
+- **Add to cast** picker in the wardrobe panel, writing to the cast the chat
+  actually reads — the preset editor's list was a no-op for a bound chat.
+- Rows show the tags they contribute; the Characters tab marks story-invented
+  entries.
 
 ## Verification
 
-**58 suites · 2,657 assertions · all green.**
+**58 suites · 2,711 assertions · all green.**
 
-Mutation-tested four ways, all caught: the reply dropping the library (3
-failures — the original bug, reproduced), every row claiming to be a library
-entry (2), the panel ignoring the refresh (1), the swap select falling through
-to the link (1).
+Mutations caught: the declaration reaching the parser again (8 failures), an
+over-broad strip eating the prose after the block (3), the tagless card evicting
+the lead (5), never taking chat leads (13), the add writing to the wrong store
+(2).

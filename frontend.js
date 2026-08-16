@@ -723,6 +723,11 @@ function realSetup(ctx) {
                   <button class="ld-btn ld-compact" data-act="wardrobe-refresh" title="Read what LumiDraw currently believes everyone is wearing">↻</button>
                 </div>
                 <div class="ld-wardrobe-rows" style="margin-top:6px"></div>
+                <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+                  <select class="ld-wardrobe-add" style="flex:1"></select>
+                  <button class="ld-btn ld-compact" data-act="wardrobe-add" title="Put this saved character into the cast this chat actually uses">Add to cast</button>
+                </div>
+                <div class="ld-help" style="margin-top:3px">Somebody in the story who is not on the character card — from a lorebook, say — goes here. This writes to whatever this chat reads from, which the preset editor's cast list does not.</div>
                 <div class="ld-help">What images are built from when the passage does not describe clothing. Edit a line and press Save to correct it; clear a line to make LumiDraw learn it again from the next scan. This beats the character's default outfit, which is only used when nothing is recorded here.</div>
                 <div class="ld-status ld-wardrobe-status" style="font-size:11px"></div>
               </div>
@@ -2540,7 +2545,16 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       detail.className = 'ld-preset-model'
       const profile = character.profile || {}
       const formCount = Array.isArray(profile.appearanceStates) ? profile.appearanceStates.length : (String(profile.appearanceStates || '').trim() ? String(profile.appearanceStates).split(/\r?\n/).filter(Boolean).length : 0)
-      detail.textContent = [profile.anchor || '', formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
+      // TELLING TWO "FANNY PRICE"S APART. A story can invent somebody you already
+      // have, and this list showed a name and an anchor — which are identical for
+      // both — so the wrong one got edited and the right one looked broken. Say
+      // which the story invented, and show the tags, because the tags are the
+      // whole difference between them.
+      const story = profile.declaredByStory ? 'invented by a story' : ''
+      const someTags = String(profile.appearanceTags || '').split(',').map((t) => t.trim()).filter(Boolean).slice(0, 4).join(', ')
+      detail.textContent = [profile.anchor || '', story, someTags,
+        formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
+      if (story) { name.style.opacity = '.72'; name.title = 'This one was written by a story, not by you. Its tags are a guess.' }
       name.appendChild(detail)
       name.addEventListener('click', () => openPersonaEditor(character.id, 'character'))
       const edit = document.createElement('button')
@@ -3350,6 +3364,13 @@ img[class*="inlineImage"] {
       const mark = row.declared
         ? '<span title="added by the story rather than by you — × deletes it" style="opacity:.55">  (story)</span>'
         : ''
+      // WHAT THIS ROW CONTRIBUTES. The input edits clothes; these are the tags
+      // that describe the person, and they were invisible — so a story's guess
+      // at somebody looked exactly like the version you wrote yourself.
+      const appearanceText = String(row.appearance || '').replace(/[<>&]/g, '')
+      const appearance = appearanceText
+        ? '<div style="font-size:10px;opacity:.5;margin-left:2px">' + appearanceText + '</div>'
+        : ''
       // Swap a story-invented character for one you wrote. The story's version is
       // a guess at somebody you may already have properly written elsewhere — in
       // a lorebook, say — and this is how you say "use mine".
@@ -3378,11 +3399,14 @@ img[class*="inlineImage"] {
       const opener = (row.source === 'library' && row.id)
         ? `<a href="#" class="ld-wardrobe-open" data-id="${row.id}" title="${where}" style="min-width:96px;font-size:12px;opacity:.8;text-decoration:underline;cursor:pointer">${name}${row.orphan ? ' *' : ''}${mark}</a>`
         : `<span title="${where}" style="min-width:96px;font-size:12px;opacity:.8">${name}${row.orphan ? ' *' : ''}${mark}</span>`
-      return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+      return `<div style="margin-bottom:6px">
+      <div style="display:flex;gap:6px;align-items:center">
         ${opener}
         <input class="ld-wardrobe-input" data-ref="${row.ref}" style="flex:1" value="${tags}" placeholder="${hint}" />
         ${swap}
         ${remove}
+      </div>
+      ${appearance}
       </div>`
     }).join('') + '<button class="ld-btn ld-compact" data-act="wardrobe-save" style="margin-top:4px">Save wardrobe</button>'
   }
@@ -3480,6 +3504,7 @@ img[class*="inlineImage"] {
       // sent. Any wardrobe read now refreshes it.
       if (Array.isArray(res.characters)) { characters = res.characters; renderCharacterList() }
       renderWardrobeRows(res.rows)
+      renderWardrobeAdd(res.rows)
       if (quiet) return
       const where = res.chatId
         ? `Read from "${res.preset || 'no preset'}" · chat ${String(res.chatId).slice(-8)}`
@@ -3489,6 +3514,39 @@ img[class*="inlineImage"] {
     } catch (e) {
       setStatus('.ld-wardrobe-status', e.message, 'err')
     }
+  }
+
+  function renderWardrobeAdd(rows) {
+    const select = $('.ld-wardrobe-add')
+    if (!select) return
+    const present = new Set((rows || []).map((row) => row.id).filter(Boolean))
+    const options = wardrobeLibrary.filter((item) => !present.has(item.id))
+    select.innerHTML = '<option value="">— add someone from your library —</option>' + options.map((item) => {
+      // Two entries can share a name. Say which one the story invented and show
+      // the start of its tags, or the picker is a coin flip.
+      const label = String(item.name || '') + (item.story ? '  (story\u2019s version)' : '') +
+        (item.tags ? '  \u00b7 ' + item.tags : '')
+      const option = document.createElement('option')
+      option.value = item.id
+      option.textContent = label
+      return option.outerHTML
+    }).join('')
+  }
+
+  if ($('[data-act="wardrobe-add"]')) {
+    $('[data-act="wardrobe-add"]').addEventListener('click', async () => {
+      const select = $('.ld-wardrobe-add')
+      if (!select || !select.value) { setStatus('.ld-wardrobe-status', 'Pick a saved character first.', 'err'); return }
+      const label = select.options[select.selectedIndex].textContent
+      try {
+        const res = await call('wardrobe', { chatId: lastSeenChatId, add: select.value }, 15000)
+        wardrobeLibrary = res.library || wardrobeLibrary
+        if (Array.isArray(res.characters)) { characters = res.characters; renderCharacterList() }
+        renderWardrobeRows(res.rows)
+        renderWardrobeAdd(res.rows)
+        setStatus('.ld-wardrobe-status', `Added ${label.split('  ')[0]} to this chat's cast.`, 'good')
+      } catch (e) { setStatus('.ld-wardrobe-status', e.message, 'err') }
+    })
   }
 
   if ($('[data-act="wardrobe-refresh"]')) {
@@ -3510,6 +3568,7 @@ img[class*="inlineImage"] {
         wardrobeLibrary = res.library || wardrobeLibrary
         if (Array.isArray(res.characters)) { characters = res.characters; renderCharacterList() }
         renderWardrobeRows(res.rows)
+        renderWardrobeAdd(res.rows)
         setStatus('.ld-wardrobe-status', `Now using your saved ${label}. The story's version was replaced.`, 'good')
       } catch (e) {
         setStatus('.ld-wardrobe-status', e.message, 'err')

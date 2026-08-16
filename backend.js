@@ -1365,6 +1365,26 @@ function cleanParserMessageText(text, { keepLedger = false } = {}) {
   // Before the tag strip, so an aside can never reach the parser as story prose
   // and become scenery.
   value = stripOutOfCharacter(value)
+  // AND NEITHER MAY A CAST DECLARATION. This is the same bug as the line above,
+  // one line away, and it cost a whole session.
+  //
+  //   [LUMICAST]{"name":"Fanny Price","count":"1boy","tags":"blue hair+long
+  //    hair+hair down+blue eyes+slender+otokonoko","outfit":"sheer harem
+  //    silks+gold jewelry+anklet+barefoot"}[/LUMICAST]
+  //
+  // …arrived in the prompt as `1boy, Fanny Price, blue hair, long hair, hair
+  // down, blue eyes, slender, otokonoko, sheer harem silks, gold jewelry,
+  // anklet, barefoot` — verbatim, in that order. In direct mode the parser
+  // writes the prompt from the passage, and a block of ready-made booru tags
+  // sitting in the passage is the easiest thing in it to copy.
+  //
+  // It looked like a character LumiDraw had saved somewhere and would not show,
+  // and it could not be found because it was never saved: absorbCastDeclarations
+  // had already matched the name to a character Eric wrote and correctly used
+  // HIS. The declaration is machinery for LumiDraw to read, not prose, and it
+  // must not survive to the parser — otherwise the story's guess at somebody
+  // silently outranks the sheet.
+  value = value.replace(CAST_DECLARATION_RE, ' ')
   return value
     .replace(TAG_RE, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
@@ -3181,6 +3201,33 @@ function castMemberBelongsHere(entry, chatId) {
 // The seam. One function decides whether this chat's people come from a cast or
 // from the preset, and everything downstream is unchanged — which is why binding
 // nothing changes nothing. A chat with no cast behaves exactly as it did before.
+// ONE WRITER for "who is in this chat's cast". Generation reads the BOUND CAST
+// when there is one and the preset otherwise (castSourceFor, just below), so any
+// edit has to land in the same place or it silently does nothing — which is
+// exactly what the preset editor's cast list does for a bound chat: you add
+// somebody, save, and the chat carries on without them.
+async function writeCastIds(preset, chatId, ids) {
+  const next = uniqueStrings(ids.map(String).filter(Boolean))
+  const boundCast = await castForChat(chatId)
+  if (boundCast) {
+    const casts = await getCasts()
+    const index = casts.findIndex((item) => item && item.id === boundCast.id)
+    if (index >= 0) {
+      casts[index] = { ...casts[index], castLibraryIds: next }
+      await saveCasts(casts)
+    }
+    return { next, where: `the cast "${boundCast.name}"` }
+  }
+  const all = await getPresets()
+  const index = all.findIndex((item) => item && item.name === preset.name)
+  if (index >= 0) {
+    all[index] = { ...all[index], castLibraryIds: next }
+    await savePresets(all)
+    preset.castLibraryIds = next
+  }
+  return { next, where: `the preset "${preset.name}"` }
+}
+
 async function castSourceFor(preset, chatId) {
   const cast = await castForChat(chatId)
   if (!cast) return preset
@@ -3302,9 +3349,29 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
         if (asPersona) spindle.log.info(`[lumidraw] persona resolved from your own library: ${match.name}`)
       }
     }
-    if (fromChat) {
+    // A CARD THAT DESCRIBES NOBODY MUST NOT EVICT A PROFILE THAT DOES.
+    //
+    // "It's still using the lumicast Fanny Price. I don't see how to change it."
+    //
+    // The chat's card was "The Remote" — a world and a setting, written as a
+    // character card because that is where Lumiverse puts narration. It carries
+    // no visual tags at all, so profileFromCard returned an anchor and nothing
+    // else, and 0.90 handed that to the lead slot in place of a fully written
+    // Fanny Price. She then appeared in no sheet the parser was given, so direct
+    // mode invented her from the prose on every single generation — which is
+    // exactly the "tags I can't find anywhere" being described, because they
+    // were never stored.
+    //
+    // Taking the leads from the chat is still right. Taking a NAME from the chat
+    // and calling it a person is not. A card with no tags is not an answer, and
+    // keeping the cast's is strictly better than replacing it with nothing.
+    const chatCardHasTags = !!(fromChat && (fromChat.appearance || []).length)
+    if (fromChat && chatCardHasTags) {
       leadCharacter = fromChat
       spindle.log.info(`[lumidraw] character comes from the chat: ${fromChat.anchor}`)
+    } else if (fromChat) {
+      spindle.log.info(`[lumidraw] the chat's card "${fromChat.anchor}" carries no visual tags — ` +
+        `it reads as a setting rather than a person, so ${leadCharacter.anchor || 'the cast\'s character'} is kept`)
     }
     if (asPersona) {
       leadPersona = asPersona
@@ -10531,26 +10598,28 @@ spindle.onFrontendMessage(async (payload, userId) => {
           const doomed = characters.find((item) => item && String(item.id) === from &&
             item.profile && item.profile.declaredByStory)
           if (doomed) await saveCharacters(characters.filter((item) => item !== doomed))
-          if (boundCast) {
-            const casts = await getCasts()
-            const index = casts.findIndex((item) => item && item.id === boundCast.id)
-            if (index >= 0) {
-              casts[index] = { ...casts[index], castLibraryIds: uniqueStrings(ids) }
-              await saveCasts(casts)
-            }
-          } else {
-            const all = await getPresets()
-            const index = all.findIndex((item) => item && item.name === preset.name)
-            if (index >= 0) {
-              all[index] = { ...all[index], castLibraryIds: uniqueStrings(ids) }
-              await savePresets(all)
-              preset.castLibraryIds = uniqueStrings(ids)
-            }
-          }
+          await writeCastIds(preset, chatId, ids)
           swapped = to
           const named = (characters.find((item) => String(item.id) === to) || {}).name || to
           spindle.log.info(`[lumidraw] cast swap · using your saved "${named}" instead of the story's version` +
             (doomed ? `; the story's ${doomed.name} was deleted` : ''))
+        }
+
+        // ADD SOMEBODY FROM YOUR LIBRARY. "It's still using the lumicast Fanny
+        // Price. I don't see how to change it." There was no control for this
+        // anywhere that worked: the preset editor's cast list writes to the
+        // PRESET, and a chat bound to a cast reads the CAST — so adding her
+        // there was a no-op you could not see. This writes where the chat reads.
+        let addedFromLibrary = ''
+        if (payload.add && preset) {
+          const wanted = String(payload.add)
+          const boundCast = await castForChat(chatId)
+          const source = boundCast || preset
+          const ids = [...(source.castLibraryIds || []), wanted]
+          const { where } = await writeCastIds(preset, chatId, ids)
+          const named = ((await getCharacters()).find((item) => String(item.id) === wanted) || {}).name || wanted
+          addedFromLibrary = wanted
+          spindle.log.info(`[lumidraw] cast · added your saved "${named}" to ${where}`)
         }
 
         // Removing a cast member. The rule that keeps this safe: a character the
@@ -10639,6 +10708,11 @@ spindle.onFrontendMessage(async (payload, userId) => {
             // anyway. A row that produced tags should say where they came from
             // and take you there.
             source: profile.libraryId ? 'library' : (boundCastForRows ? 'cast' : 'preset'),
+            // WHAT THIS ROW IS ACTUALLY CONTRIBUTING. The input beside it edits
+            // clothes; "edit what it has to make it correct" is about these, and
+            // until now they were invisible — so a wrong profile looked
+            // identical to a right one.
+            appearance: (profile.appearance || []).join(', '),
             declared: !!profile.declaredByStory,
             // Declared before the scoping existed, so it cannot be attributed to
             // a chat and will keep appearing in all of them until removed.
@@ -10654,6 +10728,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const characterLib = await getCharacters()
         const library = characterLib.map((item) => ({
           id: item.id, name: item.name, story: !!(item.profile && item.profile.declaredByStory),
+          // Two entries can share a name — a story invents "Fanny Price" while
+          // you already have a "Fanny Price" — and until now the list showed
+          // name only, so they were impossible to tell apart and the wrong one
+          // got edited.
+          inChat: String((item.profile && item.profile.declaredInChat) || ''),
+          tags: String((item.profile && item.profile.appearanceTags) || '').slice(0, 90),
         }))
         // The panel reads the character library ONCE, at init. A story that
         // invents somebody mid-chat writes a new entry the panel never hears
@@ -10661,7 +10741,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // opened — which is why a character that demonstrably exists could not
         // be found. Every wardrobe reply now carries the current library.
         reply = ok(payload, requestId, { rows, chatId, preset: presetName, added, scanError, removed, swapped,
-          library, characters: characterLib })
+          library, characters: characterLib, addedFromLibrary })
         break
       }
 
