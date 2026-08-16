@@ -3267,7 +3267,23 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
   if (settings.chatLeads !== false) {
     const occupants = await chatOccupants(userId, chatId)
     const fromChat = await cardProfile(spindle.characters, occupants.characterId, 'character', userId)
-    const asPersona = await cardProfile(spindle.personas, occupants.personaId, 'persona', userId)
+    // The host may not expose a personas API at all — LumiDraw's own probe has a
+    // line asking whether spindle.personas exists, which suggests past me was not
+    // sure either. So try the host first, then LumiDraw's own persona library,
+    // matched by id or by name. One of the two will have it.
+    let asPersona = await cardProfile(spindle.personas, occupants.personaId, 'persona', userId)
+    if (!asPersona && occupants.personaId) {
+      const saved = await getPersonas()
+      const wanted = normalizeIdentityText(occupants.personaId)
+      const match = saved.find((item) => item &&
+        (String(item.id) === occupants.personaId || normalizeIdentityText(item.name) === wanted))
+      if (match) {
+        asPersona = match.profile
+          ? normalizeProfile(match.profile, match.profile.appearanceTags || '', 'persona')
+          : profileFromCard({ name: match.name }, 'persona')
+        if (asPersona) spindle.log.info(`[lumidraw] persona resolved from your own library: ${match.name}`)
+      }
+    }
     if (fromChat) {
       leadCharacter = fromChat
       spindle.log.info(`[lumidraw] character comes from the chat: ${fromChat.anchor}`)
