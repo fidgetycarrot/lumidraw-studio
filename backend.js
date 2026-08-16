@@ -7069,6 +7069,7 @@ async function runDirectImages(images, ctx) {
   }
   const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
   const results = []
+  const markdowns = []
   const traceLines = []
   const trace = (label, status, detail) => traceLines.push({ label, status, detail })
 
@@ -7102,9 +7103,47 @@ async function runDirectImages(images, ctx) {
       debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, aspect: image.aspect } },
     }, userId, scan)
     results.push({ ok: true, entry, anchor: image.anchor, prompt })
+    if (entry && entry.images && entry.images[0]) {
+      markdowns.push({ md: `![${markdownAltText(prompt)}](${entry.images[0].url})`, anchor: image.anchor })
+    }
   }
 
+  // THE STEP I LEFT OUT. Generating the image is not the job — putting it in the
+  // story is. The compiler path does this between 'inserting' and 'done'; direct
+  // mode announced the stage and then returned, so the pictures existed in Draw
+  // Things and in the history and nowhere the reader could see them.
+  //
+  // Third time now that building a path beside the old one missed something the
+  // old one does along the way: the settings trigger list, the stage budget, and
+  // now the thing the whole feature is for.
   setStoryScanStage(scan, 'inserting', 'Adding generated images to the story message.')
+  if (markdowns.length && target && target.id) {
+    let newContent = String(target.content || '')
+    const unplaced = []
+    for (const item of markdowns) {
+      // Anchored to the sentence the parser chose, so a picture lands where the
+      // moment is rather than at the top of a long message.
+      const anchor = String(item.anchor || '')
+      let placed = false
+      if (anchor.length >= 5) {
+        let at = newContent.indexOf(anchor)
+        if (at < 0) at = newContent.toLowerCase().indexOf(anchor.toLowerCase())
+        if (at >= 0) {
+          let paraEnd = newContent.indexOf('\n\n', at)
+          if (paraEnd < 0) paraEnd = newContent.length
+          newContent = `${newContent.slice(0, paraEnd)}\n\n${item.md}${newContent.slice(paraEnd)}`
+          placed = true
+        }
+      }
+      if (!placed) unplaced.push(item.md)
+    }
+    if (unplaced.length) newContent = `${unplaced.join('\n\n')}\n\n${newContent}`
+    newContent = stripParserTrigger(newContent)
+    await updateMessageContent(target.id, target.contentKey, newContent, userId, chatId)
+    await markProcessed(target.id, target.content)
+    spindle.log.info(`[lumidraw] direct mode inserted ${markdowns.length} image(s) into the story message`)
+  }
+
   await saveStoryDebug({
     mode: 'direct',
     parserEngine: 'direct',
