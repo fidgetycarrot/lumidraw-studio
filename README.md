@@ -1,41 +1,56 @@
-# LumiDraw Studio 0.88.0 — how many pictures
+# LumiDraw Studio 0.89.0 — the leads come from the chat
 
-> "Something about the rules will typically make it gen the max amount instead of
-> logically choosing how many important moments."
+Jason was pinned, Fanny was pinned, and neither could be removed. The
+chat-membership rule only ever applied to `castLibraryIds` — the supporting
+cast. The character and persona slots were returned unconditionally:
 
-You were right, and the compiler said it out loud. From its schema:
+```js
+character: await resolveProfile(character, ...),
+persona:   await resolveProfile(persona, ...),
+cast,      // ← only this was filtered
+```
 
-> `minImages` **is a FLOOR: find that many distinct visual moments EVEN WHEN ONE
-> DOMINATES** — a second character's reaction, a change of position, a detail
-> shown close.
+And casts had no editor, so Copy handed you a duplicate you couldn't change.
 
-That's not "use your judgement." That's an instruction to **manufacture**
-moments, with suggestions for how to pad. Of course it hit the number.
+**The cast was the wrong place to answer this.** Lumiverse already knows which
+character card and which persona a chat is using, and that answer is always
+current. So the chat supplies the two leads; the cast supplies the supporting
+characters and everyone's outfits.
 
-## And direct mode was no better
+Start a new chat with a different persona and it just works.
 
-It said **nothing at all** about how many. I never passed the count into the
-instruction, so the model saw an array in the format and guessed. Not a design
-decision — an omission I'd have found the first time you counted.
+## It only ever replaces, never merges
 
-## The rule now
+A chat that names nobody keeps the cast's leads. An unreadable chat keeps them.
+A persona id that resolves to nothing keeps them, and says which id failed.
+Nothing gets worse when the host can't answer — there's a mutation asserting
+that an unreadable chat doesn't wipe the character.
 
-> Return ONE image. Most passages have one moment worth drawing, and one good
-> picture beats two where the second is filler. Add a second ONLY if the passage
-> genuinely contains another distinct moment — a different place, a different
-> pair of people, a real change of situation — not a second angle on the same
-> beat. Never more than 2. **The limit is a ceiling, not a target.**
+## Every field name is a guess, and says so
 
-One is the default. Your maximum is a ceiling. The reason is given, so it reads
-as judgement rather than a quota to satisfy — and there's an assertion that
-nothing in it says *floor*, *at least*, or *find that many*.
+I can't see your chat DTO, so each id is a **list** of candidates —
+`characterId`, `character_id`, `characterIds[]`, `characters[].id`, and the
+same four shapes for persona. All eight are tested.
 
-Set your maximum to 1 and it says so plainly instead.
+If none match, the log prints the DTO's **actual keys**:
 
-## Note on your minimum
+> `the chat DTO names no persona. Keys: id, title, createdAt, …`
 
-Direct mode ignores the **Minimum images** setting entirely, and I think that's
-right — a minimum is what caused this. If you disagree, it's easy to honour, but
-I'd rather it not exist than have it quietly recreate the floor.
+Send me that line and I'll add the real field. It fails loudly rather than
+silently doing nothing, which is how the last three bugs hid.
 
-**58 suites · 2,574 assertions · all green.**
+## The toggle
+
+**Take the character and persona from the chat** — on by default, in the Cast
+panel. Off returns to the cast's own leads.
+
+And it's in the selector list that triggers a save. That's the thing I missed
+with direct mode, and there's an assertion naming it so it can't happen a third
+time.
+
+## Verification
+
+**58 suites · 2,605 assertions · all green.** 45 new.
+
+Mutations: the persona never taken from the chat (8 failures), an unreadable
+chat wiping the character (7).

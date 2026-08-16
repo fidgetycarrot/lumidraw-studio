@@ -708,6 +708,11 @@ function realSetup(ctx) {
                   <input type="checkbox" class="ld-cast-fantasy" />
                   <span>Fantasy setting — don't treat elves as a mistake</span>
                 </label>
+                <label style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:12px">
+                  <input type="checkbox" class="ld-chat-leads" />
+                  <span>Take the character and persona from the chat</span>
+                </label>
+                <div class="ld-help">On, this chat's own character card and persona are used for the two lead roles, so a new chat with a different persona just works. The cast still supplies the supporting characters and everyone's outfits. Off, the cast's own two leads are used — which pins them to every chat that shares the cast.</div>
                 <div class="ld-help ld-cast-summary" style="margin-top:4px"></div>
                 <div class="ld-help">A cast is <strong>who</strong> is in this story. Your preset is <strong>what the picture looks like</strong> — model, LoRAs, steps, quality. Changing presets no longer changes who is in the scene, and a character the story introduces here stays here.</div>
                 <div class="ld-status ld-cast-status" style="font-size:11px"></div>
@@ -4200,6 +4205,7 @@ img[class*="inlineImage"] {
       minImages: $('.ld-minimg').value,
       autoCharTags: $('.ld-chartags').checked,
       directMode: $('.ld-direct-mode') ? $('.ld-direct-mode').checked : false,
+      chatLeads: $('.ld-chat-leads') ? $('.ld-chat-leads').checked : true,
       stripImageDirectives: $('.ld-strip-directives').checked,
       sizeChatImages: $('.ld-size-images') ? $('.ld-size-images').checked : false,
       chatImageWidth: $('.ld-image-width') ? Number($('.ld-image-width').value) || 500 : 500,
@@ -4324,7 +4330,7 @@ img[class*="inlineImage"] {
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-direct-mode']) {
+  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-direct-mode', '.ld-chat-leads']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-parser-conn') {
@@ -4590,6 +4596,7 @@ img[class*="inlineImage"] {
       $('.ld-minimg').value = settings.minImages || 0
       $('.ld-chartags').checked = settings.autoCharTags !== false
       if ($('.ld-direct-mode')) $('.ld-direct-mode').checked = settings.directMode === true
+      if ($('.ld-chat-leads')) $('.ld-chat-leads').checked = settings.chatLeads !== false
       $('.ld-strip-directives').checked = settings.stripImageDirectives !== false
       if ($('.ld-size-images')) {
         const width = Number(settings.chatImageWidth) || 500

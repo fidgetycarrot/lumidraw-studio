@@ -50,6 +50,7 @@ const DEFAULT_SETTINGS = {
   minImages: 0,           // required illustrations per reply (0 = model's discretion)
   autoCharTags: true,     // use active character image tags as a profile fallback
   directMode: false,      // the parser writes the finished prompt; the compiler does not run
+  chatLeads: true,        // the chat's own character and persona outrank the cast's
   subjectBinding: false,  // legacy compatibility mirror of parserEngine === 'anima'
   dtModelsPath: '',       // retained for compatibility with older settings
   bridgeHost: '127.0.0.1', // native LumiDraw Bridge runs on the Lumiverse Mac
@@ -2384,6 +2385,66 @@ async function resolveMacros(text, userId, chatId) {
   return text
 }
 
+// WHO IS IN THIS CHAT, according to the chat itself.
+//
+// The cast holds a character and a persona, and neither could be filtered or
+// edited — so starting a new story with a different persona pinned the old one.
+// The cast was the wrong place to answer this: Lumiverse already knows which
+// character card and which persona a chat is using, and that answer is always
+// current.
+//
+// Every field name here is a guess at a DTO I cannot see, so each is a LIST of
+// candidates and a miss is logged with the real keys rather than failing
+// silently. That is the same shape getCharacterImageTags already uses, because
+// it had the same problem.
+async function chatOccupants(userId, chatId) {
+  const out = { characterId: '', personaId: '', chatKeys: [] }
+  try {
+    const chatsApi = spindle.chats
+    if (!chatsApi || typeof chatsApi.get !== 'function' || !chatId) return out
+    let chat = null
+    for (const args of [[chatId, userId], [{ chatId, userId }], [chatId]]) {
+      try { const r = await chatsApi.get(...args); if (r) { chat = r; break } } catch { /* next */ }
+    }
+    if (!chat || typeof chat !== 'object') return out
+    out.chatKeys = Object.keys(chat)
+    out.characterId = String(chat.characterId || chat.character_id ||
+      (Array.isArray(chat.characterIds) && chat.characterIds[0]) ||
+      (Array.isArray(chat.characters) && ((chat.characters[0] || {}).id || chat.characters[0])) || '')
+    out.personaId = String(chat.personaId || chat.persona_id ||
+      (chat.persona && (chat.persona.id || chat.persona)) ||
+      (Array.isArray(chat.personas) && ((chat.personas[0] || {}).id || chat.personas[0])) || '')
+  } catch (error) {
+    spindle.log.warn('[lumidraw] could not read the chat occupants: ' + error.message)
+  }
+  return out
+}
+
+// Turn a host card into the profile shape LumiDraw uses. Only the fields it
+// actually has — anything missing stays missing rather than being invented.
+function profileFromCard(card, ref) {
+  if (!card || typeof card !== 'object') return null
+  const name = String(card.name || card.title || card.displayName || '').trim()
+  if (!name) return null
+  let tags = ''
+  for (const key of ['base_tags', 'baseTags', 'image_tags', 'imageTags',
+    'visual_tags', 'visualTags', 'appearance_tags', 'appearanceTags']) {
+    if (typeof card[key] === 'string' && card[key].trim()) { tags = card[key].trim(); break }
+  }
+  return normalizeProfile({ anchor: name, promptName: name, appearanceTags: tags, named: true }, tags, ref)
+}
+
+async function cardProfile(api, id, ref, userId) {
+  if (!api || typeof api.get !== 'function' || !id) return null
+  for (const args of [[id, userId], [{ id, userId }], [id]]) {
+    try {
+      const card = await api.get(...args)
+      if (card) return profileFromCard(card, ref)
+    } catch { /* next shape */ }
+  }
+  return null
+}
+
 async function getCharacterImageTags(userId, chatId) {
   try {
     const chatsApi = spindle.chats
@@ -3195,9 +3256,35 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
     cast.push(resolved)
   }
 
+  // The chat wins for the two lead roles. A cast is who is in a STORY, and the
+  // story's leads are whoever this chat is actually being played with — asking
+  // the cast meant a new chat inherited the old persona with no way to change it.
+  //
+  // Only ever a REPLACEMENT, never a merge: a chat that names nobody keeps the
+  // cast's answer, so nothing gets worse when the host cannot say.
+  let leadCharacter = character
+  let leadPersona = persona
+  if (settings.chatLeads !== false) {
+    const occupants = await chatOccupants(userId, chatId)
+    const fromChat = await cardProfile(spindle.characters, occupants.characterId, 'character', userId)
+    const asPersona = await cardProfile(spindle.personas, occupants.personaId, 'persona', userId)
+    if (fromChat) {
+      leadCharacter = fromChat
+      spindle.log.info(`[lumidraw] character comes from the chat: ${fromChat.anchor}`)
+    }
+    if (asPersona) {
+      leadPersona = asPersona
+      spindle.log.info(`[lumidraw] persona comes from the chat: ${asPersona.anchor}`)
+    } else if (occupants.personaId) {
+      spindle.log.info(`[lumidraw] the chat names persona ${occupants.personaId} but it could not be read; keeping the cast's`)
+    } else if (occupants.chatKeys.length) {
+      spindle.log.info('[lumidraw] the chat DTO names no persona. Keys: ' + occupants.chatKeys.join(', '))
+    }
+  }
+
   return {
-    character: await resolveProfile(character, userId, chatId),
-    persona: await resolveProfile(persona, userId, chatId),
+    character: await resolveProfile(leadCharacter, userId, chatId),
+    persona: await resolveProfile(leadPersona, userId, chatId),
     cast,
     // A property of the STORY, not of any one character — which is why it lives
     // on the cast. Some defences are calibrated for a contemporary setting and
@@ -9950,6 +10037,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
         if (payload.directMode !== undefined) settings.directMode = !!payload.directMode
+        if (payload.chatLeads !== undefined) settings.chatLeads = !!payload.chatLeads
         if (payload.useLoomLedger !== undefined) settings.useLoomLedger = !!payload.useLoomLedger
         if (payload.stripImageDirectives !== undefined) settings.stripImageDirectives = !!payload.stripImageDirectives
         if (payload.sizeChatImages !== undefined) settings.sizeChatImages = !!payload.sizeChatImages
