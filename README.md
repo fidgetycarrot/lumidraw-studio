@@ -1,54 +1,41 @@
-# LumiDraw Studio 0.87.0 — it never put the pictures in the story
+# LumiDraw Studio 0.88.0 — how many pictures
 
-Your log had it exactly:
+> "Something about the rules will typically make it gen the max amount instead of
+> logically choosing how many important moments."
 
-```
-story scan stage · inserting · Adding generated images to the story message.
-direct mode produced 1 image(s); the compiler did not run
-story scan stage · done
-```
+You were right, and the compiler said it out loud. From its schema:
 
-`inserting` and then `done`, with **nothing between them**. The image was
-generated, uploaded and written to history, and never placed in the message.
+> `minImages` **is a FLOOR: find that many distinct visual moments EVEN WHEN ONE
+> DOMINATES** — a second character's reaction, a change of position, a detail
+> shown close.
 
-Generating the picture isn't the job. Putting it in the story is. I built the
-whole mode and left out the thing it exists for — then announced the stage that
-claims I did it.
+That's not "use your judgement." That's an instruction to **manufacture**
+moments, with suggestions for how to pad. Of course it hit the number.
 
-## Fixed
+## And direct mode was no better
 
-Direct mode now writes the message back, anchored to the sentence the parser
-chose so the picture lands at the moment rather than the top. Unanchored images
-go to the top rather than being dropped, the parser trigger is stripped, and the
-message is marked processed so a re-scan doesn't duplicate it — all the things
-the compiler path does after generating.
+It said **nothing at all** about how many. I never passed the count into the
+instruction, so the model saw an array in the format and guessed. Not a design
+decision — an omission I'd have found the first time you counted.
 
-## The pattern, third time
+## The rule now
 
-- The settings list — the toggle didn't save.
-- The stage budget — the watchdog killed it.
-- The insertion — the images went nowhere.
+> Return ONE image. Most passages have one moment worth drawing, and one good
+> picture beats two where the second is filler. Add a second ONLY if the passage
+> genuinely contains another distinct moment — a different place, a different
+> pair of people, a real change of situation — not a second angle on the same
+> beat. Never more than 2. **The limit is a ceiling, not a target.**
 
-Every one is the same mistake: I built a path beside the old one and carried over
-what it *produces* without auditing what it *does along the way*. Each piece
-tested fine on its own. Nothing tested the sequence.
+One is the default. Your maximum is a ceiling. The reason is given, so it reads
+as judgement rather than a quota to satisfy — and there's an assertion that
+nothing in it says *floor*, *at least*, or *find that many*.
 
-The honest read is that my end-to-end assertion — the one I couldn't finish in
-0.84 and flagged as the weakest seam — is exactly what would have caught all
-three, and I shipped three releases without it. That's the thing to fix next, and
-this time I'd rather do it before adding anything else.
+Set your maximum to 1 and it says so plainly instead.
 
-## Also worth seeing in your log
+## Note on your minimum
 
-The prompt direct mode actually produced:
+Direct mode ignores the **Minimum images** setting entirely, and I think that's
+right — a minimum is what caused this. If you disagree, it's easy to honour, but
+I'd rather it not exist than have it quietly recreate the floor.
 
-> 2people, dirt road, grassy rise, western marches, dusk approaching, wide shot,
-> full body **BREAK** 1girl, futanari, … oversized hoodie, no pants, striped
-> thighhighs, black panties, bulge, holding sketchbook, drawing with pencil
-> **BREAK** 1boy, extremely muscular, … black t-shirt, sweatpants, sneakers,
-> standing behind her, holding warhammer planted in dirt
-
-Two characters, one contiguous run each, no prose, no cross-talk, correct
-clothing on both, `bulge` in the right place. That's the format working.
-
-**58 suites · 2,557 assertions · all green.**
+**58 suites · 2,574 assertions · all green.**

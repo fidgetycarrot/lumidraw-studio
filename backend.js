@@ -7219,8 +7219,22 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
   ].filter(Boolean).join('\n')
 }
 
+// How many pictures. The compiler's schema said the minimum "is a FLOOR: find
+// that many distinct visual moments EVEN WHEN ONE DOMINATES" — which is an
+// instruction to manufacture moments, and it is why the count came out at the
+// limit every time regardless of the passage.
+//
+// Direct mode said nothing at all, which is not better; it just left the model
+// guessing. A ceiling is a limit, not a quota, and one good picture of the moment
+// that matters beats two of which one is filler.
+function countRule(maxImages = 2) {
+  const max = Math.max(1, Number(maxImages) || 1)
+  if (max === 1) return 'Return exactly ONE image — the single moment that carries this passage.'
+  return `HOW MANY: return ONE image. Most passages have one moment worth drawing, and one good picture beats two where the second is filler. Add a second ONLY if the passage genuinely contains another distinct moment — a different place, a different pair of people, a real change of situation — not a second angle on the same beat. Never more than ${max}. The limit is a ceiling, not a target.`
+}
+
 function buildDirectInstruction(profiles, options = {}) {
-  return [DIRECT_RULES.trim(), '', directContext(profiles, options)].join('\n')
+  return [DIRECT_RULES.trim(), '', countRule(options.maxImages), '', directContext(profiles, options)].join('\n')
 }
 
 // The scene the parser writes, with nothing but structural checks. `prompt` is
@@ -9306,6 +9320,7 @@ async function scanStoryCore(userId, options = {}) {
       const savedPlacesForParser = await getPlaces()
       const instruction = directMode
         ? buildDirectInstruction(profiles, {
+          maxImages: settings.maxImages || 2,
           wardrobe: (rememberedState && rememberedState.outfits) || null,
           places: savedPlacesForParser,
           banned: preset.bannedTags || '',
