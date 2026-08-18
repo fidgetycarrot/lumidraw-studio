@@ -1428,6 +1428,7 @@ function cleanParserMessageText(text, { keepLedger = false } = {}) {
   // must not survive to the parser — otherwise the story's guess at somebody
   // silently outranks the sheet.
   value = value.replace(CAST_DECLARATION_RE, ' ')
+  value = value.replace(WEAR_DECLARATION_RE, ' ')
   return value
     .replace(TAG_RE, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
@@ -1782,6 +1783,82 @@ function precedingUserMessage(messages, targetIndex, window = 8) {
 //   [LUMICAST]{"name":"Mira","count":"1girl","tags":"brown hair+freckles"}[/LUMICAST]
 //   </payload>
 const CAST_DECLARATION_RE = /\[LUMICAST\]\s*(\{[\s\S]*?\})\s*\[\/LUMICAST\]/gi
+
+// --- clothing declared by the story -----------------------------------------
+// "Maybe a preset prompt addition for the story model to constantly update
+//  clothing? I do not want to be responsible for manually updating the LumiDraw
+//  app with clothing tags. That sounds terrible."
+//
+// It would be, and a wardrobe only you can update is a wardrobe that is wrong
+// within two turns. LUMICAST already proved the shape: the story model knows
+// what happened, so let it say so, and let LumiDraw keep the record.
+//
+//   [LUMIWEAR]{"name":"Fanny","outfit":"sheer harem silks+gold jewelry+anklet"}[/LUMIWEAR]
+//
+// One rule, and it is the whole point: a declaration REPLACES that character's
+// outfit rather than merging into it. Merging is what produced "midriff pops up
+// if the wardrobe has midriff typed" — old clothes surviving a change of clothes.
+const WEAR_DECLARATION_RE = /\[LUMIWEAR\]\s*(\{[\s\S]*?\})\s*\[\/LUMIWEAR\]/gi
+
+function extractWearDeclarations(text) {
+  const found = []
+  WEAR_DECLARATION_RE.lastIndex = 0
+  for (const match of String(text || '').matchAll(WEAR_DECLARATION_RE)) {
+    let raw = null
+    try { raw = JSON.parse(sanitizeJsonText(match[1])) } catch { continue }
+    if (!raw || typeof raw !== 'object') continue
+    const name = shortPhrase(raw.name || raw.anchor || '', 'wear name', 6, 64, true, true)
+    if (!name) continue
+    const outfit = uniqueStrings(String(raw.outfit || raw.clothing || raw.wearing || '')
+      .split(/[+,]/).map((part) => animaTag(part)).filter(Boolean)).slice(0, 12)
+    // An empty outfit is a real statement — "nude" — but an ABSENT one is a
+    // malformed declaration. Only the second is dropped.
+    if (!('outfit' in raw || 'clothing' in raw || 'wearing' in raw)) continue
+    found.push({ name, outfit })
+  }
+  return found
+}
+
+// LAST declaration wins, the opposite of LUMICAST. A character is described once
+// but changes clothes repeatedly, and within a scan window the newest statement
+// is the current one.
+async function absorbWearDeclarations(messages, targetIndex, profiles, chatId, scope, window = 6) {
+  if (!Array.isArray(messages) || !profiles) return []
+  const start = Number.isInteger(targetIndex) ? Math.max(0, targetIndex - window) : 0
+  const end = Number.isInteger(targetIndex) ? targetIndex : messages.length - 1
+  const declared = []
+  for (let i = start; i <= end && i < messages.length; i++) {
+    const bits = messageBits(messages[i] || {})
+    if (typeof bits.content !== 'string') continue
+    declared.push(...extractWearDeclarations(bits.content))
+  }
+  if (!declared.length) return []
+  const known = allKnownProfiles(profiles)
+  const memory = await getSceneMemory()
+  const key = sceneMemoryKey(chatId, scope)
+  const previous = memory[key] || {}
+  const outfits = { ...(previous.outfits || {}) }
+  const applied = []
+  for (const entry of declared) {
+    const wanted = normalizeIdentityText(entry.name)
+    const match = known.find((profile) => profile &&
+      (normalizeIdentityText(profile.anchor) === wanted ||
+       normalizeIdentityText(profile.promptName) === wanted ||
+       normalizeIdentityText(profile.ref) === wanted))
+    // Somebody the story dressed who is not in this cast. Silently writing an
+    // outfit against a ref nobody owns is how anonymous wardrobe rows appeared.
+    if (!match || !match.ref) continue
+    outfits[match.ref] = entry.outfit
+    applied.push({ name: match.anchor || match.ref, outfit: entry.outfit })
+  }
+  if (!applied.length) return []
+  memory[key] = { ...previous, outfits, at: Date.now() }
+  await spindle.storage.setJson(SCENE_MEMORY_FILE, memory, { indent: 2 })
+  for (const item of applied) {
+    spindle.log.info(`[lumidraw] the story dressed ${item.name} · ${item.outfit.join(', ') || '(nothing)'}`)
+  }
+  return applied
+}
 
 function extractCastDeclarations(text) {
   const found = []
@@ -7497,6 +7574,16 @@ async function runDirectImages(images, ctx) {
   return { mode: 'direct', processed: results.length, results, messageId: target && target.id }
 }
 
+// Tags that describe a BODY, not a garment. Kept explicit and short rather than
+// derived from the garment table: `garmentZone` returns "" both for `midriff` and
+// for `harem silks`, so "not a known garment" would file real clothing as anatomy.
+const BODY_STATE_TAGS = new Set([
+  'bulge', 'midriff', 'navel', 'cleavage', 'collarbone', 'sideboob', 'underboob',
+  'cameltoe', 'nipples', 'abs', 'toned', 'thighs', 'thick thighs', 'armpits',
+  'bare shoulders', 'bare legs', 'bare arms', 'exposed skin', 'skindentation',
+  'sweat', 'blush', 'barefoot', 'no shoes',
+])
+
 const DIRECT_RULES = `
 You are writing the FINAL image prompt. Do not describe the scene in prose and
 do not return a scene graph — return the prompt itself, in Danbooru tag style,
@@ -7516,8 +7603,18 @@ WRITING THE PROMPT:
   tag, leave it out rather than writing a sentence — a story beat the model
   cannot draw only competes with the one it can.
 - Open with the shared frame: count tags, setting, time, camera framing.
-- Copy the character sheets EXACTLY for identity and clothing. They are the
-  author's, not suggestions, and a character must look the same in every image.
+- Copy the sheets EXACTLY for IDENTITY — body, hair, eyes, species, permanent
+  features. Those are the author's and never change.
+- CLOTHING IS NOT IDENTITY. The sheet's "last seen wearing" is only what they had
+  on the last time anyone looked. THE PASSAGE ALWAYS WINS. If this passage says,
+  shows or implies a change of clothes, write what the passage says and ignore
+  the sheet entirely. People change clothes; that is what stories are made of.
+- Do NOT invent clothing the passage does not mention. If someone is in nothing
+  but an oversized shirt, that is the whole outfit — say so with the explicit
+  tag ("no pants", "bottomless", "barefoot") rather than quietly adding jeans or
+  shoes. A garment nobody mentioned is a garment nobody is wearing.
+- Body facts are not garments. "bulge", "midriff", "cleavage", "navel" describe
+  a body showing through or past clothing — never write them as something worn.
 - One clear action. Not three.
 
 NEVER: prose sentences, invented tags, a character's name as a tag, repeating a
@@ -7532,20 +7629,34 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
   for (const profile of allKnownProfiles(profiles)) {
     if (!profile) continue
     const name = profile.promptName || profile.anchor || profile.ref
-    const worn = (wardrobe && wardrobe[profile.ref] && wardrobe[profile.ref].length)
+    const recorded = (wardrobe && wardrobe[profile.ref] && wardrobe[profile.ref].length)
       ? wardrobe[profile.ref] : (profile.defaultOutfit || [])
+    // "Bulge becomes wearing a bulge. Midriff becomes wearing a midriff."
+    //
+    // Both are true, and both were this line: everything in the outfit record was
+    // announced as `wearing: …`, so a body fact that had found its way in — and
+    // `bulge` gets there BY DESIGN, the underwear rule adds it — was read as a
+    // garment. Split by an explicit list rather than by "not a known garment",
+    // because an unrecognised garment (harem silks, say) is common and calling it
+    // anatomy would be a worse bug than the one being fixed.
+    const worn = recorded.filter((tag) => !BODY_STATE_TAGS.has(String(tag).toLowerCase()))
+    const body = recorded.filter((tag) => BODY_STATE_TAGS.has(String(tag).toLowerCase()))
     const lock = identityLockFor(profile)
     lines.push([
       `${name}: ${profile.countTag || ''}`,
       (profile.appearance || []).join(', '),
       lock.length ? `ALWAYS INCLUDE: ${lock.join(', ')}` : '',
-      worn.length ? `wearing: ${worn.join(', ')}` : '',
+      // Labelled as history, not as fact. The old wording — a bare "wearing:" —
+      // read as the present tense and the parser believed it over the passage.
+      worn.length ? `last seen wearing (the passage overrides this): ${worn.join(', ')}` : '',
+      body.length ? `body, not clothing: ${body.join(', ')}` : '',
     ].filter(Boolean).join(' | '))
   }
   const place = (places || []).filter(Boolean).slice(0, 1)
     .map((item) => `Place — ${item.name}: ${(item.setting || []).join(', ')}`)
   return [
-    'CHARACTER SHEETS (copy identity and clothing exactly):',
+    'CHARACTER SHEETS — copy IDENTITY exactly. Clothing is last-known only and',
+    'whatever THIS passage says they are wearing replaces it:',
     ...lines,
     ...place,
     banned ? `NEVER USE THESE: ${banned}` : '',
@@ -9668,9 +9779,19 @@ async function scanStoryCore(userId, options = {}) {
     if (settings.parserEngine === 'anima') {
       // Hand the parser the location outright rather than hoping it survives
       // inside the recency window.
-      const rememberedState = await readSceneMemory(chatId, preset.name)
       const anchorForParser = tagsFrom(preset.sceneAnchor || '', 8)
       const profilesForState = await getStoryProfiles(preset, settings, userId, chatId)
+      // The story's own clothing declarations, applied BEFORE the record is read
+      // — so both engines see the current outfit rather than last week's. Profiles
+      // have to exist first, because a declaration is bound to a character by
+      // name and an unmatched one is dropped rather than written to a stray ref.
+      try {
+        await absorbWearDeclarations(messages, targetIndex, profilesForState, chatId,
+          await sceneScopeFor(chatId, preset.name))
+      } catch (error) {
+        spindle.log.warn('[lumidraw] could not absorb declared clothing: ' + error.message)
+      }
+      const rememberedState = await readSceneMemory(chatId, preset.name)
       const wardrobeLines = wardrobeLinesFor(rememberedState, profilesForState)
       // Somebody with no record is the only case the digest earns its tokens for —
       // and only somebody in THIS scene. Character and persona always count; a cast
@@ -10769,6 +10890,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // from "who is in this chat" to "who is in the panel". It now reads the
         // whole chat for cast declarations before building the rows.
         let added = []
+        let dressed = []
         let scanError = ''
         if (payload.scan && preset) {
           try {
@@ -10776,8 +10898,16 @@ spindle.onFrontendMessage(async (payload, userId) => {
             const messages = read.messages || []
             const absorbed = await absorbCastDeclarations(messages, null, preset, chatId)
             added = absorbed.added || []
+            // "Pressing refresh on the wardrobe panel does not change the wardrobe
+            //  of record text." It could not: refresh only ever absorbed CAST
+            //  declarations. Clothing was never read from the chat at all, so the
+            //  panel showed whatever was last typed into it by hand.
+            const scanProfiles = await getStoryProfiles(preset, settings, userId, chatId)
+            dressed = await absorbWearDeclarations(messages, null, scanProfiles, chatId,
+              await sceneScopeFor(chatId, presetName))
             spindle.log.info(`[lumidraw] wardrobe scan read ${messages.length} message(s)` +
-              (added.length ? ` and adopted ${added.join(', ')}` : ' and found no new cast declarations'))
+              (added.length ? ` and adopted ${added.join(', ')}` : ' and found no new cast declarations') +
+              (dressed.length ? ` · re-dressed ${dressed.map((item) => item.name).join(', ')}` : ''))
           } catch (error) {
             scanError = error.message
             spindle.log.info(`[lumidraw] wardrobe scan could not read the chat: ${error.message}`)
@@ -10944,7 +11074,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // opened — which is why a character that demonstrably exists could not
         // be found. Every wardrobe reply now carries the current library.
         reply = ok(payload, requestId, { rows, chatId, preset: presetName, added, scanError, removed, swapped,
-          library, characters: characterLib, addedFromLibrary })
+          library, characters: characterLib, addedFromLibrary, dressed })
         break
       }
 

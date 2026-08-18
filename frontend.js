@@ -3580,7 +3580,11 @@ img[class*="inlineImage"] {
         ? `Read from "${res.preset || 'no preset'}" · chat ${String(res.chatId).slice(-8)}`
         : `Read from "${res.preset || 'no preset'}" · NO CHAT IDENTIFIED — every chat is sharing one wardrobe record`
       const found = res.added && res.added.length ? ` Added from the story: ${res.added.join(', ')}.` : ''
-      setStatus('.ld-wardrobe-status', where + '.' + found, res.chatId ? 'good' : 'err')
+      // The answer to "refresh doesn't change the wardrobe of record": now it can,
+      // and when it does it says whose clothes changed.
+      const wore = res.dressed && res.dressed.length
+        ? ` The story re-dressed ${res.dressed.map((item) => item.name).join(', ')}.` : ''
+      setStatus('.ld-wardrobe-status', where + '.' + found + wore, res.chatId ? 'good' : 'err')
     } catch (e) {
       setStatus('.ld-wardrobe-status', e.message, 'err')
     }
