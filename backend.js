@@ -38,6 +38,16 @@ const PRESET_BACKUP_FILE = 'presets_backup_pre_cast.json'
 // with Elliot in it kept generating Jason, and later a persona with no sheet at
 // all. When the host cannot say, the answer is to ask once and remember.
 const CHAT_PERSONA_FILE = 'chat_persona.json'
+// Anima's artist vocabulary, supplied by you rather than bundled. A mistyped
+// artist tag is the worst kind of bug this project has: it fails SILENTLY. Anima
+// does not error on an artist it was never trained on — it ignores the tag, and
+// you get a blander image with no way to tell whether the style did nothing or
+// the name was wrong by one letter.
+//
+// Not shipped with the extension on purpose. 59,000 names is about a megabyte of
+// dead weight for everyone who never loads it, and a list that lives with the
+// model rather than with LumiDraw is one I cannot keep current anyway.
+const ARTIST_INDEX_FILE = 'artist_index.json'
 
 const DEFAULT_SETTINGS = {
   host: '127.0.0.1',
@@ -6342,6 +6352,95 @@ function relationCoveredByStatement(relation, statement, byRef) {
   return hits / words.length >= 0.6
 }
 
+async function getArtistIndex() {
+  const value = await spindle.storage.getJson(ARTIST_INDEX_FILE, { fallback: null })
+  if (!value || !Array.isArray(value.names)) return null
+  return value
+}
+
+// One name per line. Tolerant on purpose: the index files in the wild carry a
+// leading "@", a trailing work count, or a comma-separated second column, and
+// asking you to clean a 59,000 line file by hand would be absurd.
+function parseArtistIndex(text) {
+  const names = new Set()
+  for (const line of String(text || '').split(/\r?\n/)) {
+    let value = line.trim()
+    if (!value || value.startsWith('#')) continue
+    value = value.split(/[,\t]/)[0].trim()
+    value = value.replace(/\s+\d[\d,]*$/, '').trim()
+    value = value.replace(/^@+/, '').trim().toLowerCase()
+    if (!value || /\s{2,}/.test(value)) continue
+    names.add(value)
+  }
+  return [...names]
+}
+
+// Cheap bounded edit distance. Returns a number greater than `limit` the moment
+// it cannot possibly come in under it, so scanning 59,000 names stays fast — and
+// it only ever runs for a tag that already failed the lookup.
+function editDistanceWithin(a, b, limit) {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i]
+    let best = i
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
+      if (current[j] < best) best = current[j]
+    }
+    if (best > limit) return limit + 1
+    previous = current
+  }
+  return previous[b.length]
+}
+
+// Which of these artist tags does Anima not know, and what did you probably mean?
+function checkArtistTags(artistTags, index) {
+  if (!index || !Array.isArray(index.names) || !index.names.length) return []
+  const known = new Set(index.names)
+  const problems = []
+  for (const tag of artistTags || []) {
+    const name = String(tag || '').replace(/^@+/, '').trim().toLowerCase()
+    if (!name || known.has(name)) continue
+    // A single edit for a short name, up to three for a long one. A fixed
+    // threshold either misses "kantoku"/"kantoko" or suggests nonsense for a
+    // thirty-character handle.
+    const limit = Math.min(3, Math.max(1, Math.floor(name.length / 6)))
+    let best = ''
+    let bestScore = limit + 1
+    for (const candidate of index.names) {
+      const score = editDistanceWithin(name, candidate, limit)
+      if (score < bestScore) { bestScore = score; best = candidate; if (score === 1) break }
+    }
+    problems.push({ tag: '@' + name, suggestion: bestScore <= limit ? '@' + best : '' })
+  }
+  return problems
+}
+
+// Shared by both pipelines, so direct mode gets the same warning the compiler
+// does — the tag comes from your preset either way.
+let artistWarningCache = ''
+async function warnOnUnknownArtists(artistTags) {
+  try {
+    const index = await getArtistIndex()
+    if (!index) return []
+    const problems = checkArtistTags(artistTags, index)
+    if (!problems.length) { artistWarningCache = ''; return [] }
+    const message = problems.map((item) =>
+      item.suggestion ? `${item.tag} is not in the index — did you mean ${item.suggestion}?`
+        : `${item.tag} is not in the index`).join(' · ')
+    // Once per distinct problem, not once per image. The same typo repeating in
+    // the log every generation would train you to ignore it.
+    if (message !== artistWarningCache) {
+      artistWarningCache = message
+      spindle.log.warn('[lumidraw] artist tag · ' + message +
+        ' · Anima ignores an artist it does not know, so the style silently does nothing.')
+    }
+    return problems
+  } catch { return [] }
+}
+
 // Splits "@kantoku" style artist tags out of a free-text header so they can be
 // placed in Anima's artist slot rather than wherever the user happened to type
 // them. Returns { artists, rest }.
@@ -7290,6 +7389,9 @@ const SUBJECT_BREAK_MARK = '\u0000SUBJECT_BREAK'
 // behind, the identity lock in the middle, send.
 async function runDirectImages(images, ctx) {
   const { preset, profiles, userId, chatId, scan, rawReply, parserInput, target } = ctx
+  // Direct mode still leads with your preset's quality tags, so an artist typo in
+  // them fails exactly the same silent way. Same check, both pipelines.
+  await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
   // Built here rather than passed in: `origin` is assembled at the upload site in
   // the compiler path and does not exist this early. Passing a name that is not
   // in scope is how the first wiring attempt threw `origin is not defined` on the
@@ -8400,6 +8502,10 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   const { artists, rest } = splitArtistTags(normalizeArtistTags(
     reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), scene.safety)
   ))
+  // An artist tag Anima does not know is dropped by the model in silence. Say so
+  // — the whole point is that this failure has no symptom you could otherwise
+  // notice, only a blander image than you expected.
+  await warnOnUnknownArtists(artists)
   const savedPlaces = await getPlaces()
   const core = compileStructuredScene(scene, profiles, sourcePassage, {
     artistTags: artists,
@@ -10843,6 +10949,39 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }
 
       // Which cast is this chat using, and what is in it.
+      // Load, inspect or clear Anima's artist vocabulary. Supplied by you rather
+      // than bundled — see ARTIST_INDEX_FILE for why.
+      case 'artist_index': {
+        if (payload.clear) {
+          await spindle.storage.setJson(ARTIST_INDEX_FILE, null, { indent: 2 })
+          spindle.log.info('[lumidraw] artist index cleared; artist tags are no longer checked')
+          reply = ok(payload, requestId, { count: 0, at: 0 })
+          break
+        }
+        if (typeof payload.text === 'string' && payload.text.trim()) {
+          const names = parseArtistIndex(payload.text)
+          if (!names.length) throw new Error('No artist names found in that text — one name per line is expected.')
+          await spindle.storage.setJson(ARTIST_INDEX_FILE, { names, at: Date.now() }, { indent: 2 })
+          spindle.log.info(`[lumidraw] artist index loaded · ${names.length} names`)
+          reply = ok(payload, requestId, { count: names.length, at: Date.now() })
+          break
+        }
+        // A dry run against whatever is in the active preset right now, so the
+        // answer arrives when you ask rather than on the next generation.
+        const index = await getArtistIndex()
+        const settingsNow = await getSettings()
+        const presetNow = (await getPresets()).find((item) => item && item.name === settingsNow.activePreset)
+        const tags = presetNow
+          ? splitArtistTags(normalizeArtistTags(String(presetNow.qualityTags || ''))).artists : []
+        reply = ok(payload, requestId, {
+          count: index ? index.names.length : 0,
+          at: index ? index.at : 0,
+          checked: tags,
+          problems: checkArtistTags(tags, index),
+        })
+        break
+      }
+
       case 'casts': {
         const chatId = (await resolveActiveChatId(userId)) || String(payload.chatId || '').trim() || ''
         if (payload.bind !== undefined) {

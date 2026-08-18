@@ -927,6 +927,15 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-hint">Inserts BREAK between the characters in a multi-subject prompt. BREAK resets the attention chunk, which is what keeps one character's hair, build or clothes from reaching another. Only add BREAK to your quality tags — never to a character's own tags, or it lands mid-description.</div>
             <div class="ld-help">Where this story takes place, as tags. The parser is a separate, stateless call that only sees the current passage and a short recency window — during a long scene the prose stops naming the location, so it can go blind to it and invent one. This is handed over on every request as the established location. LumiDraw updates its own record when a passage clearly moves the characters; this is the starting point and the fallback.</div>
             <span class="ld-label" style="margin-top:7px">Banned tags</span><input class="ld-ed-banned" />
+            <span class="ld-label" style="margin-top:9px">Anima artist index</span>
+            <div class="ld-help" style="margin-top:2px">An artist tag Anima was never trained on is <strong>ignored in silence</strong> — no error, just a blander image and no way to tell the style did nothing. Paste an artist index here once and LumiDraw will check your <code>@tags</code> and suggest the near miss. Not bundled: 59,000 names is a megabyte of dead weight for everyone who never loads it.</div>
+            <textarea class="ld-artist-index" rows="3" placeholder="One artist name per line. A leading @ and a trailing work count are both fine."></textarea>
+            <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+              <button class="ld-btn ld-compact" data-act="artist-load">Load index</button>
+              <button class="ld-btn ld-compact" data-act="artist-check">Check my tags</button>
+              <button class="ld-btn ld-compact" data-act="artist-clear">Clear</button>
+            </div>
+            <div class="ld-status ld-artist-status" style="font-size:11px"></div>
             <span class="ld-label" style="margin-top:7px">Prompt prefix</span><textarea class="ld-ed-prefix" style="min-height:58px"></textarea>
             <span class="ld-label" style="margin-top:7px">Negative prompt</span><textarea class="ld-ed-negative" style="min-height:58px"></textarea>
             <div class="ld-row" style="margin-top:10px"><button class="ld-btn ld-primary" data-act="ed-save">Save preset</button><button class="ld-btn" data-act="ed-cancel">Cancel</button></div>
@@ -3484,6 +3493,41 @@ img[class*="inlineImage"] {
       loadWardrobe(true)
     })
   }
+  async function artistCall(payload, done) {
+    try { done(await call('artist_index', payload, 20000)) }
+    catch (e) { setStatus('.ld-artist-status', e.message, 'err') }
+  }
+  const artistReport = (res) => {
+    if (!res.count) return setStatus('.ld-artist-status', 'No index loaded — artist tags are not being checked.', '')
+    if (!(res.problems || []).length) {
+      const checked = (res.checked || []).length
+      return setStatus('.ld-artist-status',
+        `${res.count.toLocaleString()} names loaded. ${checked ? `All ${checked} artist tag${checked === 1 ? '' : 's'} in this preset are known.` : 'This preset has no artist tags.'}`, 'good')
+    }
+    setStatus('.ld-artist-status', res.problems.map((item) =>
+      item.suggestion ? `${item.tag} is unknown — did you mean ${item.suggestion}?` : `${item.tag} is unknown`).join(' · '), 'err')
+  }
+  if ($('[data-act="artist-load"]')) {
+    $('[data-act="artist-load"]').addEventListener('click', () => {
+      const box = $('.ld-artist-index')
+      if (!box || !box.value.trim()) return setStatus('.ld-artist-status', 'Paste an artist list first.', 'err')
+      setStatus('.ld-artist-status', 'Reading…', '')
+      artistCall({ text: box.value }, (res) => {
+        // Not kept in the box: a megabyte of names in a textarea makes the panel
+        // crawl, and it is saved now anyway.
+        box.value = ''
+        setStatus('.ld-artist-status', `${res.count.toLocaleString()} artist names loaded.`, 'good')
+      })
+    })
+  }
+  if ($('[data-act="artist-check"]')) {
+    $('[data-act="artist-check"]').addEventListener('click', () => artistCall({}, artistReport))
+  }
+  if ($('[data-act="artist-clear"]')) {
+    $('[data-act="artist-clear"]').addEventListener('click', () => artistCall({ clear: true }, () =>
+      setStatus('.ld-artist-status', 'Index cleared. Artist tags are no longer checked.', '')))
+  }
+
   if ($('.ld-chat-persona')) {
     $('.ld-chat-persona').addEventListener('change', async (event) => {
       const label = event.target.options[event.target.selectedIndex].textContent
