@@ -1848,6 +1848,14 @@ async function absorbWearDeclarations(messages, targetIndex, profiles, chatId, s
     // Somebody the story dressed who is not in this cast. Silently writing an
     // outfit against a ref nobody owns is how anonymous wardrobe rows appeared.
     if (!match || !match.ref) continue
+    // Re-declaring the same outfit is not a change, and under the 0.97 block it
+    // happens EVERY TURN for everyone on screen — that is the point, because the
+    // model cannot see its own earlier declarations and so cannot be asked to
+    // remember whether anything moved. LumiDraw holds the record, so LumiDraw
+    // does the diffing: an identical declaration must cost nothing, write
+    // nothing, and say nothing, or the log becomes noise you learn to ignore.
+    const before = (outfits[match.ref] || []).join('\u0000')
+    if (before === entry.outfit.join('\u0000')) continue
     outfits[match.ref] = entry.outfit
     applied.push({ name: match.anchor || match.ref, outfit: entry.outfit })
   }

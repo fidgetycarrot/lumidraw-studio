@@ -1,79 +1,65 @@
-# LumiDraw Studio 0.96.0 — clothing
+# LumiDraw Studio 0.98.0 — the choppy scrolling is ours
 
-Your note was the most useful thing you've sent me. Most of that list was **one
-sentence**, in the direct-mode rules:
+Not a clash. It's LumiDraw, and it's one function.
 
-> *"Copy the character sheets EXACTLY for identity **and clothing**. They are the
-> author's, not suggestions, and a character must look the same in every image."*
+## What was happening
 
-The parser was being **instructed** to override the story's clothing with the
-saved outfit, and told a character must never change clothes. That is, straight
-off your list: the saved outfit beating the story outfit, old tags drifting into
-a new one, and Fanny in Elliot's jeans while the prose has her in harem silks.
+`markFixableChatImages` runs on a **4 second timer** over every `<img>` on the
+page — that's the thing that marks which chat images can be re-generated. For
+each image it called two lookups, and **each of those rebuilt the entire
+flattened history array from scratch**, then ran a regex over every entry's full
+prompt string looking for a substring match.
 
-**Identity is the author's. Clothing is the story's.** Conflating them was the bug.
+So the real cost, four times a minute, on the main thread:
 
-## What changed
+> images on page × images in history × a regex over a whole prompt
 
-**The passage always wins.** Identity is still copied exactly — body, hair, eyes,
-species. Clothing is now labelled as history:
+It grows with your chat length *and* your History tab, which is exactly why it's
+bad **now** — you're at 51 saved images. A periodic main-thread stall during
+scrolling is what choppy scrolling *is*, and "it gets stuck on images" is the
+same stall landing while images are in view.
 
-> `last seen wearing (the passage overrides this): oversized hoodie`
+## The fix
 
-**"Bulge becomes wearing a bulge."** Both true, and both this line — everything in
-the outfit record was announced as `wearing: …`, so a body fact that got in there
-read as a garment. And `bulge` gets in *by design*; the underwear rule adds it.
-Body facts are now reported separately as `body, not clothing:`.
+Same answers, computed once per history change instead of once per image:
 
-Split by an explicit list, not by "not a known garment" — `garmentZone` returns
-empty for `midriff` *and* for `harem silks`, so the lazy version would have filed
-your harem silks as anatomy. There's a test.
+- Two **Maps** for URL and recorded-alt lookups — O(1).
+- The substring fallback, which can't be a Map, now only exists for entries with
+  no recorded alt, and is evaluated **at most once per `<img>` element**, cached
+  in a WeakMap.
+- The index rebuilds when `history` changes, detected **by reference** rather
+  than by hooking the nine places history gets assigned — a missed hook would be
+  a silently stale index.
 
-**Invented trousers.** The parser is now told: a garment nobody mentioned is a
-garment nobody is wearing. If someone's in nothing but an oversized shirt, say so
-with `no pants` / `bottomless` rather than quietly adding jeans and shoes.
+A tick over an unchanged chat is now a WeakMap lookup per image.
 
-## LUMIWEAR — your idea, and the durable half
+Measured at your scale — 51 history images, 60 chat images, 40 ticks:
 
-> *"Maybe a preset prompt addition for the story model to constantly update
-> clothing? I do not want to be responsible for manually updating the LumiDraw
-> app with clothing tags. That sounds terrible."*
+> **41ms → 2ms**
 
-It would be, and a wardrobe only you can update is wrong within two turns.
-LumiCast already proved the shape.
+The timer stays at 4 seconds. It was never the cadence that was wrong; it was
+the work per tick.
 
-```
-[LUMIWEAR]{"name":"Fanny","outfit":"sheer harem silks+gold jewelry+anklet"}[/LUMIWEAR]
-```
+## One honest note on the benchmark
 
-**`lumiwear-preset-block.md` is in this zip** — paste it in like the LumiCast one.
+The shipped function needs a DOM, which the test harness doesn't have. So the
+timing above runs a faithful **model** of both strategies over realistic data,
+and the structural assertions — index built once, WeakMap guard, Maps used, the
+per-image rebuild gone — run against the real file. I'd rather say that than
+imply I benchmarked something I didn't.
 
-- **Last declaration wins** (opposite of LumiCast: described once, dressed often).
-- **Replaces, never merges** — this is the `midriff` fix.
-- An unrecognised name is dropped, not written to a stray row.
-- Stripped from the parser's copy, same as LumiCast.
+## What I did NOT find
 
-**↻ now reads clothing too.** "Pressing refresh does not change the wardrobe of
-record" — it couldn't; refresh only ever absorbed *cast* declarations. Clothing
-was never read from the chat at all. It is now, and the panel says who was
-re-dressed.
-
-## Not in this release
-
-**Emotions wrong** and **swipe gives no image** — I haven't touched either. The
-emotion one I suspect is expression tags binding across a BREAK to the wrong
-character, which is the same family as the clothing mix-ups, but I'd rather look
-at a prompt where it happened than guess. Send me one.
+The images themselves are inserted as plain markdown `![alt](url)` with alt
+capped at 100 characters. Nothing bloated, and how they're laid out while loading
+is Lumiverse's renderer, not something LumiDraw can reach. If it's still choppy
+after this, that part is worth looking at next — but this was measurably wrong on
+its own.
 
 ## Verification
 
-**60 suites · 2,852 assertions · all green.** New suite: `clothes.mjs`, 46.
+**61 suites · 2,876 assertions · all green.** New suite: `perf.mjs`.
 
-Mutations caught, all five: the sheet authoritative again (3 failures), body facts
-back in the clothing line (2), classifying by "not a known garment" so harem silks
-becomes anatomy (2), a declaration merging instead of replacing (3), first
-declaration winning instead of last (3).
-
-One existing assertion in `direct.mjs` failed and I **replaced** it rather than
-restoring it — it asserted the sheets were authoritative for clothing, which is
-precisely the behaviour being removed. The reason is written into the test.
+Mutations caught: the WeakMap guard removed so every image is re-searched every
+tick, the index never rebuilding so new images are never marked, and a revert to
+the full per-image search.

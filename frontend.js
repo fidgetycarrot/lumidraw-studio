@@ -1157,9 +1157,65 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     return exact || matches[0]
   }
 
+  // --- the fixable index ------------------------------------------------------
+  // "Scrolling through my chat is super choppy now."
+  //
+  // markFixableChatImages runs on a 4 second timer over every <img> on the page.
+  // For each one it called findHistoryImage AND findHistoryImageByAlt, and each
+  // of those rebuilt the ENTIRE flattened history array from scratch — then ran a
+  // regex over every entry's full prompt string looking for a substring. So the
+  // real cost per tick was:
+  //
+  //     images on page  ×  images in history  ×  regex over a whole prompt
+  //
+  // …on the main thread, four times a minute, growing with both the chat and the
+  // History tab. At 51 saved images and a long chat that is a periodic stall, and
+  // a periodic main-thread stall during scrolling IS choppy scrolling.
+  //
+  // Same answers, built once per history change instead of once per image:
+  // two Maps for the O(1) cases, and the substring fallback — which cannot be a
+  // Map, since it is a substring test — evaluated at most ONCE per <img> element
+  // and remembered in a WeakMap.
+  let fixableSource = null
+  let fixableVersion = 0
+  let fixableByUrl = new Map()
+  let fixableByAlt = new Map()
+  let fixablePrompts = []
+  const fixableSeen = new WeakMap()
+
+  // Detected by reference rather than hooked into all nine places history is
+  // assigned — every one of them replaces the array, and a missed hook would be
+  // a silently stale index.
+  function ensureFixableIndex() {
+    if (fixableSource === history) return
+    fixableSource = history
+    fixableVersion++
+    fixableByUrl = new Map()
+    fixableByAlt = new Map()
+    fixablePrompts = []
+    for (const item of flattenHistoryImages()) {
+      if (item.image && item.image.url && !fixableByUrl.has(item.image.url)) {
+        fixableByUrl.set(item.image.url, item)
+      }
+      const recorded = normalizeAltText(item.entry && item.entry.origin && item.entry.origin.alt)
+      if (recorded && !fixableByAlt.has(recorded)) fixableByAlt.set(recorded, item)
+      else if (!recorded) {
+        const prompt = normalizeAltText(item.entry && item.entry.prompt)
+        if (prompt) fixablePrompts.push({ prompt, item })
+      }
+    }
+  }
+
   function findHistoryImageForChatImage(img) {
+    ensureFixableIndex()
     const src = img.getAttribute('src') || img.src || ''
-    return findHistoryImage(src) || findHistoryImageByAlt(img.getAttribute('alt') || '')
+    if (src && fixableByUrl.has(src)) return fixableByUrl.get(src)
+    const alt = normalizeAltText(img.getAttribute('alt') || '')
+    // The old length guard, kept: a short alt matches far too much.
+    if (alt.length < 20) return null
+    if (fixableByAlt.has(alt)) return fixableByAlt.get(alt)
+    const hit = fixablePrompts.find((entry) => entry.prompt.includes(alt))
+    return hit ? hit.item : null
   }
 
   function currentOutputItem() {
@@ -3864,7 +3920,14 @@ img[class*="inlineImage"] {
   // Purely cosmetic affordance so a fixable image shows a zoom cursor.
   function markFixableChatImages() {
     if (!history || !history.length) return
+    ensureFixableIndex()
     for (const img of document.querySelectorAll('img')) {
+      // Already answered for this history. An image's src and alt do not change
+      // under it, so the answer cannot either — and this is what turns a tick
+      // over an unchanged chat into a WeakMap lookup per image instead of a
+      // full search per image.
+      if (fixableSeen.get(img) === fixableVersion) continue
+      fixableSeen.set(img, fixableVersion)
       if (panel.contains(img) || lightbox.contains(img)) continue
       img.classList.toggle('ld-chat-image-fixable', !!findHistoryImageForChatImage(img))
     }
