@@ -322,6 +322,31 @@ async function personaForChat(chatId) {
   return personas.find((item) => item && String(item.id) === String(id)) || null
 }
 
+// WHICH PERSONA'S TAGS, honouring the choice. "I have Elliot selected as the
+// persona character but it keeps injecting Jason's image tags."
+//
+// `preset.personaTags` is the flat legacy field from when characters lived on
+// presets — Jason, in Eric's case. TWO places appended it to the parser
+// instruction directly, never going through getStoryProfiles, so the Playing-as
+// picker could not possibly affect them. The picker worked; these two did not
+// ask it anything.
+//
+// An explicit choice is the answer even when it carries no tags: choosing a
+// persona with an empty sheet means "no persona tags", not "fall back to the
+// one I just replaced".
+async function effectivePersonaTags(preset, chatId) {
+  const chosen = await personaForChat(chatId)
+  if (chosen) {
+    const tags = String((chosen.profile && chosen.profile.appearanceTags) || '').trim()
+    return { tags, source: `your choice for this chat — ${chosen.name}` }
+  }
+  const cast = await castForChat(chatId)
+  const from = cast || preset || {}
+  const tags = String((from.personaProfile && from.personaProfile.appearanceTags) ||
+    from.personaTags || '').trim()
+  return { tags, source: cast ? `the cast "${cast.name}"` : `the preset "${(preset || {}).name || ''}"` }
+}
+
 async function castForChat(chatId) {
   const chat = String(chatId || '').trim()
   if (!chat) return null
@@ -3521,7 +3546,20 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
   if (chosenPersona && chosenPersona.profile) {
     leadPersona = normalizeProfile(chosenPersona.profile,
       chosenPersona.profile.appearanceTags || '', 'persona')
-    spindle.log.info(`[lumidraw] persona: you chose "${chosenPersona.name}" for this chat`)
+    spindle.log.info(`[lumidraw] persona: you chose "${chosenPersona.name}" for chat ${chatId || '(none)'}`)
+  } else {
+    // The binding is per chat, so a choice saved against one chat id and a
+    // generation running under another looks EXACTLY like the picker being
+    // ignored. Manual parsing in particular reaches this from a different entry
+    // point than the automatic scan. Say so rather than leaving it to be
+    // guessed at a third time.
+    const bound = await getChatPersonaMap()
+    const keys = Object.keys(bound)
+    if (keys.length) {
+      spindle.log.info(`[lumidraw] persona: no choice recorded for chat ${chatId || '(none)'} — ` +
+        `but ${keys.length} chat(s) do have one: ${keys.map((key) => String(key).slice(-8)).join(', ')}. ` +
+        'If that list should include this chat, the ids did not match and the picker needs setting again here.')
+    }
   }
 
   return {
@@ -10021,8 +10059,9 @@ async function scanStoryCore(userId, options = {}) {
     // behind the Subject binding toggle for comparison and rollback.
     let instruction = (settings.parserInstruction || LEGACY_DEFAULT_PARSER_INSTRUCTION)
       .replaceAll('{{max_images}}', String(settings.maxImages || 2))
-    if (preset.personaTags) {
-      instruction += '\n\nUser/persona visual tags — use ONLY when the User is visibly present in the chosen moment, and only the visible parts (respect POV): ' + preset.personaTags
+    const legacyPersona = await effectivePersonaTags(preset, chatId)
+    if (legacyPersona.tags) {
+      instruction += '\n\nUser/persona visual tags — use ONLY when the User is visibly present in the chosen moment, and only the visible parts (respect POV): ' + legacyPersona.tags
     }
     const instrLabel = usingCustom ? `custom instruction (${instruction.length} chars)` : 'legacy tag instruction'
     setStoryScanStage(scan, 'parsing', 'Running the v0.13 instruction-only parser.')
@@ -11710,8 +11749,9 @@ if (typeof spindle.registerInterceptor === 'function') {
         try {
           const presets = await getPresets()
           const ap = presets.find((p) => p.name === settings.activePreset)
-          if (ap && ap.personaTags) {
-            protocolText += '\nWhen the User/persona is visibly present in an illustrated moment, represent them with these tags (include only the parts actually visible; respect POV framing): ' + ap.personaTags
+          const inlinePersona = ap ? await effectivePersonaTags(ap, await resolveActiveChatId(userId)) : { tags: '' }
+          if (inlinePersona.tags) {
+            protocolText += '\nWhen the User/persona is visibly present in an illustrated moment, represent them with these tags (include only the parts actually visible; respect POV framing): ' + inlinePersona.tags
           }
         } catch (error) {
           spindle.log.warn('[lumidraw] could not add persona hints to inline protocol: ' + error.message)

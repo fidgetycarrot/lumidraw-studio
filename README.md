@@ -1,65 +1,53 @@
-# LumiDraw Studio 0.98.0 — the choppy scrolling is ours
-
-Not a clash. It's LumiDraw, and it's one function.
+# LumiDraw Studio 0.99.0 — the picker worked; two other places never asked it
 
 ## What was happening
 
-`markFixableChatImages` runs on a **4 second timer** over every `<img>` on the
-page — that's the thing that marks which chat images can be re-generated. For
-each image it called two lookups, and **each of those rebuilt the entire
-flattened history array from scratch**, then ran a regex over every entry's full
-prompt string looking for a substring match.
+`preset.personaTags` is the flat legacy field from when characters lived on
+presets. In your install that's Jason.
 
-So the real cost, four times a minute, on the main thread:
+**Two places appended it to the parser instruction directly** — never going
+through `getStoryProfiles`, so the Playing-as choice could not possibly reach
+them:
 
-> images on page × images in history × a regex over a whole prompt
+- the legacy parser instruction
+- the inline-mode protocol injected into the chat
 
-It grows with your chat length *and* your History tab, which is exactly why it's
-bad **now** — you're at 51 saved images. A periodic main-thread stall during
-scrolling is what choppy scrolling *is*, and "it gets stuck on images" is the
-same stall landing while images are in view.
+The picker was working fine. These two never asked it anything, and one of them
+sits on the manual/inline path — which is why you hit it doing a manual parse.
 
-## The fix
+Both now resolve properly: **your choice for this chat → the bound cast → the
+preset.**
 
-Same answers, computed once per history change instead of once per image:
+## One rule worth stating
 
-- Two **Maps** for URL and recorded-alt lookups — O(1).
-- The substring fallback, which can't be a Map, now only exists for entries with
-  no recorded alt, and is evaluated **at most once per `<img>` element**, cached
-  in a WeakMap.
-- The index rebuilds when `history` changes, detected **by reference** rather
-  than by hooking the nine places history gets assigned — a missed hook would be
-  a silently stale index.
+**An explicit choice with an empty sheet means "no persona tags"** — not "fall
+back to the one I just replaced". Falling back there would reintroduce this exact
+bug for anyone whose persona is a name and a vibe rather than a tag list. There's
+a test.
 
-A tick over an unchanged chat is now a WeakMap lookup per image.
+## And a diagnostic, because this hid twice
 
-Measured at your scale — 51 history images, 60 chat images, 40 ticks:
+The persona binding is per **chat**. A choice saved under one chat id and a
+generation run under another looks *identical* to the picker being ignored — and
+manual parsing reaches the resolver from a different entry point than the auto
+scan. So the log now says:
 
-> **41ms → 2ms**
+> `persona: no choice recorded for chat 4a3f59d3 — but 1 chat(s) do have one:
+> 8b21ce90. If that list should include this chat, the ids did not match and the
+> picker needs setting again here.`
 
-The timer stays at 4 seconds. It was never the cadence that was wrong; it was
-the work per tick.
-
-## One honest note on the benchmark
-
-The shipped function needs a DOM, which the test harness doesn't have. So the
-timing above runs a faithful **model** of both strategies over realistic data,
-and the structural assertions — index built once, WeakMap guard, Maps used, the
-per-image rebuild gone — run against the real file. I'd rather say that than
-imply I benchmarked something I didn't.
-
-## What I did NOT find
-
-The images themselves are inserted as plain markdown `![alt](url)` with alt
-capped at 100 characters. Nothing bloated, and how they're laid out while loading
-is Lumiverse's renderer, not something LumiDraw can reach. If it's still choppy
-after this, that part is worth looking at next — but this was measurably wrong on
-its own.
+If you see that line, the fix is one click. If you see `persona: you chose
+"Elliot" for chat 4a3f59d3` and Jason still shows up, it's a third injection site
+and I want to know.
 
 ## Verification
 
-**61 suites · 2,876 assertions · all green.** New suite: `perf.mjs`.
+**61 suites · 2,888 assertions · all green.**
 
-Mutations caught: the WeakMap guard removed so every image is re-searched every
-tick, the index never rebuilding so new images are never marked, and a revert to
-the full per-image search.
+Mutations caught: the legacy field winning again (3 failures — the reported bug),
+an empty chosen sheet falling back to the old persona (2), the chat-id mismatch
+going silent (2).
+
+Two of my own earlier assertions failed and I updated them rather than reverting:
+one pinned the exact log wording, the other the code shape around the choice. The
+property each was testing is unchanged, and the reason is written into the test.
