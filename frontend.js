@@ -662,9 +662,10 @@ function realSetup(ctx) {
             <select class="ld-mode">
               <option value="off">Off — manual only</option>
               <option value="inline">Inline — story model writes &lt;dt-image&gt; tags</option>
-              <option value="parser">Parser — separate model derives the prompt afterward</option>
+              <option value="parser">Parser — separate model extracts the scene, then LumiDraw compiles it</option>
+              <option value="direct">Direct — separate model writes the finished image prompt</option>
             </select>
-            <div class="ld-mode-note ld-help">Inline is fastest. Parser gives you a separate prompt-conversion step and supports rescanning old messages.</div>
+            <div class="ld-mode-note ld-help">Parser and Direct both use the separate parser model and support rescanning old messages. Parser extracts scene data for LumiDraw to compile; Direct gives the parser the character/wardrobe/place rules and uses its finished prompt without the compiler.</div>
             <label style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px"><input type="checkbox" class="ld-autoscan" style="width:auto" /> Auto-scan after each story message when supported</label>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-strip-directives" style="width:auto" /> Hide generated images and image-request directives from the story model</label>
@@ -1337,16 +1338,18 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
     const parserBinding = card('Prompt parser')
     parserBinding.classList.add('ld-parser-binding-controls')
-    parserBinding.appendChild(field('Engine', controls.parserEngine))
+    const parserEngineField = field('Engine', controls.parserEngine)
+    parserEngineField.classList.add('ld-parser-engine-field')
+    parserBinding.appendChild(parserEngineField)
     if (controls.parserEngineNote) parserBinding.appendChild(controls.parserEngineNote)
     const parserSourceGrid = make('div', 'ld-reset-grid')
     parserSourceGrid.appendChild(field('Connection', inline(controls.parserConnection, controls.refreshParserSources)))
     parserSourceGrid.appendChild(field('Model override', inline(controls.parserModel, controls.clearModelOverride), 'Leave empty to use the selected connection’s model.'))
     parserBinding.appendChild(parserSourceGrid)
     if (controls.modelOverrideNote) parserBinding.appendChild(controls.modelOverrideNote)
-    parserBinding.appendChild(checkbox(controls.direct, 'Direct mode — let the parser write the finished prompt',
-      'Skips LumiDraw’s compiler. Useful when the parser already knows the target model’s prompting style.'))
-
+    // Direct is a first-class illustration mode now, not a hidden Parser toggle.
+    // The old checkbox stays only in the legacy source markup; it is detached by
+    // the UI reset and no longer controls saved settings.
     const animaContext = make('div', 'ld-anima-context-controls')
     animaContext.style.marginTop = '9px'
     const contextGrid = make('div', 'ld-reset-grid')
@@ -2894,8 +2897,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   async function openStoryPicker() {
     const mode = $('.ld-mode') ? $('.ld-mode').value : settings.mode
-    if (mode !== 'parser') {
-      setStatus('.ld-gen-status', 'Choose Parser mode in the Story tab before rescanning an old message.', 'err')
+    if (mode !== 'parser' && mode !== 'direct') {
+      setStatus('.ld-gen-status', 'Choose Parser or Direct mode in the Story tab before rescanning an old message.', 'err')
       return
     }
     const picker = $('.ld-story-picker')
@@ -4930,7 +4933,7 @@ img[class*="inlineImage"] {
       maxImages: $('.ld-maximg').value,
       minImages: $('.ld-minimg').value,
       autoCharTags: $('.ld-chartags').checked,
-      directMode: $('.ld-direct-mode') ? $('.ld-direct-mode').checked : false,
+      directMode: $('.ld-mode') ? $('.ld-mode').value === 'direct' : false,
       chatLeads: $('.ld-chat-leads') ? $('.ld-chat-leads').checked : true,
       stripImageDirectives: $('.ld-strip-directives').checked,
       sizeChatImages: $('.ld-size-images') ? $('.ld-size-images').checked : false,
@@ -4957,39 +4960,57 @@ img[class*="inlineImage"] {
   }
 
   function updateParserEngineUI() {
+    const mode = $('.ld-mode') ? $('.ld-mode').value : (settings.mode || 'off')
+    const direct = mode === 'direct'
     const engine = $('.ld-parser-engine') ? $('.ld-parser-engine').value : (settings.parserEngine || 'legacy')
     const note = $('.ld-parser-engine-note')
     const label = $('.ld-parser-instruction-label')
     const title = $('.ld-parser-debug-title')
-    if (note) note.textContent = engine === 'anima'
-      ? 'Experimental: structured JSON uses the current message plus optional reference context and Loom continuity, then LumiDraw keeps the final prompt mostly tags with a few ownership-safe sentences.'
-      : 'Known-good fallback: version 0.13-style instruction-only parsing. The returned tag prompt goes directly to Draw Things without identity JSON or the Anima compiler.'
-    if (label) label.textContent = engine === 'anima' ? 'Anima hybrid scene-extraction guidance' : 'Legacy parser instruction'
-    if (title) title.textContent = engine === 'anima' ? 'Last Anima hybrid compile' : 'Last legacy parser result'
+    const engineField = $('.ld-parser-engine-field')
+    const instruction = $('.ld-parser-instr')
+    const resetInstruction = $('[data-act="reset-parser"]')
+    if (engineField) engineField.style.display = direct ? 'none' : ''
+    if (note) note.textContent = direct
+      ? 'Direct mode has its own built-in parser rules: the parser receives character sheets, wardrobe, place/context and writes the finished image prompt. LumiDraw does not run the scene compiler afterward.'
+      : engine === 'anima'
+        ? 'Structured JSON uses the current message plus optional reference context and Loom continuity, then LumiDraw compiles the final prompt.'
+        : 'Known-good fallback: instruction-only parsing. The returned tag prompt goes directly to Draw Things without identity JSON or the Anima compiler.'
+    if (label) {
+      label.textContent = engine === 'anima' ? 'Anima hybrid scene-extraction guidance' : 'Legacy parser instruction'
+      label.style.display = direct ? 'none' : ''
+    }
+    if (instruction) instruction.style.display = direct ? 'none' : ''
+    if (resetInstruction) resetInstruction.style.display = direct ? 'none' : ''
+    if (title) title.textContent = direct
+      ? 'Last Direct prompt'
+      : engine === 'anima' ? 'Last Anima hybrid compile' : 'Last legacy parser result'
     const contextControls = $('.ld-anima-context-controls')
-    if (contextControls) contextControls.style.display = engine === 'anima' ? '' : 'none'
+    if (contextControls) contextControls.style.display = (direct || engine === 'anima') ? '' : 'none'
   }
 
   function updateScanLabel() {
     const btn = $('[data-act="scan"]')
     const oldBtn = $('[data-act="scan-old"]')
     const mode = $('.ld-mode') ? $('.ld-mode').value : 'off'
+    const parserDriven = mode === 'parser' || mode === 'direct'
     const engine = $('.ld-parser-engine') ? $('.ld-parser-engine').value : 'legacy'
     if (btn) {
       btn.textContent = mode === 'off'
         ? 'Scan latest 📖 (mode: Off — set in Story)'
-        : mode === 'parser'
-          ? `Scan latest 📖 (${engine === 'anima' ? 'Anima hybrid' : 'Legacy'})`
-          : `Scan latest 📖 (${mode})`
+        : mode === 'direct'
+          ? 'Scan latest 📖 (Direct)'
+          : mode === 'parser'
+            ? `Scan latest 📖 (${engine === 'anima' ? 'Anima hybrid' : 'Legacy'})`
+            : `Scan latest 📖 (${mode})`
     }
     if (oldBtn) {
-      oldBtn.disabled = mode !== 'parser'
-      oldBtn.title = mode === 'parser'
-        ? 'Choose any assistant message in the current chat and run the selected Parser engine on it'
-        : 'Old-message rescanning is available when Story illustrations is set to Parser'
+      oldBtn.disabled = !parserDriven
+      oldBtn.title = parserDriven
+        ? `Choose any assistant message in the current chat and run ${mode === 'direct' ? 'Direct mode' : 'the selected Parser engine'} on it`
+        : 'Old-message rescanning is available in Parser or Direct mode'
     }
     const bindingControls = $('.ld-parser-binding-controls')
-    if (bindingControls) bindingControls.style.display = mode === 'parser' ? '' : 'none'
+    if (bindingControls) bindingControls.style.display = parserDriven ? '' : 'none'
     updateParserEngineUI()
   }
 
@@ -5062,7 +5083,7 @@ img[class*="inlineImage"] {
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-direct-mode', '.ld-chat-leads', '.ld-story-break']) {
+  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-parser-conn') {
@@ -5327,7 +5348,8 @@ img[class*="inlineImage"] {
       $('.ld-maximg').value = settings.maxImages || 2
       $('.ld-minimg').value = settings.minImages || 0
       $('.ld-chartags').checked = settings.autoCharTags !== false
-      if ($('.ld-direct-mode')) $('.ld-direct-mode').checked = settings.directMode === true
+      // Direct mode is represented by the main mode selector. The backend
+      // still mirrors directMode for compatibility with older saved settings.
       if ($('.ld-chat-leads')) $('.ld-chat-leads').checked = settings.chatLeads !== false
       $('.ld-strip-directives').checked = settings.stripImageDirectives !== false
       if ($('.ld-size-images')) {

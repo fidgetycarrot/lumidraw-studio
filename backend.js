@@ -142,6 +142,11 @@ async function getSettings() {
   // the experimental Anima hybrid compiler.
   if (!['legacy', 'anima'].includes(settings.parserEngine)) settings.parserEngine = 'legacy'
   if (!stored || !stored.parserEngine) settings.parserEngine = 'legacy'
+  // Direct used to be a checkbox layered on top of Parser. Promote that old
+  // combination to the first-class mode without requiring reconfiguration.
+  if (settings.mode === 'parser' && settings.directMode === true) settings.mode = 'direct'
+  if (!['off', 'inline', 'parser', 'direct'].includes(settings.mode)) settings.mode = 'off'
+  settings.directMode = settings.mode === 'direct'
   settings.subjectBinding = settings.parserEngine === 'anima' // backward-compatible debug/profile flag
   settings.parserContextMessages = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
   settings.useLoomLedger = settings.useLoomLedger !== false
@@ -9527,7 +9532,7 @@ function scheduleAutoStoryScan(userId, request = {}) {
     try {
       await wait(Math.max(250, Number(request.delayMs) || 650))
       const settings = await getSettings()
-      if (settings.mode !== 'parser' || settings.autoScan === false) {
+      if ((settings.mode !== 'parser' && settings.mode !== 'direct') || settings.autoScan === false) {
         const result = { mode: settings.mode, processed: 0, skipped: true, note: 'Parser auto-scan is disabled.' }
         setAutoStatus(userId, { mode: settings.mode, status: 'idle', messageId, chatId, source, note: result.note })
         return result
@@ -9920,14 +9925,14 @@ async function scanStoryCore(userId, options = {}) {
   }
 
   // ------------------------- parser: derive a prompt from prose -------------
-  if (settings.mode === 'parser') {
+  if (settings.mode === 'parser' || settings.mode === 'direct') {
     if (!force && target.id && await wasProcessed(target.id, target.content, { migrate: true })) {
       return { mode: 'parser', note: 'This message was already illustrated — choose it again to force another parser run.' }
     }
     const usingCustom = !!(settings.parserInstruction && settings.parserInstruction.trim())
     const passage = cleanParserMessageText(target.content).slice(-6000)
 
-    if (settings.parserEngine === 'anima') {
+    if (settings.parserEngine === 'anima' || settings.mode === 'direct') {
       // Hand the parser the location outright rather than hoping it survives
       // inside the recency window.
       const anchorForParser = tagsFrom(preset.sceneAnchor || '', 8)
@@ -9980,7 +9985,7 @@ async function scanStoryCore(userId, options = {}) {
       // DIRECT MODE. The parser writes the finished prompt instead of a scene
       // graph, and none of the compiler below runs. Off by default; your existing
       // pipeline is untouched until you turn it on.
-      const directMode = settings.directMode === true
+      const directMode = settings.mode === 'direct' || settings.directMode === true
       const savedPlacesForParser = await getPlaces()
       const instruction = directMode
         ? buildDirectInstruction(profiles, {
@@ -10663,7 +10668,6 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.cloudFallback !== undefined) settings.cloudFallback = !!payload.cloudFallback
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
-        if (payload.directMode !== undefined) settings.directMode = !!payload.directMode
         if (payload.chatLeads !== undefined) settings.chatLeads = !!payload.chatLeads
         if (payload.useLoomLedger !== undefined) settings.useLoomLedger = !!payload.useLoomLedger
         if (payload.parserMaxTokens !== undefined) settings.parserMaxTokens = Math.max(1200, Math.min(32000, Number(payload.parserMaxTokens) || 12000))
@@ -10677,6 +10681,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
         }
         if (payload.parserContextMessages !== undefined) settings.parserContextMessages = Math.max(0, Math.min(4, Number(payload.parserContextMessages) || 0))
         if (!['legacy', 'anima'].includes(settings.parserEngine)) settings.parserEngine = 'legacy'
+        if (!['off', 'inline', 'parser', 'direct'].includes(settings.mode)) settings.mode = 'off'
+        settings.directMode = settings.mode === 'direct'
         settings.subjectBinding = settings.parserEngine === 'anima'
         if (payload.maxImages !== undefined) {
           settings.maxImages = Math.max(1, Math.min(4, Number(payload.maxImages) || 2))
@@ -11867,7 +11873,7 @@ if (typeof spindle.registerInterceptor === 'function') {
         return a
       }
       spindle.log.info(`[lumidraw] interceptor invoked (mode=${settings.mode}, msgs=${messages.length}, wrapped=${wrapped})`)
-      if (settings.mode !== 'inline' && settings.mode !== 'parser') return a
+      if (settings.mode !== 'inline' && settings.mode !== 'parser' && settings.mode !== 'direct') return a
 
       // Scrub dead image-request directives from the model's view of the
       // conversation. This edits only the copy being sent for this generation;
@@ -11909,7 +11915,7 @@ if (typeof spindle.registerInterceptor === 'function') {
         spindle.log.info('[lumidraw] inline protocol injected (' + injected.content.length + ' chars)')
         return wrapped ? { ...a, messages: out } : out
       }
-      if (settings.mode === 'parser' && settings.autoScan !== false) {
+      if ((settings.mode === 'parser' || settings.mode === 'direct') && settings.autoScan !== false) {
         const triggerText = [
           'At the very end of every assistant reply, always append exactly one line containing this XML tag and nothing else on that line:',
           PARSER_TRIGGER_TAG,
