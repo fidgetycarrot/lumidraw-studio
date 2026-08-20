@@ -54,7 +54,14 @@ const DEFAULT_SETTINGS = {
   port: 7862,
   mode: 'off',            // 'off' | 'inline' | 'parser'
   autoScan: true,         // auto-process after each story message (when events are available)
-  activePreset: '',       // preset used for story-driven generations
+  activePreset: '',       // generation preset used for story-driven generations
+  storyPromptMigrated: false, // one-time copy of legacy preset prompt fields into Story settings
+  storyQualityTags: '',
+  storyPromptPrefix: '',
+  storyNegativePrompt: '',
+  storyBannedTags: '',
+  storySceneAnchor: '',
+  storyUseBreakSeparators: false,
   parserConnection: '',   // optional connection name/id for the parser LLM
   parserModel: '',        // optional model override for the parser LLM
   parserRequestOverrides: '', // JSON merged into the parser request — the escape hatch for provider-specific reasoning keys
@@ -153,6 +160,50 @@ async function getPresets() {
 
 async function savePresets(presets) {
   await spindle.storage.setJson(PRESETS_FILE, presets, { indent: 2 })
+}
+
+// LUMIDRAW_PRESET_SEMANTICS_V1_1
+// Presets are generation recipes now. Story prompting lives in settings; people
+// live in casts/libraries. The legacy fields are copied once and left untouched in
+// existing preset files until that preset is explicitly re-saved.
+async function migratePresetPromptingToStorySettings() {
+  const stored = await spindle.storage.getJson(SETTINGS_FILE, { fallback: {} })
+  if (stored && stored.storyPromptMigrated === true) return { migrated: false, preset: '' }
+
+  const presets = await getPresets()
+  const active = presets.find((p) => p && p.name === stored.activePreset)
+    || presets.find((p) => {
+      if (!p) return false
+      return [p.qualityTags, p.promptPrefix, p.negativePrompt, p.bannedTags, p.sceneAnchor]
+        .some((value) => String(value || '').trim()) || p.useBreakSeparators === true
+    })
+
+  const next = { ...DEFAULT_SETTINGS, ...(stored || {}) }
+  if (active) {
+    if (!String(next.storyQualityTags || '').trim()) next.storyQualityTags = String(active.qualityTags || '')
+    if (!String(next.storyPromptPrefix || '').trim()) next.storyPromptPrefix = String(active.promptPrefix || '')
+    if (!String(next.storyNegativePrompt || '').trim()) next.storyNegativePrompt = String(active.negativePrompt || '')
+    if (!String(next.storyBannedTags || '').trim()) next.storyBannedTags = String(active.bannedTags || '')
+    if (!String(next.storySceneAnchor || '').trim()) next.storySceneAnchor = String(active.sceneAnchor || '')
+    if (next.storyUseBreakSeparators !== true && active.useBreakSeparators === true) next.storyUseBreakSeparators = true
+  }
+  next.storyPromptMigrated = true
+  await spindle.storage.setJson(SETTINGS_FILE, next, { indent: 2 })
+  if (active) spindle.log.info('[lumidraw] copied legacy prompt defaults from preset "' + active.name + '" into Story settings; preset data was left intact')
+  return { migrated: !!active, preset: active ? active.name : '' }
+}
+
+function storyPresetFor(preset, settings) {
+  if (!preset) return preset
+  return {
+    ...preset,
+    qualityTags: String(settings.storyQualityTags || ''),
+    promptPrefix: String(settings.storyPromptPrefix || ''),
+    negativePrompt: String(settings.storyNegativePrompt || ''),
+    bannedTags: String(settings.storyBannedTags || ''),
+    sceneAnchor: String(settings.storySceneAnchor || ''),
+    useBreakSeparators: settings.storyUseBreakSeparators === true,
+  }
 }
 
 async function getPersonas() {
@@ -9701,11 +9752,12 @@ async function scanStoryCore(userId, options = {}) {
     ? ''
     : String(options.messageId)
   const settings = await getSettings()
-  if (settings.mode === 'off') return { mode: 'off', note: 'Story illustrations is set to Off — choose Inline or Parser in the Settings tab (it saves automatically now).' }
+  if (settings.mode === 'off') return { mode: 'off', note: 'Story illustrations is set to Off — choose Inline or Parser in the Story tab.' }
   const presets = await getPresets()
-  const preset = presets.find((p) => p.name === settings.activePreset)
+  const savedPreset = presets.find((p) => p.name === settings.activePreset)
+  const preset = storyPresetFor(savedPreset, settings)
   if (!preset) {
-    return { mode: settings.mode, note: 'No active preset selected — pick one in the Generate tab first.' }
+    return { mode: settings.mode, note: 'No generation preset selected — choose one in Story → Setup.' }
   }
 
   const located = await locateStoryMessage(userId, {
@@ -10375,9 +10427,10 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   // character, a different negative prompt. Inheriting the preset the image was
   // originally made under meant a new prompt compiled against an old preset's
   // negative prompt, banned tags and scene anchor, none of which you were using.
-  const preset = presets.find((item) => item.name === settings.activePreset)
+  const rawPreset = presets.find((item) => item.name === settings.activePreset)
     || presets.find((item) => item.name === origin.presetName)
-  if (!preset) throw new Error('No preset available to compile against.')
+  const preset = storyPresetFor(rawPreset, settings)
+  if (!preset) throw new Error('No generation preset available to compile against.')
   if (origin.presetName && preset.name !== origin.presetName) {
     spindle.log.info(`[lumidraw] re-parsing against the active preset "${preset.name}". ` +
       `This image was originally made under "${origin.presetName}" — its negative prompt and banned tags no longer apply.`)
@@ -10578,6 +10631,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         try { await migratePresetsToCasts() } catch (error) {
           spindle.log.warn('[lumidraw] cast migration skipped: ' + error.message)
         }
+        try { await migratePresetPromptingToStorySettings() } catch (error) {
+          spindle.log.warn('[lumidraw] story-prompt migration skipped: ' + error.message)
+        }
         const [settings, presets, personas, characters, history, storyDebug, places, casts, chatCast] = await Promise.all([
           getSettings(), getPresets(), getPersonas(), getCharacters(), getHistory(), getStoryDebug(), getPlaces(),
           getCasts(), getChatCastMap(),
@@ -10598,7 +10654,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           host: String(payload.host || prev.host || DEFAULT_SETTINGS.host).trim(),
           port: Number(payload.port) || prev.port || DEFAULT_SETTINGS.port,
         }
-        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel']) {
+        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserRequestOverrides', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel', 'storyQualityTags', 'storyPromptPrefix', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor']) {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
         if (payload.bridgePort !== undefined) settings.bridgePort = Number(payload.bridgePort) || DEFAULT_SETTINGS.bridgePort
@@ -10610,6 +10666,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.directMode !== undefined) settings.directMode = !!payload.directMode
         if (payload.chatLeads !== undefined) settings.chatLeads = !!payload.chatLeads
         if (payload.useLoomLedger !== undefined) settings.useLoomLedger = !!payload.useLoomLedger
+        if (payload.parserMaxTokens !== undefined) settings.parserMaxTokens = Math.max(1200, Math.min(32000, Number(payload.parserMaxTokens) || 12000))
+        if (payload.storyUseBreakSeparators !== undefined) settings.storyUseBreakSeparators = !!payload.storyUseBreakSeparators
+        if (['storyQualityTags', 'storyPromptPrefix', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor', 'storyUseBreakSeparators']
+          .some((key) => payload[key] !== undefined)) settings.storyPromptMigrated = true
         if (payload.stripImageDirectives !== undefined) settings.stripImageDirectives = !!payload.stripImageDirectives
         if (payload.sizeChatImages !== undefined) settings.sizeChatImages = !!payload.sizeChatImages
         if (payload.chatImageWidth !== undefined) {
@@ -10833,7 +10893,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (pregenCache.has(fp) || pregenInflight.has(fp)) { reply = ok(payload, requestId, { started: false, dup: true }); break }
         const settings = await getSettings()
         const presets = await getPresets()
-        const preset = presets.find((p) => p.name === settings.activePreset)
+        const savedPreset = presets.find((p) => p.name === settings.activePreset)
+        const preset = storyPresetFor(savedPreset, settings)
         if (!preset || settings.mode !== 'inline') { reply = ok(payload, requestId, { started: false }); break }
         pregenInflight.add(fp)
         reply = ok(payload, requestId, { started: true })
@@ -10930,24 +10991,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
           spindle.log.info(`[lumidraw] preset "${name}" saved with no model — Draw Things will use the model selected in its own UI`)
         }
         const presets = await getPresets()
+        const existingPreset = presets.find((item) => item && item.name === name) || null
         const preset = {
+          ...(existingPreset || {}),
           name,
           config: payload.config,
           extra: payload.extra || null,
-          promptPrefix: payload.promptPrefix || '',
-          negativePrompt: payload.negativePrompt || '',
-          qualityTags: payload.qualityTags || '',
-          characterTags: payload.characterTags || '',
-          personaTags: payload.personaTags || '',
-          characterProfile: payload.characterProfile && typeof payload.characterProfile === 'object' ? payload.characterProfile : null,
-          personaProfile: payload.personaProfile && typeof payload.personaProfile === 'object' ? payload.personaProfile : null,
-          personaLibraryId: String(payload.personaLibraryId || '').trim(),
-          characterLibraryId: String(payload.characterLibraryId || '').trim(),
-          castLibraryIds: Array.isArray(payload.castLibraryIds)
-            ? uniqueStrings(payload.castLibraryIds.map((id) => String(id || '').trim()).filter(Boolean)).slice(0, 4)
-            : [],
-          bannedTags: payload.bannedTags || '',
-          sceneAnchor: String(payload.sceneAnchor || '').trim(),
           updatedAt: Date.now(),
         }
         try { await rememberModels(preset.config || {}) } catch { /* best-effort */ }
@@ -11248,9 +11297,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // answer arrives when you ask rather than on the next generation.
         const index = await getArtistIndex()
         const settingsNow = await getSettings()
-        const presetNow = (await getPresets()).find((item) => item && item.name === settingsNow.activePreset)
-        const tags = presetNow
-          ? splitArtistTags(normalizeArtistTags(String(presetNow.qualityTags || ''))).artists : []
+        const tags = splitArtistTags(normalizeArtistTags(String(settingsNow.storyQualityTags || ''))).artists
         reply = ok(payload, requestId, {
           count: index ? index.names.length : 0,
           at: index ? index.at : 0,
