@@ -7688,8 +7688,7 @@ const BODY_STATE_TAGS = new Set([
 
 const DIRECT_RULES = `
 You are writing the FINAL image prompt. Do not describe the scene in prose and
-do not return a scene graph — return the prompt itself, in Danbooru tag style,
-because the image model was trained on booru tags and reads nothing else well.
+do not return a scene graph — return the prompt itself as the finished prompt.
 
 FORMAT — return ONLY this JSON, compact, no markdown:
 {"images":[{"anchor":"5-12 exact consecutive words copied from the CURRENT PASSAGE","prompt":"the finished prompt","aspect":"3:4|4:3|1:1|16:9|9:16"}]}
@@ -7698,41 +7697,50 @@ WRITING THE PROMPT:
 - AT MOST TWO characters. Three or more is where this model falls apart, so
   choose the two whose moment carries the scene and leave the rest out. Fewer
   people is a better picture, not a less faithful one.
-- Separate each character with " BREAK ". One contiguous run per character:
-  count tag, then who they are, then what they wear, then what they are doing.
+- Open with the shared frame: overall count tags, setting, time, camera
+  framing. Then write one contiguous run per visible character, separated by
+  " BREAK ". Inside each character run: count tag, identity, clothing, action.
   Never mention one character inside another's run.
-- Common Danbooru tags only. Short comma-separated phrases. If a concept has no
-  tag, leave it out rather than writing a sentence — a story beat the model
-  cannot draw only competes with the one it can.
-- Open with the shared frame: count tags, setting, time, camera framing.
-- Copy the sheets EXACTLY for IDENTITY — body, hair, eyes, species, permanent
-  features. Those are the author's and never change.
-- CLOTHING IS NOT IDENTITY. The sheet's "last seen wearing" is only what they had
-  on the last time anyone looked. THE PASSAGE ALWAYS WINS. If this passage says,
-  shows or implies a change of clothes, write what the passage says and ignore
-  the sheet entirely. People change clothes; that is what stories are made of.
-- Do NOT invent clothing the passage does not mention. If someone is in nothing
-  but an oversized shirt, that is the whole outfit — say so with the explicit
-  tag ("no pants", "bottomless", "barefoot") rather than quietly adding jeans or
-  shoes. A garment nobody mentioned is a garment nobody is wearing.
+- Prefer common Danbooru tags and short comma-separated tag-like phrases. When a
+  crucial visible fact has no good common tag, use a BRIEF natural-language
+  phrase rather than dropping the fact entirely.
+- Copy visible, stable identity traits faithfully: body, hair, eyes, species,
+  and permanent features. The CHARACTER SHEET is the source of truth for who the
+  person is. "ALWAYS INCLUDE" traits are mandatory when visible and applicable.
+- WARDROBE IS PERSISTENT STORY STATE. Use this precedence exactly:
+  1) if the CURRENT PASSAGE clearly changes clothing, follow the passage;
+  2) otherwise keep the CURRENT WARDROBE unchanged;
+  3) if there is no current wardrobe, use any EARLIER CLOTHING MENTIONS;
+  4) only then fall back to the DEFAULT OUTFIT.
+  Silence means unchanged — do NOT reset to defaults just because clothing has
+  not been mentioned recently.
+- When the passage changes clothing, change only what the passage actually
+  changes and preserve the garments that obviously remain worn.
+- Do NOT invent extra garments. If someone is in nothing but an oversized shirt,
+  that is the whole outfit — say so with explicit tags like "no pants",
+  "bottomless", or "barefoot" rather than quietly adding jeans or shoes.
 - Body facts are not garments. "bulge", "midriff", "cleavage", "navel" describe
-  a body showing through or past clothing — never write them as something worn.
+  the body showing through or past clothing — never write them as something worn.
+- Pick the single clearest drawable moment and preserve the important visual
+  relationship: who faces whom, who touches whom, what is being held, and where
+  the action occurs.
 - One clear action. Not three.
 
-NEVER: prose sentences, invented tags, a character's name as a tag, repeating a
-species or garment word more than once, or anything from the banned list.
+NEVER: prose paragraphs, invented tags, reasoning text, self-corrections left in
+place, contradictory duplicates, a character's name as a tag, or anything from
+the banned list.
 `
 
 // The context the parser needs to write a good prompt, in the plainest form
 // that survives a language model reading it. This is what LumiDraw is FOR now:
 // knowing who is in this chat, what they were last seen wearing, where they are.
-function directContext(profiles, { wardrobe = null, places = [], banned = '', fantasy = false } = {}) {
+function directContext(profiles, { wardrobe = null, places = [], banned = '', fantasy = false, clothingDigest = [] } = {}) {
   const lines = []
   for (const profile of allKnownProfiles(profiles)) {
     if (!profile) continue
     const name = profile.promptName || profile.anchor || profile.ref
-    const recorded = (wardrobe && wardrobe[profile.ref] && wardrobe[profile.ref].length)
-      ? wardrobe[profile.ref] : (profile.defaultOutfit || [])
+    const hasWardrobe = !!(wardrobe && wardrobe[profile.ref] && wardrobe[profile.ref].length)
+    const recorded = hasWardrobe ? wardrobe[profile.ref] : (profile.defaultOutfit || [])
     // "Bulge becomes wearing a bulge. Midriff becomes wearing a midriff."
     //
     // Both are true, and both were this line: everything in the outfit record was
@@ -7748,18 +7756,22 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
       `${name}: ${profile.countTag || ''}`,
       (profile.appearance || []).join(', '),
       lock.length ? `ALWAYS INCLUDE: ${lock.join(', ')}` : '',
-      // Labelled as history, not as fact. The old wording — a bare "wearing:" —
-      // read as the present tense and the parser believed it over the passage.
-      worn.length ? `last seen wearing (the passage overrides this): ${worn.join(', ')}` : '',
+      hasWardrobe
+        ? (worn.length ? `CURRENT WARDROBE (use unless the CURRENT PASSAGE changes it): ${worn.join(', ')}` : 'CURRENT WARDROBE: none recorded')
+        : (worn.length ? `DEFAULT OUTFIT (use only if there is no current wardrobe and the CURRENT PASSAGE is silent): ${worn.join(', ')}` : 'DEFAULT OUTFIT: none recorded'),
       body.length ? `body, not clothing: ${body.join(', ')}` : '',
     ].filter(Boolean).join(' | '))
   }
   const place = (places || []).filter(Boolean).slice(0, 1)
     .map((item) => `Place — ${item.name}: ${(item.setting || []).join(', ')}`)
+  const clothingHistory = (clothingDigest || []).filter(Boolean).map((line) => `- ${line}`)
   return [
-    'CHARACTER SHEETS — copy IDENTITY exactly. Clothing is last-known only and',
-    'whatever THIS passage says they are wearing replaces it:',
+    'CHARACTER SHEETS — copy stable visible identity exactly.',
+    'WARDROBE PRECEDENCE: CURRENT PASSAGE change > CURRENT WARDROBE > EARLIER CLOTHING MENTIONS > DEFAULT OUTFIT.',
+    'Silence means unchanged, not reset.',
     ...lines,
+    clothingHistory.length ? 'EARLIER CLOTHING MENTIONS (fallback only when no CURRENT WARDROBE exists):' : '',
+    ...clothingHistory,
     ...place,
     banned ? `NEVER USE THESE: ${banned}` : '',
     fantasy
@@ -9991,6 +10003,7 @@ async function scanStoryCore(userId, options = {}) {
         ? buildDirectInstruction(profiles, {
           maxImages: settings.maxImages || 2,
           wardrobe: (rememberedState && rememberedState.outfits) || null,
+          clothingDigest: digest,
           places: savedPlacesForParser,
           banned: preset.bannedTags || '',
           fantasy: !!profiles.fantasySetting,
