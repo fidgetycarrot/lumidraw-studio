@@ -7697,16 +7697,25 @@ WRITING THE PROMPT:
 - AT MOST TWO characters. Three or more is where this model falls apart, so
   choose the two whose moment carries the scene and leave the rest out. Fewer
   people is a better picture, not a less faithful one.
+- Before writing the prompt, silently resolve each visible character into
+  exactly one identity, one anatomy state, one clothing state, one pose, and
+  one primary action. Resolve contradictions before output. Do not output this
+  planning.
 - Open with the shared frame: overall count tags, setting, time, camera
   framing. Then write one contiguous run per visible character, separated by
-  " BREAK ". Inside each character run: count tag, identity, clothing, action.
-  Never mention one character inside another's run.
+  " BREAK ". Inside each character run: count tag, identity, anatomy,
+  clothing, action, expression. Never mention one character inside another's
+  run, and do not mention the same character again later.
 - Prefer common Danbooru tags and short comma-separated tag-like phrases. When a
   crucial visible fact has no good common tag, use a BRIEF natural-language
   phrase rather than dropping the fact entirely.
 - Copy visible, stable identity traits faithfully: body, hair, eyes, species,
   and permanent features. The CHARACTER SHEET is the source of truth for who the
   person is. "ALWAYS INCLUDE" traits are mandatory when visible and applicable.
+- Character-specific anatomy must stay inside that character's own block, never
+  in the shared/global scene tags. This is especially important for traits like
+  futanari, penis, vulva, breasts, flat chest, bulge, or unusual body features.
+  If Fanny is futanari, "futanari" and "penis" belong in Fanny's block.
 - WARDROBE IS PERSISTENT STORY STATE. Use this precedence exactly:
   1) if the CURRENT PASSAGE clearly changes clothing, follow the passage;
   2) otherwise keep the CURRENT WARDROBE unchanged;
