@@ -1,53 +1,61 @@
-# LumiDraw Studio 0.99.0 — the picker worked; two other places never asked it
+# LumiDraw Studio 1.1.0 — no browser required
 
-## What was happening
+## First, a correction to what I told you
 
-`preset.personaTags` is the flat legacy field from when characters lived on
-presets. In your install that's Jason.
+**You never needed a browser at home.** The extension's frontend runs in whatever
+browser you're actually using — your work one. Home only ever needed the server.
+I said "auto-illustration only runs while the Lumiverse page is open" and left
+you to work out *which* page. That was sloppy.
 
-**Two places appended it to the parser instruction directly** — never going
-through `getStoryProfiles`, so the Playing-as choice could not possibly reach
-them:
+## But the real thing you're asking for was broken
 
-- the legacy parser instruction
-- the inline-mode protocol injected into the chat
+LumiDraw's backend registers its **own** `GENERATION_ENDED` trigger. That's the
+whole point of a server-side fallback: illustrate with no browser anywhere.
 
-The picker was working fine. These two never asked it anything, and one of them
-sits on the manual/inline path — which is why you hit it doing a manual parse.
+**It had never fired. Not once, in any install.**
 
-Both now resolve properly: **your choice for this chat → the bound cast → the
-preset.**
+```js
+const uid = payload.userId || eventMessage.userId || lastUserId
+if (!uid || !messageId || !chatId) return
+```
 
-## One rule worth stating
+`lastUserId` was assigned in exactly one place — inside `onFrontendMessage`. So
+the backend couldn't name the user until a **frontend connected**, which is
+precisely the dependency the fallback exists to remove. And it reset to `null` on
+every extension restart, so even a working install lost it.
 
-**An explicit choice with an empty sheet means "no persona tags"** — not "fall
-back to the one I just replaced". Falling back there would reintroduce this exact
-bug for anyone whose persona is a name and a vibe rather than a tag list. There's
-a test.
+Then it `return`ed with no log at all. A trigger that gives up without a word
+can't be diagnosed, and this one had been giving up silently since it was
+written.
 
-## And a diagnostic, because this hid twice
+## The fix
 
-The persona binding is per **chat**. A choice saved under one chat id and a
-generation run under another looks *identical* to the picker being ignored — and
-manual parsing reaches the resolver from a different entry point than the auto
-scan. So the log now says:
+The user id is now **remembered on disk**. One browser connection, ever — then
+the backend illustrates on its own, across restarts, with nothing open. You'll
+see:
 
-> `persona: no choice recorded for chat 4a3f59d3 — but 1 chat(s) do have one:
-> 8b21ce90. If that list should include this chat, the ids did not match and the
-> picker needs setting again here.`
+> `remembered user id restored — automatic illustration can run without a browser
+> open`
 
-If you see that line, the fix is one click. If you see `persona: you chose
-"Elliot" for chat 4a3f59d3` and Jason still shows up, it's a third injection site
-and I want to know.
+And when it genuinely can't, it says so instead of vanishing:
+
+> `backend GENERATION_ENDED ignored — missing a user id (no browser has ever
+> connected to this install)`
+
+## Why nobody caught this
+
+The host mock stubbed lifecycle events to a no-op, so **no test in this suite had
+ever fired one.** The backend's automatic trigger — arguably the most important
+path in the extension — had zero coverage. The mock can fire events now, and
+`headless.mjs` drives the real handler with no frontend involved at all.
+
+That's the second time this project a whole capability turned out to be untested
+because the mock quietly answered nothing (the first was `spindle.chats`).
 
 ## Verification
 
-**61 suites · 2,888 assertions · all green.**
+**62 suites · 2,921 assertions · all green.** New suite: `headless.mjs`.
 
-Mutations caught: the legacy field winning again (3 failures — the reported bug),
-an empty chosen sheet falling back to the old persona (2), the chat-id mismatch
-going silent (2).
-
-Two of my own earlier assertions failed and I updated them rather than reverting:
-one pinned the exact log wording, the other the code shape around the choice. The
-property each was testing is unchanged, and the reason is written into the test.
+Mutations caught: back to memory-only (2 failures — the original bug), the id
+never written to disk (3), the silent return restored (2), a failed generation
+illustrating anyway (1).

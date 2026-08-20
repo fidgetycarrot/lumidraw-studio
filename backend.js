@@ -7789,7 +7789,34 @@ function parseDirectImages(raw, maxImages = 2) {
     if (!match) return null
     try { return JSON.parse(sanitizeJsonText(match[0])) } catch { return null }
   })()
-  if (!parsed || !Array.isArray(parsed.images)) return { images: [], error: 'no images array in the reply' }
+  if (!parsed || !Array.isArray(parsed.images)) {
+    // A REFUSAL IS NOT A PARSE ERROR, and reporting it as one sent Eric to a log
+    // hunting for a bug that was not there:
+    //
+    //   raw reply: "I can't write this prompt. The passage depicts explicit
+    //   sexual content… that's a consent problem I won't illustrate around."
+    //   →  "Direct mode: no images array in the reply"
+    //
+    // Images stopped "for no reason" because the STORY moved somewhere the
+    // parser model will not write prompts for. Nothing in LumiDraw changed. The
+    // model said exactly why, in plain English, and LumiDraw threw that away and
+    // substituted a message that sounds like malformed JSON.
+    //
+    // No JSON at all, but a paragraph of prose, is a model talking to you.
+    // Forward what it said — it is the only thing that explains the failure.
+    const prose = String(text || '').trim()
+    const looksLikeProse = prose.length > 40 && !prose.includes('{')
+    if (looksLikeProse) {
+      const opening = prose.replace(/\s+/g, ' ').slice(0, 220)
+      return {
+        images: [],
+        refused: true,
+        error: 'The parser model replied in prose instead of a prompt — it appears to have ' +
+          'declined this passage. It said: "' + opening + (prose.length > 220 ? '…' : '') + '"',
+      }
+    }
+    return { images: [], error: 'no images array in the reply' }
+  }
   const images = []
   for (const item of parsed.images.slice(0, Math.max(1, maxImages))) {
     if (!item || typeof item !== 'object') continue
@@ -9353,8 +9380,32 @@ const recentAutoScans = new Map()
 // signal and is not gated.
 const BACKEND_STARTED_AT = Date.now()
 const RENDERED_EVENT_GRACE_MS = 12000
+
+// WHEN THE ECHO STORM ACTUALLY ARRIVES.
+//
+// "Opening the browser page it's generating images. I didn't send any new
+//  messages, and I didn't press anything."
+//
+// The automatic trigger is a BROWSER event: the frontend listens for
+// CHARACTER_MESSAGE_RENDERED and forwards it. Open the page after a while and
+// the chat renders its whole backlog at once, so every un-illustrated message
+// fires the trigger together — a stampede nobody asked for, on his GPU.
+//
+// A guard for exactly this already existed and could not fire: it measured from
+// BACKEND start, and Spindle had been up for hours. The storm does not come from
+// the backend booting. It comes from a FRONTEND connecting, which can happen at
+// any moment of the backend's life — every reload, every reopened tab, every
+// laptop waking up.
+//
+// The frontend already announces itself on load with `frontend_status`. That is
+// the signal, and it was being logged and thrown away.
+let lastFrontendConnectAt = 0
 function isStartupRenderedEcho(source) {
-  return /rendered/i.test(String(source || '')) && (Date.now() - BACKEND_STARTED_AT) < RENDERED_EVENT_GRACE_MS
+  if (!/rendered/i.test(String(source || ''))) return false
+  // Whichever came last. A backend restart and a page load both produce the same
+  // burst, and only the most recent one bounds the window.
+  const since = Date.now() - Math.max(BACKEND_STARTED_AT, lastFrontendConnectAt)
+  return since < RENDERED_EVENT_GRACE_MS
 }
 
 function autoScanKey(userId, chatId, messageId) {
@@ -9386,7 +9437,9 @@ function scheduleAutoStoryScan(userId, request = {}) {
   if (!userId) return { accepted: false, note: 'Automatic scan has no userId.' }
   if (!chatId && !messageId) return { accepted: false, note: 'Automatic scan has neither chatId nor messageId.' }
   if (isStartupRenderedEcho(source)) {
-    spindle.log.info('[lumidraw] ignored startup render echo · source=' + source + (messageId ? ' · message=' + messageId : ''))
+    spindle.log.info('[lumidraw] ignored render echo from a page load · source=' + source +
+      (messageId ? ' · message=' + messageId : '') +
+      ' — opening or reloading Lumiverse re-renders the backlog, which is not a reason to illustrate it')
     return { accepted: false, startupEcho: true, messageId, chatId, source }
   }
 
@@ -9899,6 +9952,13 @@ async function scanStoryCore(userId, options = {}) {
       if (directMode) {
         const direct = parseDirectImages(out, settings.maxImages || 2)
         if (!direct.images.length) {
+          // A refusal is a decision, not a fault. Reported as itself, at info
+          // rather than warn, and WITHOUT the "Direct mode:" prefix that made it
+          // read as an internal failure.
+          if (direct.refused) {
+            spindle.log.info('[lumidraw] ' + direct.error)
+            throw new Error(direct.error)
+          }
           throw new Error(`Direct mode: ${direct.error || 'the parser returned no usable prompt'}`)
         }
         return await runDirectImages(direct.images, {
@@ -10250,7 +10310,45 @@ function fail(payload, requestId, err) {
   return { type: `${payload.type}:result`, requestId, ok: false, error: message }
 }
 
+// WHOSE CHAT IS THIS. "I don't want to keep Lumiverse open at home to get images
+// at work."
+//
+// The backend registers its OWN GENERATION_ENDED trigger, which is the whole
+// point of a server-side fallback — it should not need a browser at all. It has
+// never once fired, because of this variable.
+//
+// It was set in exactly one place: inside onFrontendMessage. So the backend
+// could not identify the user until a FRONTEND connected, which is precisely the
+// dependency the fallback exists to remove. And after every extension restart it
+// went back to null, so even a previously-working install lost it.
+//
+// Worse, the handler then `return`ed with no log at all. A trigger that gives up
+// without a word cannot be diagnosed, and this one has been giving up silently
+// since it was written.
+//
+// Remembered on disk now. One frontend connection, ever, and the backend can
+// illustrate on its own from then on — across restarts, with nothing open.
+const LAST_USER_FILE = 'last_user.json'
 let lastUserId = null
+
+async function rememberUserId(userId) {
+  if (!userId || userId === lastUserId) return
+  lastUserId = userId
+  try { await spindle.storage.setJson(LAST_USER_FILE, { userId, at: Date.now() }, { indent: 2 }) }
+  catch (error) { spindle.log.warn('[lumidraw] could not remember the user id: ' + error.message) }
+}
+
+async function recallUserId() {
+  if (lastUserId) return lastUserId
+  try {
+    const saved = await spindle.storage.getJson(LAST_USER_FILE, { fallback: null })
+    if (saved && saved.userId) {
+      lastUserId = String(saved.userId)
+      spindle.log.info('[lumidraw] remembered user id restored — automatic illustration can run without a browser open')
+    }
+  } catch { /* first run */ }
+  return lastUserId
+}
 
 
 // Shared by "Re-run parser" (one image) and "Replace all" (every image in the
@@ -10468,7 +10566,7 @@ async function replaceOneImage(userId, payload) {
 }
 
 spindle.onFrontendMessage(async (payload, userId) => {
-  if (userId) lastUserId = userId
+  if (userId) await rememberUserId(userId)
   const requestId = payload && payload.requestId
   let reply
   try {
@@ -10648,6 +10746,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
 
       case 'frontend_status': {
+        // A page just loaded or reloaded. Its backlog is about to render and
+        // every message in it will announce itself as freshly rendered.
+        lastFrontendConnectAt = Date.now()
         spindle.log.info('[lumidraw] frontend status: v' + String(payload.version || '?') +
           ' · history-refresh=' + (payload.historyRefresh ? 'ready' : 'missing') +
           ' · inline-tag=' + (payload.inlineInterceptor ? 'ready' : 'missing') +
@@ -11801,15 +11902,20 @@ if (typeof spindle.registerInterceptor === 'function') {
   const normalizedPayload = (evt) => evt && evt.payload ? evt.payload : evt || {}
 
   try {
-    on('GENERATION_ENDED', (evt) => {
+    on('GENERATION_ENDED', async (evt) => {
       try {
         const payload = normalizedPayload(evt)
         if (payload.error) return
         const eventMessage = payload.message && typeof payload.message === 'object' ? payload.message : {}
         const messageId = String(payload.messageId || eventMessage.messageId || eventMessage.id || '')
         const chatId = String(payload.chatId || eventMessage.chatId || (payload.chat && payload.chat.id) || '')
-        const uid = payload.userId || eventMessage.userId || lastUserId
-        if (!uid || !messageId || !chatId) return
+        const uid = payload.userId || eventMessage.userId || await recallUserId()
+        if (!uid || !messageId || !chatId) {
+          spindle.log.info('[lumidraw] backend GENERATION_ENDED ignored — missing ' +
+            [!uid && 'a user id (no browser has ever connected to this install)',
+             !messageId && 'a message id', !chatId && 'a chat id'].filter(Boolean).join(' and '))
+          return
+        }
         scheduleAutoStoryScan(uid, {
           messageId,
           chatId,
@@ -11827,13 +11933,13 @@ if (typeof spindle.registerInterceptor === 'function') {
   }
 
   try {
-    on('CHARACTER_MESSAGE_RENDERED', (evt) => {
+    on('CHARACTER_MESSAGE_RENDERED', async (evt) => {
       try {
         const payload = normalizedPayload(evt)
         const eventMessage = payload.message && typeof payload.message === 'object' ? payload.message : {}
         const messageId = String(payload.messageId || eventMessage.messageId || eventMessage.id || '')
         const chatId = String(payload.chatId || eventMessage.chatId || (payload.chat && payload.chat.id) || '')
-        const uid = payload.userId || eventMessage.userId || lastUserId
+        const uid = payload.userId || eventMessage.userId || await recallUserId()
         if (!uid || !messageId || !chatId) return
         scheduleAutoStoryScan(uid, {
           messageId,
