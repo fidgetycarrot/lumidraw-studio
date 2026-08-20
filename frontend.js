@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.1.0'
+const EXTENSION_VERSION = '1.1.2'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -806,6 +806,7 @@ the diner = diner, booth seating, formica table, neon sign | aliases: the diner,
             </div>
               <div style="margin-top:7px"><span class="ld-label">Name in prompts (optional)</span><input class="ld-persona-ed-promptname" placeholder="Price" /><div class="ld-hint">Only needed when the name means something to the image model — "Fanny" is booru slang, "Rose" draws roses. A surname does not help; use a name without the word at all.</div></div>
             <div><span class="ld-label">Stable subject phrase</span><input class="ld-persona-ed-subject" placeholder="adult man" /></div>
+            <div><span class="ld-label">Always include (Direct mode)</span><input class="ld-persona-ed-identity" placeholder="futanari" /><div class="ld-hint">Non-negotiable identity tags. Direct mode restores these if the parser drops them. Stable futanari in Permanent appearance is also locked automatically.</div></div>
             <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-persona-ed-tags" style="min-height:58px"></textarea></div>
             <div><span class="ld-label">Default outfit tags</span><textarea class="ld-persona-ed-outfit" style="min-height:48px"></textarea></div>
             <div><span class="ld-label">Default appearance state</span><input class="ld-persona-ed-default-state" placeholder="Default" /></div>
@@ -2702,6 +2703,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       promptName: $('.ld-persona-ed-promptname') ? $('.ld-persona-ed-promptname').value.trim() : '',
       countTag: $('.ld-persona-ed-count').value.trim(),
       subject: $('.ld-persona-ed-subject').value.trim(),
+      identityTags: $('.ld-persona-ed-identity') ? $('.ld-persona-ed-identity').value.trim() : '',
       appearanceTags: $('.ld-persona-ed-tags').value.trim(),
       defaultOutfitTags: $('.ld-persona-ed-outfit').value.trim(),
       defaultAppearanceState: $('.ld-persona-ed-default-state').value.trim(),
@@ -2721,6 +2723,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if ($('.ld-persona-ed-promptname')) $('.ld-persona-ed-promptname').value = value.promptName || ''
     $('.ld-persona-ed-count').value = value.countTag || ''
     $('.ld-persona-ed-subject').value = value.subject || ''
+    if ($('.ld-persona-ed-identity')) $('.ld-persona-ed-identity').value = value.identityTags || ''
     $('.ld-persona-ed-tags').value = value.appearanceTags || ''
     $('.ld-persona-ed-outfit').value = value.defaultOutfitTags || ''
     $('.ld-persona-ed-default-state').value = value.defaultAppearanceState || value.defaultForm || ''

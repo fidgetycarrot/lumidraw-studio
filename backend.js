@@ -5033,7 +5033,7 @@ const BOORU_ALIASES = {
   // others are dead strings that occupy a slot and do nothing.
   'femboy': 'trap', 'otoko no ko': 'trap', 'otokonoko': 'trap', 'otoko-no-ko': 'trap', 'tomgirl': 'trap',
   'feminine male': 'trap', 'feminine boy': 'trap', 'girly male': 'girly boy',
-  'futa': 'futanari', 'hermaphrodite': 'futanari', 'dickgirl': 'futanari',
+  'futa': 'futanari', 'futunari': 'futanari', 'hermaphrodite': 'futanari', 'dickgirl': 'futanari',
   'crossdresser': 'crossdressing', 'crossdressed': 'crossdressing',
   'mtf crossdressing': 'crossdressing (mtf)', 'ftm crossdressing': 'crossdressing (ftm)',
   'androgyne': 'androgynous', 'androgynous male': 'androgynous',
@@ -7924,14 +7924,19 @@ function identityLockFor(profile) {
   if (!profile) return []
   const declared = Array.isArray(profile.identityTags) ? profile.identityTags
     : String(profile.identityTags || '').split(',')
-  // Explicit only. I first wrote a fallback that inferred the lock from the
-  // character's noun, and it was the same mistake as everything else tonight —
-  // guessing a rule from one example. Fanny's `futanari` lives in her appearance
-  // tags, not a noun field, so the inference found nothing and would have found
-  // the wrong thing for somebody else. Empty locks nothing, and that is correct:
-  // the sheet is already in the parser's context, so the lock is a backstop for
-  // drift, not the mechanism.
-  return animaTagList(declared).slice(0, 6)
+  const explicit = animaTagList(declared)
+
+  // Stable futanari identity is special because a parser can correctly describe
+  // every other visible trait and still quietly omit this one — especially when
+  // the scene is explicit. If the AUTHOR put futanari in Permanent appearance,
+  // that is already an explicit declaration, not an inference. Promote it to the
+  // same hard Direct-mode lock as Always include so the parser cannot sanitize or
+  // forget it. Aliases such as `futa` canonicalize through animaTag().
+  const appearance = animaTagList(profile.appearance || [])
+  const stableSexIdentity = appearance.filter((tag) =>
+    tag === 'futanari' || tag === 'male futanari' || tag === 'futa without pussy' || tag === 'cuntboy')
+
+  return uniqueStrings([...explicit, ...stableSexIdentity]).slice(0, 6)
 }
 
 // Is this character in this prompt at all? Their name is not in it — names are
