@@ -957,6 +957,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Connection</span><div style="display:flex;gap:6px;align-items:center"><select class="ld-parser-conn" style="flex:1"><option value="">— default connection —</option></select><button class="ld-btn ld-compact" data-act="refresh-parser-sources" title="Reload available parser connections">↻</button></div></div>
               <div><span class="ld-label">Model override (leave empty)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="leave empty to use the connection's own model" /><button class="ld-btn ld-compact ld-clear-override" data-act="clear-model-override" title="Go back to the connection's own model" style="display:none">Clear</button></div><div class="ld-model-override-note" style="font-size:11px;margin-top:4px"></div></div>
+              <div><span class="ld-label">Temperature</span><input class="ld-parser-temperature" type="number" min="0" max="2" step="0.05" value="0.2" /><div class="ld-hint">Parser sampling temperature. Some models want a specific value; 0.2 is LumiDraw's default.</div></div>
               <div>
                 <span class="ld-label">Settings Draw Things refused</span>
                 <div style="display:flex;gap:6px;align-items:center">
@@ -1252,6 +1253,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       parserConnection: $('.ld-parser-conn'),
       refreshParserSources: $('[data-act="refresh-parser-sources"]'),
       parserModel: $('.ld-parser-model'),
+      parserTemperature: $('.ld-parser-temperature'),
       clearModelOverride: $('[data-act="clear-model-override"]'),
       modelOverrideNote: $('.ld-model-override-note'),
       rejectedKeys: $('.ld-rejected-keys'),
@@ -1345,6 +1347,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const parserSourceGrid = make('div', 'ld-reset-grid')
     parserSourceGrid.appendChild(field('Connection', inline(controls.parserConnection, controls.refreshParserSources)))
     parserSourceGrid.appendChild(field('Model override', inline(controls.parserModel, controls.clearModelOverride), 'Leave empty to use the selected connection’s model.'))
+    parserSourceGrid.appendChild(field('Temperature', controls.parserTemperature, 'Sampling temperature for the parser model. Some models/providers require or strongly prefer a particular value.'))
     parserBinding.appendChild(parserSourceGrid)
     if (controls.modelOverrideNote) parserBinding.appendChild(controls.modelOverrideNote)
     // Direct is a first-class illustration mode now, not a hidden Parser toggle.
@@ -4926,6 +4929,7 @@ img[class*="inlineImage"] {
       parserEngine: $('.ld-parser-engine').value,
       parserConnection: $('.ld-parser-conn').value,
       parserModel: $('.ld-parser-model').value,
+      parserTemperature: $('.ld-parser-temperature') ? Number($('.ld-parser-temperature').value) : 0.2,
       parserRequestOverrides: $('.ld-parser-overrides') ? $('.ld-parser-overrides').value : '',
       parserMaxTokens: $('.ld-parser-maxtokens') ? Number($('.ld-parser-maxtokens').value) || 12000 : 12000,
       parserInstruction: $('.ld-parser-instr').value,
@@ -5072,7 +5076,7 @@ img[class*="inlineImage"] {
       pushSettings('Settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
     }, 900)
   }
-  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-overrides', '.ld-parser-maxtokens', '.ld-story-quality', '.ld-story-prefix', '.ld-story-negative', '.ld-story-banned', '.ld-story-scene-anchor', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port', '.ld-cloud-host', '.ld-cloud-port', '.ld-cloud-model']) {
+  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-temperature', '.ld-parser-overrides', '.ld-parser-maxtokens', '.ld-story-quality', '.ld-story-prefix', '.ld-story-negative', '.ld-story-banned', '.ld-story-scene-anchor', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port', '.ld-cloud-host', '.ld-cloud-port', '.ld-cloud-model']) {
     const el = $(sel)
     if (el) el.addEventListener('input', () => {
       clearTimeout(settingsSaveTimer)
@@ -5367,6 +5371,7 @@ img[class*="inlineImage"] {
       } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
+      if ($('.ld-parser-temperature')) $('.ld-parser-temperature').value = Number.isFinite(Number(settings.parserTemperature)) ? Number(settings.parserTemperature) : 0.2
       if ($('.ld-parser-overrides')) $('.ld-parser-overrides').value = settings.parserRequestOverrides || ''
       if ($('.ld-parser-maxtokens')) $('.ld-parser-maxtokens').value = settings.parserMaxTokens || 12000
       refreshModelOverrideNote()

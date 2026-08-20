@@ -64,6 +64,7 @@ const DEFAULT_SETTINGS = {
   storyUseBreakSeparators: false,
   parserConnection: '',   // optional connection name/id for the parser LLM
   parserModel: '',        // optional model override for the parser LLM
+  parserTemperature: 0.2, // parser sampling temperature; exposed because models/providers can be picky about this
   parserRequestOverrides: '', // JSON merged into the parser request — the escape hatch for provider-specific reasoning keys
   parserMaxTokens: 12000, // first-attempt output budget; sized to survive a reasoning model rather than fight it
   parserInstruction: '',  // selected engine instruction (blank = that engine's built-in default)
@@ -9000,6 +9001,10 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
   // Drop this to ~4000 if you ever confirm reasoning is genuinely off; it is
   // roughly 3x the budget the JSON alone needs.
   const configuredBudget = Math.max(1200, Math.min(32000, Number(settings.parserMaxTokens) || 12000))
+  const configuredTemperatureRaw = Number(settings.parserTemperature)
+  const configuredTemperature = Number.isFinite(configuredTemperatureRaw)
+    ? Math.max(0, Math.min(2, configuredTemperatureRaw))
+    : 0.2
   const parserTokenLimit = structured
     ? configuredBudget + ((structuredImageCount - 1) * 650)
     : 1200
@@ -9010,7 +9015,7 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
     userId,
     messages,
     parameters: {
-      temperature: 0.2,
+      temperature: configuredTemperature,
       max_tokens: parserTokenLimit,
     },
     // OpenRouter documents `effort: "none"` as "disables reasoning entirely",
@@ -9082,7 +9087,8 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
     (connectionModel && connectionModel !== modelLabel ? ' · connection model=' + connectionModel : '') +
     ' · source=' + (requestedModel ? 'model override field' : 'connection') +
     (connectionId ? ' · connection_id=' + connectionId : '') +
-    ' · reasoning=' + JSON.stringify(opts.reasoning) + ' · max_tokens=' + opts.parameters.max_tokens)
+    ' · reasoning=' + JSON.stringify(opts.reasoning) +
+    ' · temperature=' + opts.parameters.temperature + ' · max_tokens=' + opts.parameters.max_tokens)
 
   if (requestedModel && !useRawOverride && connectionModel && requestedModel !== connectionModel) {
     spindle.log.info('[lumidraw] model override "' + requestedModel + '" sent on a connection whose own model is "' + connectionModel +
@@ -10693,6 +10699,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.chatLeads !== undefined) settings.chatLeads = !!payload.chatLeads
         if (payload.useLoomLedger !== undefined) settings.useLoomLedger = !!payload.useLoomLedger
         if (payload.parserMaxTokens !== undefined) settings.parserMaxTokens = Math.max(1200, Math.min(32000, Number(payload.parserMaxTokens) || 12000))
+        if (payload.parserTemperature !== undefined) {
+          const value = Number(payload.parserTemperature)
+          settings.parserTemperature = Number.isFinite(value) ? Math.max(0, Math.min(2, value)) : 0.2
+        }
         if (payload.storyUseBreakSeparators !== undefined) settings.storyUseBreakSeparators = !!payload.storyUseBreakSeparators
         if (['storyQualityTags', 'storyPromptPrefix', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor', 'storyUseBreakSeparators']
           .some((key) => payload[key] !== undefined)) settings.storyPromptMigrated = true
