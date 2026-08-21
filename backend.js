@@ -54,9 +54,17 @@ const DEFAULT_SETTINGS = {
   port: 7862,
   mode: 'off',            // 'off' | 'inline' | 'parser'
   autoScan: true,         // auto-process after each story message (when events are available)
-  activePreset: '',       // preset used for story-driven generations
+  activePreset: '',       // generation preset used for story-driven generations
+  storyPromptMigrated: false, // one-time copy of legacy preset prompt fields into Story settings
+  storyQualityTags: '',
+  storyPromptPrefix: '',
+  storyNegativePrompt: '',
+  storyBannedTags: '',
+  storySceneAnchor: '',
+  storyUseBreakSeparators: false,
   parserConnection: '',   // optional connection name/id for the parser LLM
   parserModel: '',        // optional model override for the parser LLM
+  parserTemperature: 0.2, // parser sampling temperature; exposed because models/providers can be picky about this
   parserRequestOverrides: '', // JSON merged into the parser request — the escape hatch for provider-specific reasoning keys
   parserMaxTokens: 12000, // first-attempt output budget; sized to survive a reasoning model rather than fight it
   parserInstruction: '',  // selected engine instruction (blank = that engine's built-in default)
@@ -135,6 +143,11 @@ async function getSettings() {
   // the experimental Anima hybrid compiler.
   if (!['legacy', 'anima'].includes(settings.parserEngine)) settings.parserEngine = 'legacy'
   if (!stored || !stored.parserEngine) settings.parserEngine = 'legacy'
+  // Direct used to be a checkbox layered on top of Parser. Promote that old
+  // combination to the first-class mode without requiring reconfiguration.
+  if (settings.mode === 'parser' && settings.directMode === true) settings.mode = 'direct'
+  if (!['off', 'inline', 'parser', 'direct'].includes(settings.mode)) settings.mode = 'off'
+  settings.directMode = settings.mode === 'direct'
   settings.subjectBinding = settings.parserEngine === 'anima' // backward-compatible debug/profile flag
   settings.parserContextMessages = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
   settings.useLoomLedger = settings.useLoomLedger !== false
@@ -153,6 +166,50 @@ async function getPresets() {
 
 async function savePresets(presets) {
   await spindle.storage.setJson(PRESETS_FILE, presets, { indent: 2 })
+}
+
+// LUMIDRAW_PRESET_SEMANTICS_V1_1
+// Presets are generation recipes now. Story prompting lives in settings; people
+// live in casts/libraries. The legacy fields are copied once and left untouched in
+// existing preset files until that preset is explicitly re-saved.
+async function migratePresetPromptingToStorySettings() {
+  const stored = await spindle.storage.getJson(SETTINGS_FILE, { fallback: {} })
+  if (stored && stored.storyPromptMigrated === true) return { migrated: false, preset: '' }
+
+  const presets = await getPresets()
+  const active = presets.find((p) => p && p.name === stored.activePreset)
+    || presets.find((p) => {
+      if (!p) return false
+      return [p.qualityTags, p.promptPrefix, p.negativePrompt, p.bannedTags, p.sceneAnchor]
+        .some((value) => String(value || '').trim()) || p.useBreakSeparators === true
+    })
+
+  const next = { ...DEFAULT_SETTINGS, ...(stored || {}) }
+  if (active) {
+    if (!String(next.storyQualityTags || '').trim()) next.storyQualityTags = String(active.qualityTags || '')
+    if (!String(next.storyPromptPrefix || '').trim()) next.storyPromptPrefix = String(active.promptPrefix || '')
+    if (!String(next.storyNegativePrompt || '').trim()) next.storyNegativePrompt = String(active.negativePrompt || '')
+    if (!String(next.storyBannedTags || '').trim()) next.storyBannedTags = String(active.bannedTags || '')
+    if (!String(next.storySceneAnchor || '').trim()) next.storySceneAnchor = String(active.sceneAnchor || '')
+    if (next.storyUseBreakSeparators !== true && active.useBreakSeparators === true) next.storyUseBreakSeparators = true
+  }
+  next.storyPromptMigrated = true
+  await spindle.storage.setJson(SETTINGS_FILE, next, { indent: 2 })
+  if (active) spindle.log.info('[lumidraw] copied legacy prompt defaults from preset "' + active.name + '" into Story settings; preset data was left intact')
+  return { migrated: !!active, preset: active ? active.name : '' }
+}
+
+function storyPresetFor(preset, settings) {
+  if (!preset) return preset
+  return {
+    ...preset,
+    qualityTags: String(settings.storyQualityTags || ''),
+    promptPrefix: String(settings.storyPromptPrefix || ''),
+    negativePrompt: String(settings.storyNegativePrompt || ''),
+    bannedTags: String(settings.storyBannedTags || ''),
+    sceneAnchor: String(settings.storySceneAnchor || ''),
+    useBreakSeparators: settings.storyUseBreakSeparators === true,
+  }
 }
 
 async function getPersonas() {
@@ -4976,7 +5033,7 @@ const BOORU_ALIASES = {
   // others are dead strings that occupy a slot and do nothing.
   'femboy': 'trap', 'otoko no ko': 'trap', 'otokonoko': 'trap', 'otoko-no-ko': 'trap', 'tomgirl': 'trap',
   'feminine male': 'trap', 'feminine boy': 'trap', 'girly male': 'girly boy',
-  'futa': 'futanari', 'hermaphrodite': 'futanari', 'dickgirl': 'futanari',
+  'futa': 'futanari', 'futunari': 'futanari', 'hermaphrodite': 'futanari', 'dickgirl': 'futanari',
   'crossdresser': 'crossdressing', 'crossdressed': 'crossdressing',
   'mtf crossdressing': 'crossdressing (mtf)', 'ftm crossdressing': 'crossdressing (ftm)',
   'androgyne': 'androgynous', 'androgynous male': 'androgynous',
@@ -7641,8 +7698,7 @@ const BODY_STATE_TAGS = new Set([
 
 const DIRECT_RULES = `
 You are writing the FINAL image prompt. Do not describe the scene in prose and
-do not return a scene graph — return the prompt itself, in Danbooru tag style,
-because the image model was trained on booru tags and reads nothing else well.
+do not return a scene graph — return the prompt itself as the finished prompt.
 
 FORMAT — return ONLY this JSON, compact, no markdown:
 {"images":[{"anchor":"5-12 exact consecutive words copied from the CURRENT PASSAGE","prompt":"the finished prompt","aspect":"3:4|4:3|1:1|16:9|9:16"}]}
@@ -7651,41 +7707,59 @@ WRITING THE PROMPT:
 - AT MOST TWO characters. Three or more is where this model falls apart, so
   choose the two whose moment carries the scene and leave the rest out. Fewer
   people is a better picture, not a less faithful one.
-- Separate each character with " BREAK ". One contiguous run per character:
-  count tag, then who they are, then what they wear, then what they are doing.
-  Never mention one character inside another's run.
-- Common Danbooru tags only. Short comma-separated phrases. If a concept has no
-  tag, leave it out rather than writing a sentence — a story beat the model
-  cannot draw only competes with the one it can.
-- Open with the shared frame: count tags, setting, time, camera framing.
-- Copy the sheets EXACTLY for IDENTITY — body, hair, eyes, species, permanent
-  features. Those are the author's and never change.
-- CLOTHING IS NOT IDENTITY. The sheet's "last seen wearing" is only what they had
-  on the last time anyone looked. THE PASSAGE ALWAYS WINS. If this passage says,
-  shows or implies a change of clothes, write what the passage says and ignore
-  the sheet entirely. People change clothes; that is what stories are made of.
-- Do NOT invent clothing the passage does not mention. If someone is in nothing
-  but an oversized shirt, that is the whole outfit — say so with the explicit
-  tag ("no pants", "bottomless", "barefoot") rather than quietly adding jeans or
-  shoes. A garment nobody mentioned is a garment nobody is wearing.
+- Before writing the prompt, silently resolve each visible character into
+  exactly one identity, one anatomy state, one clothing state, one pose, and
+  one primary action. Resolve contradictions before output. Do not output this
+  planning.
+- Open with the shared frame: overall count tags, setting, time, camera
+  framing. Then write one contiguous run per visible character, separated by
+  " BREAK ". Inside each character run: count tag, identity, anatomy,
+  clothing, action, expression. Never mention one character inside another's
+  run, and do not mention the same character again later.
+- Prefer common Danbooru tags and short comma-separated tag-like phrases. When a
+  crucial visible fact has no good common tag, use a BRIEF natural-language
+  phrase rather than dropping the fact entirely.
+- Copy visible, stable identity traits faithfully: body, hair, eyes, species,
+  and permanent features. The CHARACTER SHEET is the source of truth for who the
+  person is. "ALWAYS INCLUDE" traits are mandatory when visible and applicable.
+- Character-specific anatomy must stay inside that character's own block, never
+  in the shared/global scene tags. This is especially important for traits like
+  futanari, penis, vulva, breasts, flat chest, bulge, or unusual body features.
+  If Fanny is futanari, "futanari" and "penis" belong in Fanny's block.
+- WARDROBE IS PERSISTENT STORY STATE. Use this precedence exactly:
+  1) if the CURRENT PASSAGE clearly changes clothing, follow the passage;
+  2) otherwise keep the CURRENT WARDROBE unchanged;
+  3) if there is no current wardrobe, use any EARLIER CLOTHING MENTIONS;
+  4) only then fall back to the DEFAULT OUTFIT.
+  Silence means unchanged — do NOT reset to defaults just because clothing has
+  not been mentioned recently.
+- When the passage changes clothing, change only what the passage actually
+  changes and preserve the garments that obviously remain worn.
+- Do NOT invent extra garments. If someone is in nothing but an oversized shirt,
+  that is the whole outfit — say so with explicit tags like "no pants",
+  "bottomless", or "barefoot" rather than quietly adding jeans or shoes.
 - Body facts are not garments. "bulge", "midriff", "cleavage", "navel" describe
-  a body showing through or past clothing — never write them as something worn.
+  the body showing through or past clothing — never write them as something worn.
+- Pick the single clearest drawable moment and preserve the important visual
+  relationship: who faces whom, who touches whom, what is being held, and where
+  the action occurs.
 - One clear action. Not three.
 
-NEVER: prose sentences, invented tags, a character's name as a tag, repeating a
-species or garment word more than once, or anything from the banned list.
+NEVER: prose paragraphs, invented tags, reasoning text, self-corrections left in
+place, contradictory duplicates, a character's name as a tag, or anything from
+the banned list.
 `
 
 // The context the parser needs to write a good prompt, in the plainest form
 // that survives a language model reading it. This is what LumiDraw is FOR now:
 // knowing who is in this chat, what they were last seen wearing, where they are.
-function directContext(profiles, { wardrobe = null, places = [], banned = '', fantasy = false } = {}) {
+function directContext(profiles, { wardrobe = null, places = [], banned = '', fantasy = false, clothingDigest = [] } = {}) {
   const lines = []
   for (const profile of allKnownProfiles(profiles)) {
     if (!profile) continue
     const name = profile.promptName || profile.anchor || profile.ref
-    const recorded = (wardrobe && wardrobe[profile.ref] && wardrobe[profile.ref].length)
-      ? wardrobe[profile.ref] : (profile.defaultOutfit || [])
+    const hasWardrobe = !!(wardrobe && wardrobe[profile.ref] && wardrobe[profile.ref].length)
+    const recorded = hasWardrobe ? wardrobe[profile.ref] : (profile.defaultOutfit || [])
     // "Bulge becomes wearing a bulge. Midriff becomes wearing a midriff."
     //
     // Both are true, and both were this line: everything in the outfit record was
@@ -7701,18 +7775,22 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
       `${name}: ${profile.countTag || ''}`,
       (profile.appearance || []).join(', '),
       lock.length ? `ALWAYS INCLUDE: ${lock.join(', ')}` : '',
-      // Labelled as history, not as fact. The old wording — a bare "wearing:" —
-      // read as the present tense and the parser believed it over the passage.
-      worn.length ? `last seen wearing (the passage overrides this): ${worn.join(', ')}` : '',
+      hasWardrobe
+        ? (worn.length ? `CURRENT WARDROBE (use unless the CURRENT PASSAGE changes it): ${worn.join(', ')}` : 'CURRENT WARDROBE: none recorded')
+        : (worn.length ? `DEFAULT OUTFIT (use only if there is no current wardrobe and the CURRENT PASSAGE is silent): ${worn.join(', ')}` : 'DEFAULT OUTFIT: none recorded'),
       body.length ? `body, not clothing: ${body.join(', ')}` : '',
     ].filter(Boolean).join(' | '))
   }
   const place = (places || []).filter(Boolean).slice(0, 1)
     .map((item) => `Place — ${item.name}: ${(item.setting || []).join(', ')}`)
+  const clothingHistory = (clothingDigest || []).filter(Boolean).map((line) => `- ${line}`)
   return [
-    'CHARACTER SHEETS — copy IDENTITY exactly. Clothing is last-known only and',
-    'whatever THIS passage says they are wearing replaces it:',
+    'CHARACTER SHEETS — copy stable visible identity exactly.',
+    'WARDROBE PRECEDENCE: CURRENT PASSAGE change > CURRENT WARDROBE > EARLIER CLOTHING MENTIONS > DEFAULT OUTFIT.',
+    'Silence means unchanged, not reset.',
     ...lines,
+    clothingHistory.length ? 'EARLIER CLOTHING MENTIONS (fallback only when no CURRENT WARDROBE exists):' : '',
+    ...clothingHistory,
     ...place,
     banned ? `NEVER USE THESE: ${banned}` : '',
     fantasy
@@ -7944,14 +8022,19 @@ function identityLockFor(profile) {
   if (!profile) return []
   const declared = Array.isArray(profile.identityTags) ? profile.identityTags
     : String(profile.identityTags || '').split(',')
-  // Explicit only. I first wrote a fallback that inferred the lock from the
-  // character's noun, and it was the same mistake as everything else tonight —
-  // guessing a rule from one example. Fanny's `futanari` lives in her appearance
-  // tags, not a noun field, so the inference found nothing and would have found
-  // the wrong thing for somebody else. Empty locks nothing, and that is correct:
-  // the sheet is already in the parser's context, so the lock is a backstop for
-  // drift, not the mechanism.
-  return animaTagList(declared).slice(0, 6)
+  const explicit = animaTagList(declared)
+
+  // Stable futanari identity is special because a parser can correctly describe
+  // every other visible trait and still quietly omit this one — especially when
+  // the scene is explicit. If the AUTHOR put futanari in Permanent appearance,
+  // that is already an explicit declaration, not an inference. Promote it to the
+  // same hard Direct-mode lock as Always include so the parser cannot sanitize or
+  // forget it. Aliases such as `futa` canonicalize through animaTag().
+  const appearance = animaTagList(profile.appearance || [])
+  const stableSexIdentity = appearance.filter((tag) =>
+    tag === 'futanari' || tag === 'male futanari' || tag === 'futa without pussy' || tag === 'cuntboy')
+
+  return uniqueStrings([...explicit, ...stableSexIdentity]).slice(0, 6)
 }
 
 // Is this character in this prompt at all? Their name is not in it — names are
@@ -9021,6 +9104,10 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
   // Drop this to ~4000 if you ever confirm reasoning is genuinely off; it is
   // roughly 3x the budget the JSON alone needs.
   const configuredBudget = Math.max(1200, Math.min(32000, Number(settings.parserMaxTokens) || 12000))
+  const configuredTemperatureRaw = Number(settings.parserTemperature)
+  const configuredTemperature = Number.isFinite(configuredTemperatureRaw)
+    ? Math.max(0, Math.min(2, configuredTemperatureRaw))
+    : 0.2
   const parserTokenLimit = structured
     ? configuredBudget + ((structuredImageCount - 1) * 650)
     : 1200
@@ -9031,7 +9118,7 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
     userId,
     messages,
     parameters: {
-      temperature: 0.2,
+      temperature: configuredTemperature,
       max_tokens: parserTokenLimit,
     },
     // OpenRouter documents `effort: "none"` as "disables reasoning entirely",
@@ -9103,7 +9190,8 @@ async function quietLLM(system, user, settings, userId, structured = false, scan
     (connectionModel && connectionModel !== modelLabel ? ' · connection model=' + connectionModel : '') +
     ' · source=' + (requestedModel ? 'model override field' : 'connection') +
     (connectionId ? ' · connection_id=' + connectionId : '') +
-    ' · reasoning=' + JSON.stringify(opts.reasoning) + ' · max_tokens=' + opts.parameters.max_tokens)
+    ' · reasoning=' + JSON.stringify(opts.reasoning) +
+    ' · temperature=' + opts.parameters.temperature + ' · max_tokens=' + opts.parameters.max_tokens)
 
   if (requestedModel && !useRawOverride && connectionModel && requestedModel !== connectionModel) {
     spindle.log.info('[lumidraw] model override "' + requestedModel + '" sent on a connection whose own model is "' + connectionModel +
@@ -9574,7 +9662,7 @@ function scheduleAutoStoryScan(userId, request = {}) {
     try {
       await wait(Math.max(250, Number(request.delayMs) || 650))
       const settings = await getSettings()
-      if (settings.mode !== 'parser' || settings.autoScan === false) {
+      if ((settings.mode !== 'parser' && settings.mode !== 'direct') || settings.autoScan === false) {
         const result = { mode: settings.mode, processed: 0, skipped: true, note: 'Parser auto-scan is disabled.' }
         setAutoStatus(userId, { mode: settings.mode, status: 'idle', messageId, chatId, source, note: result.note })
         return result
@@ -9799,11 +9887,12 @@ async function scanStoryCore(userId, options = {}) {
     ? ''
     : String(options.messageId)
   const settings = await getSettings()
-  if (settings.mode === 'off') return { mode: 'off', note: 'Story illustrations is set to Off — choose Inline or Parser in the Settings tab (it saves automatically now).' }
+  if (settings.mode === 'off') return { mode: 'off', note: 'Story illustrations is set to Off — choose Inline or Parser in the Story tab.' }
   const presets = await getPresets()
-  const preset = presets.find((p) => p.name === settings.activePreset)
+  const savedPreset = presets.find((p) => p.name === settings.activePreset)
+  const preset = storyPresetFor(savedPreset, settings)
   if (!preset) {
-    return { mode: settings.mode, note: 'No active preset selected — pick one in the Generate tab first.' }
+    return { mode: settings.mode, note: 'No generation preset selected — choose one in Story → Setup.' }
   }
 
   const located = await locateStoryMessage(userId, {
@@ -9966,14 +10055,14 @@ async function scanStoryCore(userId, options = {}) {
   }
 
   // ------------------------- parser: derive a prompt from prose -------------
-  if (settings.mode === 'parser') {
+  if (settings.mode === 'parser' || settings.mode === 'direct') {
     if (!force && target.id && await wasProcessed(target.id, target.content, { migrate: true })) {
       return { mode: 'parser', note: 'This message was already illustrated — choose it again to force another parser run.' }
     }
     const usingCustom = !!(settings.parserInstruction && settings.parserInstruction.trim())
     const passage = cleanParserMessageText(target.content).slice(-6000)
 
-    if (settings.parserEngine === 'anima') {
+    if (settings.parserEngine === 'anima' || settings.mode === 'direct') {
       // Hand the parser the location outright rather than hoping it survives
       // inside the recency window.
       const anchorForParser = tagsFrom(preset.sceneAnchor || '', 8)
@@ -10026,12 +10115,13 @@ async function scanStoryCore(userId, options = {}) {
       // DIRECT MODE. The parser writes the finished prompt instead of a scene
       // graph, and none of the compiler below runs. Off by default; your existing
       // pipeline is untouched until you turn it on.
-      const directMode = settings.directMode === true
+      const directMode = settings.mode === 'direct' || settings.directMode === true
       const savedPlacesForParser = await getPlaces()
       const instruction = directMode
         ? buildDirectInstruction(profiles, {
           maxImages: settings.maxImages || 2,
           wardrobe: (rememberedState && rememberedState.outfits) || null,
+          clothingDigest: digest,
           places: savedPlacesForParser,
           banned: preset.bannedTags || '',
           fantasy: !!profiles.fantasySetting,
@@ -10473,9 +10563,10 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   // character, a different negative prompt. Inheriting the preset the image was
   // originally made under meant a new prompt compiled against an old preset's
   // negative prompt, banned tags and scene anchor, none of which you were using.
-  const preset = presets.find((item) => item.name === settings.activePreset)
+  const rawPreset = presets.find((item) => item.name === settings.activePreset)
     || presets.find((item) => item.name === origin.presetName)
-  if (!preset) throw new Error('No preset available to compile against.')
+  const preset = storyPresetFor(rawPreset, settings)
+  if (!preset) throw new Error('No generation preset available to compile against.')
   if (origin.presetName && preset.name !== origin.presetName) {
     spindle.log.info(`[lumidraw] re-parsing against the active preset "${preset.name}". ` +
       `This image was originally made under "${origin.presetName}" — its negative prompt and banned tags no longer apply.`)
@@ -10676,6 +10767,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         try { await migratePresetsToCasts() } catch (error) {
           spindle.log.warn('[lumidraw] cast migration skipped: ' + error.message)
         }
+        try { await migratePresetPromptingToStorySettings() } catch (error) {
+          spindle.log.warn('[lumidraw] story-prompt migration skipped: ' + error.message)
+        }
         const [settings, presets, personas, characters, history, storyDebug, places, casts, chatCast] = await Promise.all([
           getSettings(), getPresets(), getPersonas(), getCharacters(), getHistory(), getStoryDebug(), getPlaces(),
           getCasts(), getChatCastMap(),
@@ -10696,7 +10790,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           host: String(payload.host || prev.host || DEFAULT_SETTINGS.host).trim(),
           port: Number(payload.port) || prev.port || DEFAULT_SETTINGS.port,
         }
-        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel']) {
+        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserRequestOverrides', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel', 'storyQualityTags', 'storyPromptPrefix', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor']) {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
         if (payload.bridgePort !== undefined) settings.bridgePort = Number(payload.bridgePort) || DEFAULT_SETTINGS.bridgePort
@@ -10705,9 +10799,16 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.cloudFallback !== undefined) settings.cloudFallback = !!payload.cloudFallback
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
-        if (payload.directMode !== undefined) settings.directMode = !!payload.directMode
         if (payload.chatLeads !== undefined) settings.chatLeads = !!payload.chatLeads
         if (payload.useLoomLedger !== undefined) settings.useLoomLedger = !!payload.useLoomLedger
+        if (payload.parserMaxTokens !== undefined) settings.parserMaxTokens = Math.max(1200, Math.min(32000, Number(payload.parserMaxTokens) || 12000))
+        if (payload.parserTemperature !== undefined) {
+          const value = Number(payload.parserTemperature)
+          settings.parserTemperature = Number.isFinite(value) ? Math.max(0, Math.min(2, value)) : 0.2
+        }
+        if (payload.storyUseBreakSeparators !== undefined) settings.storyUseBreakSeparators = !!payload.storyUseBreakSeparators
+        if (['storyQualityTags', 'storyPromptPrefix', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor', 'storyUseBreakSeparators']
+          .some((key) => payload[key] !== undefined)) settings.storyPromptMigrated = true
         if (payload.stripImageDirectives !== undefined) settings.stripImageDirectives = !!payload.stripImageDirectives
         if (payload.sizeChatImages !== undefined) settings.sizeChatImages = !!payload.sizeChatImages
         if (payload.chatImageWidth !== undefined) {
@@ -10715,6 +10816,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
         }
         if (payload.parserContextMessages !== undefined) settings.parserContextMessages = Math.max(0, Math.min(4, Number(payload.parserContextMessages) || 0))
         if (!['legacy', 'anima'].includes(settings.parserEngine)) settings.parserEngine = 'legacy'
+        if (!['off', 'inline', 'parser', 'direct'].includes(settings.mode)) settings.mode = 'off'
+        settings.directMode = settings.mode === 'direct'
         settings.subjectBinding = settings.parserEngine === 'anima'
         if (payload.maxImages !== undefined) {
           settings.maxImages = Math.max(1, Math.min(4, Number(payload.maxImages) || 2))
@@ -10931,7 +11034,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (pregenCache.has(fp) || pregenInflight.has(fp)) { reply = ok(payload, requestId, { started: false, dup: true }); break }
         const settings = await getSettings()
         const presets = await getPresets()
-        const preset = presets.find((p) => p.name === settings.activePreset)
+        const savedPreset = presets.find((p) => p.name === settings.activePreset)
+        const preset = storyPresetFor(savedPreset, settings)
         if (!preset || settings.mode !== 'inline') { reply = ok(payload, requestId, { started: false }); break }
         pregenInflight.add(fp)
         reply = ok(payload, requestId, { started: true })
@@ -11028,24 +11132,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
           spindle.log.info(`[lumidraw] preset "${name}" saved with no model — Draw Things will use the model selected in its own UI`)
         }
         const presets = await getPresets()
+        const existingPreset = presets.find((item) => item && item.name === name) || null
         const preset = {
+          ...(existingPreset || {}),
           name,
           config: payload.config,
           extra: payload.extra || null,
-          promptPrefix: payload.promptPrefix || '',
-          negativePrompt: payload.negativePrompt || '',
-          qualityTags: payload.qualityTags || '',
-          characterTags: payload.characterTags || '',
-          personaTags: payload.personaTags || '',
-          characterProfile: payload.characterProfile && typeof payload.characterProfile === 'object' ? payload.characterProfile : null,
-          personaProfile: payload.personaProfile && typeof payload.personaProfile === 'object' ? payload.personaProfile : null,
-          personaLibraryId: String(payload.personaLibraryId || '').trim(),
-          characterLibraryId: String(payload.characterLibraryId || '').trim(),
-          castLibraryIds: Array.isArray(payload.castLibraryIds)
-            ? uniqueStrings(payload.castLibraryIds.map((id) => String(id || '').trim()).filter(Boolean)).slice(0, 4)
-            : [],
-          bannedTags: payload.bannedTags || '',
-          sceneAnchor: String(payload.sceneAnchor || '').trim(),
           updatedAt: Date.now(),
         }
         try { await rememberModels(preset.config || {}) } catch { /* best-effort */ }
@@ -11346,9 +11438,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // answer arrives when you ask rather than on the next generation.
         const index = await getArtistIndex()
         const settingsNow = await getSettings()
-        const presetNow = (await getPresets()).find((item) => item && item.name === settingsNow.activePreset)
-        const tags = presetNow
-          ? splitArtistTags(normalizeArtistTags(String(presetNow.qualityTags || ''))).artists : []
+        const tags = splitArtistTags(normalizeArtistTags(String(settingsNow.storyQualityTags || ''))).artists
         reply = ok(payload, requestId, {
           count: index ? index.names.length : 0,
           at: index ? index.at : 0,
@@ -11918,7 +12008,7 @@ if (typeof spindle.registerInterceptor === 'function') {
         return a
       }
       spindle.log.info(`[lumidraw] interceptor invoked (mode=${settings.mode}, msgs=${messages.length}, wrapped=${wrapped})`)
-      if (settings.mode !== 'inline' && settings.mode !== 'parser') return a
+      if (settings.mode !== 'inline' && settings.mode !== 'parser' && settings.mode !== 'direct') return a
 
       // Scrub dead image-request directives from the model's view of the
       // conversation. This edits only the copy being sent for this generation;
@@ -11960,7 +12050,7 @@ if (typeof spindle.registerInterceptor === 'function') {
         spindle.log.info('[lumidraw] inline protocol injected (' + injected.content.length + ' chars)')
         return wrapped ? { ...a, messages: out } : out
       }
-      if (settings.mode === 'parser' && settings.autoScan !== false) {
+      if ((settings.mode === 'parser' || settings.mode === 'direct') && settings.autoScan !== false) {
         const triggerText = [
           'At the very end of every assistant reply, always append exactly one line containing this XML tag and nothing else on that line:',
           PARSER_TRIGGER_TAG,

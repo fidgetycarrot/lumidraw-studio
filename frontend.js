@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '0.56.0'
+const EXTENSION_VERSION = '1.3.0'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -662,9 +662,10 @@ function realSetup(ctx) {
             <select class="ld-mode">
               <option value="off">Off — manual only</option>
               <option value="inline">Inline — story model writes &lt;dt-image&gt; tags</option>
-              <option value="parser">Parser — separate model derives the prompt afterward</option>
+              <option value="parser">Parser — separate model extracts the scene, then LumiDraw compiles it</option>
+              <option value="direct">Direct — separate model writes the finished image prompt</option>
             </select>
-            <div class="ld-mode-note ld-help">Inline is fastest. Parser gives you a separate prompt-conversion step and supports rescanning old messages.</div>
+            <div class="ld-mode-note ld-help">Parser and Direct both use the separate parser model and support rescanning old messages. Parser extracts scene data for LumiDraw to compile; Direct gives the parser the character/wardrobe/place rules and uses its finished prompt without the compiler.</div>
             <label style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px"><input type="checkbox" class="ld-autoscan" style="width:auto" /> Auto-scan after each story message when supported</label>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-strip-directives" style="width:auto" /> Hide generated images and image-request directives from the story model</label>
@@ -805,6 +806,7 @@ the diner = diner, booth seating, formica table, neon sign | aliases: the diner,
             </div>
               <div style="margin-top:7px"><span class="ld-label">Name in prompts (optional)</span><input class="ld-persona-ed-promptname" placeholder="Price" /><div class="ld-hint">Only needed when the name means something to the image model — "Fanny" is booru slang, "Rose" draws roses. A surname does not help; use a name without the word at all.</div></div>
             <div><span class="ld-label">Stable subject phrase</span><input class="ld-persona-ed-subject" placeholder="adult man" /></div>
+            <div><span class="ld-label">Always include (Direct mode)</span><input class="ld-persona-ed-identity" placeholder="futanari" /><div class="ld-hint">Non-negotiable identity tags. Direct mode restores these if the parser drops them. Stable futanari in Permanent appearance is also locked automatically.</div></div>
             <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-persona-ed-tags" style="min-height:58px"></textarea></div>
             <div><span class="ld-label">Default outfit tags</span><textarea class="ld-persona-ed-outfit" style="min-height:48px"></textarea></div>
             <div><span class="ld-label">Default appearance state</span><input class="ld-persona-ed-default-state" placeholder="Default" /></div>
@@ -956,6 +958,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Connection</span><div style="display:flex;gap:6px;align-items:center"><select class="ld-parser-conn" style="flex:1"><option value="">— default connection —</option></select><button class="ld-btn ld-compact" data-act="refresh-parser-sources" title="Reload available parser connections">↻</button></div></div>
               <div><span class="ld-label">Model override (leave empty)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="leave empty to use the connection's own model" /><button class="ld-btn ld-compact ld-clear-override" data-act="clear-model-override" title="Go back to the connection's own model" style="display:none">Clear</button></div><div class="ld-model-override-note" style="font-size:11px;margin-top:4px"></div></div>
+              <div><span class="ld-label">Temperature</span><input class="ld-parser-temperature" type="number" min="0" max="2" step="0.05" value="0.2" /><div class="ld-hint">Parser sampling temperature. Some models want a specific value; 0.2 is LumiDraw's default.</div></div>
               <div>
                 <span class="ld-label">Settings Draw Things refused</span>
                 <div style="display:flex;gap:6px;align-items:center">
@@ -1078,6 +1081,502 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   `)
 
   const $ = (sel) => dom.query(sel)
+
+  // LUMIDRAW_UI_RESET_V1_1
+  // UI reset: present features by user intent instead of by implementation layer.
+  function applyUiResetV11() {
+    const storyView = $('.ld-view[data-view="story"]')
+    const libraryView = $('.ld-view[data-view="presets"]')
+    if (!storyView || !libraryView || storyView.dataset.uiResetV11 === '1') return
+    storyView.dataset.uiResetV11 = '1'
+
+    const make = (tag, cls, text) => {
+      const el = document.createElement(tag)
+      if (cls) el.className = cls
+      if (text !== undefined && text !== null) el.textContent = text
+      return el
+    }
+    const addHelp = (parent, text) => {
+      if (!text) return null
+      const el = make('div', 'ld-help ld-reset-help', text)
+      parent.appendChild(el)
+      return el
+    }
+    const field = (label, node, help) => {
+      const wrap = make('div', 'ld-reset-field')
+      if (label) wrap.appendChild(make('span', 'ld-label', label))
+      if (node) wrap.appendChild(node)
+      if (help) addHelp(wrap, help)
+      return wrap
+    }
+    const inline = (...nodes) => {
+      const row = make('div', 'ld-reset-inline')
+      for (const node of nodes) if (node) row.appendChild(node)
+      return row
+    }
+    const checkbox = (node, label, help) => {
+      const wrap = make('div', 'ld-reset-check-wrap')
+      const lab = make('label', 'ld-reset-check')
+      if (node) {
+        node.style.width = 'auto'
+        lab.appendChild(node)
+      }
+      lab.appendChild(make('span', '', label))
+      wrap.appendChild(lab)
+      if (help) addHelp(wrap, help)
+      return wrap
+    }
+    const card = (title, help) => {
+      const el = make('section', 'ld-card ld-reset-card')
+      if (title) el.appendChild(make('div', 'ld-subtitle', title))
+      if (help) addHelp(el, help)
+      return el
+    }
+    const details = (title, help) => {
+      const el = make('details', 'ld-reset-details')
+      const summary = make('summary', '', title)
+      el.appendChild(summary)
+      const body = make('div', 'ld-reset-details-body')
+      if (help) addHelp(body, help)
+      el.appendChild(body)
+      return { el, body }
+    }
+    const section = (name) => {
+      const el = make('div', 'ld-reset-section')
+      el.dataset.resetSection = name
+      return el
+    }
+    const rail = (items, key, defaultName) => {
+      const nav = make('nav', 'ld-reset-rail')
+      nav.setAttribute('role', 'tablist')
+      const buttons = {}
+      for (const [name, label] of items) {
+        const btn = make('button', 'ld-reset-tab', label)
+        btn.type = 'button'
+        btn.dataset.resetTab = name
+        nav.appendChild(btn)
+        buttons[name] = btn
+      }
+      const set = (name) => {
+        if (!buttons[name]) name = defaultName
+        for (const [id, btn] of Object.entries(buttons)) btn.classList.toggle('ld-active', id === name)
+        const root = nav.parentElement
+        if (root) {
+          for (const pane of root.querySelectorAll(':scope > .ld-reset-section')) {
+            pane.classList.toggle('ld-active', pane.dataset.resetSection === name)
+          }
+        }
+        try { localStorage.setItem(key, name) } catch { /* best effort */ }
+      }
+      for (const [name, btn] of Object.entries(buttons)) btn.addEventListener('click', () => set(name))
+      nav._setResetTab = set
+      nav._defaultResetTab = defaultName
+      return nav
+    }
+
+    const resetStyle = document.createElement('style')
+    resetStyle.setAttribute('data-lumidraw-ui-reset-v11', '1')
+    resetStyle.textContent = `
+      .ld-reset-rail{display:flex;gap:5px;flex-wrap:wrap;margin:0 0 2px;padding:3px;border:1px solid var(--lumiverse-border,#3d4050);border-radius:10px;background:#121318}
+      .ld-reset-tab{appearance:none;border:0;border-radius:7px;padding:7px 11px;background:transparent;color:var(--lumiverse-text-muted,#a2a5b4);font:inherit;font-size:12px;cursor:pointer}
+      .ld-reset-tab:hover{color:var(--lumiverse-text,#eceef4)}
+      .ld-reset-tab.ld-active{background:var(--lumiverse-fill,#262833);color:var(--lumiverse-text,#eceef4);font-weight:650}
+      .ld-reset-section{display:none;flex-direction:column;gap:9px}
+      .ld-reset-section.ld-active{display:flex}
+      .ld-reset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+      .ld-reset-field{min-width:0}
+      .ld-reset-field+.ld-reset-field{margin-top:8px}
+      .ld-reset-help{margin-top:5px}
+      .ld-reset-inline{display:flex;align-items:center;gap:7px;min-width:0}
+      .ld-reset-inline>*{min-width:0}
+      .ld-reset-inline>input,.ld-reset-inline>select,.ld-reset-inline>textarea{flex:1}
+      .ld-reset-check-wrap+.ld-reset-check-wrap{margin-top:7px}
+      .ld-reset-check{display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer}
+      .ld-reset-check input{flex:0 0 auto!important}
+      .ld-reset-details{border:1px solid var(--lumiverse-border,#3d4050);border-radius:9px;background:var(--lumiverse-fill-subtle,#1a1b22);overflow:hidden}
+      .ld-reset-details>summary{cursor:pointer;padding:9px 11px;font-size:12px;font-weight:650;user-select:none}
+      .ld-reset-details-body{padding:0 11px 11px}
+      .ld-reset-hero{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center}
+      .ld-reset-preset-line{font-size:12px;margin-top:3px}
+      .ld-reset-status{padding:8px 9px;border-radius:8px;background:var(--lumiverse-fill-subtle,#1a1b22)}
+      .ld-reset-library-note{margin-bottom:1px}
+      .ld-reset-hidden-legacy{display:none!important}
+      .ld-reset-save-note{font-size:11px;color:var(--lumiverse-text-muted,#a2a5b4);margin-top:7px}
+      @media(max-width:700px){
+        .ld-reset-grid{grid-template-columns:1fr}
+        .ld-reset-hero{grid-template-columns:1fr}
+        .ld-reset-hero .ld-reset-inline{flex-wrap:wrap}
+        .ld-reset-rail{flex-wrap:nowrap;overflow-x:auto}
+        .ld-reset-tab{white-space:nowrap}
+      }
+    `
+    storyView.appendChild(resetStyle)
+
+    const libraryMainTab = $('.ld-main-tab[data-tab="presets"]')
+    if (libraryMainTab) libraryMainTab.textContent = 'Library'
+
+    // ---------- Capture the existing controls before rebuilding Story.
+    const controls = {
+      presetSelect: $('.ld-preset-select'),
+      scan: $('[data-act="scan"]'),
+      scanOld: $('[data-act="scan-old"]'),
+      cancelScan: $('[data-act="cancel-scan"]'),
+      mode: $('.ld-mode'),
+      autoScan: $('.ld-autoscan'),
+      charTags: $('.ld-chartags'),
+      strip: $('.ld-strip-directives'),
+      sizeImages: $('.ld-size-images'),
+      sizeRow: $('.ld-size-images-row'),
+      minImages: $('.ld-minimg'),
+      maxImages: $('.ld-maximg'),
+      parserEngine: $('.ld-parser-engine'),
+      parserEngineNote: $('.ld-parser-engine-note'),
+      parserContext: $('.ld-parser-context'),
+      loom: $('.ld-use-loom-ledger'),
+      direct: $('.ld-direct-mode'),
+      parserInstruction: $('.ld-parser-instr'),
+      resetParser: $('[data-act="reset-parser"]'),
+      protocol: $('.ld-protocol'),
+      resetProtocol: $('[data-act="reset-protocol"]'),
+      lastStatus: $('.ld-story-last-status'),
+      castPick: $('.ld-cast-pick'),
+      castCopy: $('[data-act="cast-duplicate"]'),
+      chatPersona: $('.ld-chat-persona'),
+      fantasy: $('.ld-cast-fantasy'),
+      chatLeads: $('.ld-chat-leads'),
+      castSummary: $('.ld-cast-summary'),
+      castStatus: $('.ld-cast-status'),
+      wardrobeRefresh: $('[data-act="wardrobe-refresh"]'),
+      wardrobeRows: $('.ld-wardrobe-rows'),
+      wardrobeAdd: $('.ld-wardrobe-add'),
+      wardrobeAddButton: $('[data-act="wardrobe-add"]'),
+      wardrobeStatus: $('.ld-wardrobe-status'),
+      parserConnection: $('.ld-parser-conn'),
+      refreshParserSources: $('[data-act="refresh-parser-sources"]'),
+      parserModel: $('.ld-parser-model'),
+      parserTemperature: $('.ld-parser-temperature'),
+      clearModelOverride: $('[data-act="clear-model-override"]'),
+      modelOverrideNote: $('.ld-model-override-note'),
+      rejectedKeys: $('.ld-rejected-keys'),
+      clearRejectedKeys: $('[data-act="clear-rejected-keys"]'),
+      parserMaxTokens: $('.ld-parser-maxtokens'),
+      parserOverrides: $('.ld-parser-overrides'),
+      debugTitle: $('.ld-parser-debug-title'),
+      finalPrompt: $('.ld-story-final-prompt'),
+      parsedScene: $('.ld-story-parsed'),
+    }
+    const oldStudioPresetCard = controls.presetSelect ? controls.presetSelect.closest('.ld-card') : null
+
+    // ---------- STORY
+    const storyForm = storyView.querySelector('.ld-form-view')
+    const storyRail = rail([
+      ['setup', 'Setup'],
+      ['cast', 'Cast & wardrobe'],
+      ['parser', 'Parser'],
+      ['prompting', 'Prompting'],
+      ['debug', 'Debug'],
+    ], 'lumidraw.storySection.v2', 'setup')
+    const setup = section('setup')
+    const cast = section('cast')
+    const parser = section('parser')
+    const prompting = section('prompting')
+    const debug = section('debug')
+
+    const hero = card()
+    hero.classList.add('ld-reset-hero')
+    const heroText = make('div')
+    heroText.appendChild(make('div', 'ld-subtitle', 'Story illustrations'))
+    const currentLine = make('div', 'ld-reset-preset-line')
+    currentLine.appendChild(document.createTextNode('Generation preset: '))
+    currentLine.appendChild(make('strong', 'ld-story-preset-name', 'None'))
+    heroText.appendChild(currentLine)
+    addHelp(heroText, 'Story decides who, where, and what to prompt. The generation preset only decides how Draw Things renders it.')
+    const heroActions = inline(controls.scan, controls.scanOld, controls.cancelScan)
+    hero.append(heroText, heroActions)
+    setup.appendChild(hero)
+
+    const behavior = card('Illustration behavior')
+    if (controls.presetSelect) {
+      behavior.appendChild(field('Generation preset', controls.presetSelect, 'Model, sampler, steps, dimensions, LoRAs, and Draw Things settings only.'))
+    }
+    behavior.appendChild(field('Mode', controls.mode, 'Off is manual. Inline uses story-authored image tags. Parser uses a separate prompt-conversion call.'))
+    behavior.appendChild(checkbox(controls.autoScan, 'Automatically illustrate new story replies'))
+    behavior.appendChild(checkbox(controls.charTags, 'Use chat character image tags as a fallback'))
+    behavior.appendChild(checkbox(controls.strip, 'Hide image-request directives from the story model',
+      'Keeps dead image-request markup from teaching the story model to repeat it. Stored messages are not changed.'))
+    const imageCount = make('div', 'ld-reset-grid')
+    imageCount.appendChild(field('Minimum images', controls.minImages, '0 lets the model decide.'))
+    imageCount.appendChild(field('Maximum images', controls.maxImages))
+    behavior.appendChild(imageCount)
+    setup.appendChild(behavior)
+
+    const display = card('Chat image display')
+    display.appendChild(checkbox(controls.sizeImages, 'Set a custom image width',
+      'Presentation only. Leave this off when your Lumiverse CSS already sizes images.'))
+    if (controls.sizeRow) display.appendChild(controls.sizeRow)
+    setup.appendChild(display)
+    if (controls.lastStatus) {
+      controls.lastStatus.classList.add('ld-reset-status')
+      setup.appendChild(controls.lastStatus)
+    }
+
+    const castCard = card('Cast for this chat', 'Characters and personas belong to the story, not to the generation preset.')
+    const castTop = make('div', 'ld-reset-grid')
+    castTop.appendChild(field('Cast', inline(controls.castPick, controls.castCopy)))
+    castTop.appendChild(field('Playing as', controls.chatPersona, 'Remembered for this chat.'))
+    castCard.appendChild(castTop)
+    castCard.appendChild(checkbox(controls.chatLeads, 'Use this chat’s character and persona as the two leads',
+      'Supporting characters still come from the selected cast.'))
+    castCard.appendChild(checkbox(controls.fantasy, 'Fantasy setting — do not treat fantasy species as mistakes'))
+    if (controls.castSummary) castCard.appendChild(controls.castSummary)
+    if (controls.castStatus) castCard.appendChild(controls.castStatus)
+    cast.appendChild(castCard)
+
+    const wardrobeCard = card('Wardrobe of record', 'This is the clothing state LumiDraw uses when a passage does not restate an outfit.')
+    wardrobeCard.appendChild(inline(make('span', 'ld-label', 'Current wardrobe'), controls.wardrobeRefresh))
+    if (controls.wardrobeRows) wardrobeCard.appendChild(controls.wardrobeRows)
+    wardrobeCard.appendChild(field('Add a saved character to this chat', inline(controls.wardrobeAdd, controls.wardrobeAddButton)))
+    if (controls.wardrobeStatus) wardrobeCard.appendChild(controls.wardrobeStatus)
+    cast.appendChild(wardrobeCard)
+
+    const parserBinding = card('Prompt parser')
+    parserBinding.classList.add('ld-parser-binding-controls')
+    const parserEngineField = field('Engine', controls.parserEngine)
+    parserEngineField.classList.add('ld-parser-engine-field')
+    parserBinding.appendChild(parserEngineField)
+    if (controls.parserEngineNote) parserBinding.appendChild(controls.parserEngineNote)
+    const parserSourceGrid = make('div', 'ld-reset-grid')
+    parserSourceGrid.appendChild(field('Connection', inline(controls.parserConnection, controls.refreshParserSources)))
+    parserSourceGrid.appendChild(field('Model override', inline(controls.parserModel, controls.clearModelOverride), 'Leave empty to use the selected connection’s model.'))
+    parserSourceGrid.appendChild(field('Temperature', controls.parserTemperature, 'Sampling temperature for the parser model. Some models/providers require or strongly prefer a particular value.'))
+    parserBinding.appendChild(parserSourceGrid)
+    if (controls.modelOverrideNote) parserBinding.appendChild(controls.modelOverrideNote)
+    // Direct is a first-class illustration mode now, not a hidden Parser toggle.
+    // The old checkbox stays only in the legacy source markup; it is detached by
+    // the UI reset and no longer controls saved settings.
+    const animaContext = make('div', 'ld-anima-context-controls')
+    animaContext.style.marginTop = '9px'
+    const contextGrid = make('div', 'ld-reset-grid')
+    contextGrid.appendChild(field('Reference context', controls.parserContext))
+    contextGrid.appendChild(checkbox(controls.loom, 'Use latest <loomledger> as continuity reference'))
+    animaContext.appendChild(contextGrid)
+    addHelp(animaContext, 'Reference context resolves continuity; only the current story message supplies the illustrated moment.')
+    parserBinding.appendChild(animaContext)
+
+    const parserAdvanced = details('Advanced parser settings', 'Normally you should not need these.')
+    const parserInstructionLabel = make('span', 'ld-label ld-parser-instruction-label', 'Parser instruction')
+    parserAdvanced.body.appendChild(parserInstructionLabel)
+    if (controls.parserInstruction) parserAdvanced.body.appendChild(controls.parserInstruction)
+    if (controls.resetParser) parserAdvanced.body.appendChild(controls.resetParser)
+    const advancedGrid = make('div', 'ld-reset-grid')
+    advancedGrid.style.marginTop = '9px'
+    advancedGrid.appendChild(field('Maximum output tokens', controls.parserMaxTokens))
+    parserAdvanced.body.appendChild(advancedGrid)
+    parserAdvanced.body.appendChild(field('Parser request overrides (JSON)', controls.parserOverrides,
+      'Provider-specific escape hatch. Leave empty unless you know you need it.'))
+    parserBinding.appendChild(parserAdvanced.el)
+    parser.appendChild(parserBinding)
+
+    const storyQuality = document.createElement('textarea')
+    storyQuality.className = 'ld-story-quality'
+    storyQuality.rows = 2
+    storyQuality.placeholder = 'masterpiece, best quality, very aesthetic'
+    const storyPrefix = document.createElement('textarea')
+    storyPrefix.className = 'ld-story-prefix'
+    storyPrefix.rows = 2
+    storyPrefix.placeholder = 'Optional text/tags added before the compiled scene'
+    const storyNegative = document.createElement('textarea')
+    storyNegative.className = 'ld-story-negative'
+    storyNegative.rows = 2
+    storyNegative.placeholder = 'Story-wide negative prompt'
+    const storyBanned = document.createElement('textarea')
+    storyBanned.className = 'ld-story-banned'
+    storyBanned.rows = 2
+    storyBanned.placeholder = 'Tags the compiler should remove or avoid'
+    const storyAnchor = document.createElement('textarea')
+    storyAnchor.className = 'ld-story-scene-anchor'
+    storyAnchor.rows = 2
+    storyAnchor.placeholder = 'Optional starting location / recurring setting tags'
+    const storyBreak = document.createElement('input')
+    storyBreak.type = 'checkbox'
+    storyBreak.className = 'ld-story-break'
+
+    const promptCard = card('Story prompt defaults',
+      'These belong to Story now. Switching image models no longer swaps your characters or story prompt rules.')
+    promptCard.appendChild(field('Always include / quality tags', storyQuality))
+    promptCard.appendChild(field('Prompt prefix', storyPrefix))
+    promptCard.appendChild(field('Negative prompt', storyNegative))
+    promptCard.appendChild(field('Banned tags', storyBanned))
+    promptCard.appendChild(field('Scene anchor', storyAnchor, 'Starting/fallback location. LumiDraw can still update its scene memory as the story moves.'))
+    promptCard.appendChild(checkbox(storyBreak, 'Use BREAK separators when compiling supported prompts'))
+    prompting.appendChild(promptCard)
+
+    const inlineGuide = details('Inline mode guidance', 'Instructions given to the story model when Inline mode is active.')
+    if (controls.protocol) inlineGuide.body.appendChild(controls.protocol)
+    if (controls.resetProtocol) inlineGuide.body.appendChild(controls.resetProtocol)
+    prompting.appendChild(inlineGuide.el)
+
+    // The artist vocabulary was embedded in the old preset editor even though it is
+    // model/tooling knowledge rather than preset data. Move the existing nodes so
+    // their event handlers still bind to exactly the same elements.
+    const artistInput = $('.ld-artist-index')
+    if (artistInput) {
+      const artistStatus = $('.ld-artist-status')
+      const artistButtons = [
+        $('[data-act="artist-load"]'),
+        $('[data-act="artist-check"]'),
+        $('[data-act="artist-clear"]'),
+      ].filter(Boolean)
+      const artist = details('Anima artist index', 'Optional vocabulary checker for @artist tags.')
+      artist.body.appendChild(artistInput)
+      artist.body.appendChild(inline(...artistButtons))
+      if (artistStatus) artist.body.appendChild(artistStatus)
+      prompting.appendChild(artist.el)
+    }
+
+    const debugCard = card()
+    if (controls.debugTitle) debugCard.appendChild(controls.debugTitle)
+    else debugCard.appendChild(make('div', 'ld-subtitle ld-parser-debug-title', 'Last parser result'))
+    addHelp(debugCard, 'Raw parser/compiler output lives here so the normal Story setup stays readable.')
+    debugCard.appendChild(field('Final Draw Things prompt', controls.finalPrompt))
+    const parsedDetails = details('Parsed scene / parser reply')
+    if (controls.parsedScene) parsedDetails.body.appendChild(controls.parsedScene)
+    debugCard.appendChild(parsedDetails.el)
+    debug.appendChild(debugCard)
+    const dtCompat = details('Draw Things API compatibility', 'If Draw Things rejects a generation setting, LumiDraw remembers it here and omits it on later requests.')
+    dtCompat.body.appendChild(field('Rejected settings', inline(controls.rejectedKeys, controls.clearRejectedKeys)))
+    debug.appendChild(dtCompat.el)
+
+    storyForm.replaceChildren(storyRail, setup, cast, parser, prompting, debug)
+
+    let savedStoryTab = 'setup'
+    try { savedStoryTab = localStorage.getItem('lumidraw.storySection.v2') || 'setup' } catch { /* best effort */ }
+    storyRail._setResetTab(savedStoryTab)
+
+    // The preset selector used to live in Studio. Remove the card it came from.
+    if (oldStudioPresetCard) oldStudioPresetCard.remove()
+    const draftReset = $('[data-act="draft-reset"]')
+    if (draftReset) {
+      draftReset.textContent = 'Reset generation settings'
+      draftReset.title = 'Reload model/settings from the selected generation preset without replacing your Studio prompt text'
+    }
+    const draftSaveNew = $('[data-act="draft-save-new"]')
+    if (draftSaveNew) draftSaveNew.textContent = 'Save as generation preset'
+
+    // ---------- LIBRARY
+    const libraryForm = libraryView.querySelector('.ld-form-view')
+    const charList = $('.ld-charlib-list')
+    const personaList = $('.ld-persona-list')
+    const placesInput = $('.ld-places')
+    const charCard = charList ? charList.closest('.ld-card') : null
+    const personaCard = personaList ? personaList.closest('.ld-card') : null
+    const placesCard = placesInput ? placesInput.closest('.ld-card') : null
+    const sharedEditor = $('.ld-persona-editor')
+    const presetEditor = $('.ld-editor')
+    const presetList = $('.ld-preset-list')
+    const newPreset = $('[data-act="new-preset"]')
+    const presetManager = newPreset ? newPreset.closest('.ld-card') : null
+
+    if (charCard) {
+      const title = charCard.querySelector('.ld-subtitle')
+      const help = charCard.querySelector('.ld-help')
+      if (title) title.textContent = 'Characters'
+      if (help) help.textContent = 'Reusable character identities used by casts. They are not stored in generation presets.'
+    }
+    if (personaCard) {
+      const title = personaCard.querySelector('.ld-subtitle')
+      const help = personaCard.querySelector('.ld-help')
+      if (title) title.textContent = 'Personas'
+      if (help) help.textContent = 'Reusable identities for who you are playing. They belong to Story/casts, not generation presets.'
+    }
+    if (placesCard) {
+      const title = placesCard.querySelector('.ld-subtitle')
+      if (title) title.textContent = 'Places'
+    }
+    if (presetManager) {
+      const title = presetManager.querySelector('.ld-subtitle')
+      const help = presetManager.querySelector('.ld-help')
+      if (title) title.textContent = 'Generation presets'
+      if (help) help.textContent = 'A generation preset is only the image recipe: model, sampler, steps, dimensions, LoRAs, and Draw Things settings.'
+      if (newPreset) newPreset.textContent = '＋ New generation preset'
+    }
+    if (presetEditor) {
+      const title = presetEditor.querySelector('.ld-subtitle')
+      if (title) title.textContent = 'Generation preset'
+      const quality = presetEditor.querySelector('.ld-ed-quality')
+      const saveButton = presetEditor.querySelector('[data-act="ed-save"]')
+      const saveRow = saveButton ? saveButton.closest('.ld-row') : null
+      if (quality && saveRow) {
+        // Keep old inputs in the DOM for backwards-compatible editor code, but the
+        // new save path ignores them. This avoids breaking handlers while making
+        // the product model unambiguous.
+        let node = quality
+        while (node && node !== saveRow) {
+          const next = node.nextElementSibling
+          node.classList.add('ld-reset-hidden-legacy')
+          node = next
+        }
+        if (!presetEditor.querySelector('.ld-reset-generation-note')) {
+          const note = make('div', 'ld-help ld-reset-generation-note',
+            'Generation-only preset. Story prompting, cast, characters, personas, and places are managed outside this editor.')
+          presetEditor.insertBefore(note, saveRow)
+        }
+      }
+    }
+
+    const libRail = rail([
+      ['presets', 'Presets'],
+      ['characters', 'Characters'],
+      ['personas', 'Personas'],
+      ['places', 'Places'],
+    ], 'lumidraw.librarySection.v2', 'presets')
+    const libPresets = section('presets')
+    const libCharacters = section('characters')
+    const libPersonas = section('personas')
+    const libPlaces = section('places')
+    if (presetManager) libPresets.appendChild(presetManager)
+    if (presetList) libPresets.appendChild(presetList)
+    if (presetEditor) libPresets.appendChild(presetEditor)
+    if (charCard) libCharacters.appendChild(charCard)
+    if (personaCard) libPersonas.appendChild(personaCard)
+    if (placesCard) libPlaces.appendChild(placesCard)
+    libraryForm.replaceChildren(libRail, libPresets, libCharacters, libPersonas, libPlaces)
+    if (sharedEditor) {
+      libraryForm.appendChild(sharedEditor)
+      sharedEditor.style.display = 'none'
+    }
+    const originalLibSet = libRail._setResetTab
+    libRail._setResetTab = (name) => {
+      if (sharedEditor) sharedEditor.style.display = 'none'
+      originalLibSet(name)
+    }
+    for (const button of libRail.querySelectorAll('.ld-reset-tab')) {
+      button.addEventListener('click', () => { if (sharedEditor) sharedEditor.style.display = 'none' })
+    }
+    let savedLibraryTab = 'presets'
+    try { savedLibraryTab = localStorage.getItem('lumidraw.librarySection.v2') || 'presets' } catch { /* best effort */ }
+    libRail._setResetTab(savedLibraryTab)
+
+    // ---------- SETTINGS: infrastructure only.
+    const parserTab = $('.ld-settings-tab[data-settings-tab="parser"]')
+    if (parserTab) parserTab.remove()
+    const connectionTab = $('.ld-settings-tab[data-settings-tab="connection"]')
+    if (connectionTab) connectionTab.textContent = 'Connections'
+    const advancedTab = $('.ld-settings-tab[data-settings-tab="advanced"]')
+    if (advancedTab) advancedTab.textContent = 'Cloud & diagnostics'
+    const parserSettingsCard = $('.ld-card[data-settings-section="parser"]')
+    if (parserSettingsCard) parserSettingsCard.remove()
+    const saveConnections = $('[data-act="save-settings"]')
+    if (saveConnections) {
+      saveConnections.style.display = 'none'
+      const row = saveConnections.closest('.ld-section-actions')
+      if (row && !row.querySelector('.ld-reset-save-note')) {
+        row.appendChild(make('span', 'ld-reset-save-note', 'Connection changes save automatically.'))
+      }
+    }
+  }
+  applyUiResetV11()
+
   const launcher = $('.ld-launcher')
   const panel = $('.ld-panel')
   const fullscreenToggle = $('.ld-fullscreen-toggle')
@@ -1462,8 +1961,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (preset) {
       return {
         config: preset.config || {},
-        negativePrompt: preset.negativePrompt || '',
-        label: `chat preset “${preset.name}”`,
+        negativePrompt: $('.ld-negative') ? $('.ld-negative').value : '',
+        label: `generation preset “${preset.name}”`,
       }
     }
     if (syncedConfig) {
@@ -2204,6 +2703,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       promptName: $('.ld-persona-ed-promptname') ? $('.ld-persona-ed-promptname').value.trim() : '',
       countTag: $('.ld-persona-ed-count').value.trim(),
       subject: $('.ld-persona-ed-subject').value.trim(),
+      identityTags: $('.ld-persona-ed-identity') ? $('.ld-persona-ed-identity').value.trim() : '',
       appearanceTags: $('.ld-persona-ed-tags').value.trim(),
       defaultOutfitTags: $('.ld-persona-ed-outfit').value.trim(),
       defaultAppearanceState: $('.ld-persona-ed-default-state').value.trim(),
@@ -2223,6 +2723,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if ($('.ld-persona-ed-promptname')) $('.ld-persona-ed-promptname').value = value.promptName || ''
     $('.ld-persona-ed-count').value = value.countTag || ''
     $('.ld-persona-ed-subject').value = value.subject || ''
+    if ($('.ld-persona-ed-identity')) $('.ld-persona-ed-identity').value = value.identityTags || ''
     $('.ld-persona-ed-tags').value = value.appearanceTags || ''
     $('.ld-persona-ed-outfit').value = value.defaultOutfitTags || ''
     $('.ld-persona-ed-default-state').value = value.defaultAppearanceState || value.defaultForm || ''
@@ -2254,7 +2755,14 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       cancelButton.textContent = scan && scan.stage === 'cancelling' ? 'Cancelling…' : 'Cancel parser'
     }
     if (scanButton) scanButton.disabled = active
-    if (oldButton) oldButton.disabled = active || (($('.ld-mode') ? $('.ld-mode').value : settings.mode) !== 'parser')
+    // Direct is a rescanning mode too. openStoryPicker already accepts both —
+    // this gate was left behind when Direct was promoted from a checkbox to a
+    // mode, so the button it guards sat greyed out while the thing behind it
+    // worked perfectly.
+    if (oldButton) {
+      const modeNow = ($('.ld-mode') ? $('.ld-mode').value : settings.mode)
+      oldButton.disabled = active || (modeNow !== 'parser' && modeNow !== 'direct')
+    }
     if (!scan || !scan.startedAt) {
       stopScanElapsedTimer()
       return
@@ -2402,8 +2910,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   async function openStoryPicker() {
     const mode = $('.ld-mode') ? $('.ld-mode').value : settings.mode
-    if (mode !== 'parser') {
-      setStatus('.ld-gen-status', 'Choose Parser mode in the Story tab before rescanning an old message.', 'err')
+    if (mode !== 'parser' && mode !== 'direct') {
+      setStatus('.ld-gen-status', 'Choose Parser or Direct mode in the Story tab before rescanning an old message.', 'err')
       return
     }
     const picker = $('.ld-story-picker')
@@ -2910,8 +3418,8 @@ ${entry.prompt || ''}`.trim()
       if (!draftConfig || !draftDirty) {
         hydrateDraftFromSource({
           config: preset.config || {},
-          negativePrompt: preset.negativePrompt || '',
-          label: `chat preset “${preset.name}”`,
+          negativePrompt: $('.ld-negative') ? $('.ld-negative').value : '',
+          label: `generation preset “${preset.name}”`,
         }, { force: true })
       } else {
         setStatus('.ld-draft-status', `Chat preset changed to “${preset.name}”. Your temporary workspace was kept; use Reset workspace to load the preset.`)
@@ -3073,7 +3581,7 @@ ${entry.prompt || ''}`.trim()
   const SETTINGS_SECTION_KEY = 'lumidraw.settingsSection'
 
   function setSettingsSection(name, persist = true) {
-    const next = ['connection', 'parser', 'advanced'].includes(name) ? name : 'connection'
+    const next = ['connection', 'advanced'].includes(name) ? name : 'connection'
     for (const tab of dom.queryAll('.ld-settings-tab')) {
       tab.classList.toggle('ld-active', tab.getAttribute('data-settings-tab') === next)
     }
@@ -4218,15 +4726,6 @@ img[class*="inlineImage"] {
         name: activePreset,
         config: bundle.config,
         extra: existing.extra || null,
-        promptPrefix: existing.promptPrefix || '',
-        negativePrompt: bundle.negativePrompt,
-        qualityTags: existing.qualityTags || '',
-        characterTags: existing.characterTags || '',
-        personaTags: existing.personaTags || '',
-        characterProfile: existing.characterProfile || null,
-        personaProfile: existing.personaProfile || null,
-        personaLibraryId: existing.personaLibraryId || '',
-        bannedTags: existing.bannedTags || '',
       })
       presets = result.presets
       syncedConfig = cloneJson(bundle.config)
@@ -4269,19 +4768,6 @@ img[class*="inlineImage"] {
         name,
         config,
         extra: editorExtra,
-        promptPrefix: $('.ld-ed-prefix').value,
-        negativePrompt: $('.ld-ed-negative').value,
-        qualityTags: $('.ld-ed-quality').value,
-        characterTags: $('.ld-ed-chartags').value,
-        personaTags: $('.ld-ed-personatags').value,
-        characterProfile: editorProfile('character'),
-        personaProfile: editorProfile('persona'),
-        personaLibraryId: $('.ld-ed-persona-link').value || '',
-        characterLibraryId: $('.ld-ed-char-link').value || '',
-        castLibraryIds: [...editorCastIds],
-        bannedTags: $('.ld-ed-banned').value,
-        sceneAnchor: $('.ld-ed-scene-anchor').value,
-        useBreakSeparators: $('.ld-ed-break') ? $('.ld-ed-break').checked : false,
       })
       presets = res.presets
       if (editorOriginalName && editorOriginalName !== name) {
@@ -4453,6 +4939,7 @@ img[class*="inlineImage"] {
       parserEngine: $('.ld-parser-engine').value,
       parserConnection: $('.ld-parser-conn').value,
       parserModel: $('.ld-parser-model').value,
+      parserTemperature: $('.ld-parser-temperature') ? Number($('.ld-parser-temperature').value) : 0.2,
       parserRequestOverrides: $('.ld-parser-overrides') ? $('.ld-parser-overrides').value : '',
       parserMaxTokens: $('.ld-parser-maxtokens') ? Number($('.ld-parser-maxtokens').value) || 12000 : 12000,
       parserInstruction: $('.ld-parser-instr').value,
@@ -4460,13 +4947,19 @@ img[class*="inlineImage"] {
       maxImages: $('.ld-maximg').value,
       minImages: $('.ld-minimg').value,
       autoCharTags: $('.ld-chartags').checked,
-      directMode: $('.ld-direct-mode') ? $('.ld-direct-mode').checked : false,
+      directMode: $('.ld-mode') ? $('.ld-mode').value === 'direct' : false,
       chatLeads: $('.ld-chat-leads') ? $('.ld-chat-leads').checked : true,
       stripImageDirectives: $('.ld-strip-directives').checked,
       sizeChatImages: $('.ld-size-images') ? $('.ld-size-images').checked : false,
       chatImageWidth: $('.ld-image-width') ? Number($('.ld-image-width').value) || 500 : 500,
       parserContextMessages: $('.ld-parser-context').value,
       useLoomLedger: $('.ld-use-loom-ledger').checked,
+      storyQualityTags: $('.ld-story-quality') ? $('.ld-story-quality').value : '',
+      storyPromptPrefix: $('.ld-story-prefix') ? $('.ld-story-prefix').value : '',
+      storyNegativePrompt: $('.ld-story-negative') ? $('.ld-story-negative').value : '',
+      storyBannedTags: $('.ld-story-banned') ? $('.ld-story-banned').value : '',
+      storySceneAnchor: $('.ld-story-scene-anchor') ? $('.ld-story-scene-anchor').value : '',
+      storyUseBreakSeparators: $('.ld-story-break') ? $('.ld-story-break').checked : false,
     })
     settings = res.settings
     updateScanLabel()
@@ -4481,39 +4974,57 @@ img[class*="inlineImage"] {
   }
 
   function updateParserEngineUI() {
+    const mode = $('.ld-mode') ? $('.ld-mode').value : (settings.mode || 'off')
+    const direct = mode === 'direct'
     const engine = $('.ld-parser-engine') ? $('.ld-parser-engine').value : (settings.parserEngine || 'legacy')
     const note = $('.ld-parser-engine-note')
     const label = $('.ld-parser-instruction-label')
     const title = $('.ld-parser-debug-title')
-    if (note) note.textContent = engine === 'anima'
-      ? 'Experimental: structured JSON uses the current message plus optional reference context and Loom continuity, then LumiDraw keeps the final prompt mostly tags with a few ownership-safe sentences.'
-      : 'Known-good fallback: version 0.13-style instruction-only parsing. The returned tag prompt goes directly to Draw Things without identity JSON or the Anima compiler.'
-    if (label) label.textContent = engine === 'anima' ? 'Anima hybrid scene-extraction guidance' : 'Legacy parser instruction'
-    if (title) title.textContent = engine === 'anima' ? 'Last Anima hybrid compile' : 'Last legacy parser result'
+    const engineField = $('.ld-parser-engine-field')
+    const instruction = $('.ld-parser-instr')
+    const resetInstruction = $('[data-act="reset-parser"]')
+    if (engineField) engineField.style.display = direct ? 'none' : ''
+    if (note) note.textContent = direct
+      ? 'Direct mode has its own built-in parser rules: the parser receives character sheets, wardrobe, place/context and writes the finished image prompt. LumiDraw does not run the scene compiler afterward.'
+      : engine === 'anima'
+        ? 'Structured JSON uses the current message plus optional reference context and Loom continuity, then LumiDraw compiles the final prompt.'
+        : 'Known-good fallback: instruction-only parsing. The returned tag prompt goes directly to Draw Things without identity JSON or the Anima compiler.'
+    if (label) {
+      label.textContent = engine === 'anima' ? 'Anima hybrid scene-extraction guidance' : 'Legacy parser instruction'
+      label.style.display = direct ? 'none' : ''
+    }
+    if (instruction) instruction.style.display = direct ? 'none' : ''
+    if (resetInstruction) resetInstruction.style.display = direct ? 'none' : ''
+    if (title) title.textContent = direct
+      ? 'Last Direct prompt'
+      : engine === 'anima' ? 'Last Anima hybrid compile' : 'Last legacy parser result'
     const contextControls = $('.ld-anima-context-controls')
-    if (contextControls) contextControls.style.display = engine === 'anima' ? '' : 'none'
+    if (contextControls) contextControls.style.display = (direct || engine === 'anima') ? '' : 'none'
   }
 
   function updateScanLabel() {
     const btn = $('[data-act="scan"]')
     const oldBtn = $('[data-act="scan-old"]')
     const mode = $('.ld-mode') ? $('.ld-mode').value : 'off'
+    const parserDriven = mode === 'parser' || mode === 'direct'
     const engine = $('.ld-parser-engine') ? $('.ld-parser-engine').value : 'legacy'
     if (btn) {
       btn.textContent = mode === 'off'
         ? 'Scan latest 📖 (mode: Off — set in Story)'
-        : mode === 'parser'
-          ? `Scan latest 📖 (${engine === 'anima' ? 'Anima hybrid' : 'Legacy'})`
-          : `Scan latest 📖 (${mode})`
+        : mode === 'direct'
+          ? 'Scan latest 📖 (Direct)'
+          : mode === 'parser'
+            ? `Scan latest 📖 (${engine === 'anima' ? 'Anima hybrid' : 'Legacy'})`
+            : `Scan latest 📖 (${mode})`
     }
     if (oldBtn) {
-      oldBtn.disabled = mode !== 'parser'
-      oldBtn.title = mode === 'parser'
-        ? 'Choose any assistant message in the current chat and run the selected Parser engine on it'
-        : 'Old-message rescanning is available when Story illustrations is set to Parser'
+      oldBtn.disabled = !parserDriven
+      oldBtn.title = parserDriven
+        ? `Choose any assistant message in the current chat and run ${mode === 'direct' ? 'Direct mode' : 'the selected Parser engine'} on it`
+        : 'Old-message rescanning is available in Parser or Direct mode'
     }
     const bindingControls = $('.ld-parser-binding-controls')
-    if (bindingControls) bindingControls.style.display = mode === 'parser' ? '' : 'none'
+    if (bindingControls) bindingControls.style.display = parserDriven ? '' : 'none'
     updateParserEngineUI()
   }
 
@@ -4575,7 +5086,7 @@ img[class*="inlineImage"] {
       pushSettings('Settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
     }, 900)
   }
-  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-overrides', '.ld-parser-maxtokens', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port', '.ld-cloud-host', '.ld-cloud-port', '.ld-cloud-model']) {
+  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-temperature', '.ld-parser-overrides', '.ld-parser-maxtokens', '.ld-story-quality', '.ld-story-prefix', '.ld-story-negative', '.ld-story-banned', '.ld-story-scene-anchor', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port', '.ld-cloud-host', '.ld-cloud-port', '.ld-cloud-model']) {
     const el = $(sel)
     if (el) el.addEventListener('input', () => {
       clearTimeout(settingsSaveTimer)
@@ -4586,7 +5097,7 @@ img[class*="inlineImage"] {
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-direct-mode', '.ld-chat-leads']) {
+  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-parser-conn') {
@@ -4851,7 +5362,8 @@ img[class*="inlineImage"] {
       $('.ld-maximg').value = settings.maxImages || 2
       $('.ld-minimg').value = settings.minImages || 0
       $('.ld-chartags').checked = settings.autoCharTags !== false
-      if ($('.ld-direct-mode')) $('.ld-direct-mode').checked = settings.directMode === true
+      // Direct mode is represented by the main mode selector. The backend
+      // still mirrors directMode for compatibility with older saved settings.
       if ($('.ld-chat-leads')) $('.ld-chat-leads').checked = settings.chatLeads !== false
       $('.ld-strip-directives').checked = settings.stripImageDirectives !== false
       if ($('.ld-size-images')) {
@@ -4869,12 +5381,19 @@ img[class*="inlineImage"] {
       } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
+      if ($('.ld-parser-temperature')) $('.ld-parser-temperature').value = Number.isFinite(Number(settings.parserTemperature)) ? Number(settings.parserTemperature) : 0.2
       if ($('.ld-parser-overrides')) $('.ld-parser-overrides').value = settings.parserRequestOverrides || ''
       if ($('.ld-parser-maxtokens')) $('.ld-parser-maxtokens').value = settings.parserMaxTokens || 12000
       refreshModelOverrideNote()
       refreshRejectedKeys()
       $('.ld-parser-instr').value = settings.parserInstruction || parserDefaultFor(settings.parserEngine || 'legacy')
       $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
+      if ($('.ld-story-quality')) $('.ld-story-quality').value = settings.storyQualityTags || ''
+      if ($('.ld-story-prefix')) $('.ld-story-prefix').value = settings.storyPromptPrefix || ''
+      if ($('.ld-story-negative')) $('.ld-story-negative').value = settings.storyNegativePrompt || ''
+      if ($('.ld-story-banned')) $('.ld-story-banned').value = settings.storyBannedTags || ''
+      if ($('.ld-story-scene-anchor')) $('.ld-story-scene-anchor').value = settings.storySceneAnchor || ''
+      if ($('.ld-story-break')) $('.ld-story-break').checked = settings.storyUseBreakSeparators === true
       await loadCatalog()
       if (settings.activePreset) { activePreset = settings.activePreset }
       if (activePreset) {
@@ -4902,8 +5421,8 @@ img[class*="inlineImage"] {
         if (p) {
           hydrateDraftFromSource({
             config: p.config || {},
-            negativePrompt: p.negativePrompt || '',
-            label: `chat preset “${p.name}”`,
+            negativePrompt: $('.ld-negative') ? $('.ld-negative').value : '',
+            label: `generation preset “${p.name}”`,
           }, { force: true })
         }
       }
