@@ -1,61 +1,79 @@
-# LumiDraw Studio 1.1.0 — no browser required
+# LumiDraw Studio 1.2.0 — why the characters swap places
 
-## First, a correction to what I told you
+Not the image models. Two of these are LumiDraw's fault — the parser broke its
+own rules and nothing checked.
 
-**You never needed a browser at home.** The extension's frontend runs in whatever
-browser you're actually using — your work one. Home only ever needed the server.
-I said "auto-illustration only runs while the Lumiverse page is open" and left
-you to work out *which* page. That was sloppy.
+## 1. The frame and Elliot were in the same block
 
-## But the real thing you're asking for was broken
+Count the BREAKs in that prompt:
 
-LumiDraw's backend registers its **own** `GENERATION_ENDED` trigger. That's the
-whole point of a server-side fallback: illustrate with no browser anywhere.
-
-**It had never fired. Not once, in any install.**
-
-```js
-const uid = payload.userId || eventMessage.userId || lastUserId
-if (!uid || !messageId || !chatId) return
+```
+block 0: 25 tags · count tags: [2girls, 1boy, 1boy]
+block 1: 15 tags · count tags: [1girl]
+block 2: 16 tags · count tags: [1girl]
 ```
 
-`lastUserId` was assigned in exactly one place — inside `onFrontendMessage`. So
-the backend couldn't name the user until a **frontend connected**, which is
-precisely the dependency the fallback exists to remove. And it reset to `null` on
-every extension restart, so even a working install lost it.
+Three BREAKs, but **none between the shared frame and the first character.** The
+scene description and Elliot's entire run are one block — a block that declares
+`1boy` twice and announces `2girls` alongside him.
 
-Then it `return`ed with no log at all. A trigger that gives up without a word
-can't be diagnosed, and this one had been giving up silently since it was
-written.
+Anima binds a BREAK-delimited block as **one subject group**. So Elliot's
+features sit in a block that says there are two girls present, and
+`camera facing doorway` / `wide shot` bind to *him* rather than to the camera.
+After that the model is guessing, and guessing is what you're seeing.
 
-## The fix
+**Fixed.** The rule needs no judgement: a block may open with count tags — that's
+the shared frame — but the first count tag appearing *after* a non-count tag
+starts a new subject, and a new subject needs a BREAK. An already-correct prompt
+comes through byte-identical.
 
-The user id is now **remembered on disk**. One browser connection, ever — then
-the backend illustrates on its own, across restarts, with nothing open. You'll
-see:
+## 2. Names are not tags
 
-> `remembered user id restored — automatic illustration can run without a browser
-> open`
+`Elliot`, `Fanny`, `Hannah`. Anima has never heard of them. The direct-mode rules
+already say *"NEVER … a character's name as a tag"* — the parser wrote them
+anyway and nothing enforced it.
 
-And when it genuinely can't, it says so instead of vanishing:
+At best a name is noise competing with the description. At worst it pulls toward
+whichever booru character happens to share it, which is its own source of
+"why does she look wrong".
 
-> `backend GENERATION_ENDED ignored — missing a user id (no browser has ever
-> connected to this install)`
+**Fixed.** Names are matched on the whole tag, never as a substring, so `jason
+mask` survives while `Jason` doesn't.
 
-## Why nobody caught this
+## 3. Three characters — this one I won't fix for you
 
-The host mock stubbed lifecycle events to a no-op, so **no test in this suite had
-ever fired one.** The backend's automatic trigger — arguably the most important
-path in the extension — had zero coverage. The mock can fire events now, and
-`headless.mjs` drives the real handler with no frontend involved at all.
+The rules say **at most two**, and they say it because that's where this model
+falls apart. Your prompt has three. That alone would cause swapping even with
+the two fixes above.
 
-That's the second time this project a whole capability turned out to be untested
-because the mock quietly answered nothing (the first was `spindle.chats`).
+LumiDraw now warns instead of trimming:
+
+> `3 characters in one image. Anima reliably falls apart past two — expect
+> features and positions to swap between them.`
+
+Which character to lose is your call, not mine, and dropping one silently would
+be worse than a muddled picture you can see is muddled. If Hannah in the doorway
+is the beat, the strongest version is probably her and one other.
+
+## Also worth knowing
+
+Your scene block says `couch` while Elliot is `lying on bed`. The model has to
+reconcile two pieces of furniture, and that muddle compounds the positioning
+problem. That one's the parser reading the passage, not a structural bug.
 
 ## Verification
 
-**62 suites · 2,921 assertions · all green.** New suite: `headless.mjs`.
+**62 suites · 2,951 assertions · all green.**
 
-Mutations caught: back to memory-only (2 failures — the original bug), the id
-never written to disk (3), the silent return restored (2), a failed generation
-illustrating anyway (1).
+Mutations caught: the fused block left fused (3 failures), names matched as
+substrings (1), an anchor that is itself a count tag deleting every count tag (1).
+
+A fifth mutation **blew the stack instead of failing an assertion** — the split
+recurses on model output and was unbounded if the guard weakened. That's a crash
+pretending to be a caught bug, so the recursion is capped now and there's a test
+for forty fused subjects.
+
+One existing assertion also failed on `indexOf` returning -1 after I moved the
+line it anchored to. That's the **fourth** time -1 has produced a meaningless
+ordering result in this suite, so it now asserts both anchors exist before
+comparing them.
