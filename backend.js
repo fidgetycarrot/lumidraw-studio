@@ -790,7 +790,7 @@ async function rememberSceneState(chatId, presetName, { setting = [], lighting =
     // they were last seen wearing, which is the whole point of remembering.
     const mergedOutfits = { ...(previous.outfits || {}) }
     for (const [ref, worn] of Object.entries(wardrobe || {})) {
-      const items = uniqueStrings(worn || []).slice(0, 6)
+      const items = uniqueStrings(worn || []).slice(0, 12)
       if (items.length) mergedOutfits[ref] = items
     }
     // Merged for the same reason as outfits: someone offstage this scene is
@@ -1880,7 +1880,9 @@ function buildAnimaParserInput(messages, targetIndex, target, settings, sceneSta
     // The wardrobe sentence is only worth its tokens when there is a wardrobe. A
     // scene with nothing but a location should not pay for advice about clothes.
     const wardrobeRule = (sceneState && (sceneState.outfits || []).length)
-      ? '\nAttire is kept for you. OMIT a subject\'s outfit array entirely when the CURRENT PASSAGE does not change it — silence means unchanged, and the wardrobe line above is used. Fill it in only when the passage changes, removes, or adds clothing, or when a time-skip ("later", "the next morning", "after dressing") means they would have changed. When you do fill it in, give the WHOLE outfit, not the one garment the passage mentioned. Never re-describe clothing that has not changed: a re-wording reads as a costume change to the image model. If the CURRENT PASSAGE clearly shows different clothes — a change, not a re-wording — report the passage\'s version; your report outranks the wardrobe line.'
+      ? (settings.mode === 'direct' || settings.directMode === true
+        ? '\nAttire is kept for you. Each clothing line above is what that character is wearing NOW — copy it exactly unless the CURRENT PASSAGE changes, removes, or adds clothing (a time-skip counts). When it changes, report the complete new outfit in "outfits". Never re-word unchanged clothing: a re-wording reads as a costume change.'
+        : '\nAttire is kept for you. OMIT a subject\'s outfit array entirely when the CURRENT PASSAGE does not change it — silence means unchanged, and the wardrobe line above is used. Fill it in only when the passage changes, removes, or adds clothing, or when a time-skip ("later", "the next morning", "after dressing") means they would have changed. When you do fill it in, give the WHOLE outfit, not the one garment the passage mentioned. Never re-describe clothing that has not changed: a re-wording reads as a costume change to the image model. If the CURRENT PASSAGE clearly shows different clothes — a change, not a re-wording — report the passage\'s version; your report outranks the wardrobe line.')
       : ''
     sections.push('----- ESTABLISHED SCENE STATE — AUTHORITATIVE -----\n' +
       'This is where the story currently is. Use it for setting and lighting unless the CURRENT PASSAGE states that the characters moved or the light changed. Never invent a different place, and never describe a location that appears nowhere in this request.' +
@@ -6031,7 +6033,7 @@ function isPovStagingCue(value) {
 const GARMENT_RE = /\b(?:shirt|blouse|dress|skirt|trousers|pants|jeans|shorts|coat|jacket|cloak|cape|capelet|robe|gown|tunic|sweater|hoodie|vest|corset|bodice|apron|uniform|armou?r|helmet|hood|hat|cap|scarf|tie|belt|glove|gloves|mitten|sock|socks|stocking|stockings|pantyhose|tights|shoe|shoes|boot|boots|sandal|sandals|heels|lingerie|bra|panties|underwear|briefs|thong|swimsuit|bikini|kimono|yukata|haori|sash|obi|collar|choker|necklace|earring|earrings|bracelet|ring|glasses|goggles|mask|veil|crown|tiara|headband|ribbon|bow|jewelry|clothes|clothing|outfit|garment|leotard|bodysuit|overalls|jumpsuit|nightgown|pyjamas|pajamas|towel|blanket|harness|strap|straps)\b/i
 
 // Bare-state words are legitimate outfit values even though no garment is named.
-const BARE_STATE_RE = /^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs|bare shoulders|undressed|dressed|clothed|fully clothed|partially clothed|disheveled clothes|torn clothes|open shirt|wet clothes|bloody clothes)$/i
+const BARE_STATE_RE = /^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs|bare shoulders|no shoes|no pants|no bottoms|no shirt|no top|no underwear|no panties|no bra|undressed|dressed|clothed|fully clothed|partially clothed|disheveled clothes|torn clothes|open shirt|wet clothes|bloody clothes)$/i
 
 const BODY_PART_RE = /\b(?:hand|hands|thumb|finger|fingers|palm|wrist|arm|arms|forearm|forearms|upper arm|elbow|shoulder|shoulders|jaw|chin|face|cheek|cheeks|eye|eyes|mouth|lip|lips|neck|throat|chest|torso|abdomen|stomach|back|waist|hip|hips|thigh|thighs|calf|shin|knee|knees|leg|legs|ankle|foot|feet|toe|toes|head|forehead|hair|skin|tail|ear|ears|muzzle|snout|fur|claw|claws|paw|paws|wound|scar|bite|bruise)\b/i
 
@@ -7829,14 +7831,7 @@ const SUBJECT_BREAK_MARK = '\u0000SUBJECT_BREAK'
 // behind, the identity lock in the middle, send.
 async function runDirectImages(images, ctx) {
   const { preset, profiles, userId, chatId, scan, rawReply, parserInput, target } = ctx
-  // Direct mode still leads with your preset's quality tags, so an artist typo in
-  // them fails exactly the same silent way. Same check, both pipelines.
   await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
-  // Built here rather than passed in: `origin` is assembled at the upload site in
-  // the compiler path and does not exist this early. Passing a name that is not
-  // in scope is how the first wiring attempt threw `origin is not defined` on the
-  // very first real scan — caught by driving it through the handler rather than
-  // reading the code and assuming.
   const origin = {
     messageId: String((target && target.id) || ''),
     chatId: String(chatId || ''),
@@ -7849,51 +7844,65 @@ async function runDirectImages(images, ctx) {
   const traceLines = []
   const trace = (label, status, detail) => traceLines.push({ label, status, detail })
 
-  for (let index = 0; index < images.length; index++) {
+  // Anchors do not have to come back in passage order. Sort before anything is
+  // numbered so image 1 really is the first moment in the passage.
+  const passage = (parserInput && parserInput.currentPassage) || ''
+  const ordered = orderScenesByPassage(images, passage)
+  const grounding = [passage, (parserInput && parserInput.contextPreview) || ''].filter(Boolean).join('\n')
+
+  for (let index = 0; index < ordered.length; index++) {
     assertStoryScanActive(scan)
-    const image = images[index]
-    // THE WATCHDOG. "compiling" is budgeted at 60 seconds because in the compiler
-    // path it is a fast local operation — the generate step moves the stage to
-    // 'generating' first. Direct mode did the whole run, image included, while
-    // the stage still said 'compiling', so an 80-second generation on a laptop
-    // was killed by a timer meant for string manipulation.
+    const image = ordered[index]
     setStoryScanStage(scan, 'generating',
-      `Sending image ${index + 1} of ${images.length} to Draw Things.`)
-    // Names come out BEFORE the lock, so the lock's presence test reads tags
-    // rather than a name that was about to be deleted.
+      `Sending image ${index + 1} of ${ordered.length} to Draw Things.`)
     const named = stripSubjectNames(image.prompt, profiles)
     if (named.removed.length) {
       trace('character names', 'removed', named.removed.join(', ') + ' — Anima does not know them')
-      spindle.log.info('[lumidraw] direct · removed character name(s) from the prompt: ' +
-        named.removed.join(', ') + ' — a name is not a tag, and at worst it pulls toward ' +
-        'whichever booru character shares it')
+      spindle.log.info('[lumidraw] direct · removed character name(s) from the prompt: ' + named.removed.join(', '))
     }
-    const locked = applyIdentityLock(named.prompt, profiles, trace)
-    const banned = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
-    const body = banned.join(', ').replace(/\s*,\s*BREAK\s*,\s*/g, ' BREAK ').trim()
-    // The preset's own quality tags still lead — they are the author's, and they
-    // are the one part of the prompt that should be identical in every image.
-    const prompt = joinPromptParts([preset.qualityTags, prefix, body])
+    let body = named.prompt
+    const locked = applyIdentityLock(body, profiles, trace)
+    body = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
+      .join(', ').replace(/\s*,\s*BREAK\s*,\s*/g, ' BREAK ').replace(/\s{2,}/g, ' ').trim()
+
+    // Rating and the two narrow anatomy/censorship defences occupy fixed slots;
+    // Direct's authored body remains otherwise intact.
+    const defences = directDefences(body, profiles, image.rating)
+    if (defences.notes.length) {
+      trace('direct defences', 'applied',
+        defences.notes.join(' · ') + (defences.negatives.length ? ` · negatives: ${defences.negatives.join(', ')}` : ''))
+      spindle.log.info('[lumidraw] direct defences · ' + defences.notes.join(' · ') +
+        (defences.negatives.length ? ` · negatives: ${defences.negatives.join(', ')}` : ''))
+    }
+    const header = reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), image.rating)
+    const prompt = joinPromptParts([header, image.rating || '', ...defences.positive, body])
+    const negativePrompt = negativeWith(preset.negativePrompt || '', defences.negatives)
+    const detrapped = stripSubwordTraps(prompt)
+    for (const hit of detrapped.hits) {
+      trace('subword trap', 'applied', `removed ${hit.words.join(', ')} — ${hit.why}`)
+    }
+    const finalPrompt = detrapped.text
     trace('direct prompt', 'applied',
-      `${image.prompt.length} chars from the parser, sent as ${prompt.length}`)
+      `${image.prompt.length} chars from the parser, sent as ${finalPrompt.length}` +
+      (image.rating ? ` · rating ${image.rating}` : ' · no rating given'))
 
     const dims = aspectDims(preset.config, image.aspect)
     const entry = await generateAndUpload({
-      prompt,
-      negativePrompt: preset.negativePrompt || '',
+      prompt: finalPrompt,
+      negativePrompt,
       config: preset.config,
       extra: preset.extra,
       dims,
-      origin: { ...origin, mode: 'direct', alt: markdownAltText(prompt) },
-      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, aspect: image.aspect } },
+      origin: { ...origin, mode: 'direct', alt: markdownAltText(finalPrompt) },
+      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, aspect: image.aspect, rating: image.rating } },
     }, userId, scan)
-    results.push({ ok: true, entry, anchor: image.anchor, prompt })
+    results.push({ ok: true, entry, anchor: image.anchor, prompt: finalPrompt })
     if (entry && entry.images && entry.images[0] && target && target.id) {
       placements.push(await placeGeneratedStoryImage(userId, {
         chatId,
         messageId: String(target.id),
         entry,
-        alt: prompt,
+        alt: finalPrompt,
         dims,
         anchor: image.anchor,
         source: 'direct',
@@ -7901,16 +7910,18 @@ async function runDirectImages(images, ctx) {
     }
   }
 
-  // 1.3.3: placement is extension state, not message markup. Lumiverse keeps
-  // injected extension DOM stable across virtualized row remounts, so changing
-  // a story image no longer rewrites the assistant message or forces the row to
-  // rebuild just to display a picture.
+  // What the parser explicitly says changed becomes state for the next image.
+  try {
+    await applyDirectContinuity(ordered, { profiles, chatId, presetName: preset.name, grounding })
+  } catch (error) {
+    spindle.log.warn('[lumidraw] direct · could not record continuity: ' + error.message)
+  }
+
   setStoryScanStage(scan, 'inserting', 'Mounting generated images in the story message.')
   if (target && target.id) {
     await markProcessed(target.id, target.content)
     spindle.log.info(`[lumidraw] direct mode registered ${placements.length} native image mount(s) for the story message`)
   }
-
 
   await saveStoryDebug({
     mode: 'direct',
@@ -7925,9 +7936,10 @@ async function runDirectImages(images, ctx) {
     ledgerFound: parserInput.ledgerFound,
     trace: traceLines,
   })
-  spindle.log.info(`[lumidraw] direct mode produced ${results.length} image(s); the compiler did not run`)
+  spindle.log.info(`[lumidraw] direct mode produced ${results.length} image(s); parser body stayed direct, continuity/defences were mechanical`)
   return { mode: 'direct', processed: results.length, results, messageId: target && target.id }
 }
+
 
 // Tags that describe a BODY, not a garment. Kept explicit and short rather than
 // derived from the garment table: `garmentZone` returns "" both for `midriff` and
@@ -7936,111 +7948,157 @@ const BODY_STATE_TAGS = new Set([
   'bulge', 'midriff', 'navel', 'cleavage', 'collarbone', 'sideboob', 'underboob',
   'cameltoe', 'nipples', 'abs', 'toned', 'thighs', 'thick thighs', 'armpits',
   'bare shoulders', 'bare legs', 'bare arms', 'exposed skin', 'skindentation',
-  'sweat', 'blush', 'barefoot', 'no shoes',
+  'sweat', 'blush', 'barefoot', 'bare feet', 'no shoes', 'nude', 'naked',
+  'topless', 'bottomless', 'shirtless', 'undressed', 'no pants', 'no bottoms',
+  'no shirt', 'no top', 'no underwear', 'no panties', 'no bra',
 ])
 
 const DIRECT_RULES = `
-You are writing the FINAL image prompt. Do not describe the scene in prose and
-do not return a scene graph — return the prompt itself as the finished prompt.
+You write the FINAL prompt for Anima, an image model trained on Danbooru tags.
+LumiDraw does not edit, reorder, or second-guess your prompt — what you write
+is what is drawn — so these rules are the whole job.
 
-FORMAT — return ONLY this JSON, compact, no markdown:
-{"images":[{"anchor":"5-12 exact consecutive words copied from the CURRENT PASSAGE","prompt":"the finished prompt","aspect":"3:4|4:3|1:1|16:9|9:16"}]}
+OUTPUT — only this JSON, compact, no markdown, no commentary:
+{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","rating":"safe|sensitive|nsfw|explicit","prompt":"the finished prompt","aspect":"3:4|4:3|1:1|16:9|9:16","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
+Omit "setting" and "outfits" entirely when nothing has changed.
 
-WRITING THE PROMPT:
-- AT MOST TWO characters. Three or more is where this model falls apart, so
-  choose the two whose moment carries the scene and leave the rest out. Fewer
-  people is a better picture, not a less faithful one.
-- Before writing the prompt, silently resolve each visible character into
-  exactly one identity, one anatomy state, one clothing state, one pose, and
-  one primary action. Resolve contradictions before output. Do not output this
-  planning.
-- Open with the shared frame: overall count tags, setting, time, camera
-  framing. Then write one contiguous run per visible character, separated by
-  " BREAK ". Inside each character run: count tag, identity, anatomy,
-  clothing, action, expression. Never mention one character inside another's
-  run, and do not mention the same character again later.
-- Prefer common Danbooru tags and short comma-separated tag-like phrases. When a
-  crucial visible fact has no good common tag, use a BRIEF natural-language
-  phrase rather than dropping the fact entirely.
-- Copy visible, stable identity traits faithfully: body, hair, eyes, species,
-  and permanent features. The CHARACTER SHEET is the source of truth for who the
-  person is. "ALWAYS INCLUDE" traits are mandatory when visible and applicable.
-- Character-specific anatomy must stay inside that character's own block, never
-  in the shared/global scene tags. This is especially important for traits like
-  futanari, penis, vulva, breasts, flat chest, bulge, or unusual body features.
-  If Fanny is futanari, "futanari" and "penis" belong in Fanny's block.
-- WARDROBE IS PERSISTENT STORY STATE. Use this precedence exactly:
-  1) if the CURRENT PASSAGE clearly changes clothing, follow the passage;
-  2) otherwise keep the CURRENT WARDROBE unchanged;
-  3) if there is no current wardrobe, use any EARLIER CLOTHING MENTIONS;
-  4) only then fall back to the DEFAULT OUTFIT.
-  Silence means unchanged — do NOT reset to defaults just because clothing has
-  not been mentioned recently.
-- When the passage changes clothing, change only what the passage actually
-  changes and preserve the garments that obviously remain worn.
-- Do NOT invent extra garments. If someone is in nothing but an oversized shirt,
-  that is the whole outfit — say so with explicit tags like "no pants",
-  "bottomless", or "barefoot" rather than quietly adding jeans or shoes.
-- Body facts are not garments. "bulge", "midriff", "cleavage", "navel" describe
-  the body showing through or past clothing — never write them as something worn.
-- Pick the single clearest drawable moment and preserve the important visual
-  relationship: who faces whom, who touches whom, what is being held, and where
-  the action occurs.
-- One clear action. Not three.
+CHOOSING THE MOMENT
+- Illustrate only the CURRENT PASSAGE. Prior context resolves who and where;
+  it never supplies the moment.
+- Pick the single clearest drawable beat. One clear action, not three.
 
-NEVER: prose paragraphs, invented tags, reasoning text, self-corrections left in
-place, contradictory duplicates, a character's name as a tag, or anything from
-the banned list.
+PROMPT SHAPE — exactly this order:
+1. Count tags for everyone in frame ("1girl, 1boy").
+2. ONE scene sentence in plain words: who does what to whom, the geometry
+   stated once. In explicit scenes use the clinical word (fellatio, penis),
+   never a euphemism; in safe or sensitive scenes never name a sexual act. No
+   appearance, clothing, or scenery in this sentence. Do not write the rating
+   into the prompt — LumiDraw places it from your "rating" field.
+3. Camera, setting, lighting as short tags. Use trained framing words only:
+   portrait, upper body, cowboy shot, full body, wide shot; from above, from
+   below, from side, from behind, from front; dutch angle, pov. Choose a frame
+   that includes everything the sentence depends on — a hip-level act is not a
+   portrait — but inside a vehicle or other tight interior, never wider than
+   cowboy shot.
+4. " BREAK ", then one run per character. Each run: count tag, IDENTITY ANCHOR
+   copied exactly, anatomy (per the rule below), clothing, pose, action,
+   expression. One character's traits never appear inside another's run.
+
+THE CHARACTER SHEETS ARE PASTE-EXACT TEXT, NOT NOTES.
+- Copy each identity anchor and clothing run character-for-character. Do not
+  paraphrase, reorder, complete, or improve them, and do not drop a trait
+  because the passage failed to repeat it. What the sheet states is true in
+  every image.
+- Never invent appearance. A person the sheet does not cover is described from
+  the passage alone, briefly.
+- No character names anywhere in the prompt. In the scene sentence use "she",
+  "he", "they" — or a two-word visual label ("the taller girl") when a pronoun
+  would be ambiguous.
+- AT MOST TWO characters per image. Three or more is where this model swaps
+  faces, bodies, and clothes; choose the two whose moment carries the scene.
+
+ANATOMY
+- ALWAYS INCLUDE traits are part of the identity anchor and appear in every
+  image of that character, at every rating.
+- SAVED ANATOMY (penis, testicles, ...) is included when the rating is nsfw or
+  explicit AND the character is nude or the passage depicts it. It stays inside
+  its owner's run, immediately after the identity anchor.
+- Never give a character anatomy the sheet does not list, and never substitute
+  one set for another. A character whose sheet says futanari is drawn
+  futanari — with no female-genital tags — in every image where her anatomy
+  appears.
+
+WARDROBE — persistent story state, in this precedence:
+1) a change in the CURRENT PASSAGE wins;
+2) otherwise the sheet's CURRENT CLOTHING, copied exactly;
+3) otherwise EARLIER CLOTHING MENTIONS;
+4) otherwise DEFAULT OUTFIT.
+Silence means unchanged — never reset to defaults because clothing has not been
+mentioned recently.
+- A change means writing the COMPLETE new outfit in the run AND in "outfits",
+  keyed by the exact sheet name: every garment still worn, not just the one
+  thing the passage named. Report "nude" rather than an empty list when
+  everything came off.
+- Clothing coming off IS a change. If it leaves the body and you stay silent,
+  it goes back on next image.
+- Never invent garments. Someone in nothing but an oversized shirt is
+  "no pants, barefoot" — say so instead of quietly adding jeans or shoes.
+- Body states (bulge, midriff, cleavage, navel) are not garments.
+
+SETTING — when the passage moves the characters somewhere new, put the new
+location's tags in "setting" so LumiDraw remembers the move. Omit it when they
+have not moved.
+
+RATING is the Danbooru rating of the PICTURE, not the mood of the story:
+safe = nothing suggestive; sensitive = suggestive, no nudity; nsfw = nudity or
+overt sexual context; explicit = a sexual act or visible genitals.
+
+NEVER: prose paragraphs beyond the one scene sentence, reasoning or
+self-corrections ("no wait"), contradictory duplicates, invented tags, a
+character's name as a tag, or anything from the banned list.
 `
 
 // The context the parser needs to write a good prompt, in the plainest form
 // that survives a language model reading it. This is what LumiDraw is FOR now:
 // knowing who is in this chat, what they were last seen wearing, where they are.
+// Build the identity run once from the locked profile. The count tag is NOT
+// part of this anchor because the Direct prompt grammar already places a count
+// tag immediately before it in each character block. Keeping it out avoids
+// accidental `1girl, 1girl, ...` duplication when the parser copies exactly.
+function directAnchorFor(profile) {
+  const declared = Array.isArray(profile.identityTags)
+    ? profile.identityTags
+    : String(profile.identityTags || '').split(',')
+  return enforceOnePresentation(rewriteKnownAliases(uniqueStrings([
+    profile.subject,
+    ...declared,
+    ...(profile.appearance || []),
+  ].map(animaTag).filter(Boolean))), profile.anchor || profile.ref).slice(0, 28)
+}
+
 function directContext(profiles, { wardrobe = null, places = [], banned = '', fantasy = false, clothingDigest = [] } = {}) {
-  const lines = []
+  const blocks = []
   for (const profile of allKnownProfiles(profiles)) {
     if (!profile) continue
-    const name = profile.promptName || profile.anchor || profile.ref
+    const name = profile.anchor || profile.ref
+    const anchor = directAnchorFor(profile)
     const hasWardrobe = !!(wardrobe && wardrobe[profile.ref] && wardrobe[profile.ref].length)
     const recorded = hasWardrobe ? wardrobe[profile.ref] : (profile.defaultOutfit || [])
-    // "Bulge becomes wearing a bulge. Midriff becomes wearing a midriff."
-    //
-    // Both are true, and both were this line: everything in the outfit record was
-    // announced as `wearing: …`, so a body fact that had found its way in — and
-    // `bulge` gets there BY DESIGN, the underwear rule adds it — was read as a
-    // garment. Split by an explicit list rather than by "not a known garment",
-    // because an unrecognised garment (harem silks, say) is common and calling it
-    // anatomy would be a worse bug than the one being fixed.
+    // Body facts and garments stay separated. Use the explicit body-state list,
+    // never "not a known garment", because unusual clothing must remain clothing.
     const worn = recorded.filter((tag) => !BODY_STATE_TAGS.has(String(tag).toLowerCase()))
     const body = recorded.filter((tag) => BODY_STATE_TAGS.has(String(tag).toLowerCase()))
-    const lock = identityLockFor(profile)
-    lines.push([
-      `${name}: ${profile.countTag || ''}`,
-      (profile.appearance || []).join(', '),
-      lock.length ? `ALWAYS INCLUDE: ${lock.join(', ')}` : '',
-      hasWardrobe
-        ? (worn.length ? `CURRENT WARDROBE (use unless the CURRENT PASSAGE changes it): ${worn.join(', ')}` : 'CURRENT WARDROBE: none recorded')
-        : (worn.length ? `DEFAULT OUTFIT (use only if there is no current wardrobe and the CURRENT PASSAGE is silent): ${worn.join(', ')}` : 'DEFAULT OUTFIT: none recorded'),
-      body.length ? `body, not clothing: ${body.join(', ')}` : '',
-    ].filter(Boolean).join(' | '))
+    const lines = [name]
+    if (profile.countTag) lines.push('  COUNT TAG: ' + animaTag(profile.countTag))
+    if (anchor.length) lines.push('  IDENTITY ANCHOR (copy exactly): ' + anchor.join(', '))
+    if ((profile.anatomy || []).length) {
+      lines.push('  SAVED ANATOMY (the anatomy rule decides when): ' + animaTagList(profile.anatomy).join(', '))
+    }
+    if (hasWardrobe) {
+      lines.push('  CURRENT CLOTHING (copy exactly unless the CURRENT PASSAGE changes it): ' +
+        (worn.length ? worn.join(', ') : '(nothing recorded as worn)'))
+    } else if (worn.length) {
+      lines.push('  DEFAULT OUTFIT (only when nothing is recorded and the passage is silent): ' + worn.join(', '))
+    }
+    if (body.length) lines.push('  body, not clothing: ' + body.join(', '))
+    blocks.push(lines.join('\n'))
   }
   const place = (places || []).filter(Boolean).slice(0, 1)
-    .map((item) => `Place — ${item.name}: ${(item.setting || []).join(', ')}`)
-  const clothingHistory = (clothingDigest || []).filter(Boolean).map((line) => `- ${line}`)
+    .map((item) => `Place — ${item.name}: ${(item.tags || item.setting || []).join(', ')}`)
+  const clothingHistory = (clothingDigest || []).filter(Boolean).map((line) => '- ' + line)
   return [
-    'CHARACTER SHEETS — copy stable visible identity exactly.',
-    'WARDROBE PRECEDENCE: CURRENT PASSAGE change > CURRENT WARDROBE > EARLIER CLOTHING MENTIONS > DEFAULT OUTFIT.',
+    'CHARACTER SHEETS — paste-exact text, not notes.',
+    'WARDROBE PRECEDENCE: CURRENT PASSAGE change > CURRENT CLOTHING > EARLIER CLOTHING MENTIONS > DEFAULT OUTFIT.',
     'Silence means unchanged, not reset.',
-    ...lines,
-    clothingHistory.length ? 'EARLIER CLOTHING MENTIONS (fallback only when no CURRENT WARDROBE exists):' : '',
+    ...blocks,
+    clothingHistory.length ? 'EARLIER CLOTHING MENTIONS (fallback only when no CURRENT CLOTHING exists):' : '',
     ...clothingHistory,
     ...place,
     banned ? `NEVER USE THESE: ${banned}` : '',
-    fantasy
-      ? 'This is a FANTASY setting. Non-human species are correct here, not errors.'
-      : '',
+    fantasy ? 'This is a FANTASY setting. Non-human species are correct here, not errors.' : '',
   ].filter(Boolean).join('\n')
 }
+
 
 // How many pictures. The compiler's schema said the minimum "is a FLOOR: find
 // that many distinct visual moments EVEN WHEN ONE DOMINATES" — which is an
@@ -8192,20 +8250,6 @@ function parseDirectImages(raw, maxImages = 2) {
     try { return JSON.parse(sanitizeJsonText(match[0])) } catch { return null }
   })()
   if (!parsed || !Array.isArray(parsed.images)) {
-    // A REFUSAL IS NOT A PARSE ERROR, and reporting it as one sent Eric to a log
-    // hunting for a bug that was not there:
-    //
-    //   raw reply: "I can't write this prompt. The passage depicts explicit
-    //   sexual content… that's a consent problem I won't illustrate around."
-    //   →  "Direct mode: no images array in the reply"
-    //
-    // Images stopped "for no reason" because the STORY moved somewhere the
-    // parser model will not write prompts for. Nothing in LumiDraw changed. The
-    // model said exactly why, in plain English, and LumiDraw threw that away and
-    // substituted a message that sounds like malformed JSON.
-    //
-    // No JSON at all, but a paragraph of prose, is a model talking to you.
-    // Forward what it said — it is the only thing that explains the failure.
     const prose = String(text || '').trim()
     const looksLikeProse = prose.length > 40 && !prose.includes('{')
     if (looksLikeProse) {
@@ -8225,9 +8269,8 @@ function parseDirectImages(raw, maxImages = 2) {
     const written = String(item.prompt || '').trim()
     if (!written) continue
     const repaired = repairDirectPrompt(written)
-    const dropped = repaired.dropped
-    if (dropped.length) {
-      spindle.log.info(`[lumidraw] direct · the parser corrected itself mid-prompt; dropped ${dropped.join(', ')}`)
+    if (repaired.dropped.length) {
+      spindle.log.info(`[lumidraw] direct · the parser corrected itself mid-prompt; dropped ${repaired.dropped.join(', ')}`)
     }
     const split = splitFusedSubjectRuns(repaired.prompt)
     if (split.inserted.length) {
@@ -8235,24 +8278,37 @@ function parseDirectImages(raw, maxImages = 2) {
         `inserted BREAK before ${split.inserted.join(', ')} — Anima binds a block as one subject group`)
     }
     const prompt = split.prompt
-    // Three or more subjects is where this model falls apart, and the rules say
-    // so. Reported rather than trimmed: which character to lose is the author's
-    // call, not mine, and dropping one silently would be worse than a muddled
-    // picture the author can see is muddled.
     const runs = prompt.split(/\bBREAK\b/).filter((run) =>
       DIRECT_COUNT_TAG_RE.test((run.split(',')[0] || '').trim()))
     if (runs.length > 2) {
       spindle.log.warn(`[lumidraw] direct · ${runs.length} characters in one image. ` +
         'Anima reliably falls apart past two — expect features and positions to swap between them.')
     }
+    const ratingRaw = String(item.rating || item.safety || '').trim().toLowerCase()
+    const outfits = {}
+    if (item.outfits && typeof item.outfits === 'object' && !Array.isArray(item.outfits)) {
+      for (const [key, value] of Object.entries(item.outfits)) {
+        const name = String(key || '').trim().slice(0, 64)
+        if (!name) continue
+        const list = animaTagList(Array.isArray(value) ? value : String(value || '').split(',')).slice(0, 12)
+        if (list.length) outfits[name] = list
+      }
+    }
     images.push({
       anchor: String(item.anchor || '').trim(),
       prompt,
       aspect: VALID_ASPECTS.has(String(item.aspect || '')) ? String(item.aspect) : '3:4',
+      rating: ANIMA_SAFETY_TAGS.includes(ratingRaw) ? ratingRaw : '',
+      setting: animaTagList(tagsFrom(item.setting || [], 8)),
+      // Accepted for forward compatibility if a parser returns it, though the
+      // compact Direct schema does not require a lighting sidecar.
+      lighting: animaTagList(tagsFrom(item.lighting || [], 4)),
+      outfits,
     })
   }
   return { images, error: images.length ? '' : 'no usable prompt in the reply' }
 }
+
 
 // Which tags must be present whenever this character is in the picture.
 //
@@ -8284,10 +8340,14 @@ function identityLockFor(profile) {
 // not tags — so identity is matched on the tags that describe them.
 function subjectPresentIn(prompt, profile) {
   const text = String(prompt || '').toLowerCase()
-  const marks = [...(profile.appearance || []), ...(profile.defaultOutfit || [])]
-  const hits = marks.filter((tag) => tag && text.includes(String(tag).toLowerCase())).length
-  return hits >= 2
+  // Match the stable identity anchor, never clothing. Clothing is allowed to
+  // change; the anchor is the paste-exact signal Direct mode was asked to keep.
+  const marks = directAnchorFor(profile).filter((tag) => tag && !DIRECT_COUNT_TAG_RE.test(tag))
+  if (!marks.length) return false
+  const hits = marks.filter((tag) => text.includes(String(tag).toLowerCase())).length
+  return hits >= Math.min(2, marks.length)
 }
+
 
 // The only thing that touches what the parser wrote, and it only ever ADDS.
 function applyIdentityLock(prompt, profiles, trace = null) {
@@ -8316,6 +8376,89 @@ function applyIdentityLock(prompt, profiles, trace = null) {
   }
   return { prompt: text, restored }
 }
+
+// The compiler's two anatomy defences, rebuilt for a prompt LumiDraw did not
+// compile. They touch fixed header/negative slots, never the parser's body.
+function directDefences(prompt, profiles, rating) {
+  const out = { positive: [], negatives: [], notes: [] }
+  const level = String(rating || '').toLowerCase()
+  if (!['nsfw', 'explicit'].includes(level)) return out
+  const text = String(prompt || '').toLowerCase()
+  const hasTag = (tag) => !!tag && text.includes(String(tag).toLowerCase())
+  const present = allKnownProfiles(profiles).filter((p) => p && p.ref && subjectPresentIn(prompt, p))
+  const shown = present.filter((p) =>
+    (p.anatomy || []).some(hasTag) ||
+    identityLockFor(p).some((tag) => /futanari|penis|testicles/.test(tag) && hasTag(tag)))
+  if (!shown.length) return out
+  out.positive.push(UNCENSORED_TAG)
+  out.negatives.push(...CENSOR_NEGATIVES)
+  out.notes.push('anatomy is in the prompt — the censorship prior is countered')
+  const penisFamily = (p) =>
+    [...(p.anatomy || []), ...identityLockFor(p)]
+      .some((tag) => PENIS_ANATOMY_RE.test(tag) || /futanari|futa without pussy/.test(tag))
+  // profile.anatomy only here deliberately. A lock such as "futa without pussy"
+  // contains the word "pussy" but is not saved female anatomy.
+  const femaleSaved = present.some((p) => (p.anatomy || []).some((tag) => FEMALE_ANATOMY_RE.test(tag)))
+  if (shown.every(penisFamily) && !femaleSaved) {
+    out.negatives.push(...FEMALE_GENITAL_NEGATIVES)
+    out.notes.push('every shown anatomy is penis-family — female genitalia negated')
+  }
+  out.positive = uniqueStrings(out.positive)
+  out.negatives = uniqueStrings(out.negatives)
+  return out
+}
+
+// Close the continuity loop Direct mode previously only read from. Sidecar
+// reports are persisted only when grounded in the current passage/context or in
+// the already-established wardrobe, so a parser hallucination is not learned.
+async function applyDirectContinuity(images, { profiles, chatId, presetName, grounding }) {
+  const known = allKnownProfiles(profiles).filter((p) => p && p.ref)
+  const memory = await readSceneMemory(chatId, presetName)
+  const outfits = {}
+  for (const image of images || []) {
+    for (const [name, raw] of Object.entries(image.outfits || {})) {
+      const wanted = normalizeIdentityText(name)
+      const match = known.find((p) =>
+        [p.anchor, p.promptName, p.ref].some((v) => normalizeIdentityText(v) === wanted))
+      if (!match) {
+        spindle.log.info(`[lumidraw] direct · wardrobe report for "${name}" matched no one in this cast — ignored`)
+        continue
+      }
+      if (ANONYMOUS_REF_RE.test(match.ref)) continue
+      const list = animaTagList(Array.isArray(raw) ? raw : String(raw || '').split(',')).slice(0, 12)
+      if (!list.length) continue
+      const before = (memory.outfits || {})[match.ref] || []
+      if (before.join('\u0000') === list.join('\u0000')) continue
+      const keep = list.filter((tag) => {
+        if (BARE_STATE_RE.test(tag)) return true
+        if (isNotClothing(tag)) return false
+        return garmentSupported(tag, grounding, before, match)
+      })
+      const dropped = list.filter((tag) => !keep.includes(tag))
+      if (dropped.length) {
+        spindle.log.info(`[lumidraw] direct · ${match.anchor || match.ref} — rendered but NOT remembered, ` +
+          `nothing in the passage backs them: ${dropped.join(', ')}`)
+      }
+      if (!keep.length) continue
+      outfits[match.ref] = keep
+      spindle.log.info(`[lumidraw] direct · the parser re-dressed ${match.anchor || match.ref} · ${keep.join(', ')}`)
+    }
+  }
+  let setting = null
+  let lighting = null
+  const moved = [...(images || [])].reverse().find((im) => (im.setting || []).length || (im.lighting || []).length)
+  if (moved) {
+    setting = reconcileSetting(moved.setting || [], grounding, memory.setting || []).setting
+    lighting = scrubUnsupportedPlaces(animaTagList(moved.lighting || []), grounding, 'lighting').tags
+  }
+  if (!Object.keys(outfits).length && !(setting && setting.length) && !(lighting && lighting.length)) return
+  await rememberSceneState(chatId, presetName, {
+    setting: setting && setting.length ? setting : undefined,
+    lighting: lighting && lighting.length ? lighting : undefined,
+    outfits: Object.keys(outfits).length ? outfits : null,
+  })
+}
+
 
 function escapeForRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
