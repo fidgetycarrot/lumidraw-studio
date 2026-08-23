@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.9'
+const EXTENSION_VERSION = '1.3.10'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -4385,7 +4385,7 @@ ${entry.prompt || ''}`.trim()
             .join('') + '</select>'
         : ''
       const remove = row.id
-        ? `<button class="ld-btn ld-compact" data-act="wardrobe-drop" data-id="${row.id}" data-name="${name}" data-declared="${row.declared ? '1' : ''}" title="${row.declared ? 'Delete this character — the story invented it' : 'Remove from this chat's cast; the saved character is kept'}" style="padding:2px 7px">×</button>`
+        ? `<button class="ld-btn ld-compact" data-act="wardrobe-drop" data-id="${row.id}" data-name="${name}" data-declared="${row.declared ? '1' : ''}" title="${row.declared ? 'Delete this character — the story invented it' : "Remove from this chat's cast; the saved character is kept"}" style="padding:2px 7px">×</button>`
         : ''
       // WHERE THESE TAGS LIVE, and a way to get there. "LumiDraw has the Fanny
       // character saved somehow, somewhere cause the image it produced used the
