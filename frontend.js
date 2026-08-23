@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.2'
+const EXTENSION_VERSION = '1.3.3'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -52,17 +52,29 @@ function realSetup(ctx) {
       injected.push(el)
       return () => el.remove()
     },
-    inject(target, html) {
+    inject(target, html, position = 'beforeend') {
       if (ctx.dom && typeof ctx.dom.inject === 'function') {
-        try { return ctx.dom.inject(target, html) } catch (e) {
+        try { return ctx.dom.inject(target, html, position) } catch (e) {
           console.warn('[LumiDraw] ctx.dom.inject failed, using document fallback:', e.message)
         }
       }
       const root = document.createElement('div')
       root.setAttribute('data-lumidraw', '1')
       root.innerHTML = html
-      document.body.appendChild(root)
+      const parent = typeof target === 'string' ? document.querySelector(target) : target
+      if (parent && typeof parent.insertAdjacentElement === 'function') {
+        try { parent.insertAdjacentElement(position, root) } catch { parent.appendChild(root) }
+      } else if (parent && typeof parent.appendChild === 'function') parent.appendChild(root)
+      else document.body.appendChild(root)
       injected.push(root)
+      return root
+    },
+    uninject(node) {
+      if (!node) return
+      if (ctx.dom && typeof ctx.dom.uninject === 'function') {
+        try { ctx.dom.uninject(node); return } catch { /* fallback below */ }
+      }
+      try { node.remove() } catch { /* ignore */ }
     },
     query(sel) {
       if (ctx.dom && typeof ctx.dom.query === 'function') {
@@ -100,6 +112,13 @@ function realSetup(ctx) {
   let liveScanStatus = null
   let liveScanStatusAt = 0
   let clickedChatImageUrl = ''
+  let clickedChatPlacementId = ''
+  let imagePlacements = []
+  let imagePlacementChatId = ''
+  let imagePlacementRefreshSeq = 0
+  const imageMessageMounts = new Map()
+  const imageMessageRenderKeys = new Map()
+  const imageLifecycleUnsubs = []
   let scanElapsedTimer = null
   let activePreset = null   // name of selected preset
   let personaEditorId = null
@@ -130,6 +149,27 @@ function realSetup(ctx) {
 
   const unsub = ctx.onBackendMessage((payload) => {
     if (!payload) return
+    if (payload.type === 'image_placement_upserted') {
+      const placement = payload.placement
+      if (placement && placement.placementId) {
+        const index = imagePlacements.findIndex((item) => item && item.placementId === placement.placementId)
+        if (index >= 0) imagePlacements[index] = placement
+        else imagePlacements.push(placement)
+        if (!imagePlacementChatId || String(placement.chatId || '') === imagePlacementChatId) {
+          imagePlacementChatId = String(placement.chatId || imagePlacementChatId || '')
+          renderImagesIntoMessage(String(placement.messageId || ''))
+        }
+      }
+      return
+    }
+    if (payload.type === 'image_placement_removed') {
+      const removed = Array.isArray(payload.placements) ? payload.placements : []
+      const ids = new Set(removed.map((item) => String(item && item.placementId || '')).filter(Boolean))
+      const affected = new Set(removed.map((item) => String(item && item.messageId || '')).filter(Boolean))
+      if (ids.size) imagePlacements = imagePlacements.filter((item) => !ids.has(String(item && item.placementId || '')))
+      for (const messageId of affected) renderImagesIntoMessage(messageId)
+      return
+    }
     if (payload.type === 'history_updated') {
       history = Array.isArray(payload.history) ? payload.history : history
       const newest = payload.entry && payload.entry.images && payload.entry.images[0]
@@ -1857,6 +1897,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   function closeLightbox() {
     clickedChatImageUrl = ''
+    clickedChatPlacementId = ''
     lightbox.classList.remove('ld-open')
     lightbox.setAttribute('aria-hidden', 'true')
     lightboxImage.removeAttribute('src')
@@ -1868,6 +1909,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   function moveLightbox(delta) {
     if (!lightboxItems.length) return
     clickedChatImageUrl = ''   // the handle belonged to the previous image
+    clickedChatPlacementId = ''
     lightboxIndex = (lightboxIndex + delta + lightboxItems.length) % lightboxItems.length
     renderLightbox()
   }
@@ -3248,13 +3290,14 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const recipeConfig = entry && entry.recipe && entry.recipe.config ? entry.recipe.config : null
       const res = await call('append_to_chat', {
         imageUrl: img.url,
+        imageId: img.id || '',
         alt: (entry && entry.prompt) ? entry.prompt.slice(0, 120) : 'Generated image',
         width: recipeConfig && recipeConfig.width,
         height: recipeConfig && recipeConfig.height,
       })
-      setStatus('.ld-gen-status', res.mode === 'inserted'
-        ? 'Added a copy at the top of the latest story message.'
-        : 'Could not edit the latest message — posted as a new message instead.', 'good')
+      setStatus('.ld-gen-status', res.mode === 'mounted'
+        ? 'Added a native LumiDraw image to the latest story message.'
+        : (res.mode === 'inserted' ? 'Added a copy at the top of the latest story message.' : 'Added image to chat.'), 'good')
     } catch (e) {
       setStatus('.ld-gen-status', e.message, 'err')
     }
@@ -3834,56 +3877,184 @@ ${entry.prompt || ''}`.trim()
   // The override silently beats the connection dropdown, so switching
   // connections can change nothing at all while looking like it changed
   // everything. Say so where the field is.
-  // Image display width. Presentation only — no message is modified and nothing is
-  // regenerated. Current Lumiverse virtualizes chat rows and remeasures them as
-  // content changes, so keep this selector intentionally cheap: no :has(), no
-  // DOM scans, and no wrapper mutations. We do style Lumiverse's existing image
-  // wrappers because otherwise their compact width caps the child image. New
-  // LumiDraw images carry intrinsic dimensions so aspect ratio is reserved before
-  // they decode.
-  let imageSizeStyleRemove = null
-  function imageSizeCss(px) {
-    const size = `${px}px`
-    return `
-:root { --lumidraw-image-size: ${size}; }
-/* Lumiverse wraps inline message images. Resize the wrapper as well as the
-   image or the host's compact wrapper becomes the effective size cap. These
-   selectors are cheap: no :has(), no tree walk, no DOM mutation. */
-button[class*="inlineImageBtn"],
-div[class*="inlineImageWrap"] {
-  display: block !important;
-  width: min(100%, var(--lumidraw-image-size)) !important;
-  max-width: var(--lumidraw-image-size) !important;
-  height: auto !important;
-  max-height: none !important;
-  aspect-ratio: auto !important;
-  margin-inline: auto !important;
-  overflow: visible !important;
-}
-[data-component="MessageContent"] img,
-img[data-lumidraw-image="1"],
-img[class*="inlineImage"] {
-  display: block !important;
-  float: none !important;
-  width: min(100%, var(--lumidraw-image-size)) !important;
-  max-width: var(--lumidraw-image-size) !important;
-  height: auto !important;
-  max-height: none !important;
-  margin-inline: auto !important;
-  object-fit: contain !important;
-  box-sizing: border-box !important;
-}`
+  // ------------------------------------------------------------------ native story images
+  // Current Lumiverse virtualizes message rows. Follow SimTracker's pattern:
+  // find the exact mounted message, inject one extension-owned host into its
+  // bubble, update that mount in place, and let Lumiverse replay the injected
+  // wrapper across virtualizer unmount/remount cycles. No polling and no
+  // document-wide MutationObserver.
+  const removeImageMountStyle = dom.addStyle(`
+    .ld-message-images-host {
+      display:flex; flex-direction:column; align-items:center; gap:12px;
+      width:100%; max-width:100%; margin:12px 0 2px; box-sizing:border-box;
+    }
+    .ld-chat-image-item {
+      display:block; max-width:100%; margin:0 auto; box-sizing:border-box;
+    }
+    .ld-chat-image {
+      display:block; width:100%; max-width:100%; height:auto; max-height:none;
+      object-fit:contain; box-sizing:border-box; border-radius:8px; cursor:pointer;
+    }
+  `)
+
+  const escapeAttr = (value) => String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+  function findMountedMessageElement(messageId) {
+    const id = String(messageId || '')
+    if (!id) return null
+    if (ctx.dom && typeof ctx.dom.findMessageElement === 'function') {
+      try {
+        const node = ctx.dom.findMessageElement(id)
+        if (node) return node
+      } catch { /* fallback below */ }
+    }
+    return document.querySelector(`[data-message-id="${CSS.escape(id)}"]`) ||
+      document.querySelector(`[data-messageid="${CSS.escape(id)}"]`)
+  }
+
+  function clearImageMessageMount(messageId) {
+    const id = String(messageId || '')
+    const mount = imageMessageMounts.get(id)
+    if (mount) dom.uninject(mount)
+    imageMessageMounts.delete(id)
+    imageMessageRenderKeys.delete(id)
+  }
+
+  function placementsForMessage(messageId) {
+    const id = String(messageId || '')
+    return imagePlacements
+      .filter((item) => item && String(item.messageId || '') === id &&
+        (!imagePlacementChatId || String(item.chatId || '') === imagePlacementChatId))
+      .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0))
+  }
+
+  function placementRenderKey(items) {
+    return items.map((item) => [item.placementId, item.url, item.width, item.height, item.alt].join('|')).join('||')
+  }
+
+  function placementMarkup(item) {
+    const width = Math.max(1, Number(item.width) || 768)
+    const height = Math.max(1, Number(item.height) || 1024)
+    const id = escapeAttr(item.placementId)
+    return `<div class="ld-chat-image-item" data-lumidraw-placement-id="${id}" data-intrinsic-width="${width}">
+      <img class="ld-chat-image" data-lumidraw-image="1" data-lumidraw-placement-id="${id}"
+        src="${escapeAttr(item.url)}" alt="${escapeAttr(item.alt || 'Generated image')}"
+        width="${width}" height="${height}" loading="lazy" decoding="async" />
+    </div>`
+  }
+
+  function configuredChatImageWidth(intrinsic = 0) {
+    const enabled = !!($('.ld-size-images') && $('.ld-size-images').checked)
+    if (enabled) {
+      const raw = Number($('.ld-image-width') ? $('.ld-image-width').value : 0)
+      return Math.min(1200, Math.max(200, raw || 500))
+    }
+    const own = Number(intrinsic) || 0
+    return own > 0 ? Math.min(1200, Math.max(200, own)) : 720
+  }
+
+  function applyNativeImageSizingToMount(mount) {
+    if (!mount || !mount.querySelectorAll) return
+    for (const item of mount.querySelectorAll('.ld-chat-image-item')) {
+      const px = configuredChatImageWidth(item.getAttribute('data-intrinsic-width'))
+      item.style.setProperty('width', `${px}px`, 'important')
+      item.style.setProperty('max-width', '100%', 'important')
+      const img = item.querySelector('.ld-chat-image')
+      if (img) {
+        img.style.setProperty('width', '100%', 'important')
+        img.style.setProperty('max-width', '100%', 'important')
+        img.style.setProperty('height', 'auto', 'important')
+        img.style.setProperty('max-height', 'none', 'important')
+      }
+    }
+  }
+
+  function renderImagesIntoMessage(messageId) {
+    const id = String(messageId || '')
+    if (!id) return
+    const items = placementsForMessage(id)
+    if (!items.length) { clearImageMessageMount(id); return }
+    const key = placementRenderKey(items)
+    const existing = imageMessageMounts.get(id)
+    const stillMounted = !!existing && existing.isConnected
+    if (stillMounted && imageMessageRenderKeys.get(id) === key) {
+      applyNativeImageSizingToMount(existing)
+      return
+    }
+    const inner = items.map(placementMarkup).join('')
+    if (stillMounted) {
+      existing.innerHTML = inner
+      imageMessageRenderKeys.set(id, key)
+      applyNativeImageSizingToMount(existing)
+      return
+    }
+    clearImageMessageMount(id)
+    const messageNode = findMountedMessageElement(id)
+    if (!messageNode) return
+    const bubbleNode = messageNode.querySelector(':scope > div[class*="bubble"]') ||
+      messageNode.querySelector('div[class*="bubble"]') || messageNode
+    const host = `<div class="ld-message-images-host" data-lumidraw-message-images="${escapeAttr(id)}">${inner}</div>`
+    const mount = dom.inject(bubbleNode, host, 'beforeend')
+    if (!mount) return
+    imageMessageMounts.set(id, mount)
+    imageMessageRenderKeys.set(id, key)
+    applyNativeImageSizingToMount(mount)
+  }
+
+  async function refreshImagePlacements(chatId = '') {
+    const seq = ++imagePlacementRefreshSeq
+    const res = await call('get_image_mounts', { chatId: String(chatId || '') }, 15000)
+    if (seq !== imagePlacementRefreshSeq) return
+    const nextChatId = String(res.chatId || chatId || '')
+    if (imagePlacementChatId && nextChatId && imagePlacementChatId !== nextChatId) {
+      for (const messageId of [...imageMessageMounts.keys()]) clearImageMessageMount(messageId)
+    }
+    imagePlacementChatId = nextChatId
+    imagePlacements = Array.isArray(res.placements) ? res.placements : []
+    const ids = new Set(imagePlacements.map((item) => String(item && item.messageId || '')).filter(Boolean))
+    for (const id of ids) renderImagesIntoMessage(id)
+  }
+
+  // Images stored by LumiDraw 1.3.2 and earlier still live inside Lumiverse's
+  // inline-image component. Resize only when that virtualized message mounts;
+  // no global selector polling. This compatibility path can go away once old
+  // chats have naturally aged out.
+  function styleLegacyImage(img) {
+    if (!img || img.closest('.ld-message-images-host')) return
+    const found = findHistoryImageForChatImage(img)
+    if (!found) return
+    img.classList.add('ld-legacy-chat-image')
+    const enabled = !!($('.ld-size-images') && $('.ld-size-images').checked)
+    const width = configuredChatImageWidth((found.entry && found.entry.recipe && found.entry.recipe.config && found.entry.recipe.config.width) || img.naturalWidth)
+    const nodes = [img, img.closest('button[class*="inlineImageBtn"]'), img.closest('div[class*="inlineImageWrap"]')].filter(Boolean)
+    for (const node of nodes) {
+      if (enabled) {
+        node.style.setProperty('width', `${width}px`, 'important')
+        node.style.setProperty('max-width', '100%', 'important')
+        node.style.setProperty('height', 'auto', 'important')
+        node.style.setProperty('max-height', 'none', 'important')
+      } else {
+        for (const prop of ['width', 'max-width', 'height', 'max-height']) node.style.removeProperty(prop)
+      }
+    }
+    img.style.setProperty('object-fit', 'contain', 'important')
+  }
+
+  function prepareLegacyLumiDrawImages(messageId) {
+    const messageNode = findMountedMessageElement(messageId)
+    if (!messageNode) return
+    for (const img of messageNode.querySelectorAll('img')) styleLegacyImage(img)
   }
 
   function applyImageSize() {
     const on = $('.ld-size-images') && $('.ld-size-images').checked
     const row = $('.ld-size-images-row')
     if (row) row.style.display = on ? 'flex' : 'none'
-    if (imageSizeStyleRemove) { try { imageSizeStyleRemove() } catch (e) {} ; imageSizeStyleRemove = null }
-    if (!on) return
-    const raw = Number($('.ld-image-width') ? $('.ld-image-width').value : 0)
-    const px = Math.min(1200, Math.max(200, raw || 500))
-    imageSizeStyleRemove = dom.addStyle(imageSizeCss(px))
+    // Native mounts are ours, so resize them directly. Legacy wrappers are only
+    // touched if LumiDraw already identified their image; no host-wide CSS.
+    for (const mount of imageMessageMounts.values()) applyNativeImageSizingToMount(mount)
+    for (const img of document.querySelectorAll('img.ld-legacy-chat-image')) styleLegacyImage(img)
   }
 
   // The slider and the number box are two views of one value.
@@ -4354,6 +4525,7 @@ img[class*="inlineImage"] {
       const res = await call('regenerate_image', {
         imageUrl: oldUrl,
         chatImageUrl: clickedChatImageUrl,
+        placementId: clickedChatPlacementId,
         prompt,
         negativePrompt: $('.ld-lightbox-regen-negative').value,
         reuseSeed: $('.ld-lightbox-regen-seed').checked && !$('.ld-lightbox-regen-seed').disabled,
@@ -4400,8 +4572,12 @@ img[class*="inlineImage"] {
     // is what the backend will swap — preserving the image's position in the
     // story rather than guessing at a similar-looking one.
     const clickedSrc = target.getAttribute('src') || target.src || ''
+    const placementHost = target.closest('[data-lumidraw-placement-id]')
+    const placementId = target.getAttribute('data-lumidraw-placement-id') ||
+      (placementHost && placementHost.getAttribute('data-lumidraw-placement-id')) || ''
     if (openLightbox(found.image.url)) {
       clickedChatImageUrl = clickedSrc
+      clickedChatPlacementId = placementId
       openRegenPanel()
     }
   }
@@ -5282,6 +5458,12 @@ img[class*="inlineImage"] {
             const chatId = payload.chatId || eventMessage.chatId || (payload.chat && payload.chat.id)
             if (!messageId || !chatId) return
             lastSeenChatId = String(chatId)
+            if (imagePlacementChatId && imagePlacementChatId !== String(chatId)) {
+              refreshImagePlacements(String(chatId)).catch(() => {})
+            } else {
+              renderImagesIntoMessage(String(messageId))
+            }
+            prepareLegacyLumiDrawImages(String(messageId))
             ctx.sendToBackend({
               type: 'character_message_rendered', requestId: makeId(),
               messageId: String(messageId),
@@ -5296,6 +5478,46 @@ img[class*="inlineImage"] {
         console.log('[LumiDraw] CHARACTER_MESSAGE_RENDERED listener unavailable:', error.message)
       }
     }
+    if (ctx.events && typeof ctx.events.on === 'function') {
+      try {
+        const off = ctx.events.on('CHAT_SWITCHED', (payload) => {
+          const chatId = String((payload && (payload.chatId || payload.id || (payload.chat && payload.chat.id))) || '')
+          lastSeenChatId = chatId
+          for (const messageId of [...imageMessageMounts.keys()]) clearImageMessageMount(messageId)
+          imagePlacements = []
+          imagePlacementChatId = ''
+          if (chatId) refreshImagePlacements(chatId).catch((error) => console.log('[LumiDraw] image refresh after chat switch failed:', error.message))
+        })
+        if (typeof off === 'function') imageLifecycleUnsubs.push(off)
+      } catch (error) {
+        console.log('[LumiDraw] CHAT_SWITCHED image listener unavailable:', error.message)
+      }
+      try {
+        const off = ctx.events.on('MESSAGE_SWIPED', (payload) => {
+          const eventMessage = payload && payload.message && typeof payload.message === 'object' ? payload.message : {}
+          const messageId = String((payload && (payload.messageId || payload.id)) || eventMessage.messageId || eventMessage.id || '')
+          if (!messageId) return
+          clearImageMessageMount(messageId)
+          imagePlacements = imagePlacements.filter((item) => String(item && item.messageId || '') !== messageId)
+        })
+        if (typeof off === 'function') imageLifecycleUnsubs.push(off)
+      } catch (error) {
+        console.log('[LumiDraw] MESSAGE_SWIPED image listener unavailable:', error.message)
+      }
+      try {
+        const off = ctx.events.on('MESSAGE_DELETED', (payload) => {
+          const eventMessage = payload && payload.message && typeof payload.message === 'object' ? payload.message : {}
+          const messageId = String((payload && (payload.messageId || payload.id)) || eventMessage.messageId || eventMessage.id || '')
+          if (!messageId) return
+          clearImageMessageMount(messageId)
+          imagePlacements = imagePlacements.filter((item) => String(item && item.messageId || '') !== messageId)
+        })
+        if (typeof off === 'function') imageLifecycleUnsubs.push(off)
+      } catch (error) {
+        console.log('[LumiDraw] MESSAGE_DELETED image listener unavailable:', error.message)
+      }
+    }
+
     ctx.sendToBackend({
       type: 'frontend_status', requestId: makeId(),
       version: EXTENSION_VERSION, historyRefresh: !!refreshHistoryButton,
@@ -5393,6 +5615,12 @@ img[class*="inlineImage"] {
         }
       }
       renderCharacterList(); renderPersonaList(); renderPlaces(); renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
+      refreshImagePlacements(lastSeenChatId).catch((error) => console.log('[LumiDraw] native image placement refresh failed:', error.message))
+      // One cheap compatibility pass for already-mounted pre-1.3.3 images.
+      // Future virtualized rows are handled by CHARACTER_MESSAGE_RENDERED.
+      requestAnimationFrame(() => {
+        for (const img of document.querySelectorAll('[data-component="MessageContent"] img')) styleLegacyImage(img)
+      })
       loadCasts().catch(() => {})
       loadWardrobe().catch(() => {})
       updateScanLabel()
@@ -5443,6 +5671,9 @@ img[class*="inlineImage"] {
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
     window.removeEventListener('keydown', onStoryPickerKeyDown)
     document.removeEventListener('click', onDocumentImageClick, true)
+    for (const unsubscribe of imageLifecycleUnsubs.splice(0)) { try { if (typeof unsubscribe === 'function') unsubscribe() } catch { /* ignore */ } }
+    for (const messageId of [...imageMessageMounts.keys()]) clearImageMessageMount(messageId)
+    try { removeImageMountStyle() } catch { /* ignore */ }
     closeLightbox()
     document.body.classList.remove('ld-fullscreen-lock')
     if (window[INSTANCE_KEY] === liveInstance) delete window[INSTANCE_KEY]
