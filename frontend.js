@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.12'
+const EXTENSION_VERSION = '1.3.13'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -2972,6 +2972,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     prompt.value = debug && debug.lastCompiledPrompt ? debug.lastCompiledPrompt : ''
     parsed.value = debug ? JSON.stringify({
       mode: debug.mode,
+      parserEngine: debug.parserEngine || null,
+      debugSource: debug.debugSource || null,
+      selectedEntryIndex: debug.selectedEntryIndex || null,
       subjectBinding: debug.subjectBinding,
       error: debug.error || null,
       rawReply: debug.rawReply || null,
@@ -3899,6 +3902,7 @@ ${entry.prompt || ''}`.trim()
         // model should not require committing to it first.
         parserModel: $('.ld-parser-model') ? $('.ld-parser-model').value.trim() : undefined,
         parserConnection: $('.ld-parser-conn') ? $('.ld-parser-conn').value : undefined,
+        mode: $('.ld-mode') ? $('.ld-mode').value : undefined,
         attempt,
       }, 300000)
       const results = Array.isArray(res.results) ? res.results : []
@@ -3920,11 +3924,34 @@ ${entry.prompt || ''}`.trim()
         setStatus('.ld-lightbox-regen-status', res.note || 'The parser produced no usable scene. The prompt below is unchanged.', 'err')
         return
       }
-      const applyResult = (entry) => {
-        promptBox.value = entry.prompt || ''
-        if (entry.negativePrompt) $('.ld-lightbox-regen-negative').value = entry.negativePrompt
+      const syncReparseDebug = (entry, index, source = 'image reparse candidate') => {
+        const mode = res.mode || ($('.ld-mode') ? $('.ld-mode').value : 'parser')
+        storyDebug = {
+          ...(storyDebug || {}),
+          mode,
+          parserEngine: res.parserEngine || (mode === 'direct' ? 'direct' : null),
+          debugSource: source,
+          selectedEntryIndex: Number.isInteger(index) ? index + 1 : null,
+          subjectBinding: mode === 'direct' ? true : !!(storyDebug && storyDebug.subjectBinding),
+          rawReply: res.rawReply || null,
+          lastCompiledPrompt: entry && entry.prompt ? entry.prompt : '',
+          entries: usable.map((candidate, candidateIndex) => ({
+            index: candidateIndex + 1,
+            selected: candidateIndex === index,
+            anchor: candidate.anchor || '',
+            sceneStatement: candidate.sceneStatement || '',
+            prompt: candidate.prompt || '',
+          })),
+          at: Date.now(),
+        }
+        renderStoryDebug()
       }
-      applyResult(usable[0])
+      const applyResult = (entry, index) => {
+        promptBox.value = entry.prompt || ''
+        $('.ld-lightbox-regen-negative').value = entry.negativePrompt || ''
+        syncReparseDebug(entry, index)
+      }
+      applyResult(usable[0], 0)
       // Several scenes usually come back; let the user flip between them and
       // back to what was there before, since comparison is the point.
       if (usable.length >= 1) {
@@ -3948,7 +3975,7 @@ ${entry.prompt || ''}`.trim()
             originIndex && originIndex === index + 1 ? 'Same position in the reply as the image you are fixing.' : '',
           ].filter(Boolean).join('\n')
           chip.style.textAlign = 'left'
-          chip.addEventListener('click', () => applyResult(entry))
+          chip.addEventListener('click', () => applyResult(entry, index))
           row.appendChild(chip)
         })
         if (reparseOriginalPrompt) {
@@ -3956,7 +3983,10 @@ ${entry.prompt || ''}`.trim()
           revert.className = 'ld-btn ld-compact'
           revert.textContent = 'Original'
           revert.title = 'Put the prompt this image was actually made with back in the box'
-          revert.addEventListener('click', () => { promptBox.value = reparseOriginalPrompt })
+          revert.addEventListener('click', () => {
+            promptBox.value = reparseOriginalPrompt
+            syncReparseDebug({ prompt: reparseOriginalPrompt }, null, 'original image prompt')
+          })
           row.appendChild(revert)
         }
         picker.appendChild(row)
@@ -4764,6 +4794,7 @@ ${entry.prompt || ''}`.trim()
           imageUrl: item.image.url,
           parserModel: $('.ld-parser-model') ? $('.ld-parser-model').value.trim() : undefined,
           parserConnection: $('.ld-parser-conn') ? $('.ld-parser-conn').value : undefined,
+          mode: $('.ld-mode') ? $('.ld-mode').value : undefined,
         }, 1800000)
         history = Array.isArray(res.history) ? res.history : history
         renderHistory()

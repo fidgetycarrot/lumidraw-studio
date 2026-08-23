@@ -7836,14 +7836,115 @@ const SUBJECT_BREAK_MARK = '\u0000SUBJECT_BREAK'
 // as non-negotiable are present, and puts back the ones that are not.
 // ===========================================================================
 
+// Direct generation and image reparsing must evaluate roster/run contradictions
+// identically. Keeping this outside runDirectImages prevents the lightbox's
+// prompt-only path from silently falling back to the structured compiler.
+async function reconcileDirectPresence(initialImages, ctx) {
+  let images = Array.isArray(initialImages) ? initialImages : []
+  let rawReply = ctx.rawReply
+  const { instruction, settings, profiles, parserInput, userId, scan } = ctx
+  const passage = (parserInput && parserInput.currentPassage) || ''
+  if (!instruction || !settings || !images.length || !parserInput) return { images, rawReply }
+
+  const contradictions = images.map((image) => directPresenceContradictions(image, profiles)).filter(Boolean)
+  const contradictionScore = (list) => (list || []).reduce((sum, item) =>
+    sum + (item.missing || []).length + (item.extra || []).length, 0)
+  const firstScore = contradictionScore(contradictions)
+  if (!contradictions.length) return { images, rawReply }
+
+  const names = uniqueStrings(contradictions.flatMap((c) => [
+    ...c.missing.map((p) => p.anchor || p.ref),
+    ...c.extra.map((p) => p.anchor || p.ref),
+  ]))
+  const detail = contradictions.map((c) => {
+    const missing = c.missing.map((p) => p.anchor || p.ref).join(', ') || 'none'
+    const extra = c.extra.map((p) => p.anchor || p.ref).join(', ') || 'none'
+    return `missing runs: ${missing}; wrong/extra runs: ${extra}`
+  }).join(' | ')
+  spindle.log.warn(`[lumidraw] direct · present roster and runs disagree (${names.join(' / ') || detail}); re-parsing once`)
+  if (scan) setStoryScanStage(scan, 'parsing', 'The parser paired the scene with the wrong character sheet; re-reading once.')
+  const retryInstruction = instruction +
+    '\n\nYOUR PREVIOUS ATTEMPT WAS REJECTED. Your validated present roster and the character BREAK runs did not match. ' +
+    `The mismatch was: ${detail}. ` +
+    'Every validated present person needs exactly one matching run, and no run may copy a different known sheet. ' +
+    'Re-read the CURRENT PASSAGE, verify each 3-8 word evidence quote, and rewrite in the SAME JSON format.'
+  try {
+    const retryRaw = await quietLLM(retryInstruction, parserInput.input, settings, userId, true, scan || null)
+    const retry = parseDirectImages(retryRaw, settings.maxImages || images.length || 1, profiles, passage)
+    const retryBad = retry.images.map((image) => directPresenceContradictions(image, profiles)).filter(Boolean)
+    const retryScore = contradictionScore(retryBad)
+    if (retry.images.length && retryScore < firstScore) {
+      spindle.log.info('[lumidraw] direct · retry resolved the presence/run mismatch' +
+        (retryBad.length ? ' partially' : ' completely'))
+      images = retry.images
+      rawReply = retryRaw
+    } else {
+      spindle.log.warn('[lumidraw] direct · retry did not improve the mismatch; using the mechanically guarded first attempt')
+    }
+  } catch (error) {
+    spindle.log.warn('[lumidraw] direct · mismatch retry failed (' + error.message + '); using the first attempt')
+  }
+  return { images, rawReply }
+}
+
+// The exact non-generating half of Direct mode. Automatic scans and lightbox
+// reparses both pass through here, so a preview is the prompt Draw Things would
+// actually receive rather than a compiler-shaped approximation.
+function finalizeDirectImagePrompt(image, ctx) {
+  const { preset, profiles, prefix, trace } = ctx
+  for (const note of image.notes || []) trace('parser cleanup', 'applied', note)
+  if ((image.present || []).length) trace('presence roster', 'clean',
+    image.present.map((entry) => `${entry.name}: "${entry.evidence}"`).join(' · '))
+  let body = sanitizeDirectNames(image.prompt, profiles, trace)
+  const locked = applyIdentityLock(body, profiles, trace)
+  body = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
+    .join(', ').replace(/\s*,\s*BREAK\s*,\s*/g, ' BREAK ').replace(/\s{2,}/g, ' ').trim()
+
+  const defences = directDefences(body, profiles, image.rating)
+  if (defences.notes.length) {
+    trace('direct defences', 'applied',
+      defences.notes.join(' · ') + (defences.negatives.length ? ` · negatives: ${defences.negatives.join(', ')}` : ''))
+    spindle.log.info('[lumidraw] direct defences · ' + defences.notes.join(' · ') +
+      (defences.negatives.length ? ` · negatives: ${defences.negatives.join(', ')}` : ''))
+  }
+
+  const headerRaw = reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), image.rating)
+  const hadHeaderBreak = /\bBREAK\b/.test(headerRaw)
+  const headerParts = headerRaw.split(/\bBREAK\b/)
+    .map((part) => part.replace(/^[\s,.]+|[\s,.]+$/g, '')).filter(Boolean)
+  if (hadHeaderBreak) {
+    trace('preset BREAK', 'removed', 'BREAK found in quality/prefix text — content kept, separator dropped')
+  }
+  const header = headerParts.join(', ')
+  const prompt = joinPromptParts([header, image.rating || '', ...defences.positive, body])
+  const negativePrompt = negativeWith(preset.negativePrompt || '', defences.negatives)
+  const detrapped = stripSubwordTraps(prompt)
+  for (const hit of detrapped.hits) {
+    trace('subword trap', 'applied', `removed ${hit.words.join(', ')} — ${hit.why}`)
+  }
+  const finalPrompt = detrapped.text
+  trace('direct prompt', 'applied',
+    `${String(image.prompt || '').length} chars from the parser, sent as ${finalPrompt.length}` +
+    (image.rating ? ` · rating ${image.rating}` : ' · no rating given'))
+  return { prompt: finalPrompt, negativePrompt }
+}
+
+function directSceneSentence(prompt) {
+  const tags = String(prompt || '').split(/\bBREAK\b/)[0].split(',').map((tag) => tag.trim()).filter(Boolean)
+  let index = 0
+  while (index < tags.length && (DIRECT_COUNT_TAG_RE.test(tags[index]) || DIRECT_COUNT_FULL_RE.test(tags[index]))) index++
+  return tags[index] || ''
+}
+
 // Turn the prompts the parser wrote into images. Everything the compiler used to
 // do between "the model has spoken" and "send it" is gone: no scene graph, no
 // defences, no substitutions. Quality tags in front, the author's negative
 // behind, the identity lock in the middle, send.
 async function runDirectImages(initialImages, ctx) {
   const { preset, profiles, userId, chatId, scan, parserInput, target, instruction, settings } = ctx
-  let images = Array.isArray(initialImages) ? initialImages : []
-  let rawReply = ctx.rawReply
+  const reconciled = await reconcileDirectPresence(initialImages, ctx)
+  let images = reconciled.images
+  const rawReply = reconciled.rawReply
   await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
   const origin = {
     messageId: String((target && target.id) || ''),
@@ -7856,51 +7957,7 @@ async function runDirectImages(initialImages, ctx) {
   const placements = []
   const traceLines = []
   const trace = (label, status, detail) => traceLines.push({ label, status, detail })
-
-  // Anchors do not have to come back in passage order. Before sorting/generation,
-  // give the parser one chance to repair a roster/run contradiction. This is a
-  // conditional second parser call only when the first answer is internally wrong.
   const passage = (parserInput && parserInput.currentPassage) || ''
-  if (instruction && settings && images.length) {
-    const contradictions = images.map((image) => directPresenceContradictions(image, profiles)).filter(Boolean)
-    const contradictionScore = (list) => (list || []).reduce((sum, item) =>
-      sum + (item.missing || []).length + (item.extra || []).length, 0)
-    const firstScore = contradictionScore(contradictions)
-    if (contradictions.length) {
-      const names = uniqueStrings(contradictions.flatMap((c) => [
-        ...c.missing.map((p) => p.anchor || p.ref),
-        ...c.extra.map((p) => p.anchor || p.ref),
-      ]))
-      const detail = contradictions.map((c) => {
-        const missing = c.missing.map((p) => p.anchor || p.ref).join(', ') || 'none'
-        const extra = c.extra.map((p) => p.anchor || p.ref).join(', ') || 'none'
-        return `missing runs: ${missing}; wrong/extra runs: ${extra}`
-      }).join(' | ')
-      spindle.log.warn(`[lumidraw] direct · present roster and runs disagree (${names.join(' / ') || detail}); re-parsing once`)
-      setStoryScanStage(scan, 'parsing', 'The parser paired the scene with the wrong character sheet; re-reading once.')
-      const retryInstruction = instruction +
-        '\n\nYOUR PREVIOUS ATTEMPT WAS REJECTED. Your validated present roster and the character BREAK runs did not match. ' +
-        `The mismatch was: ${detail}. ` +
-        'Every validated present person needs exactly one matching run, and no run may copy a different known sheet. ' +
-        'Re-read the CURRENT PASSAGE, verify each 3-8 word evidence quote, and rewrite in the SAME JSON format.'
-      try {
-        const retryRaw = await quietLLM(retryInstruction, parserInput.input, settings, userId, true, scan)
-        const retry = parseDirectImages(retryRaw, settings.maxImages || images.length || 1, profiles, passage)
-        const retryBad = retry.images.map((image) => directPresenceContradictions(image, profiles)).filter(Boolean)
-        const retryScore = contradictionScore(retryBad)
-        if (retry.images.length && retryScore < firstScore) {
-          spindle.log.info('[lumidraw] direct · retry resolved the presence/run mismatch' +
-            (retryBad.length ? ' partially' : ' completely'))
-          images = retry.images
-          rawReply = retryRaw
-        } else {
-          spindle.log.warn('[lumidraw] direct · retry did not improve the mismatch; using the mechanically guarded first attempt')
-        }
-      } catch (error) {
-        spindle.log.warn('[lumidraw] direct · mismatch retry failed (' + error.message + '); using the first attempt')
-      }
-    }
-  }
   const ordered = orderScenesByPassage(images, passage)
   const grounding = [passage, (parserInput && parserInput.contextPreview) || ''].filter(Boolean).join('\n')
 
@@ -7909,43 +7966,9 @@ async function runDirectImages(initialImages, ctx) {
     const image = ordered[index]
     setStoryScanStage(scan, 'generating',
       `Sending image ${index + 1} of ${ordered.length} to Draw Things.`)
-    for (const note of image.notes || []) trace('parser cleanup', 'applied', note)
-    if ((image.present || []).length) trace('presence roster', 'clean',
-      image.present.map((entry) => `${entry.name}: "${entry.evidence}"`).join(' · '))
-    let body = sanitizeDirectNames(image.prompt, profiles, trace)
-    const locked = applyIdentityLock(body, profiles, trace)
-    body = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
-      .join(', ').replace(/\s*,\s*BREAK\s*,\s*/g, ' BREAK ').replace(/\s{2,}/g, ' ').trim()
-
-    // Rating and the two narrow anatomy/censorship defences occupy fixed slots;
-    // Direct's authored body remains otherwise intact.
-    const defences = directDefences(body, profiles, image.rating)
-    if (defences.notes.length) {
-      trace('direct defences', 'applied',
-        defences.notes.join(' · ') + (defences.negatives.length ? ` · negatives: ${defences.negatives.join(', ')}` : ''))
-      spindle.log.info('[lumidraw] direct defences · ' + defences.notes.join(' · ') +
-        (defences.negatives.length ? ` · negatives: ${defences.negatives.join(', ')}` : ''))
-    }
-    // Direct owns the subject BREAKs. A compiler-era BREAK left in quality tags
-    // would isolate the style header into its own attention chunk, so keep the
-    // header text but remove the separator.
-    const headerRaw = reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), image.rating)
-    const headerParts = headerRaw.split(/\bBREAK\b/)
-      .map((part) => part.replace(/^[\s,]+|[\s,]+$/g, '')).filter(Boolean)
-    if (headerParts.length > 1) {
-      trace('preset BREAK', 'removed', 'BREAK found in quality/prefix text — content kept, separator dropped')
-    }
-    const header = headerParts.join(', ')
-    const prompt = joinPromptParts([header, image.rating || '', ...defences.positive, body])
-    const negativePrompt = negativeWith(preset.negativePrompt || '', defences.negatives)
-    const detrapped = stripSubwordTraps(prompt)
-    for (const hit of detrapped.hits) {
-      trace('subword trap', 'applied', `removed ${hit.words.join(', ')} — ${hit.why}`)
-    }
-    const finalPrompt = detrapped.text
-    trace('direct prompt', 'applied',
-      `${image.prompt.length} chars from the parser, sent as ${finalPrompt.length}` +
-      (image.rating ? ` · rating ${image.rating}` : ' · no rating given'))
+    const finalized = finalizeDirectImagePrompt(image, { preset, profiles, prefix, trace })
+    const finalPrompt = finalized.prompt
+    const negativePrompt = finalized.negativePrompt
 
     const dims = aspectDims(preset.config, image.aspect)
     const entry = await generateAndUpload({
@@ -11474,6 +11497,10 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const settings = { ...saved }
   if (overrides.parserModel !== undefined) settings.parserModel = String(overrides.parserModel || '').trim()
   if (overrides.parserConnection) settings.parserConnection = String(overrides.parserConnection).trim()
+  if (['parser', 'direct'].includes(String(overrides.mode || ''))) {
+    settings.mode = String(overrides.mode)
+    settings.directMode = settings.mode === 'direct'
+  }
 
   const presets = await getPresets()
   // The active preset wins here, unlike a plain regeneration. Re-running the parser
@@ -11503,13 +11530,20 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const rememberedState = await readSceneMemory(chatId, preset.name)
   const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
   const profiles = await getStoryProfiles(preset, settings, userId, chatId)
-  const reparseCast = allKnownProfiles(profiles).filter((p) => p && p.ref)
-  const reparseUnknown = !reparseCast.length || reparseCast.some((p) => !((rememberedState.outfits || {})[p.ref] || []).length)
+  const directMode = settings.mode === 'direct' || settings.directMode === true
+  const profilesForPrompt = directMode
+    ? gateDirectProfiles(profiles, directEvidenceFor(messages, targetIndex, settings))
+    : profiles
+  const reparseCast = allKnownProfiles(profilesForPrompt).filter((p) => p && p.ref)
+  const inThisScene = (p) => p.ref === 'character' || p.ref === 'persona' ||
+    (p.anchor && new RegExp('\\b' + escapeRegExp(String(p.anchor).split(/\s+/)[0]) + '\\b', 'i').test(passage))
+  const presentCast = reparseCast.filter(inThisScene)
+  const reparseUnknown = !presentCast.length || presentCast.some((p) => !((rememberedState.outfits || {})[p.ref] || []).length)
   const reparseDigest = reparseUnknown ? clothingDigest(messages, targetIndex) : []
   const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, {
     setting: (rememberedState.setting || []).length ? rememberedState.setting : anchorTags,
     lighting: rememberedState.lighting || [],
-    outfits: wardrobeLinesFor(rememberedState, profiles),
+    outfits: wardrobeLinesFor(rememberedState, profilesForPrompt),
     clothingDigest: reparseDigest,
   })
   const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
@@ -11520,29 +11554,71 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const retry = source && source.prompt
     ? { previousPrompt: String(source.prompt), attempt: Math.max(1, Number(overrides.attempt) || 1) }
     : null
-  const instruction = applyDynamicGuidance(
-    (await resolveMacros(guidance, userId, chatId)) +
-      structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
-    composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: await getPlaces(), retry, wardrobe: (rememberedState && rememberedState.outfits) || null })))
+  const savedPlacesForParser = await getPlaces()
+  const instruction = directMode
+    ? buildDirectInstruction(profilesForPrompt, {
+      maxImages: settings.maxImages || 2,
+      wardrobe: (rememberedState && rememberedState.outfits) || null,
+      clothingDigest: reparseDigest,
+      places: savedPlacesForParser,
+      banned: preset.bannedTags || '',
+      fantasy: !!profiles.fantasySetting,
+    }) + (retry
+      ? `\n\nREPARSE ATTEMPT ${retry.attempt}. The prompt below was rejected by the user. Choose a meaningfully different drawable moment when the CURRENT PASSAGE supports one; never change the validated physical-presence rules.\nREJECTED PROMPT:\n${retry.previousPrompt}`
+      : '')
+    : applyDynamicGuidance(
+      (await resolveMacros(guidance, userId, chatId)) +
+        structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
+      composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: savedPlacesForParser, retry, wardrobe: (rememberedState && rememberedState.outfits) || null })))
   if (retry) {
-    spindle.log.info(`[lumidraw] re-parse attempt ${retry.attempt} · the previous reading was sent back as rejected`)
+    spindle.log.info(`[lumidraw] ${directMode ? 'direct ' : ''}re-parse attempt ${retry.attempt} · the previous reading was sent back as rejected`)
   }
 
   const startedAt = Date.now()
   const report = {}
-  const raw = await quietLLM(instruction, parserInput.input, settings, userId, true, null, report)
+  let raw = await quietLLM(instruction, parserInput.input, settings, userId, true, null, report)
   const parserMs = Date.now() - startedAt
 
   let parsed = []
   let parseError = ''
-  try {
-    parsed = parseParserScenes(raw, settings.maxImages || 2, profiles)
-  } catch (error) {
-    parseError = error.message
+  const results = []
+  if (directMode) {
+    const direct = parseDirectImages(raw, settings.maxImages || 2, profiles, passage)
+    if (!direct.images.length) {
+      parseError = direct.error || 'Direct mode returned no usable prompt.'
+    } else {
+      const reconciled = await reconcileDirectPresence(direct.images, {
+        preset, profiles, userId, chatId, scan: null, rawReply: raw, parserInput,
+        instruction, settings,
+      })
+      raw = reconciled.rawReply
+      const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
+      await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
+      for (const item of orderScenesByPassage(reconciled.images, passage)) {
+        const traceLines = []
+        const trace = (label, status, detail) => traceLines.push({ label, status, detail })
+        const finalized = finalizeDirectImagePrompt(item, { preset, profiles, prefix, trace })
+        results.push({
+          ok: true,
+          anchor: item.anchor || '',
+          sceneStatement: directSceneSentence(item.prompt),
+          prompt: finalized.prompt,
+          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, aspect: item.aspect, rating: item.rating, present: item.present || [] } },
+          aspect: item.aspect || '',
+          negativePrompt: finalized.negativePrompt,
+          trace: traceLines,
+        })
+      }
+    }
+  } else {
+    try {
+      parsed = parseParserScenes(raw, settings.maxImages || 2, profiles)
+    } catch (error) {
+      parseError = error.message
+    }
   }
 
-  const results = []
-  if (!parseError) {
+  if (!directMode && !parseError) {
     for (const item of orderScenesByPassage(parsed.slice(0, Math.max(1, Math.min(4, Number(settings.maxImages) || 2))), passage)) {
       const assessment = assessStructuredScene(item.scene)
       if (!assessment.valid) {
@@ -12461,7 +12537,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (!imageUrl) throw new Error('Rebuilding needs to know which message to work from.')
 
         const parse = await reparseSourceMessage(userId, imageUrl, payload)
-        if (parse.parseError) throw new Error(`Parser returned invalid structured data: ${parse.parseError}`)
+        if (parse.parseError) throw new Error(parse.settings.mode === 'direct' || parse.settings.directMode === true
+          ? `Direct parser returned no usable prompt: ${parse.parseError}`
+          : `Parser returned invalid structured data: ${parse.parseError}`)
         const usable = parse.results.filter((item) => item.ok)
         if (!usable.length) throw new Error('The parser produced no usable scene, so nothing was changed.')
 
@@ -12522,9 +12600,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
         const parse = await reparseSourceMessage(userId, imageUrl, payload)
         if (parse.parseError) {
+          const directReparse = parse.settings.mode === 'direct' || parse.settings.directMode === true
           reply = ok(payload, requestId, {
             reparsed: false,
-            note: `Parser returned invalid structured data: ${parse.parseError}`,
+            note: directReparse
+              ? `Direct parser returned no usable prompt: ${parse.parseError}`
+              : `Parser returned invalid structured data: ${parse.parseError}`,
             parserMs: parse.parserMs,
             model: parse.report.model || '',
             overrideNote: parse.report.overrideNote || '',
@@ -12549,6 +12630,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         reply = ok(payload, requestId, {
           reparsed: usable > 0,
           results: parse.results,
+          mode: parse.settings.mode === 'direct' || parse.settings.directMode === true ? 'direct' : 'parser',
+          parserEngine: parse.settings.mode === 'direct' || parse.settings.directMode === true ? 'direct' : parse.settings.parserEngine,
+          rawReply: String(parse.raw || ''),
           parserMs: parse.parserMs,
           model: parse.report.model || '',
           requestedModel: parse.report.requestedModel || '',
