@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.0'
+const EXTENSION_VERSION = '1.3.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -424,7 +424,6 @@ function realSetup(ctx) {
     .ld-lightbox-actions { display:flex; gap:7px; flex:0 0 auto; }
     .ld-lightbox-regen { flex:0 0 auto; max-height:46%; overflow-y:auto; padding:10px 12px; border-top:1px solid var(--lumiverse-border, #3d4050); background:#15161c; }
     .ld-lightbox-regen textarea { width:100%; box-sizing:border-box; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; line-height:1.4; }
-    .ld-chat-image-fixable { cursor:zoom-in; }
     .ld-dt-field { display:flex; flex-direction:column; gap:3px; margin-top:7px; }
     .ld-dt-field:first-child { margin-top:0; }
     .ld-dt-settings .ld-profile-block { margin-top:7px; }
@@ -1657,30 +1656,15 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
 
   // --- the fixable index ------------------------------------------------------
-  // "Scrolling through my chat is super choppy now."
-  //
-  // markFixableChatImages runs on a 4 second timer over every <img> on the page.
-  // For each one it called findHistoryImage AND findHistoryImageByAlt, and each
-  // of those rebuilt the ENTIRE flattened history array from scratch — then ran a
-  // regex over every entry's full prompt string looking for a substring. So the
-  // real cost per tick was:
-  //
-  //     images on page  ×  images in history  ×  regex over a whole prompt
-  //
-  // …on the main thread, four times a minute, growing with both the chat and the
-  // History tab. At 51 saved images and a long chat that is a periodic stall, and
-  // a periodic main-thread stall during scrolling IS choppy scrolling.
-  //
-  // Same answers, built once per history change instead of once per image:
-  // two Maps for the O(1) cases, and the substring fallback — which cannot be a
-  // Map, since it is a substring test — evaluated at most ONCE per <img> element
-  // and remembered in a WeakMap.
+  // Chat rows are virtualized by current Lumiverse. Do not poll the document for
+  // images: rows are mounted/unmounted while scrolling, and a document-wide scan
+  // plus class mutation creates work exactly when the virtualizer is busiest.
+  // The history index stays cached, but matching now happens only when an image is
+  // actually clicked.
   let fixableSource = null
-  let fixableVersion = 0
   let fixableByUrl = new Map()
   let fixableByAlt = new Map()
   let fixablePrompts = []
-  const fixableSeen = new WeakMap()
 
   // Detected by reference rather than hooked into all nine places history is
   // assigned — every one of them replaces the array, and a missed hook would be
@@ -1688,7 +1672,6 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   function ensureFixableIndex() {
     if (fixableSource === history) return
     fixableSource = history
-    fixableVersion++
     fixableByUrl = new Map()
     fixableByAlt = new Map()
     fixablePrompts = []
@@ -3262,9 +3245,12 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     }
     setStatus('.ld-gen-status', 'Adding to chat…')
     try {
+      const recipeConfig = entry && entry.recipe && entry.recipe.config ? entry.recipe.config : null
       const res = await call('append_to_chat', {
         imageUrl: img.url,
         alt: (entry && entry.prompt) ? entry.prompt.slice(0, 120) : 'Generated image',
+        width: recipeConfig && recipeConfig.width,
+        height: recipeConfig && recipeConfig.height,
       })
       setStatus('.ld-gen-status', res.mode === 'inserted'
         ? 'Added a copy at the top of the latest story message.'
@@ -3849,47 +3835,24 @@ ${entry.prompt || ''}`.trim()
   // connections can change nothing at all while looking like it changed
   // everything. Say so where the field is.
   // Image display width. Presentation only — no message is modified and nothing is
-  // regenerated. The selectors mirror the ones a hand-written Lumiverse stylesheet
-  // needs, but this survives a Lumiverse rebuild better: it leans on the stable
-  // [data-component] attributes and on attribute-substring matches for the hashed
-  // CSS-module class names, which are the part that changes when Lumiverse builds.
+  // regenerated. Current Lumiverse virtualizes chat rows and remeasures them as
+  // content changes, so keep this selector intentionally cheap: no :has(), no
+  // generated class names, and no wrapper mutations. New LumiDraw images carry
+  // intrinsic dimensions so their aspect ratio is reserved before they decode.
   let imageSizeStyleRemove = null
   function imageSizeCss(px) {
     const size = `${px}px`
     return `
 :root { --lumidraw-image-size: ${size}; }
-[data-component="MessageContent"] p:has(img) {
-  width: 100% !important; max-width: 100% !important; height: auto !important;
-  text-align: center !important; overflow: visible !important; clear: both !important;
-}
-[data-component="MessageContent"] p:has(img) > span:has(> img),
-[data-component="MessageContent"] p:has(img) > a:has(img) {
-  display: block !important;
-  width: min(100%, var(--lumidraw-image-size)) !important;
-  max-width: var(--lumidraw-image-size) !important;
-  height: auto !important; max-height: none !important;
-  margin-inline: auto !important; overflow: visible !important;
-}
 [data-component="MessageContent"] img {
-  display: block !important; float: none !important; clear: both !important;
-  width: min(100%, var(--lumidraw-image-size)) !important;
-  max-width: var(--lumidraw-image-size) !important;
-  height: auto !important; max-height: none !important;
-  margin: 0 auto !important; object-fit: contain !important; box-sizing: border-box !important;
-}
-button[class*="inlineImageBtn"],
-div[class*="inlineImageWrap"] {
   display: block !important;
+  float: none !important;
   width: min(100%, var(--lumidraw-image-size)) !important;
   max-width: var(--lumidraw-image-size) !important;
-  height: auto !important; max-height: none !important;
-  aspect-ratio: auto !important; margin-inline: auto !important; overflow: visible !important;
-}
-img[class*="inlineImage"] {
-  display: block !important; width: 100% !important;
-  max-width: var(--lumidraw-image-size) !important;
-  height: auto !important; max-height: none !important;
-  margin-inline: auto !important; object-fit: contain !important;
+  height: auto !important;
+  margin-inline: auto !important;
+  object-fit: contain !important;
+  box-sizing: border-box !important;
 }`
   }
 
@@ -4425,22 +4388,6 @@ img[class*="inlineImage"] {
   }
   document.addEventListener('click', onDocumentImageClick, true)
 
-  // Purely cosmetic affordance so a fixable image shows a zoom cursor.
-  function markFixableChatImages() {
-    if (!history || !history.length) return
-    ensureFixableIndex()
-    for (const img of document.querySelectorAll('img')) {
-      // Already answered for this history. An image's src and alt do not change
-      // under it, so the answer cannot either — and this is what turns a tick
-      // over an unchanged chat into a WeakMap lookup per image instead of a
-      // full search per image.
-      if (fixableSeen.get(img) === fixableVersion) continue
-      fixableSeen.set(img, fixableVersion)
-      if (panel.contains(img) || lightbox.contains(img)) continue
-      img.classList.toggle('ld-chat-image-fixable', !!findHistoryImageForChatImage(img))
-    }
-  }
-  const fixableTimer = setInterval(markFixableChatImages, 4000)
   $('.ld-text-editor-close').addEventListener('click', () => closeTextEditor(false))
   $('.ld-text-editor-cancel').addEventListener('click', () => closeTextEditor(false))
   $('.ld-text-editor-apply').addEventListener('click', () => closeTextEditor(true))
@@ -5477,8 +5424,6 @@ img[class*="inlineImage"] {
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
     window.removeEventListener('keydown', onStoryPickerKeyDown)
     document.removeEventListener('click', onDocumentImageClick, true)
-    clearInterval(fixableTimer)
-    for (const img of document.querySelectorAll('img.ld-chat-image-fixable')) img.classList.remove('ld-chat-image-fixable')
     closeLightbox()
     document.body.classList.remove('ld-fullscreen-lock')
     if (window[INSTANCE_KEY] === liveInstance) delete window[INSTANCE_KEY]

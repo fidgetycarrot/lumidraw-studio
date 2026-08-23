@@ -1348,10 +1348,17 @@ function looksLikeImageDirective(url) {
 
 function stripForeignImageDirectives(text) {
   const value = String(text || '')
-  if (!value.includes('![')) return { text: value, count: 0 }
+  if (!value.includes('![') && !/<img\b/i.test(value)) return { text: value, count: 0 }
   let count = 0
-  const next = value.replace(MARKDOWN_IMAGE_RE, (match, href) => {
+  let next = value.replace(MARKDOWN_IMAGE_RE, (match, href) => {
     if (!looksLikeImageDirective(href)) return match
+    count++
+    return ''
+  })
+  next = next.replace(/<img\b[^>]*>/gi, (tag) => {
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag)
+    const ours = /\bdata-lumidraw-image\s*=|\bdata-lumidraw-image\b/i.test(tag)
+    if (!ours && (!src || !looksLikeImageDirective(src[1]))) return tag
     count++
     return ''
   })
@@ -2235,7 +2242,7 @@ async function listStoryMessages(userId, requestedLimit = 120) {
     preview: storyPreview(bits.content),
     createdAt: bits.createdAt,
     processed: processed.has(bits.id) || processed.has(String(bits.id)),
-    hasImage: /!\[[^\]]*\]\([^)]*\)/.test(bits.content),
+    hasImage: /!\[[^\]]*\]\([^)]*\)|<img\b[^>]*\bsrc\s*=/i.test(bits.content),
     isLatest: newestIndex === 0,
   }))
 
@@ -2279,6 +2286,46 @@ function markdownAltText(value, maxChars = 100) {
     .trim()
     .slice(0, maxChars)
     .trim()
+}
+
+// Current Lumiverse virtualizes messages and lazy-loads images. Markdown images
+// have no intrinsic dimensions until their file is decoded, so a row can be measured
+// as text-only and then jump by hundreds of pixels when the image loads. Supplying
+// HTML width/height lets the browser reserve the final aspect ratio immediately.
+function htmlAttr(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function storyImageMarkup(imageUrl, alt, dimensions = null) {
+  const width = Math.max(0, Math.round(Number(dimensions && dimensions.width) || 0))
+  const height = Math.max(0, Math.round(Number(dimensions && dimensions.height) || 0))
+  const size = width > 0 && height > 0 ? ` width="${width}" height="${height}"` : ''
+  return `<img data-lumidraw-image="1" src="${htmlAttr(imageUrl)}" alt="${htmlAttr(markdownAltText(alt, 120))}"${size} loading="lazy" decoding="async">`
+}
+
+function removeImageMarkupFromContent(content, imageUrl) {
+  const text = String(content || '')
+  const url = String(imageUrl || '').trim()
+  if (!text || !url) return { content: text, removed: false }
+  const wanted = normalizeForImageMatch(url)
+  let removed = false
+  let next = text.replace(/!\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)\s*/g, (match, href) => {
+    if (normalizeForImageMatch(href) !== wanted) return match
+    removed = true
+    return ''
+  })
+  next = next.replace(/<img\b[^>]*>/gi, (tag) => {
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag)
+    if (!src || normalizeForImageMatch(src[1]) !== wanted) return tag
+    removed = true
+    return ''
+  })
+  if (removed) next = next.replace(/^\s+/, '').replace(/\n{3,}/g, '\n\n')
+  return { content: next, removed }
 }
 
 function replaceImageUrlInContent(content, oldUrl, newUrl) {
@@ -2388,6 +2435,16 @@ function findImageCandidatesByAlt(messages, promptText) {
       const alt = normalizeIdentityText(match[1])
       if (alt.length < 20) continue
       if (prompt.includes(alt)) candidates.push({ bits, url: match[2], alt })
+    }
+    for (const match of bits.content.matchAll(/<img\b[^>]*>/gi)) {
+      const tag = match[0]
+      const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag)
+      const altMatch = /\balt\s*=\s*["']([^"']*)["']/i.exec(tag)
+      if (!src || !altMatch) continue
+      const alt = normalizeIdentityText(altMatch[1]
+        .replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&amp;/g, '&'))
+      if (alt.length < 20) continue
+      if (prompt.includes(alt)) candidates.push({ bits, url: src[1], alt })
     }
   }
   return candidates
@@ -7629,7 +7686,7 @@ async function runDirectImages(images, ctx) {
     }, userId, scan)
     results.push({ ok: true, entry, anchor: image.anchor, prompt })
     if (entry && entry.images && entry.images[0]) {
-      markdowns.push({ md: `![${markdownAltText(prompt)}](${entry.images[0].url})`, anchor: image.anchor })
+      markdowns.push({ md: storyImageMarkup(entry.images[0].url, prompt, dims), anchor: image.anchor })
     }
   }
 
@@ -10028,7 +10085,7 @@ async function scanStoryCore(userId, options = {}) {
             origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'inline', alt: inlineAlt },
           }, userId)
         }
-        const md = `![${inlineAlt}](${entry.images[0].url})`
+        const md = storyImageMarkup(entry.images[0].url, inlineAlt, dims)
         content = content.replace(m[0], md)
         debugEntries.push({
           format: compiled.format,
@@ -10248,7 +10305,7 @@ async function scanStoryCore(userId, options = {}) {
             sceneStatement: (item.scene && item.scene.sceneStatement) || '',
           },
         }, userId, scan)
-        mds.push(`![${parserAlt}](${entry.images[0].url})`)
+        mds.push(storyImageMarkup(entry.images[0].url, parserAlt, dims))
         debugEntries.push({
           anchor: item.anchor,
           scene: compiled.scene,
@@ -10357,7 +10414,7 @@ async function scanStoryCore(userId, options = {}) {
         extra: preset.extra,
         origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'legacy-parser' },
       }, userId, scan)
-      mds.push(`![${markdownAltText(line)}](${entry.images[0].url})`)
+      mds.push(storyImageMarkup(entry.images[0].url, line, entry.recipe && entry.recipe.config))
     }
     assertStoryScanActive(scan)
     setStoryScanStage(scan, 'inserting', 'Adding generated images to the story message.')
@@ -11773,9 +11830,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // Places a generated image INTO the latest story message (prepended
         // at its top) via getMessages + updateMessage. Falls back to
         // appending a new assistant message if in-place editing fails.
-        const { imageUrl, alt, chatId } = payload
+        const { imageUrl, alt, chatId, width, height } = payload
         if (!imageUrl) throw new Error('No image URL to add.')
-        const md = `![${markdownAltText(alt || 'Generated image', 120)}](${imageUrl})`
+        const md = storyImageMarkup(imageUrl, alt || 'Generated image', { width, height })
 
         const chatApi = spindle.chat || spindle.chats
         if (!chatApi) {
@@ -11891,18 +11948,15 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const attempts = []
         const { messages, chatId: rmChatId } = await fetchMessages(userId)
 
-        const needle = `](${imageUrl})`
         let removed = false
         for (const m of messages) {
           const contentKey = ('content' in m) ? 'content' : ('text' in m) ? 'text' : ('message' in m) ? 'message' : null
           if (!contentKey || typeof m[contentKey] !== 'string') continue
-          if (!m[contentKey].includes(needle)) continue
-          const esc = imageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-          const re = new RegExp('!\\[[^\\]]*\\]\\(' + esc + '\\)\\n?\\n?')
-          const newContent = m[contentKey].replace(re, '').replace(/^\s+/, '')
+          const stripped = removeImageMarkupFromContent(m[contentKey], imageUrl)
+          if (!stripped.removed) continue
           const messageId = m.id || m.messageId
           try {
-            await updateMessageContent(messageId, contentKey, newContent, userId, rmChatId)
+            await updateMessageContent(messageId, contentKey, stripped.content, userId, rmChatId)
             removed = true
           } catch (e) { attempts.push(e.message) }
           break
@@ -11921,13 +11975,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // best-effort: remove from chat first (ignore not-found)
         try {
           const { messages, chatId: dChatId } = await fetchMessages(userId)
-          const needle = `](${imageUrl})`
           for (const m of messages) {
             const bits = messageBits(m)
-            if (!bits.contentKey || typeof bits.content !== 'string' || !bits.content.includes(needle)) continue
-            const esc = imageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-            const re = new RegExp('!\\[[^\\]]*\\]\\(' + esc + '\\)\\n?\\n?')
-            await updateMessageContent(bits.id, bits.contentKey, bits.content.replace(re, '').replace(/^\s+/, ''), userId, dChatId)
+            if (!bits.contentKey || typeof bits.content !== 'string') continue
+            const stripped = removeImageMarkupFromContent(bits.content, imageUrl)
+            if (!stripped.removed) continue
+            await updateMessageContent(bits.id, bits.contentKey, stripped.content, userId, dChatId)
             break
           }
         } catch { /* not in a chat / no chat open — fine */ }
