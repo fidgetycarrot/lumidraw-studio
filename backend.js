@@ -7866,12 +7866,8 @@ async function runDirectImages(images, ctx) {
     const image = ordered[index]
     setStoryScanStage(scan, 'generating',
       `Sending image ${index + 1} of ${ordered.length} to Draw Things.`)
-    const named = stripSubjectNames(image.prompt, profiles)
-    if (named.removed.length) {
-      trace('character names', 'removed', named.removed.join(', ') + ' — Anima does not know them')
-      spindle.log.info('[lumidraw] direct · removed character name(s) from the prompt: ' + named.removed.join(', '))
-    }
-    let body = named.prompt
+    for (const note of image.notes || []) trace('parser cleanup', 'applied', note)
+    let body = sanitizeDirectNames(image.prompt, profiles, trace)
     const locked = applyIdentityLock(body, profiles, trace)
     body = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
       .join(', ').replace(/\s*,\s*BREAK\s*,\s*/g, ' BREAK ').replace(/\s{2,}/g, ' ').trim()
@@ -7885,7 +7881,16 @@ async function runDirectImages(images, ctx) {
       spindle.log.info('[lumidraw] direct defences · ' + defences.notes.join(' · ') +
         (defences.negatives.length ? ` · negatives: ${defences.negatives.join(', ')}` : ''))
     }
-    const header = reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), image.rating)
+    // Direct owns the subject BREAKs. A compiler-era BREAK left in quality tags
+    // would isolate the style header into its own attention chunk, so keep the
+    // header text but remove the separator.
+    const headerRaw = reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), image.rating)
+    const headerParts = headerRaw.split(/\bBREAK\b/)
+      .map((part) => part.replace(/^[\s,]+|[\s,]+$/g, '')).filter(Boolean)
+    if (headerParts.length > 1) {
+      trace('preset BREAK', 'removed', 'BREAK found in quality/prefix text — content kept, separator dropped')
+    }
+    const header = headerParts.join(', ')
     const prompt = joinPromptParts([header, image.rating || '', ...defences.positive, body])
     const negativePrompt = negativeWith(preset.negativePrompt || '', defences.negatives)
     const detrapped = stripSubwordTraps(prompt)
@@ -7979,12 +7984,14 @@ CHOOSING THE MOMENT
 - Pick the single clearest drawable beat. One clear action, not three.
 
 PROMPT SHAPE — exactly this order:
-1. Count tags for everyone in frame ("1girl, 1boy").
-2. ONE scene sentence in plain words: who does what to whom, the geometry
-   stated once. In explicit scenes use the clinical word (fellatio, penis),
-   never a euphemism; in safe or sensitive scenes never name a sexual act. No
-   appearance, clothing, or scenery in this sentence. Do not write the rating
-   into the prompt — LumiDraw places it from your "rating" field.
+1. Count tags for everyone in frame. These are real Danbooru tags — 1girl,
+   2girls, 1boy — pluralized, never "2girl". The frame's total must equal the
+   character runs that follow.
+2. ONE scene sentence in plain words, at most 18 words: who does what to whom,
+   the geometry stated once. In explicit scenes use the clinical word (fellatio,
+   penis), never a euphemism; in safe or sensitive scenes never name a sexual
+   act. No appearance, clothing, or scenery in this sentence. Do not write the
+   rating into the prompt — LumiDraw places it from your "rating" field.
 3. Camera, setting, lighting as short tags. Use trained framing words only:
    portrait, upper body, cowboy shot, full body, wide shot; from above, from
    below, from side, from behind, from front; dutch angle, pov. Choose a frame
@@ -7995,18 +8002,31 @@ PROMPT SHAPE — exactly this order:
    copied exactly, anatomy (per the rule below), clothing, pose, action,
    expression. One character's traits never appear inside another's run.
 
+NAMES
+- Name each person once in the scene sentence using the SENTENCE NAME on their
+  sheet ("Price stands on the sidewalk while Mara reads the screen"). A name
+  shared between the sentence and the described body is strong anti-bleed glue.
+- Names belong ONLY in that one scene sentence: never in a tag run and never as
+  a bare tag. If a sheet gives no SENTENCE NAME, use she/he/they or a short
+  visual label such as "the taller girl".
+
+KEEP EACH RUN TIGHT — at most 18 tags, each thing said once:
+- One hair colour. One tag per garment, with its modifiers merged: write
+  "open dark hoodie", never "hoodie, open hoodie, dark hoodie".
+- The anchor's noun ("adult man") is said once; do not add extra body nouns such
+  as "slim male" or "tall female".
+- No umbrella tags ("casual clothes", "simple outfit") once the garments are
+  named. No filler ("beautiful", "nice").
+
 THE CHARACTER SHEETS ARE PASTE-EXACT TEXT, NOT NOTES.
 - Copy each identity anchor and clothing run character-for-character. Do not
-  paraphrase, reorder, complete, or improve them, and do not drop a trait
-  because the passage failed to repeat it. What the sheet states is true in
-  every image.
+  paraphrase, reorder, complete, or improve them, and do not drop a trait because
+  the passage failed to repeat it. What the sheet states is true in every image.
 - Never invent appearance. A person the sheet does not cover is described from
   the passage alone, briefly.
-- No character names anywhere in the prompt. In the scene sentence use "she",
-  "he", "they" — or a two-word visual label ("the taller girl") when a pronoun
-  would be ambiguous.
 - AT MOST TWO characters per image. Three or more is where this model swaps
-  faces, bodies, and clothes; choose the two whose moment carries the scene.
+  faces, bodies, and clothes; choose the two whose moment carries the scene. A
+  third person who merely witnesses the beat is left out, not squeezed in.
 
 ANATOMY
 - ALWAYS INCLUDE traits are part of the identity anchor and appear in every
@@ -8015,9 +8035,8 @@ ANATOMY
   explicit AND the character is nude or the passage depicts it. It stays inside
   its owner's run, immediately after the identity anchor.
 - Never give a character anatomy the sheet does not list, and never substitute
-  one set for another. A character whose sheet says futanari is drawn
-  futanari — with no female-genital tags — in every image where her anatomy
-  appears.
+  one set for another. A character whose sheet says futanari is drawn futanari —
+  with no female-genital tags — in every image where her anatomy appears.
 
 WARDROBE — persistent story state, in this precedence:
 1) a change in the CURRENT PASSAGE wins;
@@ -8044,9 +8063,13 @@ RATING is the Danbooru rating of the PICTURE, not the mood of the story:
 safe = nothing suggestive; sensitive = suggestive, no nudity; nsfw = nudity or
 overt sexual context; explicit = a sexual act or visible genitals.
 
+ASPECT — 16:9 for a wide scene or two figures side by side, 4:3 for two close
+figures, 3:4 for a single figure, 1:1 for a tight emblematic shot.
+
 NEVER: prose paragraphs beyond the one scene sentence, reasoning or
-self-corrections ("no wait"), contradictory duplicates, invented tags, a
-character's name as a tag, or anything from the banned list.
+self-corrections ("no wait"), the same concept twice in different words,
+invented tags, a character's name as a tag/run token, or anything from the
+banned list.
 `
 
 // The context the parser needs to write a good prompt, in the plainest form
@@ -8067,6 +8090,27 @@ function directAnchorFor(profile) {
   ].map(animaTag).filter(Boolean))), profile.anchor || profile.ref).slice(0, 28)
 }
 
+// Direct mode may use a character name in exactly one place: the natural-language
+// scene sentence. promptName is the author's explicit safe image-prompt name;
+// the real anchor is used only when it does not collide with Anima's tag space.
+function directSentenceName(profile) {
+  const promptName = String((profile && profile.promptName) || '').trim()
+  if (promptName && !nameReadsAsTag(promptName)) return promptName
+  const anchor = String((profile && profile.anchor) || '').trim()
+  if (anchor && !nameReadsAsTag(anchor)) return anchor
+  return ''
+}
+
+function directFallbackNoun(profile) {
+  const count = animaTag((profile && profile.countTag) || '')
+  if (/girl/.test(count)) return 'the girl'
+  if (/boy/.test(count)) return 'the boy'
+  if (/woman|female/.test(count)) return 'the woman'
+  if (/man|male/.test(count)) return 'the man'
+  const subject = String((profile && profile.subject) || '').trim().toLowerCase()
+  return subject ? `the ${subject}` : 'the character'
+}
+
 function directContext(profiles, { wardrobe = null, places = [], banned = '', fantasy = false, clothingDigest = [] } = {}) {
   const blocks = []
   for (const profile of allKnownProfiles(profiles)) {
@@ -8080,6 +8124,15 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
     const worn = recorded.filter((tag) => !BODY_STATE_TAGS.has(String(tag).toLowerCase()))
     const body = recorded.filter((tag) => BODY_STATE_TAGS.has(String(tag).toLowerCase()))
     const lines = [name]
+    const sentenceName = directSentenceName(profile)
+    if (sentenceName) {
+      lines.push('  SENTENCE NAME: ' + sentenceName + ' — use this name once in the scene sentence only; never in a tag run')
+      if (normalizeIdentityText(sentenceName) !== normalizeIdentityText(name)) {
+        lines.push('  REAL NAME IS UNSAFE IN IMAGE TEXT: never write "' + name + '"; use the SENTENCE NAME above')
+      }
+    } else {
+      lines.push('  SENTENCE NAME: none — "' + name + '" collides with image-tag vocabulary; use a pronoun or short visual label')
+    }
     if (profile.countTag) lines.push('  COUNT TAG: ' + animaTag(profile.countTag))
     if (anchor.length) lines.push('  IDENTITY ANCHOR (copy exactly): ' + anchor.join(', '))
     if ((profile.anatomy || []).length) {
@@ -8208,27 +8261,66 @@ function splitFusedSubjectRuns(prompt, depth = 0) {
 // they are removed here rather than hoped for. A name is not a tag: at best it
 // is noise competing with the description, at worst it pulls toward whichever
 // booru character happens to share it.
-function stripSubjectNames(prompt, profiles) {
-  const names = new Set()
-  for (const profile of allKnownProfiles(profiles)) {
-    if (!profile) continue
-    for (const value of [profile.anchor, profile.promptName]) {
-      const name = String(value || '').trim().toLowerCase()
-      if (name && !DIRECT_COUNT_TAG_RE.test(name)) names.add(name)
+function sanitizeDirectNames(prompt, profiles, trace = null) {
+  const notes = []
+  const entries = allKnownProfiles(profiles).filter((p) => p && p.anchor).map((profile) => {
+    const anchor = String(profile.anchor || '').trim()
+    const promptName = String(profile.promptName || '').trim()
+    const safe = directSentenceName(profile)
+    return {
+      anchor,
+      promptName,
+      use: safe || directFallbackNoun(profile),
+      collided: !safe,
     }
-  }
-  if (!names.size) return { prompt: String(prompt || ''), removed: [] }
-  const removed = []
-  const next = String(prompt || '').split(/\bBREAK\b/).map((run) => {
-    const kept = run.split(',').map((tag) => tag.trim()).filter((tag) => {
-      if (!tag) return false
-      if (!names.has(tag.toLowerCase())) return true
-      removed.push(tag)
-      return false
-    })
-    return ' ' + kept.join(', ') + ' '
-  }).join('BREAK')
-  return { prompt: removed.length ? next.replace(/\s+/g, ' ').trim() : String(prompt || ''), removed }
+  })
+  if (!entries.length) return String(prompt || '')
+
+  const blocks = String(prompt || '').split(/\bBREAK\b/)
+  const next = blocks.map((block, blockIndex) => {
+    const isFrame = blockIndex === 0
+    const out = []
+    for (const rawPart of String(block || '').split(',')) {
+      let part = String(rawPart || '').trim()
+      if (!part) continue
+      let drop = false
+      for (const entry of entries) {
+        const forms = uniqueStrings([entry.anchor, entry.promptName].filter(Boolean))
+        for (const form of forms) {
+          const re = new RegExp(`\\b${escapeRegExp(form)}\\b`, 'gi')
+          if (!re.test(part)) continue
+          // Names in BREAK runs are tag-space noise. Drop the whole comma-token
+          // rather than leave junk such as "'s phone" after deleting the word.
+          if (!isFrame) {
+            notes.push(`removed "${form}" from a tag run — names bind only in the scene sentence`)
+            drop = true
+            break
+          }
+          // A bare name in the shared frame is still a bare tag, not the sentence.
+          if (normalizeIdentityText(part) === normalizeIdentityText(form)) {
+            notes.push(`removed bare name tag "${part}" — names belong inside the scene sentence`)
+            drop = true
+            break
+          }
+          if (normalizeIdentityText(entry.use) !== normalizeIdentityText(form)) {
+            part = part.replace(re, entry.use)
+            const why = nameReadsAsTag(form)
+            notes.push(why
+              ? `"${form}" → "${entry.use}" in the scene sentence — ${why}`
+              : `"${form}" → "${entry.use}" in the scene sentence — the sheet's prompt name`)
+          }
+        }
+        if (drop) break
+      }
+      if (!drop && part) out.push(part)
+    }
+    return ' ' + out.join(', ') + ' '
+  }).join('BREAK').replace(/\s{2,}/g, ' ').trim()
+
+  const unique = uniqueStrings(notes)
+  if (trace) for (const note of unique) trace('character names', 'applied', note)
+  if (unique.length) spindle.log.info('[lumidraw] direct · names · ' + unique.slice(0, 6).join(' · '))
+  return next
 }
 
 function repairDirectPrompt(prompt) {
@@ -8252,7 +8344,169 @@ function repairDirectPrompt(prompt) {
   return { prompt: dropped.length ? repaired.replace(/\s+/g, ' ').trim() : String(prompt || ''), dropped }
 }
 
-function parseDirectImages(raw, maxImages = 2) {
+
+// Freehand parsers occasionally emit singular multi-counts such as `2girl`.
+// Normalize counts everywhere, and rebuild the shared frame from the subject
+// runs that actually survive the hard two-subject ceiling.
+const DIRECT_COUNT_FULL_RE = /^(\d+)\s*\+?\s*(girl|girls|boy|boys|other|others|woman|women|man|men|female|females|male|males|people|person|persons)$/i
+const DIRECT_COUNT_BASE = {
+  girl: 'girl', girls: 'girl', boy: 'boy', boys: 'boy', other: 'other', others: 'other',
+  woman: 'woman', women: 'woman', man: 'man', men: 'man', female: 'female', females: 'female',
+  male: 'male', males: 'male', people: 'people', person: 'person', persons: 'person',
+}
+const DIRECT_COUNT_PLURALS = {
+  girl: 'girls', boy: 'boys', other: 'others', woman: 'women',
+  man: 'men', female: 'females', male: 'males', people: 'people', person: 'people',
+}
+
+function directCountBase(value) {
+  return DIRECT_COUNT_BASE[String(value || '').toLowerCase()] || String(value || '').toLowerCase()
+}
+
+function normalizeDirectCountTag(tag) {
+  const match = DIRECT_COUNT_FULL_RE.exec(String(tag || '').trim())
+  if (!match) return String(tag || '').trim()
+  const n = Number(match[1])
+  const kind = directCountBase(match[2])
+  return `${n}${n === 1 ? kind : DIRECT_COUNT_PLURALS[kind]}`
+}
+
+function firstDirectTag(block) {
+  return (String(block || '').split(',')[0] || '').trim()
+}
+
+function limitDirectSubjectRuns(prompt, maxSubjects = 2) {
+  const notes = []
+  const blocks = String(prompt || '').split(/\bBREAK\b/).map((b) => b.trim()).filter(Boolean)
+  if (blocks.length < 2) return { prompt: String(prompt || ''), notes }
+  const isCount = (tag) => DIRECT_COUNT_TAG_RE.test(tag) || DIRECT_COUNT_FULL_RE.test(tag)
+  const frame = blocks[0]
+  const subjectRuns = []
+  const passthrough = []
+  for (const block of blocks.slice(1)) {
+    if (isCount(firstDirectTag(block))) subjectRuns.push(block)
+    else passthrough.push(block)
+  }
+  if (!subjectRuns.length) return { prompt: String(prompt || ''), notes }
+
+  const kept = subjectRuns.slice(0, Math.max(1, maxSubjects))
+  for (const run of subjectRuns.slice(Math.max(1, maxSubjects))) {
+    notes.push(`dropped an extra character run ("${run.split(',').slice(0, 3).join(', ')}…") — Anima is capped at two described subjects`)
+  }
+
+  const normalizedRuns = kept.map((run) => {
+    const tags = run.split(',')
+    const norm = normalizeDirectCountTag(tags[0])
+    if (tags[0].trim() && norm !== tags[0].trim()) {
+      notes.push(`count tag "${tags[0].trim()}" written as "${norm}"`)
+      tags[0] = norm
+    }
+    return tags.join(',').replace(/\s+/g, ' ').trim()
+  })
+
+  const sums = new Map()
+  let countable = normalizedRuns.length > 0
+  for (const run of normalizedRuns) {
+    const match = DIRECT_COUNT_FULL_RE.exec(normalizeDirectCountTag(firstDirectTag(run)))
+    if (!match) { countable = false; break }
+    const kind = directCountBase(match[2])
+    sums.set(kind, (sums.get(kind) || 0) + Number(match[1]))
+  }
+  let frameOut = frame
+  if (countable) {
+    const aggregate = [...sums.entries()].map(([kind, n]) =>
+      `${n}${n === 1 ? kind : DIRECT_COUNT_PLURALS[kind]}`)
+    const rest = frame.split(',').map((t) => t.trim()).filter((t) => t && !isCount(t))
+    frameOut = [...aggregate, ...rest].join(', ')
+  }
+  return { prompt: [frameOut, ...normalizedRuns, ...passthrough].join(' BREAK ').replace(/\s+/g, ' ').trim(), notes }
+}
+
+// Collapse parser re-description without changing paste-exact identity anchors.
+// Exact anchor tags win over later embellished variants; garments use the most
+// specific same-head wording when neither candidate is protected identity.
+function dedupeDirectRuns(prompt, profiles = null) {
+  const notes = []
+  const key = (t) => normalizeIdentityText(t)
+  const protectedKeys = new Set()
+  for (const profile of allKnownProfiles(profiles || {})) {
+    for (const tag of directAnchorFor(profile || {})) {
+      const k = key(tag)
+      if (k) protectedKeys.add(k)
+    }
+  }
+  const blocks = String(prompt || '').split(/\bBREAK\b/).map((block) => {
+    const tags = String(block || '').split(',').map((t) => t.trim()).filter(Boolean)
+    const kept = []
+    for (const tag of tags) {
+      const k = key(tag)
+      if (!k) continue
+      const exact = kept.findIndex((other) => key(other) === k)
+      if (exact >= 0) { notes.push(`"${tag}" — already said`); continue }
+
+      let handled = false
+      for (let i = 0; i < kept.length; i++) {
+        const other = kept[i]
+        const ko = key(other)
+        const tagProtected = protectedKeys.has(k)
+        const otherProtected = protectedKeys.has(ko)
+        const otherContains = ko.length > k.length && new RegExp(`\\b${escapeRegExp(k)}\\b`).test(ko)
+        const tagContains = k.length > ko.length && new RegExp(`\\b${escapeRegExp(ko)}\\b`).test(k)
+        if (!otherContains && !tagContains) continue
+        if (otherProtected) {
+          notes.push(`"${tag}" dropped — paste-exact identity already says "${other}"`)
+          handled = true
+          break
+        }
+        if (tagProtected) {
+          notes.push(`"${other}" folded into paste-exact identity "${tag}"`)
+          kept[i] = tag
+          handled = true
+          break
+        }
+        if (otherContains) {
+          notes.push(`"${tag}" — already covered by "${other}"`)
+          handled = true
+          break
+        }
+        if (tagContains) {
+          notes.push(`"${other}" folded into "${tag}"`)
+          kept[i] = tag
+          handled = true
+          break
+        }
+      }
+      if (!handled) kept.push(tag)
+    }
+
+    const bestByHead = new Map()
+    for (const tag of kept) {
+      const k = key(tag)
+      if (protectedKeys.has(k)) continue
+      const head = k.split(/\s+/).pop()
+      if (!head || !garmentZone(k)) continue
+      const words = k.split(/\s+/).length
+      const prev = bestByHead.get(head)
+      if (!prev || words > prev.words) bestByHead.set(head, { tag, words })
+    }
+    const finalTags = kept.filter((tag) => {
+      const k = key(tag)
+      if (protectedKeys.has(k)) return true
+      const head = k.split(/\s+/).pop()
+      if (!head || !garmentZone(k)) return true
+      const best = bestByHead.get(head)
+      if (best && best.tag !== tag) {
+        notes.push(`"${tag}" dropped — "${best.tag}" is the same garment`)
+        return false
+      }
+      return true
+    })
+    return ' ' + finalTags.join(', ') + ' '
+  })
+  return { prompt: blocks.join('BREAK').replace(/\s+/g, ' ').trim(), notes }
+}
+
+function parseDirectImages(raw, maxImages = 2, profiles = null) {
   let text = extractParserText(raw)
   const parsed = (() => {
     try { return JSON.parse(sanitizeJsonText(text)) } catch { /* fall through */ }
@@ -8288,12 +8542,15 @@ function parseDirectImages(raw, maxImages = 2) {
       spindle.log.info('[lumidraw] direct · the frame and a character were in one block; ' +
         `inserted BREAK before ${split.inserted.join(', ')} — Anima binds a block as one subject group`)
     }
-    const prompt = split.prompt
-    const runs = prompt.split(/\bBREAK\b/).filter((run) =>
-      DIRECT_COUNT_TAG_RE.test((run.split(',')[0] || '').trim()))
-    if (runs.length > 2) {
-      spindle.log.warn(`[lumidraw] direct · ${runs.length} characters in one image. ` +
-        'Anima reliably falls apart past two — expect features and positions to swap between them.')
+    const limited = limitDirectSubjectRuns(split.prompt, 2)
+    const deduped = dedupeDirectRuns(limited.prompt, profiles)
+    const prompt = deduped.prompt
+    const notes = [...limited.notes, ...deduped.notes]
+    if (limited.notes.length) {
+      spindle.log.warn('[lumidraw] direct · ' + limited.notes.join(' · '))
+    }
+    if (deduped.notes.length) {
+      spindle.log.info('[lumidraw] direct · duplicates collapsed · ' + deduped.notes.slice(0, 8).join(' · '))
     }
     const ratingRaw = String(item.rating || item.safety || '').trim().toLowerCase()
     const outfits = {}
@@ -8309,6 +8566,7 @@ function parseDirectImages(raw, maxImages = 2) {
       anchor: String(item.anchor || '').trim(),
       prompt,
       aspect: VALID_ASPECTS.has(String(item.aspect || '')) ? String(item.aspect) : '3:4',
+      notes,
       rating: ANIMA_SAFETY_TAGS.includes(ratingRaw) ? ratingRaw : '',
       setting: animaTagList(tagsFrom(item.setting || [], 8)),
       // Accepted for forward compatibility if a parser returns it, though the
@@ -10546,7 +10804,7 @@ async function scanStoryCore(userId, options = {}) {
       assertStoryScanActive(scan)
       setStoryScanStage(scan, 'compiling', 'Parser returned structured JSON; compiling the Anima prompt.')
       if (directMode) {
-        const direct = parseDirectImages(out, settings.maxImages || 2)
+        const direct = parseDirectImages(out, settings.maxImages || 2, profiles)
         if (!direct.images.length) {
           // A refusal is a decision, not a fault. Reported as itself, at info
           // rather than warn, and WITHOUT the "Direct mode:" prefix that made it
