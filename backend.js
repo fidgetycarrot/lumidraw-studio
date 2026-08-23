@@ -353,7 +353,7 @@ async function bindChatToCast(chatId, castId) {
   if (castId) map[chat] = String(castId)
   else delete map[chat]
   await spindle.storage.setJson(CHAT_CAST_FILE, map, { indent: 2 })
-  spindle.log.info(`[lumidraw] chat ${chat} is now using cast ${castId || '(none — falls back to the preset)'}`)
+  spindle.log.info(`[lumidraw] chat ${chat} is now using cast ${castId || '(none — chat-local leads only)'}`)
   return map
 }
 
@@ -402,10 +402,10 @@ async function effectivePersonaTags(preset, chatId) {
     return { tags, source: `your choice for this chat — ${chosen.name}` }
   }
   const cast = await castForChat(chatId)
-  const from = cast || preset || {}
+  const from = cast || {}
   const tags = String((from.personaProfile && from.personaProfile.appearanceTags) ||
     from.personaTags || '').trim()
-  return { tags, source: cast ? `the cast "${cast.name}"` : `the preset "${(preset || {}).name || ''}"` }
+  return { tags, source: cast ? `the cast "${cast.name}"` : 'no saved cast is bound to this chat' }
 }
 
 async function castForChat(chatId) {
@@ -2211,8 +2211,8 @@ async function absorbCastDeclarations(messages, targetIndex, preset, chatId = ''
   // 0.73.0 could only paper over it by filtering the polluted list at read time.
   // With a cast bound, there is nothing to filter: it never gets in.
   const boundCast = await castForChat(chatId)
-  let castIds = Array.isArray((boundCast || preset).castLibraryIds)
-    ? (boundCast || preset).castLibraryIds.slice() : []
+  let castIds = Array.isArray((boundCast || {}).castLibraryIds)
+    ? boundCast.castLibraryIds.slice() : []
   for (const entry of declared) {
     const key = normalizeIdentityText(entry.name)
     const existing = characters.find((item) => normalizeIdentityText(item && item.name) === key)
@@ -2265,14 +2265,11 @@ async function absorbCastDeclarations(messages, targetIndex, preset, chatId = ''
     // The preset is not touched at all on this path. That is the point.
     return { added, skipped }
   }
-  if (nextIds.join('|') !== (preset.castLibraryIds || []).join('|')) {
-    const presets = await getPresets()
-    const index = presets.findIndex((item) => item && item.name === preset.name)
-    if (index >= 0) {
-      presets[index] = { ...presets[index], castLibraryIds: nextIds }
-      await savePresets(presets)
-      preset.castLibraryIds = nextIds
-    }
+  // An unbound chat gets a chat-local cast only when there is actually someone
+  // to store. Never write story people back into the generation preset.
+  if (nextIds.length) {
+    const written = await writeCastIds(preset, chatId, nextIds)
+    spindle.log.info(`[lumidraw] ${added.join(', ') || 'cast'} joined ${written.where} — this chat only`)
   }
   return { added, skipped }
 }
@@ -3670,39 +3667,69 @@ function castMemberBelongsHere(entry, chatId) {
   return declaredIn === String(chatId || '')
 }
 
-// The seam. One function decides whether this chat's people come from a cast or
-// from the preset, and everything downstream is unchanged — which is why binding
-// nothing changes nothing. A chat with no cast behaves exactly as it did before.
-// ONE WRITER for "who is in this chat's cast". Generation reads the BOUND CAST
-// when there is one and the preset otherwise (castSourceFor, just below), so any
-// edit has to land in the same place or it silently does nothing — which is
-// exactly what the preset editor's cast list does for a bound chat: you add
-// somebody, save, and the chat carries on without them.
+// A generation preset no longer owns people. Legacy identity fields remain in the
+// preset files for rollback/migration, but an UNBOUND chat must not silently read
+// them or every new story starts with yesterday's cast.
+function unboundStorySource(preset) {
+  return {
+    ...(preset || {}),
+    characterProfile: null,
+    personaProfile: null,
+    characterLibraryId: '',
+    personaLibraryId: '',
+    characterTags: '',
+    personaTags: '',
+    castLibraryIds: [],
+    activeCastId: '',
+    activeCastName: '',
+    fantasySetting: false,
+  }
+}
+
+async function createChatLocalCast(chatId) {
+  const chat = String(chatId || '').trim()
+  if (!chat) throw new Error('Could not identify the current chat; no cast was changed.')
+  const existing = await castForChat(chat)
+  if (existing) return existing
+  const casts = await getCasts()
+  const cast = {
+    id: `cast_chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    name: `Chat cast ${chat.slice(-6)}`,
+    characterProfile: null,
+    personaProfile: null,
+    characterLibraryId: '',
+    personaLibraryId: '',
+    characterTags: '',
+    personaTags: '',
+    castLibraryIds: [],
+    migratedFromPreset: '',
+    chatLocal: true,
+    createdAt: Date.now(),
+  }
+  casts.push(cast)
+  await saveCasts(casts)
+  await bindChatToCast(chat, cast.id)
+  spindle.log.info(`[lumidraw] created an empty chat-local cast for ${chat}; generation presets no longer supply people`)
+  return cast
+}
+
+// ONE WRITER for "who is in this chat's cast". An unbound chat gets its own
+// empty cast on the first actual cast edit; the preset is never mutated.
 async function writeCastIds(preset, chatId, ids) {
   const next = uniqueStrings(ids.map(String).filter(Boolean))
-  const boundCast = await castForChat(chatId)
-  if (boundCast) {
-    const casts = await getCasts()
-    const index = casts.findIndex((item) => item && item.id === boundCast.id)
-    if (index >= 0) {
-      casts[index] = { ...casts[index], castLibraryIds: next }
-      await saveCasts(casts)
-    }
-    return { next, where: `the cast "${boundCast.name}"` }
-  }
-  const all = await getPresets()
-  const index = all.findIndex((item) => item && item.name === preset.name)
+  const boundCast = await createChatLocalCast(chatId)
+  const casts = await getCasts()
+  const index = casts.findIndex((item) => item && item.id === boundCast.id)
   if (index >= 0) {
-    all[index] = { ...all[index], castLibraryIds: next }
-    await savePresets(all)
-    preset.castLibraryIds = next
+    casts[index] = { ...casts[index], castLibraryIds: next }
+    await saveCasts(casts)
   }
-  return { next, where: `the preset "${preset.name}"` }
+  return { next, where: `the cast "${boundCast.name}"` }
 }
 
 async function castSourceFor(preset, chatId) {
   const cast = await castForChat(chatId)
-  if (!cast) return preset
+  if (!cast) return unboundStorySource(preset)
   return {
     ...preset,
     characterProfile: cast.characterProfile,
@@ -3718,27 +3745,11 @@ async function castSourceFor(preset, chatId) {
   }
 }
 
-// "Then I would really never have to do anything." A chat that has never been
-// bound gets bound the first time it resolves people, to the cast that came from
-// the preset it is already using. That is not a behaviour change — it is the
-// same people it would have got from the fallback — it just makes them THIS
-// chat's people from then on, so the next story cannot inherit them.
-async function autoBindChat(preset, chatId) {
-  const chat = String(chatId || '').trim()
-  if (!chat || !preset) return null
-  const map = await getChatCastMap()
-  if (map[chat]) return null
-  const casts = await getCasts()
-  const match = casts.find((item) => item && item.migratedFromPreset === preset.name) ||
-    casts.find((item) => item && item.name === preset.name)
-  if (!match) return null
-  await bindChatToCast(chat, match.id)
-  spindle.log.info(`[lumidraw] chat ${chat} had no cast, so it adopted "${match.name}" from its preset`)
-  return match
-}
-
+// New chats deliberately do not auto-bind to a preset-derived cast.
+// Existing explicit chat→cast bindings are still honored by castSourceFor().
 async function getStoryProfiles(preset, settings, userId, chatId) {
-  await autoBindChat(preset, chatId)
+  // New chats stay unbound until the user/story actually adds or selects a cast.
+  // Legacy preset identities remain stored for rollback but are not active story state.
   preset = await castSourceFor(preset, chatId)
   const needsLibrary = !!(preset.characterLibraryId || (Array.isArray(preset.castLibraryIds) && preset.castLibraryIds.length))
   const characterLibrary = needsLibrary ? await getCharacters() : []
@@ -11609,7 +11620,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // but when BOTH are empty sceneMemoryKey returns '' and every chat shares
         // one wardrobe record — so that case is now said out loud rather than
         // silently producing another story's clothes.
-        const chatId = (await resolveActiveChatId(userId)) || String(payload.chatId || '').trim() || ''
+        const chatId = String(payload.chatId || '').trim() || String((await resolveActiveChatId(userId)) || '')
         if (!chatId) {
           spindle.log.info('[lumidraw] wardrobe: no chat could be identified — this record is shared across every chat')
         }
@@ -11653,7 +11664,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           const from = String(payload.replace.from)
           const to = String(payload.replace.to)
           const boundCast = await castForChat(chatId)
-          const source = boundCast || preset
+          const source = boundCast || { castLibraryIds: [] }
           const ids = (source.castLibraryIds || []).map((id) => (String(id) === from ? to : String(id)))
           const characters = await getCharacters()
           const doomed = characters.find((item) => item && String(item.id) === from &&
@@ -11675,7 +11686,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.add && preset) {
           const wanted = String(payload.add)
           const boundCast = await castForChat(chatId)
-          const source = boundCast || preset
+          const source = boundCast || { castLibraryIds: [] }
           const ids = [...(source.castLibraryIds || []), wanted]
           const { where } = await writeCastIds(preset, chatId, ids)
           const named = ((await getCharacters()).find((item) => String(item.id) === wanted) || {}).name || wanted
@@ -11696,7 +11707,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           // source of the rows and nobody moved the removal, so the × edited a
           // list the panel no longer reads and appeared to do nothing.
           const boundCast = await castForChat(chatId)
-          const source = boundCast || preset
+          const source = boundCast || { castLibraryIds: [] }
           const keepIds = (source.castLibraryIds || []).filter((id) => !wanted.has(String(id)))
           const doomed = characters.filter((item) => item && wanted.has(String(item.id)) &&
             item.profile && item.profile.declaredByStory)
@@ -11711,19 +11722,11 @@ spindle.onFrontendMessage(async (payload, userId) => {
                 casts[index] = { ...casts[index], castLibraryIds: keepIds }
                 await saveCasts(casts)
               }
-            } else {
-              const all = await getPresets()
-              const index = all.findIndex((item) => item && item.name === preset.name)
-              if (index >= 0) {
-                all[index] = { ...all[index], castLibraryIds: keepIds }
-                await savePresets(all)
-                preset.castLibraryIds = keepIds
-              }
             }
           }
           removed = [...wanted]
           spindle.log.info(`[lumidraw] removed ${removed.length} from ` +
-            (boundCast ? `the cast "${boundCast.name}"` : `the preset "${preset.name}"`) +
+            (boundCast ? `the cast "${boundCast.name}"` : 'this unbound chat') +
             (doomed.length ? `; ${doomed.map((item) => item.name).join(', ')} were the story's and were deleted` : ''))
         }
 
@@ -11768,7 +11771,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
             // on screen said so, and the panel's copy of that tab was stale
             // anyway. A row that produced tags should say where they came from
             // and take you there.
-            source: profile.libraryId ? 'library' : (boundCastForRows ? 'cast' : 'preset'),
+            source: profile.libraryId ? 'library' : (boundCastForRows ? 'cast' : 'chat'),
             // WHAT THIS ROW IS ACTUALLY CONTRIBUTING. The input beside it edits
             // clothes; "edit what it has to make it correct" is about these, and
             // until now they were invisible — so a wrong profile looked
@@ -11839,7 +11842,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }
 
       case 'casts': {
-        const chatId = (await resolveActiveChatId(userId)) || String(payload.chatId || '').trim() || ''
+        const chatId = String(payload.chatId || '').trim() || String((await resolveActiveChatId(userId)) || '')
         if (payload.bind !== undefined) {
           await bindChatToCast(chatId, String(payload.bind || ''))
         }

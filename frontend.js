@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.6'
+const EXTENSION_VERSION = '1.3.7'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -4233,7 +4233,7 @@ ${entry.prompt || ''}`.trim()
     const box = $('.ld-wardrobe-rows')
     if (!box) return
     if (!rows || !rows.length) {
-      box.innerHTML = '<div class="ld-help" style="margin:0">No characters here yet. Rows come from the active preset — the main character, the persona, and its cast list. Refresh reads this chat for [LUMICAST] declarations.</div>'
+      box.innerHTML = '<div class="ld-help" style="margin:0">No characters here yet. This chat starts from its current Lumiverse character/persona; add saved characters here or refresh to read story declarations.</div>'
       return
     }
     box.innerHTML = rows.map((row) => {
@@ -4265,7 +4265,7 @@ ${entry.prompt || ''}`.trim()
             .join('') + '</select>'
         : ''
       const remove = row.id
-        ? `<button class="ld-btn ld-compact" data-act="wardrobe-drop" data-id="${row.id}" data-name="${name}" data-declared="${row.declared ? '1' : ''}" title="${row.declared ? 'Delete this character — the story invented it' : 'Unlink from this preset; the character itself is kept'}" style="padding:2px 7px">×</button>`
+        ? `<button class="ld-btn ld-compact" data-act="wardrobe-drop" data-id="${row.id}" data-name="${name}" data-declared="${row.declared ? '1' : ''}" title="${row.declared ? 'Delete this character — the story invented it' : 'Remove from this chat's cast; the saved character is kept'}" style="padding:2px 7px">×</button>`
         : ''
       // WHERE THESE TAGS LIVE, and a way to get there. "LumiDraw has the Fanny
       // character saved somehow, somewhere cause the image it produced used the
@@ -4275,9 +4275,9 @@ ${entry.prompt || ''}`.trim()
       const where = row.source === 'library'
         ? 'a saved character — click to edit it'
         : row.source === 'cast'
-          ? 'stored in the bound cast — edit under Cast & presets'
-          : row.source === 'preset'
-            ? 'stored in the active preset — edit under Cast & presets'
+          ? 'stored in the bound cast'
+          : row.source === 'chat'
+            ? 'the active chat character/persona'
             : 'no profile behind this row — only a wardrobe note'
       const opener = (row.source === 'library' && row.id)
         ? `<a href="#" class="ld-wardrobe-open" data-id="${row.id}" title="${where}" style="min-width:96px;font-size:12px;opacity:.8;text-decoration:underline;cursor:pointer">${name}${row.orphan ? ' *' : ''}${mark}</a>`
@@ -4309,7 +4309,7 @@ ${entry.prompt || ''}`.trim()
     if (!pick) return
     const casts = res.casts || []
     const esc = (value) => String(value || '').replace(/[<>&"]/g, '')
-    pick.innerHTML = ['<option value="">(none — fall back to the preset)</option>']
+    pick.innerHTML = ['<option value="">(none — use this chat only)</option>']
       .concat(casts.map((cast) =>
         `<option value="${esc(cast.id)}"${cast.id === res.boundId ? ' selected' : ''}>${esc(cast.name)}</option>`))
       .join('')
@@ -4327,7 +4327,7 @@ ${entry.prompt || ''}`.trim()
     if (summary) {
       const who = active
         ? [active.character, active.persona, ...(active.members || [])].filter(Boolean).join(' · ') || 'Nobody in this cast yet.'
-        : 'No cast bound — this chat is using whoever is in the active preset.'
+        : 'No saved cast bound — this chat uses its current character/persona plus anyone you add here.'
       // Sharing a cast is legitimate — the same two people really can be in two
       // stories — but it means a character one story introduces joins the other's
       // list too. Copy is the answer, and it is one button away.
@@ -4340,12 +4340,15 @@ ${entry.prompt || ''}`.trim()
   }
 
   async function loadCasts(payload = {}) {
+    const requestedChatId = String(payload.chatId || lastSeenChatId || '')
     try {
-      const res = await call('casts', { chatId: lastSeenChatId, ...payload }, 15000)
+      const res = await call('casts', { ...payload, chatId: requestedChatId }, 15000)
+      // A slow reply from the chat we just left must never repaint the new chat's panel.
+      if (requestedChatId && lastSeenChatId && requestedChatId !== String(lastSeenChatId)) return res
       renderCasts(res)
       return res
     } catch (e) {
-      setStatus('.ld-cast-status', e.message, 'err')
+      if (!requestedChatId || requestedChatId === String(lastSeenChatId || '')) setStatus('.ld-cast-status', e.message, 'err')
       return null
     }
   }
@@ -4356,7 +4359,7 @@ ${entry.prompt || ''}`.trim()
       if (!res) return
       setStatus('.ld-cast-status', res.boundId
         ? 'This chat now uses that cast. Images and the wardrobe follow it.'
-        : 'Unbound — this chat falls back to the preset.', 'good')
+        : 'No saved cast bound — this chat now uses its own current character/persona.', 'good')
       loadWardrobe(true)
     })
   }
@@ -4430,9 +4433,13 @@ ${entry.prompt || ''}`.trim()
     })
   }
 
-  async function loadWardrobe(quiet = true, scan = false) {
+  async function loadWardrobe(quiet = true, scan = false, explicitChatId = '') {
+    const requestedChatId = String(explicitChatId || lastSeenChatId || '')
     try {
-      const res = await call('wardrobe', { chatId: lastSeenChatId, scan }, 30000)
+      const res = await call('wardrobe', { chatId: requestedChatId, scan }, 30000)
+      // Chat switches can happen while this request is in flight. Keep old data from
+      // flashing back into the panel after the new chat is already active.
+      if (requestedChatId && lastSeenChatId && requestedChatId !== String(lastSeenChatId)) return res
       wardrobeLibrary = res.library || []
       // The Characters tab was loaded once, at init. A story that invents
       // somebody mid-chat writes a real, editable character the panel never
@@ -4532,7 +4539,7 @@ ${entry.prompt || ''}`.trim()
         const declared = !!drop.getAttribute('data-declared')
         const question = declared
           ? `Delete ${name}? The story invented this one, so nothing you wrote is lost.`
-          : `Remove ${name} from this preset? The character itself is kept in the Characters tab.`
+          : `Remove ${name} from this chat's cast? The character itself is kept in the Characters tab.`
         if (!window.confirm(question)) return
         try {
           const res = await call('wardrobe', { chatId: lastSeenChatId, remove: [drop.getAttribute('data-id')] }, 15000)
@@ -5637,15 +5644,39 @@ ${entry.prompt || ''}`.trim()
       try {
         const off = ctx.events.on('CHAT_SWITCHED', (payload) => {
           const context = readImageEventContext(payload)
-          const chatId = String(context.chatId || (payload && (payload.chatId || payload.id || (payload.chat && payload.chat.id))) || '')
-          lastSeenChatId = chatId
+          const eventChatId = String(context.chatId || (payload && (payload.chatId || payload.id || (payload.chat && payload.chat.id))) || '')
+          lastSeenChatId = eventChatId
           for (const placementId of [...imagePlacementMounts.keys()]) clearImagePlacementMount(placementId)
           for (const timer of imageAttachRetryTimers.values()) clearTimeout(timer)
           imageAttachRetryTimers.clear()
           pendingImageMessageIds.clear()
           imagePlacements = []
           imagePlacementChatId = ''
-          if (chatId) refreshImagePlacements(chatId).catch((error) => console.log('[LumiDraw] image refresh after chat switch failed:', error.message))
+
+          // Cast + wardrobe are chat state just as much as image placements are.
+          // 1.3.6 only refreshed the images here, so the panel could display and edit
+          // the previous story until some unrelated event happened to refresh it.
+          const rows = $('.ld-wardrobe-rows')
+          if (rows) rows.innerHTML = '<div class="ld-help" style="margin:0">Loading this chat…</div>'
+          const summary = $('.ld-cast-summary')
+          if (summary) summary.textContent = 'Loading this chat…'
+          setStatus('.ld-wardrobe-status', '', '')
+          setStatus('.ld-cast-status', '', '')
+
+          const rehydrate = (chatId) => {
+            const id = String(chatId || '')
+            if (!id) return
+            lastSeenChatId = id
+            refreshImagePlacements(id).catch((error) => console.log('[LumiDraw] image refresh after chat switch failed:', error.message))
+            loadCasts({ chatId: id }).catch(() => {})
+            loadWardrobe(true, false, id).catch(() => {})
+          }
+          if (eventChatId) rehydrate(eventChatId)
+          else {
+            // Some host builds emit CHAT_SWITCHED before the payload contains an id.
+            // Give getActiveChat one task turn to settle instead of reusing the old id.
+            setTimeout(() => rehydrate(activeChatIdFromCtx()), 0)
+          }
         })
         if (typeof off === 'function') imageLifecycleUnsubs.push(off)
       } catch (error) {
@@ -5775,9 +5806,12 @@ ${entry.prompt || ''}`.trim()
       }
       renderCharacterList(); renderPersonaList(); renderPlaces(); renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
       const bootChatId = activeChatIdFromCtx()
-      if (bootChatId) refreshImagePlacements(bootChatId).catch((error) => console.log('[LumiDraw] native image placement refresh failed:', error.message))
-      loadCasts().catch(() => {})
-      loadWardrobe().catch(() => {})
+      if (bootChatId) {
+        lastSeenChatId = String(bootChatId)
+        refreshImagePlacements(bootChatId).catch((error) => console.log('[LumiDraw] native image placement refresh failed:', error.message))
+      }
+      loadCasts(bootChatId ? { chatId: String(bootChatId) } : {}).catch(() => {})
+      loadWardrobe(true, false, bootChatId ? String(bootChatId) : '').catch(() => {})
       updateScanLabel()
       initialized = true
       // The header shows the version the BACKEND reports, which comes from the
