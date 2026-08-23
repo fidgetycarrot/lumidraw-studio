@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.7'
+const EXTENSION_VERSION = '1.3.8'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -36,9 +36,63 @@ function realSetup(ctx) {
   // unstable hover/click hit-testing, especially in Safari. Keep one live UI.
   const INSTANCE_KEY = '__lumidrawStudioLiveInstance'
   const priorInstance = window[INSTANCE_KEY]
-  if (priorInstance && priorInstance.panel && priorInstance.panel.isConnected) {
-    console.warn('[LumiDraw] duplicate setup ignored; existing UI is still mounted')
-    return () => {}
+  if (priorInstance) {
+    const priorPanelLive = !!(priorInstance.panel && priorInstance.panel.isConnected)
+    const priorLauncherLive = !!(priorInstance.launcher && priorInstance.launcher.isConnected)
+
+    // Newer LumiDraw instances keep their own teardown handle. When Lumiverse
+    // hot-reloads a different version, use it instead of stacking two copies of
+    // the app on top of each other. 1.3.7 and earlier did not expose this handle.
+    if ((priorPanelLive || priorLauncherLive) && typeof priorInstance.cleanup === 'function' &&
+        priorInstance.version && priorInstance.version !== EXTENSION_VERSION) {
+      console.warn(`[LumiDraw] replacing live v${priorInstance.version} with v${EXTENSION_VERSION}`)
+      try { priorInstance.cleanup() } catch (error) {
+        console.warn('[LumiDraw] prior-instance cleanup failed:', error && error.message ? error.message : error)
+      }
+      if (window[INSTANCE_KEY] === priorInstance) delete window[INSTANCE_KEY]
+    } else if (priorPanelLive && priorLauncherLive) {
+      console.warn('[LumiDraw] duplicate setup ignored; existing UI is still mounted')
+      return () => {}
+    } else if (priorPanelLive && !priorLauncherLive) {
+      // Lumiverse can replace an extension injection during a hot reload while
+      // leaving another injected node connected. 1.3.7's guard checked only the
+      // panel, so a missing launcher made the entire app inaccessible. Recover an
+      // entry point for that still-live panel instead of stranding it. A full page
+      // refresh will then load the new version normally.
+      console.warn('[LumiDraw] live panel found without its launcher; restoring launcher')
+      const recovery = document.createElement('button')
+      recovery.className = 'ld-launcher ld-launcher-recovery'
+      recovery.title = 'LumiDraw Studio'
+      recovery.setAttribute('aria-label', 'LumiDraw Studio')
+      recovery.setAttribute('type', 'button')
+      recovery.innerHTML = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="9" cy="9" r="1.8"></circle><path d="M21 15.5l-4.2-4.2a1.6 1.6 0 0 0-2.3 0L6 20"></path></svg>'
+      // Inline essentials make the rescue button usable even if the old style
+      // injection was the node Lumiverse happened to discard.
+      recovery.style.cssText = 'position:fixed;right:16px;bottom:88px;z-index:9000;width:58px;height:58px;border-radius:16px;display:flex;align-items:center;justify-content:center;cursor:pointer;'
+      const reopen = () => {
+        priorInstance.panel.classList.toggle('ld-open')
+        if (priorInstance.panel.classList.contains('ld-open')) {
+          priorInstance.panel.style.display = 'flex'
+        } else {
+          priorInstance.panel.style.display = ''
+        }
+      }
+      recovery.addEventListener('click', reopen)
+      document.body.appendChild(recovery)
+      priorInstance.launcher = recovery
+      priorInstance.recoveredLauncher = true
+      return () => {
+        recovery.removeEventListener('click', reopen)
+        try { recovery.remove() } catch { /* ignore */ }
+      }
+    } else if (!priorPanelLive && priorLauncherLive) {
+      // The inverse half-instance is useless; remove the orphan and let this
+      // setup create a complete fresh UI.
+      try { priorInstance.launcher.remove() } catch { /* ignore */ }
+      if (window[INSTANCE_KEY] === priorInstance) delete window[INSTANCE_KEY]
+    } else if (!priorPanelLive && !priorLauncherLive && window[INSTANCE_KEY] === priorInstance) {
+      delete window[INSTANCE_KEY]
+    }
   }
   // --- resilient DOM layer: prefer host helpers, fall back to document ---
   const injected = []
@@ -1643,7 +1697,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   const lightboxTitle = $('.ld-lightbox-title')
   const lightboxMeta = $('.ld-lightbox-meta')
   const lightboxZoomLevel = $('.ld-lightbox-zoom-level')
-  const liveInstance = { panel, launcher }
+  const liveInstance = { panel, launcher, version: EXTENSION_VERSION, cleanup: null }
   window[INSTANCE_KEY] = liveInstance
   const FULLSCREEN_KEY = 'lumidraw_panel_fullscreen_v1'
   let expandedTextarea = null
@@ -5855,7 +5909,7 @@ ${entry.prompt || ''}`.trim()
     }
   })()
 
-  return () => {
+  const cleanup = () => {
     if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
     window.removeEventListener('keydown', onStoryPickerKeyDown)
@@ -5873,4 +5927,6 @@ ${entry.prompt || ''}`.trim()
     removeStyle()
     dom.cleanup()
   }
+  liveInstance.cleanup = cleanup
+  return cleanup
 }
