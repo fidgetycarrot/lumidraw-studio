@@ -7840,8 +7840,10 @@ const SUBJECT_BREAK_MARK = '\u0000SUBJECT_BREAK'
 // do between "the model has spoken" and "send it" is gone: no scene graph, no
 // defences, no substitutions. Quality tags in front, the author's negative
 // behind, the identity lock in the middle, send.
-async function runDirectImages(images, ctx) {
-  const { preset, profiles, userId, chatId, scan, rawReply, parserInput, target } = ctx
+async function runDirectImages(initialImages, ctx) {
+  const { preset, profiles, userId, chatId, scan, parserInput, target, instruction, settings } = ctx
+  let images = Array.isArray(initialImages) ? initialImages : []
+  let rawReply = ctx.rawReply
   await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
   const origin = {
     messageId: String((target && target.id) || ''),
@@ -7855,9 +7857,50 @@ async function runDirectImages(images, ctx) {
   const traceLines = []
   const trace = (label, status, detail) => traceLines.push({ label, status, detail })
 
-  // Anchors do not have to come back in passage order. Sort before anything is
-  // numbered so image 1 really is the first moment in the passage.
+  // Anchors do not have to come back in passage order. Before sorting/generation,
+  // give the parser one chance to repair a roster/run contradiction. This is a
+  // conditional second parser call only when the first answer is internally wrong.
   const passage = (parserInput && parserInput.currentPassage) || ''
+  if (instruction && settings && images.length) {
+    const contradictions = images.map((image) => directPresenceContradictions(image, profiles)).filter(Boolean)
+    const contradictionScore = (list) => (list || []).reduce((sum, item) =>
+      sum + (item.missing || []).length + (item.extra || []).length, 0)
+    const firstScore = contradictionScore(contradictions)
+    if (contradictions.length) {
+      const names = uniqueStrings(contradictions.flatMap((c) => [
+        ...c.missing.map((p) => p.anchor || p.ref),
+        ...c.extra.map((p) => p.anchor || p.ref),
+      ]))
+      const detail = contradictions.map((c) => {
+        const missing = c.missing.map((p) => p.anchor || p.ref).join(', ') || 'none'
+        const extra = c.extra.map((p) => p.anchor || p.ref).join(', ') || 'none'
+        return `missing runs: ${missing}; wrong/extra runs: ${extra}`
+      }).join(' | ')
+      spindle.log.warn(`[lumidraw] direct · present roster and runs disagree (${names.join(' / ') || detail}); re-parsing once`)
+      setStoryScanStage(scan, 'parsing', 'The parser paired the scene with the wrong character sheet; re-reading once.')
+      const retryInstruction = instruction +
+        '\n\nYOUR PREVIOUS ATTEMPT WAS REJECTED. Your validated present roster and the character BREAK runs did not match. ' +
+        `The mismatch was: ${detail}. ` +
+        'Every validated present person needs exactly one matching run, and no run may copy a different known sheet. ' +
+        'Re-read the CURRENT PASSAGE, verify each 3-8 word evidence quote, and rewrite in the SAME JSON format.'
+      try {
+        const retryRaw = await quietLLM(retryInstruction, parserInput.input, settings, userId, true, scan)
+        const retry = parseDirectImages(retryRaw, settings.maxImages || images.length || 1, profiles, passage)
+        const retryBad = retry.images.map((image) => directPresenceContradictions(image, profiles)).filter(Boolean)
+        const retryScore = contradictionScore(retryBad)
+        if (retry.images.length && retryScore < firstScore) {
+          spindle.log.info('[lumidraw] direct · retry resolved the presence/run mismatch' +
+            (retryBad.length ? ' partially' : ' completely'))
+          images = retry.images
+          rawReply = retryRaw
+        } else {
+          spindle.log.warn('[lumidraw] direct · retry did not improve the mismatch; using the mechanically guarded first attempt')
+        }
+      } catch (error) {
+        spindle.log.warn('[lumidraw] direct · mismatch retry failed (' + error.message + '); using the first attempt')
+      }
+    }
+  }
   const ordered = orderScenesByPassage(images, passage)
   const grounding = [passage, (parserInput && parserInput.contextPreview) || ''].filter(Boolean).join('\n')
 
@@ -7867,6 +7910,8 @@ async function runDirectImages(images, ctx) {
     setStoryScanStage(scan, 'generating',
       `Sending image ${index + 1} of ${ordered.length} to Draw Things.`)
     for (const note of image.notes || []) trace('parser cleanup', 'applied', note)
+    if ((image.present || []).length) trace('presence roster', 'clean',
+      image.present.map((entry) => `${entry.name}: "${entry.evidence}"`).join(' · '))
     let body = sanitizeDirectNames(image.prompt, profiles, trace)
     const locked = applyIdentityLock(body, profiles, trace)
     body = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
@@ -7910,7 +7955,7 @@ async function runDirectImages(images, ctx) {
       extra: preset.extra,
       dims,
       origin: { ...origin, mode: 'direct', alt: markdownAltText(finalPrompt) },
-      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, aspect: image.aspect, rating: image.rating } },
+      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, aspect: image.aspect, rating: image.rating, present: image.present || [] } },
     }, userId, scan)
     results.push({ ok: true, entry, anchor: image.anchor, prompt: finalPrompt })
     if (entry && entry.images && entry.images[0] && target && target.id) {
@@ -7944,7 +7989,7 @@ async function runDirectImages(images, ctx) {
     parserEngine: 'direct',
     rawReply,
     error: '',
-    entries: results.map((item) => ({ anchor: item.anchor, prompt: item.prompt })),
+    entries: results.map((item, index) => ({ anchor: item.anchor, prompt: item.prompt, present: (ordered[index] && ordered[index].present) || [] })),
     lastCompiledPrompt: results.length ? results[results.length - 1].prompt : '',
     contextPreview: parserInput.contextPreview,
     ledgerPreview: parserInput.ledgerPreview,
@@ -7975,13 +8020,25 @@ LumiDraw does not edit, reorder, or second-guess your prompt — what you write
 is what is drawn — so these rules are the whole job.
 
 OUTPUT — only this JSON, compact, no markdown, no commentary:
-{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","rating":"safe|sensitive|nsfw|explicit","prompt":"the finished prompt","aspect":"3:4|4:3|1:1|16:9|9:16","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
+{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","prompt":"the finished prompt","aspect":"3:4|4:3|1:1|16:9|9:16","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
 Omit "setting" and "outfits" entirely when nothing has changed.
 
 CHOOSING THE MOMENT
 - Illustrate only the CURRENT PASSAGE. Prior context resolves who and where;
   it never supplies the moment.
 - Pick the single clearest drawable beat. One clear action, not three.
+
+PRESENCE — decide this first, before writing the prompt.
+- List in "present" everyone physically in the frame, each with an evidence
+  quote copied exactly from the CURRENT PASSAGE — 3-8 consecutive words showing
+  them acting, being touched, or being looked at. The quote is checked against
+  the passage; a paraphrase voids the entry.
+- Talked about, remembered, phoned, imagined, expected, or arriving next is NOT
+  present. A character sheet means the story knows them, not that the camera sees
+  them. Most passages involve only one or two known people.
+- Use the exact sheet name in "present". A physically present stranger with no
+  sheet uses a two-word visual label instead. Every BREAK run must belong to
+  someone in "present". No run for anyone else, ever.
 
 PROMPT SHAPE — exactly this order:
 1. Count tags for everyone in frame. These are real Danbooru tags — 1girl,
@@ -7998,17 +8055,21 @@ PROMPT SHAPE — exactly this order:
    that includes everything the sentence depends on — a hip-level act is not a
    portrait — but inside a vehicle or other tight interior, never wider than
    cowboy shot.
-4. " BREAK ", then one run per character. Each run: count tag, IDENTITY ANCHOR
-   copied exactly, anatomy (per the rule below), clothing, pose, action,
-   expression. One character's traits never appear inside another's run.
+4. " BREAK ", then one run per character listed in "present". Each run starts:
+   count tag, that person's SENTENCE NAME (or RUN LABEL), IDENTITY ANCHOR copied exactly; then
+   anatomy (per the rule below), clothing, pose, action, expression. One
+   character's traits never appear inside another's run.
 
 NAMES
-- Name each person once in the scene sentence using the SENTENCE NAME on their
-  sheet ("Price stands on the sidewalk while Mara reads the screen"). A name
-  shared between the sentence and the described body is strong anti-bleed glue.
-- Names belong ONLY in that one scene sentence: never in a tag run and never as
-  a bare tag. If a sheet gives no SENTENCE NAME, use she/he/they or a short
-  visual label such as "the taller girl".
+- Name each person in the scene sentence, and open their BREAK run with the same
+  SENTENCE NAME immediately after the count tag ("1girl, Jamie Brennan, blonde
+  hair, …"). The repeated safe name binds that description to that body.
+- Use the SENTENCE NAME from the sheet exactly. Never abbreviate it or invent a
+  shorter form. If the sheet has no safe SENTENCE NAME, use a pronoun in the
+  sentence and the supplied short visual label as the run heading.
+- A real name marked unsafe by the sheet is NEVER written. Use its safe prompt
+  name instead. If no safe SENTENCE NAME exists, use the sheet's supplied RUN
+  LABEL as the run heading.
 
 KEEP EACH RUN TIGHT — at most 18 tags, each thing said once:
 - One hair colour. One tag per garment, with its modifiers merged: write
@@ -8068,8 +8129,8 @@ figures, 3:4 for a single figure, 1:1 for a tight emblematic shot.
 
 NEVER: prose paragraphs beyond the one scene sentence, reasoning or
 self-corrections ("no wait"), the same concept twice in different words,
-invented tags, a character's name as a tag/run token, or anything from the
-banned list.
+invented tags, an unsafe/alternate character name, or anything from the banned
+list.
 `
 
 // The context the parser needs to write a good prompt, in the plainest form
@@ -8090,9 +8151,10 @@ function directAnchorFor(profile) {
   ].map(animaTag).filter(Boolean))), profile.anchor || profile.ref).slice(0, 28)
 }
 
-// Direct mode may use a character name in exactly one place: the natural-language
-// scene sentence. promptName is the author's explicit safe image-prompt name;
-// the real anchor is used only when it does not collide with Anima's tag space.
+// Direct mode uses one mechanically-vetted binding name in the natural-language
+// scene sentence AND as the heading of that character's BREAK run. promptName is
+// the author's explicit safe image-prompt name; the real anchor is used only when
+// it does not collide with Anima's tag space.
 function directSentenceName(profile) {
   const promptName = String((profile && profile.promptName) || '').trim()
   if (promptName && !nameReadsAsTag(promptName)) return promptName
@@ -8126,12 +8188,13 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
     const lines = [name]
     const sentenceName = directSentenceName(profile)
     if (sentenceName) {
-      lines.push('  SENTENCE NAME: ' + sentenceName + ' — use this name once in the scene sentence only; never in a tag run')
+      lines.push('  SENTENCE NAME: ' + sentenceName + ' — use this exact safe name in the scene sentence AND immediately after the count tag in this person\'s BREAK run')
       if (normalizeIdentityText(sentenceName) !== normalizeIdentityText(name)) {
         lines.push('  REAL NAME IS UNSAFE IN IMAGE TEXT: never write "' + name + '"; use the SENTENCE NAME above')
       }
     } else {
-      lines.push('  SENTENCE NAME: none — "' + name + '" collides with image-tag vocabulary; use a pronoun or short visual label')
+      lines.push('  SENTENCE NAME: none — "' + name + '" collides with image-tag vocabulary; use a pronoun in the sentence')
+      lines.push('  RUN LABEL: ' + directFallbackNoun(profile) + ' — use this exact label immediately after the count tag')
     }
     if (profile.countTag) lines.push('  COUNT TAG: ' + animaTag(profile.countTag))
     if (anchor.length) lines.push('  IDENTITY ANCHOR (copy exactly): ' + anchor.join(', '))
@@ -8151,7 +8214,7 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
     .map((item) => `Place — ${item.name}: ${(item.tags || item.setting || []).join(', ')}`)
   const clothingHistory = (clothingDigest || []).filter(Boolean).map((line) => '- ' + line)
   return [
-    'CHARACTER SHEETS — paste-exact text, not notes.',
+    'CHARACTER SHEETS — paste-exact text, not notes. This is everyone the story knows, NOT everyone in the picture — the present list decides who.',
     'WARDROBE PRECEDENCE: CURRENT PASSAGE change > CURRENT CLOTHING > EARLIER CLOTHING MENTIONS > DEFAULT OUTFIT.',
     'Silence means unchanged, not reset.',
     ...blocks,
@@ -8161,6 +8224,48 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
     banned ? `NEVER USE THESE: ${banned}` : '',
     fantasy ? 'This is a FANTASY setting. Non-human species are correct here, not errors.' : '',
   ].filter(Boolean).join('\n')
+}
+
+
+// Character sheets are reference, not a declaration that everyone is on camera.
+// Leads stay available because POV/current-chat scenes may omit their names. Cast
+// members named nowhere in the passage or recent parser context are withheld so a
+// salient paste-exact sheet cannot tempt the parser to draw an absent person.
+function gateDirectProfiles(profiles, evidenceText) {
+  const hay = normalizeIdentityText(evidenceText)
+  const cast = []
+  const withheld = []
+  for (const profile of ((profiles && profiles.cast) || [])) {
+    if (!profile) continue
+    const forms = uniqueStrings([profile.anchor, profile.promptName, directSentenceName(profile), String(profile.anchor || '').split(/\s+/)[0]].filter(Boolean))
+    const inEvidence = forms.some((form) => {
+      const needle = normalizeIdentityText(form)
+      return needle && new RegExp(`\\b${escapeRegExp(needle)}\\b`).test(hay)
+    })
+    if (inEvidence) cast.push(profile)
+    else withheld.push(profile.anchor || profile.ref)
+  }
+  if (withheld.length) {
+    spindle.log.info('[lumidraw] direct · no sheet sent for ' + withheld.join(', ') +
+      ' — named nowhere in the passage or recent context')
+  }
+  return { ...(profiles || {}), cast }
+}
+
+// Presence evidence deliberately excludes wardrobe/state blocks. A saved outfit
+// proves continuity, not that its owner is physically in this moment.
+function directEvidenceFor(messages, targetIndex, settings) {
+  const parts = []
+  const target = messageBits(messages[targetIndex] || {})
+  if (typeof target.content === 'string') parts.push(cleanParserMessageText(target.content))
+  const back = Math.max(2, (Number(settings.parserContextMessages) || 0) * 2 + 2)
+  for (let i = Math.max(0, targetIndex - back); i < targetIndex; i++) {
+    const bits = messageBits(messages[i] || {})
+    if (typeof bits.content !== 'string') continue
+    const clean = cleanParserMessageText(bits.content)
+    if (clean) parts.push(clean.slice(-1500))
+  }
+  return parts.join('\n')
 }
 
 
@@ -8279,36 +8384,54 @@ function sanitizeDirectNames(prompt, profiles, trace = null) {
   const blocks = String(prompt || '').split(/\bBREAK\b/)
   const next = blocks.map((block, blockIndex) => {
     const isFrame = blockIndex === 0
+    const rawParts = String(block || '').split(',').map((part) => String(part || '').trim()).filter(Boolean)
     const out = []
-    for (const rawPart of String(block || '').split(',')) {
-      let part = String(rawPart || '').trim()
-      if (!part) continue
+    for (let partIndex = 0; partIndex < rawParts.length; partIndex++) {
+      let part = rawParts[partIndex]
       let drop = false
       for (const entry of entries) {
-        const forms = uniqueStrings([entry.anchor, entry.promptName].filter(Boolean))
+        const forms = uniqueStrings([entry.anchor, entry.promptName, String(entry.anchor || '').split(/\s+/)[0]].filter(Boolean))
         for (const form of forms) {
           const re = new RegExp(`\\b${escapeRegExp(form)}\\b`, 'gi')
           if (!re.test(part)) continue
-          // Names in BREAK runs are tag-space noise. Drop the whole comma-token
-          // rather than leave junk such as "'s phone" after deleting the word.
-          if (!isFrame) {
-            notes.push(`removed "${form}" from a tag run — names bind only in the scene sentence`)
-            drop = true
-            break
+          const bare = normalizeIdentityText(part) === normalizeIdentityText(form)
+
+          if (isFrame) {
+            // The scene sentence may contain the safe binding name. A separate
+            // comma-token that is only a name is still a stray tag and is dropped.
+            if (bare) {
+              notes.push(`removed bare name tag "${part}" — names belong inside the scene sentence`)
+              drop = true
+              break
+            }
+            if (normalizeIdentityText(entry.use) !== normalizeIdentityText(form)) {
+              part = part.replace(re, entry.use)
+              const why = nameReadsAsTag(form)
+              notes.push(why
+                ? `"${form}" → "${entry.use}" in the scene sentence — ${why}`
+                : `"${form}" → "${entry.use}" in the scene sentence — the sheet's prompt name`)
+            }
+            continue
           }
-          // A bare name in the shared frame is still a bare tag, not the sentence.
-          if (normalizeIdentityText(part) === normalizeIdentityText(form)) {
-            notes.push(`removed bare name tag "${part}" — names belong inside the scene sentence`)
-            drop = true
-            break
+
+          // In a subject run, the binding name is allowed only as the run head:
+          // immediately after the count tag. Elsewhere it is tag-space noise.
+          const runHead = partIndex === 1 && DIRECT_COUNT_FULL_RE.test(normalizeDirectCountTag(rawParts[0] || ''))
+          if (bare && runHead) {
+            if (normalizeIdentityText(entry.use) !== normalizeIdentityText(form)) {
+              part = entry.use
+              const why = nameReadsAsTag(form)
+              notes.push(why
+                ? `"${form}" → "${entry.use}" at the run head — ${why}`
+                : `"${form}" → "${entry.use}" at the run head — the sheet's prompt name`)
+            }
+            // A vetted name already equal to the chosen safe form survives.
+            continue
           }
-          if (normalizeIdentityText(entry.use) !== normalizeIdentityText(form)) {
-            part = part.replace(re, entry.use)
-            const why = nameReadsAsTag(form)
-            notes.push(why
-              ? `"${form}" → "${entry.use}" in the scene sentence — ${why}`
-              : `"${form}" → "${entry.use}" in the scene sentence — the sheet's prompt name`)
-          }
+
+          notes.push(`removed "${form}" from inside a tag run — names are allowed only as the run heading`)
+          drop = true
+          break
         }
         if (drop) break
       }
@@ -8506,7 +8629,120 @@ function dedupeDirectRuns(prompt, profiles = null) {
   return { prompt: blocks.join('BREAK').replace(/\s+/g, ' ').trim(), notes }
 }
 
-function parseDirectImages(raw, maxImages = 2, profiles = null) {
+
+function directProfileForPresenceName(name, profiles) {
+  const wanted = normalizeIdentityText(name)
+  if (!wanted) return null
+  return allKnownProfiles(profiles).find((profile) => profile && [
+    profile.anchor, profile.promptName, profile.ref, directSentenceName(profile),
+  ].some((form) => normalizeIdentityText(form) === wanted)) || null
+}
+
+// Whose sheet did this run copy? The run-head binding name is the strongest
+// signal. Trait overlap remains a conservative fallback and refuses ties.
+function matchDirectRunProfile(run, profiles) {
+  const text = String(run || '')
+  const lower = text.toLowerCase()
+  const headTokens = text.split(',').slice(0, 4).map((v) => normalizeIdentityText(v)).filter(Boolean)
+  for (const profile of allKnownProfiles(profiles)) {
+    if (!profile) continue
+    const forms = uniqueStrings([
+      directSentenceName(profile), profile.anchor, profile.promptName, String(profile.anchor || '').split(/\s+/)[0],
+    ].filter(Boolean).map(normalizeIdentityText))
+    if (forms.some((form) => headTokens.includes(form))) return profile
+  }
+  let best = null
+  let bestScore = 0
+  let tie = false
+  for (const profile of allKnownProfiles(profiles)) {
+    const marks = directAnchorFor(profile || {})
+    if (!marks.length) continue
+    const score = marks.filter((tag) => lower.includes(String(tag).toLowerCase())).length
+    if (score > bestScore) { best = profile; bestScore = score; tie = false }
+    else if (score === bestScore && best && profile.ref !== best.ref) tie = true
+  }
+  if (!best || tie || bestScore < Math.min(2, directAnchorFor(best).length || 1)) return null
+  return best
+}
+
+// A sheet is not presence. When the parser declared a roster, a known-profile
+// run that does not belong to that validated roster is mechanically removed.
+// Unknown strangers are kept because there is no reliable sheet match to judge.
+function dropUndeclaredRuns(prompt, present, profiles) {
+  const notes = []
+  if (present === null || present === undefined) return { prompt: String(prompt || ''), notes, skipped: true }
+  const declaredNames = new Set((present || []).map((entry) =>
+    normalizeIdentityText(entry && typeof entry === 'object' ? entry.name : entry)).filter(Boolean))
+  const declaredRefs = new Set()
+  for (const entry of present || []) {
+    const profile = directProfileForPresenceName(entry && typeof entry === 'object' ? entry.name : entry, profiles)
+    if (profile && profile.ref) declaredRefs.add(profile.ref)
+  }
+  const blocks = String(prompt || '').split(/\bBREAK\b/).map((b) => b.trim()).filter(Boolean)
+  if (blocks.length < 2) return { prompt: String(prompt || ''), notes }
+  const isCount = (tag) => DIRECT_COUNT_TAG_RE.test(tag) || DIRECT_COUNT_FULL_RE.test(tag)
+  const frame = blocks[0]
+  const runs = []
+  const rest = []
+  for (const block of blocks.slice(1)) (isCount(firstDirectTag(block)) ? runs : rest).push(block)
+  const kept = []
+  for (const run of runs) {
+    const best = matchDirectRunProfile(run, profiles)
+    if (!best) { kept.push(run); continue }
+    const nameForms = uniqueStrings([
+      best.anchor, best.promptName, best.ref, directSentenceName(best),
+    ].filter(Boolean).map(normalizeIdentityText))
+    const allowed = (best.ref && declaredRefs.has(best.ref)) || nameForms.some((form) => declaredNames.has(form))
+    if (allowed) { kept.push(run); continue }
+    notes.push(`dropped the run for ${best.anchor || best.ref} — the validated present list ` +
+      `(${(present || []).map((e) => e && typeof e === 'object' ? e.name : e).join(', ') || 'empty'}) does not include them. Talked about is not present.`)
+  }
+  if (runs.length && !kept.length) {
+    return {
+      prompt: String(prompt || ''),
+      notes: ['every known run failed the presence check — the declaration is being distrusted and the prompt kept intact'],
+      skipped: true,
+    }
+  }
+  return { prompt: [frame, ...kept, ...rest].join(' BREAK '), notes }
+}
+
+// Compare the validated roster with the runs that survived parsing. Missing
+// validated people are enough to retry: an extra wrong run may already have been
+// removed by dropUndeclaredRuns, so requiring an extra here would hide the exact
+// Jamie/Erin failure after the guard did its first job.
+function directPresenceContradictions(image, profiles) {
+  const runs = String((image && image.prompt) || '').split(/\bBREAK\b/).slice(1)
+    .map((run) => matchDirectRunProfile(run, profiles)).filter(Boolean)
+  const runRefs = new Set(runs.map((p) => p.ref))
+  const expected = []
+  for (const entry of (image && image.present) || []) {
+    const profile = directProfileForPresenceName(entry && entry.name, profiles)
+    if (profile && !expected.some((p) => p.ref === profile.ref)) expected.push(profile)
+  }
+  const missing = expected.filter((p) => !runRefs.has(p.ref))
+  const expectedRefs = new Set(expected.map((p) => p.ref))
+  const extra = expected.length ? runs.filter((p) => !expectedRefs.has(p.ref)) : []
+
+  // Compatibility fallback if the parser omitted/voided presence: use safe names
+  // in the frame sentence to catch a right-sentence/wrong-sheet contradiction.
+  if (!expected.length) {
+    const frame = (String((image && image.prompt) || '').split(/\bBREAK\b/)[0] || '').toLowerCase()
+    const named = []
+    for (const p of allKnownProfiles(profiles)) {
+      const form = directSentenceName(p)
+      if (form && new RegExp(`\\b${escapeRegExp(form.toLowerCase())}\\b`).test(frame)) named.push(p)
+    }
+    const namedRefs = new Set(named.map((p) => p.ref))
+    const sentenceMissing = named.filter((p) => !runRefs.has(p.ref))
+    const sentenceExtra = named.length ? runs.filter((p) => !namedRefs.has(p.ref)) : []
+    if (sentenceMissing.length || sentenceExtra.length) return { missing: sentenceMissing, extra: sentenceExtra, source: 'sentence' }
+    return null
+  }
+  return (missing.length || extra.length) ? { missing, extra, source: 'present' } : null
+}
+
+function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '') {
   let text = extractParserText(raw)
   const parsed = (() => {
     try { return JSON.parse(sanitizeJsonText(text)) } catch { /* fall through */ }
@@ -8542,10 +8778,39 @@ function parseDirectImages(raw, maxImages = 2, profiles = null) {
       spindle.log.info('[lumidraw] direct · the frame and a character were in one block; ' +
         `inserted BREAK before ${split.inserted.join(', ')} — Anima binds a block as one subject group`)
     }
-    const limited = limitDirectSubjectRuns(split.prompt, 2)
+    const presenceFieldDeclared = Object.prototype.hasOwnProperty.call(item, 'present')
+    const presentRaw = Array.isArray(item.present) ? item.present
+      : (item.present ? [{ name: item.present }] : [])
+    const present = []
+    const passageNorm = normalizeIdentityText(passage)
+    for (const entry of presentRaw.slice(0, 6)) {
+      const name = String((entry && typeof entry === 'object' && entry.name) || entry || '').trim()
+      const evidence = String((entry && typeof entry === 'object' && entry.evidence) || '').trim()
+      if (!name) continue
+      const evidenceNorm = normalizeIdentityText(evidence)
+      const evidenceWords = evidenceNorm ? evidenceNorm.split(/\s+/).filter(Boolean).length : 0
+      if (!evidenceNorm || evidenceWords < 3 || evidenceWords > 8 || !passageNorm.includes(evidenceNorm)) {
+        const why = !evidenceNorm ? 'none given'
+          : (evidenceWords < 3 || evidenceWords > 8 ? `${evidenceWords} words; expected 3-8` : 'not found in the current passage')
+        spindle.log.warn(`[lumidraw] direct · "${name}" declared present, but the evidence quote is invalid ` +
+          `(${why}${evidence ? ` · "${evidence.slice(0, 60)}"` : ''}) — treated as not present`)
+        continue
+      }
+      present.push({ name, evidence })
+    }
+    if (present.length) {
+      spindle.log.info('[lumidraw] direct · present · ' + present.map((entry) =>
+        `${entry.name} <= "${entry.evidence}"`).join(' · '))
+    }
+    const declared = dropUndeclaredRuns(split.prompt, presenceFieldDeclared ? present : null, profiles)
+    for (const note of declared.notes) spindle.log.warn('[lumidraw] direct · ' + note)
+    if (declared.skipped && !presenceFieldDeclared) {
+      spindle.log.info('[lumidraw] direct · presence check skipped — the parser omitted the present field')
+    }
+    const limited = limitDirectSubjectRuns(declared.prompt, 2)
     const deduped = dedupeDirectRuns(limited.prompt, profiles)
     const prompt = deduped.prompt
-    const notes = [...limited.notes, ...deduped.notes]
+    const notes = [...declared.notes, ...limited.notes, ...deduped.notes]
     if (limited.notes.length) {
       spindle.log.warn('[lumidraw] direct · ' + limited.notes.join(' · '))
     }
@@ -8567,6 +8832,8 @@ function parseDirectImages(raw, maxImages = 2, profiles = null) {
       prompt,
       aspect: VALID_ASPECTS.has(String(item.aspect || '')) ? String(item.aspect) : '3:4',
       notes,
+      present,
+      presenceFieldDeclared,
       rating: ANIMA_SAFETY_TAGS.includes(ratingRaw) ? ratingRaw : '',
       setting: animaTagList(tagsFrom(item.setting || [], 8)),
       // Accepted for forward compatibility if a parser returns it, though the
@@ -10744,12 +11011,16 @@ async function scanStoryCore(userId, options = {}) {
         spindle.log.warn('[lumidraw] could not absorb declared clothing: ' + error.message)
       }
       const rememberedState = await readSceneMemory(chatId, preset.name)
-      const wardrobeLines = wardrobeLinesFor(rememberedState, profilesForState)
+      const directMode = settings.mode === 'direct' || settings.directMode === true
+      const profilesForPrompt = directMode
+        ? gateDirectProfiles(profilesForState, directEvidenceFor(messages, targetIndex, settings))
+        : profilesForState
+      const wardrobeLines = wardrobeLinesFor(rememberedState, profilesForPrompt)
       // Somebody with no record is the only case the digest earns its tokens for —
       // and only somebody in THIS scene. Character and persona always count; a cast
       // member counts only when the passage names them, or a big cast would keep
       // the digest firing forever for someone offstage.
-      const knownCast = allKnownProfiles(profilesForState).filter((p) => p && p.ref)
+      const knownCast = allKnownProfiles(profilesForPrompt).filter((p) => p && p.ref)
       const inThisScene = (p) => p.ref === 'character' || p.ref === 'persona' ||
         (p.anchor && new RegExp('\\b' + escapeRegExp(String(p.anchor).split(/\s+/)[0]) + '\\b', 'i').test(passage))
       const presentCast = knownCast.filter(inThisScene)
@@ -10781,10 +11052,9 @@ async function scanStoryCore(userId, options = {}) {
       // DIRECT MODE. The parser writes the finished prompt instead of a scene
       // graph, and none of the compiler below runs. Off by default; your existing
       // pipeline is untouched until you turn it on.
-      const directMode = settings.mode === 'direct' || settings.directMode === true
       const savedPlacesForParser = await getPlaces()
       const instruction = directMode
-        ? buildDirectInstruction(profiles, {
+        ? buildDirectInstruction(profilesForPrompt, {
           maxImages: settings.maxImages || 2,
           wardrobe: (rememberedState && rememberedState.outfits) || null,
           clothingDigest: digest,
@@ -10804,7 +11074,7 @@ async function scanStoryCore(userId, options = {}) {
       assertStoryScanActive(scan)
       setStoryScanStage(scan, 'compiling', 'Parser returned structured JSON; compiling the Anima prompt.')
       if (directMode) {
-        const direct = parseDirectImages(out, settings.maxImages || 2, profiles)
+        const direct = parseDirectImages(out, settings.maxImages || 2, profiles, passage)
         if (!direct.images.length) {
           // A refusal is a decision, not a fault. Reported as itself, at info
           // rather than warn, and WITHOUT the "Direct mode:" prefix that made it
@@ -10817,6 +11087,7 @@ async function scanStoryCore(userId, options = {}) {
         }
         return await runDirectImages(direct.images, {
           target, preset, profiles, userId, chatId, scan, rawReply: out, parserInput,
+          instruction, settings,
         })
       }
       let parsed
