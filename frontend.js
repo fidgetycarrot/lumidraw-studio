@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.8'
+const EXTENSION_VERSION = '1.3.9'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -15,16 +15,76 @@ function makeId() {
   return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+function makeBootstrapLauncher() {
+  const id = 'lumidraw-bootstrap-launcher'
+  const stale = document.getElementById(id)
+  if (stale) { try { stale.remove() } catch { /* ignore */ } }
+  const button = document.createElement('button')
+  button.id = id
+  button.type = 'button'
+  button.title = `LumiDraw Studio v${EXTENSION_VERSION} — starting…`
+  button.setAttribute('aria-label', `LumiDraw Studio v${EXTENSION_VERSION}`)
+  button.innerHTML = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="9" cy="9" r="1.8"></circle><path d="M21 15.5l-4.2-4.2a1.6 1.6 0 0 0-2.3 0L6 20"></path></svg>'
+  // This is intentionally raw DOM + inline CSS. It exists BEFORE any Spindle DOM
+  // API call, so a permission/API/startup failure can never make LumiDraw wholly
+  // inaccessible again. Once normal setup succeeds it is removed.
+  button.style.cssText = [
+    'position:fixed','right:16px','bottom:88px','z-index:2147483000',
+    'width:58px','height:58px','border-radius:16px','display:flex',
+    'align-items:center','justify-content:center','background:#262833',
+    'border:1px solid #515564','color:#eceef4','cursor:pointer',
+    'box-shadow:0 2px 12px rgba(0,0,0,.38)','padding:0'
+  ].join(';')
+  let startupError = ''
+  const click = () => {
+    const panel = document.querySelector('.ld-panel')
+    if (panel) {
+      panel.classList.toggle('ld-open')
+      panel.style.display = panel.classList.contains('ld-open') ? 'flex' : ''
+      return
+    }
+    const detail = startupError || 'The frontend setup function started, but the full LumiDraw panel has not mounted yet.'
+    window.alert(`LumiDraw v${EXTENSION_VERSION} startup diagnostic:
+
+${detail}`)
+  }
+  button.addEventListener('click', click)
+  const host = document.body || document.documentElement
+  if (!host) throw new Error('document root is unavailable during LumiDraw setup')
+  host.appendChild(button)
+  return {
+    button,
+    fail(error) {
+      startupError = error && error.stack ? String(error.stack) : String(error && error.message ? error.message : error || 'Unknown startup error')
+      button.style.background = '#6d2832'
+      button.title = `LumiDraw v${EXTENSION_VERSION} startup failed — click for details`
+      button.setAttribute('aria-label', `LumiDraw v${EXTENSION_VERSION} startup failed — click for details`)
+    },
+    remove() {
+      button.removeEventListener('click', click)
+      try { button.remove() } catch { /* ignore */ }
+    },
+  }
+}
+
 export function setup(ctx) {
+  // First executable UI action. If this button never appears, Lumiverse did not
+  // import/call this frontend at all; that distinguishes loader failures from
+  // runtime failures without needing DevTools.
+  const bootstrap = makeBootstrapLauncher()
   console.log('[LumiDraw] setup called. ctx keys:', ctx ? Object.keys(ctx) : ctx)
   if (ctx && ctx.dom) console.log('[LumiDraw] ctx.dom keys:', Object.keys(ctx.dom))
   try {
     const cleanup = realSetup(ctx)
     console.log('[LumiDraw] setup finished — launcher should be visible bottom-right')
-    return cleanup
+    bootstrap.remove()
+    return () => {
+      try { if (typeof cleanup === 'function') cleanup() } finally { bootstrap.remove() }
+    }
   } catch (err) {
     console.error('[LumiDraw] setup crashed:', err)
-    return () => {}
+    bootstrap.fail(err)
+    return () => bootstrap.remove()
   }
 }
 
@@ -98,7 +158,13 @@ function realSetup(ctx) {
   const injected = []
   const dom = {
     addStyle(css) {
-      if (ctx.dom && typeof ctx.dom.addStyle === 'function') return ctx.dom.addStyle(css)
+      if (ctx.dom && typeof ctx.dom.addStyle === 'function') {
+        try { return ctx.dom.addStyle(css) } catch (e) {
+          // Current Lumiverse gates DOM helpers behind app_manipulation. A stale
+          // permission grant must not abort LumiDraw before it can explain itself.
+          console.warn('[LumiDraw] ctx.dom.addStyle failed, using document fallback:', e && e.message ? e.message : e)
+        }
+      }
       const el = document.createElement('style')
       el.setAttribute('data-lumidraw', '1')
       el.textContent = css
@@ -273,7 +339,7 @@ function realSetup(ctx) {
   // ------------------------------------------------------------------ styles
   const removeStyle = dom.addStyle(`
     .ld-launcher {
-      position: fixed; right: 16px; bottom: 88px; z-index: 9000;
+      position: fixed; right: 16px; bottom: 88px; z-index: 2147482000;
       width: 58px; height: 58px; border-radius: 16px;
       display: flex; align-items: center; justify-content: center;
       background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
@@ -282,7 +348,7 @@ function realSetup(ctx) {
     }
     .ld-launcher:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
     .ld-panel {
-      position: fixed; right: 16px; bottom: 140px; z-index: 9001;
+      position: fixed; right: 16px; bottom: 140px; z-index: 2147482001;
       width: min(1180px, calc(100vw - 24px)); max-width: calc(100vw - 24px);
       height: min(82vh, 820px); max-height: calc(100dvh - 24px);
       display: none; flex-direction: column; overflow: hidden;
