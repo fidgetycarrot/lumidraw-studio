@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.1'
+const EXTENSION_VERSION = '1.3.2'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -3837,19 +3837,38 @@ ${entry.prompt || ''}`.trim()
   // Image display width. Presentation only — no message is modified and nothing is
   // regenerated. Current Lumiverse virtualizes chat rows and remeasures them as
   // content changes, so keep this selector intentionally cheap: no :has(), no
-  // generated class names, and no wrapper mutations. New LumiDraw images carry
-  // intrinsic dimensions so their aspect ratio is reserved before they decode.
+  // DOM scans, and no wrapper mutations. We do style Lumiverse's existing image
+  // wrappers because otherwise their compact width caps the child image. New
+  // LumiDraw images carry intrinsic dimensions so aspect ratio is reserved before
+  // they decode.
   let imageSizeStyleRemove = null
   function imageSizeCss(px) {
     const size = `${px}px`
     return `
 :root { --lumidraw-image-size: ${size}; }
-[data-component="MessageContent"] img {
+/* Lumiverse wraps inline message images. Resize the wrapper as well as the
+   image or the host's compact wrapper becomes the effective size cap. These
+   selectors are cheap: no :has(), no tree walk, no DOM mutation. */
+button[class*="inlineImageBtn"],
+div[class*="inlineImageWrap"] {
+  display: block !important;
+  width: min(100%, var(--lumidraw-image-size)) !important;
+  max-width: var(--lumidraw-image-size) !important;
+  height: auto !important;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+  margin-inline: auto !important;
+  overflow: visible !important;
+}
+[data-component="MessageContent"] img,
+img[data-lumidraw-image="1"],
+img[class*="inlineImage"] {
   display: block !important;
   float: none !important;
   width: min(100%, var(--lumidraw-image-size)) !important;
   max-width: var(--lumidraw-image-size) !important;
   height: auto !important;
+  max-height: none !important;
   margin-inline: auto !important;
   object-fit: contain !important;
   box-sizing: border-box !important;
