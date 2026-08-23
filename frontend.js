@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.4'
+const EXTENSION_VERSION = '1.3.5'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -116,8 +116,9 @@ function realSetup(ctx) {
   let imagePlacements = []
   let imagePlacementChatId = ''
   let imagePlacementRefreshSeq = 0
-  const imageMessageMounts = new Map()
-  const imageMessageRenderKeys = new Map()
+  const imagePlacementMounts = new Map()
+  const imagePlacementRenderKeys = new Map()
+  const imagePlacementMountMessages = new Map()
   const imageLifecycleUnsubs = []
   const pendingImageMessageIds = new Set()
   const imageAttachRetryTimers = new Map()
@@ -3894,15 +3895,13 @@ ${entry.prompt || ''}`.trim()
   // connections can change nothing at all while looking like it changed
   // everything. Say so where the field is.
   // ------------------------------------------------------------------ native story images
-  // Current Lumiverse virtualizes message rows. Follow SimTracker's pattern:
-  // find the exact mounted message, inject one extension-owned host into its
-  // bubble, update that mount in place, and let Lumiverse replay the injected
-  // wrapper across virtualizer unmount/remount cycles. No polling and no
-  // document-wide MutationObserver.
+  // 1.3.5 keeps SimTracker-style extension-owned mounts, but restores LumiDraw's
+  // original scene placement: every image owns its own mount and that mount is
+  // inserted immediately after the rendered paragraph containing the parser's
+  // saved anchor. The assistant message itself is never rewritten with <img>.
   const removeImageMountStyle = dom.addStyle(`
-    .ld-message-images-host {
-      display:flex; flex-direction:column; align-items:center; gap:12px;
-      width:100%; max-width:100%; margin:12px 0 2px; box-sizing:border-box;
+    .ld-message-image-host {
+      display:block; width:100%; max-width:100%; margin:12px 0; box-sizing:border-box;
     }
     .ld-chat-image-item {
       display:block; max-width:100%; margin:0 auto; box-sizing:border-box;
@@ -3916,9 +3915,8 @@ ${entry.prompt || ''}`.trim()
   const escapeAttr = (value) => String(value == null ? '' : value)
     .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-  // 1.3.4: mirror SimTracker's event parsing. CHARACTER_MESSAGE_RENDERED is
-  // useful even when the payload does not carry chatId; messageId is the only
-  // thing required to finish an already-known image placement.
+  // CHARACTER_MESSAGE_RENDERED is useful even when the payload does not carry
+  // chatId; messageId is enough to satisfy an already-known render intent.
   function readImageEventContext(payload) {
     if (typeof payload === 'string' || typeof payload === 'number') {
       return { messageId: String(payload), chatId: '', isUser: null }
@@ -3964,12 +3962,20 @@ ${entry.prompt || ''}`.trim()
     imageAttachRetryTimers.delete(id)
   }
 
+  function clearImagePlacementMount(placementId) {
+    const id = String(placementId || '')
+    const mount = imagePlacementMounts.get(id)
+    if (mount) dom.uninject(mount)
+    imagePlacementMounts.delete(id)
+    imagePlacementRenderKeys.delete(id)
+    imagePlacementMountMessages.delete(id)
+  }
+
   function clearImageMessageMount(messageId) {
     const id = String(messageId || '')
-    const mount = imageMessageMounts.get(id)
-    if (mount) dom.uninject(mount)
-    imageMessageMounts.delete(id)
-    imageMessageRenderKeys.delete(id)
+    for (const [placementId, mountedMessageId] of [...imagePlacementMountMessages.entries()]) {
+      if (mountedMessageId === id) clearImagePlacementMount(placementId)
+    }
     pendingImageMessageIds.delete(id)
     cancelImageAttachRetry(id)
   }
@@ -3982,18 +3988,20 @@ ${entry.prompt || ''}`.trim()
       .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0))
   }
 
-  function placementRenderKey(items) {
-    return items.map((item) => [item.placementId, item.url, item.width, item.height, item.alt].join('|')).join('||')
+  function placementRenderKey(item) {
+    return [item.placementId, item.url, item.width, item.height, item.alt, item.anchor, item.source].join('|')
   }
 
   function placementMarkup(item) {
     const width = Math.max(1, Number(item.width) || 768)
     const height = Math.max(1, Number(item.height) || 1024)
     const id = escapeAttr(item.placementId)
-    return `<div class="ld-chat-image-item" data-lumidraw-placement-id="${id}" data-intrinsic-width="${width}">
-      <img class="ld-chat-image" data-lumidraw-image="1" data-lumidraw-placement-id="${id}"
-        src="${escapeAttr(item.url)}" alt="${escapeAttr(item.alt || 'Generated image')}"
-        width="${width}" height="${height}" loading="lazy" decoding="async" />
+    return `<div class="ld-message-image-host" data-lumidraw-placement-host="${id}">
+      <div class="ld-chat-image-item" data-lumidraw-placement-id="${id}" data-intrinsic-width="${width}">
+        <img class="ld-chat-image" data-lumidraw-image="1" data-lumidraw-placement-id="${id}"
+          src="${escapeAttr(item.url)}" alt="${escapeAttr(item.alt || 'Generated image')}"
+          width="${width}" height="${height}" loading="lazy" decoding="async" />
+      </div>
     </div>`
   }
 
@@ -4023,77 +4031,134 @@ ${entry.prompt || ''}`.trim()
     }
   }
 
-  // Returns true when the render intent is satisfied. A missing virtualized row
-  // is NOT an error: keep the placement pending and CHARACTER_MESSAGE_RENDERED
-  // will finish the attach when Lumiverse mounts that message.
+  function normalizeAnchorText(value) {
+    return String(value || '')
+      .replace(/[\u00a0\u2007\u202f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase()
+  }
+
+  function messageContentRoot(messageNode) {
+    if (!messageNode || !messageNode.querySelector) return messageNode
+    return messageNode.querySelector('[data-component="MessageContent"]') ||
+      messageNode.querySelector('[data-component="BubbleMessage"] [class*="prose"]') ||
+      messageNode.querySelector('[class*="prose"]') ||
+      messageNode.querySelector('[class*="messageContent"]') ||
+      messageNode
+  }
+
+  // The parser anchor is copied verbatim from the story passage. Markdown may
+  // split that sentence across <em>/<strong>/links, so compare each rendered
+  // block's textContent rather than looking for one literal DOM text node.
+  function findAnchorBlock(contentRoot, anchor) {
+    const wanted = normalizeAnchorText(anchor)
+    if (!contentRoot || !wanted || wanted.length < 5) return null
+    const selector = 'p,li,blockquote,pre,h1,h2,h3,h4,h5,h6'
+    const candidates = contentRoot.querySelectorAll ? [...contentRoot.querySelectorAll(selector)] : []
+    for (const block of candidates) {
+      if (normalizeAnchorText(block.textContent).includes(wanted)) return block
+    }
+    // Some themes/renderers use plain immediate divs instead of <p>. Limit this
+    // fallback to direct children so we don't choose the entire message wrapper.
+    for (const block of [...(contentRoot.children || [])]) {
+      if (block.matches && block.matches('.ld-message-image-host')) continue
+      if (normalizeAnchorText(block.textContent).includes(wanted)) return block
+    }
+    return null
+  }
+
+  function placementInjectionTarget(messageNode, item) {
+    const contentRoot = messageContentRoot(messageNode)
+    const anchorBlock = findAnchorBlock(contentRoot, item.anchor)
+    if (anchorBlock) return { target: anchorBlock, position: 'afterend', anchored: true }
+
+    // Match the pre-1.3.3 behavior: if a story anchor cannot be placed, put the
+    // image at the TOP rather than silently moving it to the end of the scene.
+    // A manual Studio insertion has no story anchor, so keeping it at the end is
+    // less surprising there.
+    if (String(item.source || '') === 'manual') {
+      return { target: contentRoot || messageNode, position: 'beforeend', anchored: false }
+    }
+    return { target: contentRoot || messageNode, position: 'afterbegin', anchored: false }
+  }
+
+  // Returns true when every placement for this message has a live mount. A
+  // missing virtualized row is not an error; keep the message pending and let
+  // CHARACTER_MESSAGE_RENDERED satisfy it when Lumiverse mounts the row.
   function renderImagesIntoMessage(messageId) {
     const id = String(messageId || '')
     if (!id) return false
     const items = placementsForMessage(id)
     if (!items.length) { clearImageMessageMount(id); return true }
-    const key = placementRenderKey(items)
-    const existing = imageMessageMounts.get(id)
-    const stillMounted = !!existing && existing.isConnected
-    if (stillMounted && imageMessageRenderKeys.get(id) === key) {
-      applyNativeImageSizingToMount(existing)
-      pendingImageMessageIds.delete(id)
-      cancelImageAttachRetry(id)
-      return true
-    }
-    const inner = items.map(placementMarkup).join('')
-    if (stillMounted) {
-      existing.innerHTML = inner
-      imageMessageRenderKeys.set(id, key)
-      applyNativeImageSizingToMount(existing)
-      pendingImageMessageIds.delete(id)
-      cancelImageAttachRetry(id)
-      return true
-    }
-    // Match SimTracker's cold path exactly: a stale/disconnected injected mount
-    // must be unregistered before a replacement mount is created, otherwise the
-    // host can later replay both wrappers when virtualization remounts the row.
-    if (existing) {
-      dom.uninject(existing)
-      imageMessageMounts.delete(id)
-      imageMessageRenderKeys.delete(id)
-    }
 
-    // SimTracker's cold path: find the actual mounted message, then inject into
-    // its bubble. Do not fall back to mutating the message content or wrappers.
     const messageNode = findMountedMessageElement(id)
     if (!messageNode) {
       pendingImageMessageIds.add(id)
       return false
     }
-    const bubbleNode = messageNode.querySelector(':scope > div[class*="bubble"]') ||
-      messageNode.querySelector('div[class*="bubble"]') || messageNode
-    const host = `<div class="ld-message-images-host" data-lumidraw-message-images="${escapeAttr(id)}">${inner}</div>`
-    let mount = null
-    try {
-      mount = ctx.dom && typeof ctx.dom.inject === 'function'
-        ? ctx.dom.inject(bubbleNode, host, 'beforeend')
-        : dom.inject(bubbleNode, host, 'beforeend')
-    } catch (error) {
-      console.warn('[LumiDraw] native image inject failed:', error && error.message ? error.message : error)
-      pendingImageMessageIds.add(id)
-      return false
+
+    const wantedIds = new Set(items.map((item) => String(item.placementId || '')).filter(Boolean))
+    let rebuild = false
+    for (const [placementId, mountedMessageId] of imagePlacementMountMessages.entries()) {
+      if (mountedMessageId === id && !wantedIds.has(placementId)) { rebuild = true; break }
     }
-    if (!mount) {
-      pendingImageMessageIds.add(id)
-      return false
+    if (!rebuild) {
+      for (const item of items) {
+        const placementId = String(item.placementId || '')
+        const mount = imagePlacementMounts.get(placementId)
+        if (!mount || !mount.isConnected || imagePlacementRenderKeys.get(placementId) !== placementRenderKey(item)) {
+          rebuild = true
+          break
+        }
+      }
     }
-    imageMessageMounts.set(id, mount)
-    imageMessageRenderKeys.set(id, key)
-    pendingImageMessageIds.delete(id)
-    cancelImageAttachRetry(id)
-    applyNativeImageSizingToMount(mount)
-    return true
+
+    if (!rebuild) {
+      for (const item of items) applyNativeImageSizingToMount(imagePlacementMounts.get(String(item.placementId || '')))
+      pendingImageMessageIds.delete(id)
+      cancelImageAttachRetry(id)
+      return true
+    }
+
+    // Rebuild this message as one mount per image. Work backwards so two images
+    // sharing one paragraph anchor preserve their saved order when each uses
+    // insertAdjacentHTML('afterend').
+    clearImageMessageMount(id)
+    let complete = true
+    for (const item of [...items].reverse()) {
+      const placementId = String(item.placementId || '')
+      if (!placementId) continue
+      const where = placementInjectionTarget(messageNode, item)
+      if (!where.target) { complete = false; continue }
+      let mount = null
+      try {
+        mount = ctx.dom && typeof ctx.dom.inject === 'function'
+          ? ctx.dom.inject(where.target, placementMarkup(item), where.position)
+          : dom.inject(where.target, placementMarkup(item), where.position)
+      } catch (error) {
+        console.warn('[LumiDraw] anchored native image inject failed:', error && error.message ? error.message : error)
+      }
+      if (!mount) { complete = false; continue }
+      imagePlacementMounts.set(placementId, mount)
+      imagePlacementRenderKeys.set(placementId, placementRenderKey(item))
+      imagePlacementMountMessages.set(placementId, id)
+      applyNativeImageSizingToMount(mount)
+    }
+
+    if (complete) {
+      pendingImageMessageIds.delete(id)
+      cancelImageAttachRetry(id)
+      return true
+    }
+    pendingImageMessageIds.add(id)
+    return false
   }
 
   // One event-scoped retry burst handles the common race where the backend
   // finishes just before React mounts the final message. This is not polling:
   // after two frames + one short settle retry we wait for Lumiverse's own
-  // CHARACTER_MESSAGE_RENDERED event, exactly like SimTracker's render intent.
+  // CHARACTER_MESSAGE_RENDERED event, like SimTracker's render intent.
   function scheduleImageAttach(messageId) {
     const id = String(messageId || '')
     if (!id || !placementsForMessage(id).length) return false
@@ -4122,26 +4187,26 @@ ${entry.prompt || ''}`.trim()
     if (seq !== imagePlacementRefreshSeq) return
     const nextChatId = String(res.chatId || wantedChat || '')
     if (imagePlacementChatId && nextChatId && imagePlacementChatId !== nextChatId) {
-      for (const messageId of [...imageMessageMounts.keys()]) clearImageMessageMount(messageId)
+      for (const placementId of [...imagePlacementMounts.keys()]) clearImagePlacementMount(placementId)
     }
     imagePlacementChatId = nextChatId
     if (nextChatId) lastSeenChatId = nextChatId
     imagePlacements = Array.isArray(res.placements) ? res.placements : []
-    const ids = new Set(imagePlacements.map((item) => String(item && item.messageId || '')).filter(Boolean))
-    for (const mountedId of [...imageMessageMounts.keys()]) {
-      if (!ids.has(mountedId)) clearImageMessageMount(mountedId)
+    const activePlacementIds = new Set(imagePlacements.map((item) => String(item && item.placementId || '')).filter(Boolean))
+    for (const placementId of [...imagePlacementMounts.keys()]) {
+      if (!activePlacementIds.has(placementId)) clearImagePlacementMount(placementId)
     }
-    for (const id of ids) scheduleImageAttach(id)
+    const messageIds = new Set(imagePlacements.map((item) => String(item && item.messageId || '')).filter(Boolean))
+    for (const id of messageIds) scheduleImageAttach(id)
   }
 
-  // Pre-1.3.3 images are canonical message content owned by Lumiverse's inline
-  // image renderer. 1.3.4 deliberately leaves them alone: no wrapper probing,
-  // no compatibility resizing, and no extra virtualized-row DOM work.
+  // Pre-1.3.3 images remain canonical message content owned by Lumiverse's
+  // inline-image renderer. LumiDraw deliberately leaves them alone.
   function applyImageSize() {
     const on = $('.ld-size-images') && $('.ld-size-images').checked
     const row = $('.ld-size-images-row')
     if (row) row.style.display = on ? 'flex' : 'none'
-    for (const mount of imageMessageMounts.values()) applyNativeImageSizingToMount(mount)
+    for (const mount of imagePlacementMounts.values()) applyNativeImageSizingToMount(mount)
   }
 
   // The slider and the number box are two views of one value.
@@ -5574,7 +5639,7 @@ ${entry.prompt || ''}`.trim()
           const context = readImageEventContext(payload)
           const chatId = String(context.chatId || (payload && (payload.chatId || payload.id || (payload.chat && payload.chat.id))) || '')
           lastSeenChatId = chatId
-          for (const messageId of [...imageMessageMounts.keys()]) clearImageMessageMount(messageId)
+          for (const placementId of [...imagePlacementMounts.keys()]) clearImagePlacementMount(placementId)
           for (const timer of imageAttachRetryTimers.values()) clearTimeout(timer)
           imageAttachRetryTimers.clear()
           pendingImageMessageIds.clear()
@@ -5765,7 +5830,7 @@ ${entry.prompt || ''}`.trim()
     for (const timer of imageAttachRetryTimers.values()) clearTimeout(timer)
     imageAttachRetryTimers.clear()
     pendingImageMessageIds.clear()
-    for (const messageId of [...imageMessageMounts.keys()]) clearImageMessageMount(messageId)
+    for (const placementId of [...imagePlacementMounts.keys()]) clearImagePlacementMount(placementId)
     try { removeImageMountStyle() } catch { /* ignore */ }
     closeLightbox()
     document.body.classList.remove('ld-fullscreen-lock')
