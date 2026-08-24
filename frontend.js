@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.13'
+const EXTENSION_VERSION = '1.3.14'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -13,6 +13,21 @@ function makeId() {
   const a = new Uint8Array(16)
   crypto.getRandomValues(a)
   return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+// Lumiverse serves its own cached image tiers from the same canonical image
+// URL. Keep the original URL in LumiDraw's state and alter only display URLs.
+function lumidrawImageVariantUrl(value, tier, enabled = true) {
+  const raw = String(value || '').trim()
+  if (!enabled || (tier !== 'sm' && tier !== 'lg') || !raw) return raw
+  const match = raw.match(/^((?:https?:\/\/[^/?#]+)?\/api\/v1\/images\/[^/?#]+)(\?[^#]*)?(#.*)?$/i)
+  if (!match) return raw
+  const query = String(match[2] || '').replace(/^\?/, '')
+  const kept = query.split('&').filter(Boolean).filter((part) => {
+    try { return decodeURIComponent(part.split('=')[0] || '').toLowerCase() !== 'size' } catch { return true }
+  })
+  kept.push(`size=${tier}`)
+  return `${match[1]}?${kept.join('&')}${match[3] || ''}`
 }
 
 function makeBootstrapLauncher() {
@@ -256,6 +271,33 @@ function realSetup(ctx) {
   const pending = new Map() // requestId → {resolve, reject}
   let rescanInputAction = null
   let rescanInputActionUnsub = null
+
+  function previewUrl(original, tier) {
+    return lumidrawImageVariantUrl(original, tier, settings.optimizedPreviews !== false)
+  }
+
+  function setPreviewImageSource(img, original, tier) {
+    if (!img) return
+    const canonical = String(original || '')
+    img.dataset.lumidrawOriginalUrl = canonical
+    if (!img.dataset.lumidrawPreviewFallbackBound) {
+      img.dataset.lumidrawPreviewFallbackBound = '1'
+      img.addEventListener('error', () => {
+        const fallback = String(img.dataset.lumidrawOriginalUrl || '')
+        if (fallback && img.getAttribute('src') !== fallback) img.src = fallback
+      })
+    }
+    img.src = previewUrl(canonical, tier)
+  }
+
+  function refreshNativePreviewSources() {
+    for (const mount of imagePlacementMounts.values()) {
+      if (!mount || !mount.querySelectorAll) continue
+      for (const img of mount.querySelectorAll('img[data-lumidraw-original-url]')) {
+        setPreviewImageSource(img, img.dataset.lumidrawOriginalUrl, 'lg')
+      }
+    }
+  }
 
   function call(type, data = {}, timeoutMs = 630000) {
     return new Promise((resolve, reject) => {
@@ -847,6 +889,8 @@ function realSetup(ctx) {
             <label style="display:flex;align-items:center;gap:7px;margin-top:11px;font-size:12px"><input type="checkbox" class="ld-size-images" style="width:auto" /> Set the display width of images in chat</label>
             <div class="ld-size-images-row" style="display:none;align-items:center;gap:8px;margin-top:6px"><input type="range" class="ld-image-width" min="200" max="1200" step="10" style="flex:1" /><input type="number" class="ld-image-width-num" min="200" max="1200" step="10" style="width:76px" /><span style="font-size:12px;opacity:0.7">px</span></div>
             <div class="ld-help">Applies immediately, to every image in the conversation. This is presentation only — nothing is regenerated and no message is modified. Leave it off if you already size images with your own custom CSS, or the two will fight.</div>
+            <label style="display:flex;align-items:center;gap:7px;margin-top:11px;font-size:12px"><input type="checkbox" class="ld-optimized-previews" style="width:auto" /> Use optimized image previews</label>
+            <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-delete-chat-images" style="width:auto" /> Delete unshared LumiDraw images when their chat is deleted</label>
             <div class="ld-parser-binding-controls" style="margin-top:9px">
               <span class="ld-label">Parser engine</span>
               <select class="ld-parser-engine">
@@ -1401,6 +1445,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       strip: $('.ld-strip-directives'),
       sizeImages: $('.ld-size-images'),
       sizeRow: $('.ld-size-images-row'),
+      optimizedPreviews: $('.ld-optimized-previews'),
+      deleteChatImages: $('.ld-delete-chat-images'),
       minImages: $('.ld-minimg'),
       maxImages: $('.ld-maximg'),
       parserEngine: $('.ld-parser-engine'),
@@ -1488,6 +1534,10 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     display.appendChild(checkbox(controls.sizeImages, 'Set a custom image width',
       'Applies to native LumiDraw images generated with v1.3.3 or newer. Older inline images are left entirely to Lumiverse.'))
     if (controls.sizeRow) display.appendChild(controls.sizeRow)
+    display.appendChild(checkbox(controls.optimizedPreviews, 'Use optimized previews (recommended)',
+      'History uses Lumiverse’s small cached tier and chat/current images use its large tier. The original stays available for the viewer, regeneration, and download.'))
+    display.appendChild(checkbox(controls.deleteChatImages, 'Delete unshared LumiDraw images with a deleted chat',
+      'Removes the LumiDraw upload and its cached previews only when no other chat uses it. Draw Things keeps its own generated copy.'))
     setup.appendChild(display)
     if (controls.lastStatus) {
       controls.lastStatus.classList.add('ld-reset-status')
@@ -1865,6 +1915,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   function findHistoryImageForChatImage(img) {
     ensureFixableIndex()
+    const original = img.getAttribute('data-lumidraw-original-url') || (img.dataset && img.dataset.lumidrawOriginalUrl) || ''
+    if (original && fixableByUrl.has(original)) return fixableByUrl.get(original)
     const src = img.getAttribute('src') || img.src || ''
     if (src && fixableByUrl.has(src)) return fixableByUrl.get(src)
     const alt = normalizeAltText(img.getAttribute('alt') || '')
@@ -3480,7 +3532,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     hit.title = 'Open image viewer'
     hit.setAttribute('aria-label', 'Open generated image viewer')
     const img = document.createElement('img')
-    img.src = image.url
+    setPreviewImageSource(img, image.url, 'lg')
     img.alt = (entry.prompt || 'Generated image').slice(0, 160)
     img.draggable = false
     hit.addEventListener('click', () => openLightbox(image.url))
@@ -3519,9 +3571,11 @@ seed ${entry.seed}
 ${entry.prompt || ''}`.trim()
         hit.setAttribute('aria-label', 'Load generated image into Create')
         const im = document.createElement('img')
-        im.src = img.url
+        setPreviewImageSource(im, img.url, 'sm')
         im.alt = (entry.prompt || 'Generated image').slice(0, 160)
         im.draggable = false
+        im.loading = 'lazy'
+        im.decoding = 'async'
         hit.addEventListener('click', () => loadHistoryImage(entry, img))
         hit.appendChild(im)
         const row = document.createElement('div')
@@ -4146,10 +4200,12 @@ ${entry.prompt || ''}`.trim()
     const width = Math.max(1, Number(item.width) || 768)
     const height = Math.max(1, Number(item.height) || 1024)
     const id = escapeAttr(item.placementId)
+    const originalUrl = String(item.url || '')
+    const displayUrl = previewUrl(originalUrl, 'lg')
     return `<div class="ld-message-image-host" data-lumidraw-placement-host="${id}">
       <div class="ld-chat-image-item" data-lumidraw-placement-id="${id}" data-intrinsic-width="${width}">
         <img class="ld-chat-image" data-lumidraw-image="1" data-lumidraw-placement-id="${id}"
-          src="${escapeAttr(item.url)}" alt="${escapeAttr(item.alt || 'Generated image')}"
+          data-lumidraw-original-url="${escapeAttr(originalUrl)}" src="${escapeAttr(displayUrl)}" alt="${escapeAttr(item.alt || 'Generated image')}"
           width="${width}" height="${height}" loading="lazy" decoding="async" />
       </div>
     </div>`
@@ -4173,6 +4229,7 @@ ${entry.prompt || ''}`.trim()
       item.style.setProperty('max-width', '100%', 'important')
       const img = item.querySelector('.ld-chat-image')
       if (img) {
+        setPreviewImageSource(img, img.dataset.lumidrawOriginalUrl || img.getAttribute('src') || '', 'lg')
         img.style.setProperty('width', '100%', 'important')
         img.style.setProperty('max-width', '100%', 'important')
         img.style.setProperty('height', 'auto', 'important')
@@ -4372,6 +4429,17 @@ ${entry.prompt || ''}`.trim()
   }
   if ($('.ld-size-images')) {
     $('.ld-size-images').addEventListener('change', () => { applyImageSize(); scheduleSettingsSave() })
+  }
+  if ($('.ld-optimized-previews')) {
+    $('.ld-optimized-previews').addEventListener('change', () => {
+      settings.optimizedPreviews = $('.ld-optimized-previews').checked
+      renderHistory()
+      refreshNativePreviewSources()
+      scheduleSettingsSave()
+    })
+  }
+  if ($('.ld-delete-chat-images')) {
+    $('.ld-delete-chat-images').addEventListener('change', scheduleSettingsSave)
   }
 
   // --- wardrobe of record -----------------------------------------------------
@@ -4879,7 +4947,8 @@ ${entry.prompt || ''}`.trim()
     // handle on WHICH image was clicked when a message holds several, and it
     // is what the backend will swap — preserving the image's position in the
     // story rather than guessing at a similar-looking one.
-    const clickedSrc = target.getAttribute('src') || target.src || ''
+    const clickedSrc = target.getAttribute('data-lumidraw-original-url') ||
+      (target.dataset && target.dataset.lumidrawOriginalUrl) || target.getAttribute('src') || target.src || ''
     const placementHost = target.closest('[data-lumidraw-placement-id]')
     const placementId = target.getAttribute('data-lumidraw-placement-id') ||
       (placementHost && placementHost.getAttribute('data-lumidraw-placement-id')) || ''
@@ -5402,6 +5471,8 @@ ${entry.prompt || ''}`.trim()
       stripImageDirectives: $('.ld-strip-directives').checked,
       sizeChatImages: $('.ld-size-images') ? $('.ld-size-images').checked : false,
       chatImageWidth: $('.ld-image-width') ? Number($('.ld-image-width').value) || 500 : 500,
+      optimizedPreviews: $('.ld-optimized-previews') ? $('.ld-optimized-previews').checked : true,
+      deleteImagesWithChats: $('.ld-delete-chat-images') ? $('.ld-delete-chat-images').checked : true,
       parserContextMessages: $('.ld-parser-context').value,
       useLoomLedger: $('.ld-use-loom-ledger').checked,
       storyQualityTags: $('.ld-story-quality') ? $('.ld-story-quality').value : '',
@@ -5902,6 +5973,8 @@ ${entry.prompt || ''}`.trim()
         if ($('.ld-image-width-num')) $('.ld-image-width-num').value = width
         applyImageSize()
       }
+      if ($('.ld-optimized-previews')) $('.ld-optimized-previews').checked = settings.optimizedPreviews !== false
+      if ($('.ld-delete-chat-images')) $('.ld-delete-chat-images').checked = settings.deleteImagesWithChats !== false
       $('.ld-parser-engine').value = settings.parserEngine || 'legacy'
       $('.ld-parser-context').value = String(settings.parserContextMessages ?? 2)
       $('.ld-use-loom-ledger').checked = settings.useLoomLedger !== false

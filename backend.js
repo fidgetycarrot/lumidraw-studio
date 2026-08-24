@@ -88,6 +88,8 @@ const DEFAULT_SETTINGS = {
   stripImageDirectives: true, // remove dead ![...](/…/gen) image-request directives from the prompt context
   sizeChatImages: false,  // off by default: a custom Lumiverse stylesheet would fight it
   chatImageWidth: 500,    // px, only consulted when sizeChatImages is on
+  optimizedPreviews: true, // use Lumiverse's cached sm/lg image tiers in the UI; originals remain canonical
+  deleteImagesWithChats: true, // delete unshared LumiDraw uploads when their owning chat is deleted
   cloudEnabled: false,    // route generations to Draw Things Cloud Compute via the relay
   cloudHost: '127.0.0.1', // the relay runs on the Lumiverse Mac, beside the Bridge
   cloudPort: 7864,
@@ -155,6 +157,8 @@ async function getSettings() {
   settings.subjectBinding = settings.parserEngine === 'anima' // backward-compatible debug/profile flag
   settings.parserContextMessages = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
   settings.useLoomLedger = settings.useLoomLedger !== false
+  settings.optimizedPreviews = settings.optimizedPreviews !== false
+  settings.deleteImagesWithChats = settings.deleteImagesWithChats !== false
   if (settings.parserEngine === 'anima' && (!stored || !stored.parserInstruction || stored.parserInstruction === LEGACY_DEFAULT_PARSER_INSTRUCTION || stored.parserInstruction === V0181_ANIMA_PARSER_INSTRUCTION)) {
     settings.parserInstruction = ''
   }
@@ -497,11 +501,13 @@ async function getHistory() {
   return spindle.storage.getJson(HISTORY_FILE, { fallback: [] })
 }
 
-async function pushHistory(entry) {
+async function pushHistory(entry, userId = '') {
   const history = await getHistory()
   history.unshift(entry)
   const trimmed = history.slice(0, HISTORY_LIMIT)
   await spindle.storage.setJson(HISTORY_FILE, trimmed, { indent: 2 })
+  const evicted = history.slice(HISTORY_LIMIT)
+  if (userId && evicted.length) await deleteEvictedHistoryImages(userId, evicted, trimmed)
   return trimmed
 }
 
@@ -663,6 +669,195 @@ async function removeImagePlacements(userId, criteria = {}) {
     if (userId) notifyFrontend(userId, 'image_placement_removed', { placements: removed })
   }
   return removed
+}
+
+function imageRefId(image = {}) {
+  const explicit = String(image.id || image.imageId || '').trim()
+  if (explicit) return explicit
+  const match = String(image.url || image.imageUrl || '').match(/\/api\/v1\/images\/([^/?#]+)/i)
+  return match ? match[1] : ''
+}
+
+function imageRefUrl(image = {}) {
+  return String(image.url || image.imageUrl || '').trim()
+}
+
+function imageBaseUrl(value) {
+  return normalizeForImageMatch(String(value || '').trim()).split(/[?#]/)[0]
+}
+
+function sameImageRef(left = {}, right = {}) {
+  const leftId = imageRefId(left)
+  const rightId = imageRefId(right)
+  if (leftId && rightId && leftId === rightId) return true
+  const leftUrl = imageBaseUrl(imageRefUrl(left))
+  const rightUrl = imageBaseUrl(imageRefUrl(right))
+  return !!(leftUrl && rightUrl && leftUrl === rightUrl)
+}
+
+function uniqueImageRefs(images = []) {
+  const out = []
+  for (const image of images) {
+    if (!image || (!imageRefId(image) && !imageRefUrl(image))) continue
+    const normalized = { id: imageRefId(image), url: imageRefUrl(image) }
+    if (!out.some((item) => sameImageRef(item, normalized))) out.push(normalized)
+  }
+  return out
+}
+
+function imageReferencedInPlacementState(state, image) {
+  const chats = state && state.chats && typeof state.chats === 'object' ? state.chats : {}
+  for (const byMessage of Object.values(chats)) {
+    if (!byMessage || typeof byMessage !== 'object') continue
+    for (const items of Object.values(byMessage)) {
+      if (Array.isArray(items) && items.some((item) => sameImageRef(item, image))) return true
+    }
+  }
+  return false
+}
+
+function imageReferencedInHistory(history, image, { excludeChatId = '' } = {}) {
+  const excluded = String(excludeChatId || '')
+  for (const entry of Array.isArray(history) ? history : []) {
+    const originChat = String(entry && entry.origin && entry.origin.chatId || '')
+    if (excluded && originChat === excluded) continue
+    if ((entry.images || []).some((item) => sameImageRef(item, image))) return true
+  }
+  return false
+}
+
+async function deleteOwnedImage(userId, image) {
+  const id = imageRefId(image)
+  if (!id || !spindle.images) return false
+  for (const fn of ['delete', 'remove']) {
+    if (typeof spindle.images[fn] !== 'function') continue
+    for (const args of [[id, userId], [{ id, userId }], [id]]) {
+      try {
+        await spindle.images[fn](...args)
+        return true
+      } catch { /* try the next supported signature */ }
+    }
+  }
+  return false
+}
+
+async function deleteEvictedHistoryImages(userId, evicted, remainingHistory) {
+  const candidates = uniqueImageRefs((evicted || []).flatMap((entry) => entry && entry.images || []))
+  if (!candidates.length) return 0
+  const state = await getImagePlacementState()
+  let deleted = 0
+  for (const image of candidates) {
+    if (imageReferencedInPlacementState(state, image)) continue
+    if (imageReferencedInHistory(remainingHistory, image)) continue
+    if (await deleteOwnedImage(userId, image)) deleted++
+  }
+  if (deleted) spindle.log.info(`[lumidraw] history retention deleted ${deleted} unreferenced image upload(s)`)
+  return deleted
+}
+
+async function removeChatScopedState(chatId, messageIds = []) {
+  const chat = String(chatId || '').trim()
+  if (!chat) return
+
+  for (const file of [CHAT_CAST_FILE, CHAT_PERSONA_FILE]) {
+    const map = await spindle.storage.getJson(file, { fallback: {} })
+    if (!map || typeof map !== 'object' || Array.isArray(map) || !(chat in map)) continue
+    delete map[chat]
+    await spindle.storage.setJson(file, map, { indent: 2 })
+  }
+
+  const memory = await spindle.storage.getJson(SCENE_MEMORY_FILE, { fallback: {} })
+  if (memory && typeof memory === 'object' && !Array.isArray(memory)) {
+    let changed = false
+    for (const key of Object.keys(memory)) {
+      if (key === chat || key.startsWith(chat + '::')) {
+        delete memory[key]
+        changed = true
+      }
+    }
+    if (changed) await spindle.storage.setJson(SCENE_MEMORY_FILE, memory, { indent: 2 })
+  }
+
+  const ids = new Set((messageIds || []).map((value) => String(value || '')).filter(Boolean))
+  if (ids.size) {
+    const processed = await spindle.storage.getJson(PROCESSED_FILE, { fallback: [] })
+    if (Array.isArray(processed)) {
+      const kept = processed.filter((entry) => {
+        const value = String(entry || '')
+        for (const id of ids) if (value === id || value.startsWith(id + ':')) return false
+        return true
+      })
+      if (kept.length !== processed.length) {
+        await spindle.storage.setJson(PROCESSED_FILE, kept, { indent: 0 })
+      }
+    }
+  }
+}
+
+async function cleanupDeletedChat(userId, chatId, options = {}) {
+  const chat = String(chatId || '').trim()
+  if (!chat) return { chatId: '', removedPlacements: 0, deletedImages: 0, preservedImages: 0 }
+  const settings = options.settings || await getSettings()
+  const history = await getHistory()
+  const state = await getImagePlacementState()
+  const byMessage = state.chats[chat] && typeof state.chats[chat] === 'object' ? state.chats[chat] : {}
+  const placed = []
+  const messageIds = new Set()
+  for (const [messageId, items] of Object.entries(byMessage)) {
+    messageIds.add(String(messageId))
+    if (Array.isArray(items)) placed.push(...items)
+  }
+  const ownedEntries = history.filter((entry) => String(entry && entry.origin && entry.origin.chatId || '') === chat)
+  for (const entry of ownedEntries) {
+    const messageId = String(entry && entry.origin && entry.origin.messageId || '')
+    if (messageId) messageIds.add(messageId)
+  }
+  const candidates = uniqueImageRefs([
+    ...placed,
+    ...ownedEntries.flatMap((entry) => entry && entry.images || []),
+  ])
+
+  const removed = await removeImagePlacements(userId, { chatId: chat })
+  await removeChatScopedState(chat, [...messageIds])
+  if (typeof lastAutoStatus === 'object' && String(lastAutoStatus.chatId || '') === chat) {
+    lastAutoStatus = { at: Date.now(), mode: '', status: 'idle', note: '', messageId: '', chatId: '' }
+  }
+
+  if (settings.deleteImagesWithChats === false || !candidates.length) {
+    return { chatId: chat, removedPlacements: removed.length, deletedImages: 0, preservedImages: candidates.length }
+  }
+
+  const remainingState = await getImagePlacementState()
+  const deleted = []
+  let preserved = 0
+  for (const image of candidates) {
+    const shared = imageReferencedInPlacementState(remainingState, image) ||
+      imageReferencedInHistory(history, image, { excludeChatId: chat })
+    if (shared) {
+      preserved++
+      continue
+    }
+    if (await deleteOwnedImage(userId, image)) deleted.push(image)
+  }
+
+  let cleanedHistory = history
+  if (deleted.length) {
+    cleanedHistory = history.map((entry) => ({
+      ...entry,
+      images: (entry.images || []).filter((image) => !deleted.some((item) => sameImageRef(item, image))),
+    })).filter((entry) => entry.images && entry.images.length)
+    await spindle.storage.setJson(HISTORY_FILE, cleanedHistory, { indent: 2 })
+    if (userId) notifyFrontend(userId, 'history_updated', { history: cleanedHistory, source: 'chat-cleanup' })
+  }
+  spindle.log.info(`[lumidraw] deleted chat ${chat}: removed ${removed.length} placement(s), ` +
+    `deleted ${deleted.length} unshared image upload(s), preserved ${preserved} shared image(s)`)
+  return {
+    chatId: chat,
+    removedPlacements: removed.length,
+    deletedImages: deleted.length,
+    preservedImages: preserved,
+    history: cleanedHistory,
+  }
 }
 
 async function replaceImagePlacement(userId, criteria, entry, alt = '') {
@@ -2809,7 +3004,7 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     ...(debug ? { trace: debug.trace || [], scene: debug.scene || null } : {}),
   }
   assertStoryScanActive(scan)
-  const history = await pushHistory(entry)
+  const history = await pushHistory(entry, userId)
   notifyFrontend(userId, 'history_updated', { history, entry })
   return entry
 }
@@ -11817,6 +12012,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           .some((key) => payload[key] !== undefined)) settings.storyPromptMigrated = true
         if (payload.stripImageDirectives !== undefined) settings.stripImageDirectives = !!payload.stripImageDirectives
         if (payload.sizeChatImages !== undefined) settings.sizeChatImages = !!payload.sizeChatImages
+        if (payload.optimizedPreviews !== undefined) settings.optimizedPreviews = !!payload.optimizedPreviews
+        if (payload.deleteImagesWithChats !== undefined) settings.deleteImagesWithChats = !!payload.deleteImagesWithChats
         if (payload.chatImageWidth !== undefined) {
           settings.chatImageWidth = Math.min(1200, Math.max(200, Number(payload.chatImageWidth) || 500))
         }
@@ -12765,7 +12962,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
           images: uploads,
         }
-        const history = await pushHistory(entry)
+        const history = await pushHistory(entry, userId)
         // Push the completed result independently of the request reply. This
         // keeps remote/mobile clients synchronized if the original response is
         // delayed or dropped after Draw Things has already finished.
@@ -12867,16 +13064,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           }
         } catch { /* not in a chat / no chat open — fine */ }
         // delete the owned image itself
-        let deleted = false
-        if (imageId && spindle.images) {
-          for (const fn of ['delete', 'remove']) {
-            if (typeof spindle.images[fn] !== 'function') continue
-            for (const args of [[imageId, userId], [{ id: imageId, userId }], [imageId]]) {
-              try { await spindle.images[fn](...args); deleted = true; break } catch { /* next */ }
-            }
-            if (deleted) break
-          }
-        }
+        const deleted = await deleteOwnedImage(userId, { id: imageId, url: imageUrl })
         // scrub from history
         const history = await getHistory()
         for (const entry of history) {
@@ -12910,15 +13098,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           for (const entry of history) {
             for (const im of entry.images || []) {
               try { await removeImagePlacements(userId, { imageUrl: im.url, imageId: im.id }) } catch { /* best effort */ }
-              if (!im.id || !spindle.images) continue
-              for (const fn of ['delete', 'remove']) {
-                if (typeof spindle.images[fn] !== 'function') continue
-                let done = false
-                for (const args of [[im.id, userId], [{ id: im.id, userId }], [im.id]]) {
-                  try { await spindle.images[fn](...args); done = true; n++; break } catch { /* next */ }
-                }
-                if (done) break
-              }
+              if (await deleteOwnedImage(userId, im)) n++
             }
           }
           spindle.log.info('[lumidraw] cleared history, deleted ' + n + ' image(s)')
@@ -13081,6 +13261,23 @@ if (typeof spindle.registerInterceptor === 'function') {
     spindle.log.info('[lumidraw] MESSAGE_SWIPED native-image cleanup registered')
   } catch (error) {
     spindle.log.warn('[lumidraw] MESSAGE_SWIPED registration failed: ' + error.message)
+  }
+
+  try {
+    on('CHAT_DELETED', async (evt) => {
+      try {
+        const payload = normalizedPayload(evt)
+        const chatId = String((typeof payload === 'string' ? payload : '') || payload.id || payload.chatId || (payload.chat && payload.chat.id) || '')
+        const uid = payload.userId || (evt && evt.userId) || await recallUserId()
+        if (!chatId) return
+        await cleanupDeletedChat(uid, chatId)
+      } catch (error) {
+        spindle.log.warn('[lumidraw] CHAT_DELETED storage cleanup failed: ' + error.message)
+      }
+    })
+    spindle.log.info('[lumidraw] CHAT_DELETED image and chat-state cleanup registered')
+  } catch (error) {
+    spindle.log.warn('[lumidraw] CHAT_DELETED registration failed: ' + error.message)
   }
 
   try {
