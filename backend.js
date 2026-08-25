@@ -971,7 +971,9 @@ async function readSceneMemory(chatId, presetName) {
   return adopted
 }
 
-async function rememberSceneState(chatId, presetName, { setting = [], lighting = [], outfits = null, looks = null } = {}) {
+async function rememberSceneState(chatId, presetName, {
+  setting = [], lighting = [], outfits = null, looks = null, outfitMeta = null,
+} = {}) {
   const key = sceneMemoryKey(chatId, await sceneScopeFor(chatId, presetName))
   const tags = uniqueStrings(setting || []).slice(0, 6)
   const light = uniqueStrings(lighting || []).slice(0, 4)
@@ -984,9 +986,23 @@ async function rememberSceneState(chatId, presetName, { setting = [], lighting =
     // Merged, not replaced: a character absent from this scene keeps whatever
     // they were last seen wearing, which is the whole point of remembering.
     const mergedOutfits = { ...(previous.outfits || {}) }
+    const mergedOutfitMeta = { ...(previous.outfitMeta || {}) }
     for (const [ref, worn] of Object.entries(wardrobe || {})) {
       const items = uniqueStrings(worn || []).slice(0, 12)
-      if (items.length) mergedOutfits[ref] = items
+      if (items.length) {
+        const before = uniqueStrings(mergedOutfits[ref] || [])
+        const changed = before.join('\u0000') !== items.join('\u0000')
+        mergedOutfits[ref] = items
+        const detail = outfitMeta && outfitMeta[ref]
+        if (detail && typeof detail === 'object' && (changed || !mergedOutfitMeta[ref])) {
+          mergedOutfitMeta[ref] = {
+            source: String(detail.source || 'story').slice(0, 32),
+            at: Number(detail.at) || Date.now(),
+            messageId: String(detail.messageId || '').slice(0, 128),
+            evidence: String(detail.evidence || '').replace(/\s+/g, ' ').trim().slice(0, 220),
+          }
+        }
+      }
     }
     // Merged for the same reason as outfits: someone offstage this scene is
     // still in whatever Look they were last put into.
@@ -998,6 +1014,7 @@ async function rememberSceneState(chatId, presetName, { setting = [], lighting =
       setting: tags.length ? tags : (previous.setting || []),
       lighting: light.length ? light : (previous.lighting || []),
       outfits: mergedOutfits,
+      outfitMeta: mergedOutfitMeta,
       looks: mergedLooks,
       at: Date.now(),
     }
@@ -1952,7 +1969,7 @@ function wardrobeLinesFor(rememberedState, profiles) {
 //
 // It runs ONLY when the wardrobe has nothing for somebody in the scene. When the
 // record is populated it is authoritative and this would be noise.
-const CLOTHING_SENTENCE_RE = /\b(?:wearing|wore|dressed|undressed|changed into|pulled on|pulled off|shrugged into|slipped (?:on|into|out of)|stripped|took off|threw on|buttoned|unbuttoned|zipped|unzipped|tugged|barefoot|topless|bottomless|naked|nude|shirt|t-shirt|blouse|tank top|sweater|hoodie|jacket|coat|cardigan|corset|dress|gown|robe|skirt|shorts|jeans|trousers|pants|leggings|boots|sneakers|shoes|sandals|heels|socks|stockings|thighhighs|apron|uniform|swimsuit|bikini|underwear|panties|bra)\b/i
+const CLOTHING_SENTENCE_RE = /\b(?:wearing|wears?|wore|clad|outfit|dressed|undressed|changed into|pulled on|pulled off|shrugged into|slipped (?:on|into|out of)|stripped|took off|threw on|buttoned|unbuttoned|zipped|unzipped|tugged|barefoot|topless|bottomless|naked|nude|shirt|t-shirt|blouse|tank top|sweater|hoodie|jacket|coat|cardigan|corset|dress|gown|robe|nightgown|pajamas|pyjamas|skirt|shorts|jeans|trousers|pants|leggings|boots|sneakers|shoes|sandals|heels|socks|stockings|thighhighs|apron|uniform|swimsuit|bikini|underwear|lingerie|panties|bra|boxers|briefs)\b/i
 
 function clothingDigest(messages, targetIndex, window = 30, maxChars = 900) {
   if (!Array.isArray(messages) || !Number.isInteger(targetIndex)) return []
@@ -1981,6 +1998,206 @@ function clothingDigest(messages, targetIndex, window = 30, maxChars = 900) {
     total += found[i].length
   }
   return kept
+}
+
+// A wardrobe sync is deliberately smaller than an image parse. It reads the
+// latest passage, reports only clothing that passage explicitly establishes,
+// and never calls Draw Things. The existing wardrobe is supplied so a partial
+// action such as "pulled on jeans" can retain garments the passage did not
+// remove without asking the model to invent the rest of an outfit.
+const WARDROBE_SYNC_RULES = `
+You are a DATA FORMATTER. Read the CURRENT PASSAGE and extract only explicit
+clothing-state updates. Do not continue the story, describe an image, or invent
+an outfit.
+
+OUTPUT — only compact JSON, no markdown or commentary:
+{"updates":[{"name":"exact character name from KNOWN CHARACTERS","evidence":"3-14 exact consecutive words from CURRENT PASSAGE","outfit":["complete current clothing tags"]}]}
+
+RULES
+- Return {"updates":[]} when the CURRENT PASSAGE does not explicitly show or
+  state a character's clothing, dressing, undressing, or garment removal.
+- Ordinary actions and context are not clothing evidence. Waking up does not
+  imply underwear; leaving home does not imply getting dressed.
+- A visible statement such as "wearing a red dress" is an update even without
+  a change verb. Copy its clothing meaning into short booru-style tags.
+- The evidence must be copied exactly and must come from CURRENT PASSAGE, never
+  RECENT CONTEXT. Context resolves names and pronouns only.
+- "outfit" is the complete resulting state: retain CURRENT WARDROBE items the
+  passage did not remove, include every explicitly added garment, and use
+  "nude", "topless", "bottomless", or "barefoot" when directly established.
+- Never guess a missing garment, color, shoes, underwear, or accessory.
+- Use each character's exact KNOWN CHARACTERS name. One update per character.
+`
+
+function wardrobeProfileForName(name, profiles) {
+  const wanted = normalizeIdentityText(name)
+  if (!wanted) return null
+  return allKnownProfiles(profiles).find((profile) => profile && profile.ref &&
+    [profile.anchor, profile.promptName, profile.ref].some((value) =>
+      normalizeIdentityText(value) === wanted)) || null
+}
+
+function effectiveWardrobeForProfiles(state, profiles) {
+  const saved = (state && state.outfits) || {}
+  const result = {}
+  for (const profile of allKnownProfiles(profiles)) {
+    if (!profile || !profile.ref) continue
+    const recorded = uniqueStrings(saved[profile.ref] || [])
+    result[profile.ref] = recorded.length ? recorded : uniqueStrings(profile.defaultOutfit || [])
+  }
+  return result
+}
+
+function buildWardrobeSyncInput(messages, targetIndex, target, profiles, state) {
+  const effective = effectiveWardrobeForProfiles(state, profiles)
+  const characterLines = []
+  for (const profile of allKnownProfiles(profiles)) {
+    if (!profile || !profile.ref) continue
+    const name = profile.anchor || profile.promptName || profile.ref
+    const recorded = uniqueStrings(((state && state.outfits) || {})[profile.ref] || [])
+    const current = effective[profile.ref] || []
+    const source = recorded.length ? 'recorded current state' : (current.length ? 'saved default fallback' : 'unknown')
+    characterLines.push(`- ${name} (${profile.ref}) · ${source}: ${current.join(', ') || '(do not invent clothing)'}`)
+  }
+
+  const context = []
+  let remaining = 1800
+  for (let i = targetIndex - 1; i >= 0 && i >= targetIndex - 5 && remaining > 0; i--) {
+    const bits = messageBits(messages[i] || {})
+    if (typeof bits.content !== 'string') continue
+    const cleaned = cleanParserMessageText(bits.content).replace(/\s+/g, ' ').trim()
+    if (!cleaned) continue
+    const clipped = cleaned.slice(-Math.min(remaining, 700))
+    context.unshift((bits.isAssistant ? 'Assistant' : bits.isUser ? 'User' : 'Chat') + ': ' + clipped)
+    remaining -= clipped.length
+  }
+
+  return [
+    'KNOWN CHARACTERS AND CURRENT WARDROBE',
+    characterLines.join('\n') || '(none)',
+    '',
+    'RECENT CONTEXT — pronoun/name resolution only; never extract an update from here',
+    context.join('\n') || '(none)',
+    '',
+    'CURRENT PASSAGE — all evidence and updates must come from here',
+    cleanParserMessageText(target.content).slice(-6000),
+  ].join('\n')
+}
+
+function parseWardrobeSyncReply(raw, profiles, passage, currentOutfits = {}) {
+  let parsed
+  try { parsed = parseJsonObject(extractParserText(raw), 'wardrobe sync') }
+  catch (error) { return { updates: [], rejected: [error.message] } }
+  if (!parsed || !Array.isArray(parsed.updates)) {
+    return { updates: [], rejected: ['Wardrobe sync reply did not contain an updates array.'] }
+  }
+
+  const passageNorm = normalizeIdentityText(passage)
+  const updatesByRef = new Map()
+  const rejected = []
+  for (const item of parsed.updates.slice(0, 8)) {
+    if (!item || typeof item !== 'object') continue
+    const name = String(item.name || '').trim().slice(0, 64)
+    const profile = wardrobeProfileForName(name, profiles)
+    if (!profile) {
+      rejected.push(`${name || 'Unnamed update'} did not match a known character.`)
+      continue
+    }
+    const evidence = String(item.evidence || '').replace(/\s+/g, ' ').trim().slice(0, 220)
+    const evidenceNorm = normalizeIdentityText(evidence)
+    const evidenceWords = evidenceNorm ? evidenceNorm.split(/\s+/).filter(Boolean).length : 0
+    if (!evidenceNorm || evidenceWords < 3 || evidenceWords > 14 || !passageNorm.includes(evidenceNorm)) {
+      rejected.push(`${profile.anchor || profile.ref} had no valid exact evidence quote in the latest passage.`)
+      continue
+    }
+    if (!CLOTHING_SENTENCE_RE.test(evidence) && !OUTFIT_CHANGE_RE.test(evidence) &&
+        !UNDRESS_FULL_RE.test(evidence) && !UNDRESS_VERB_RE.test(evidence)) {
+      rejected.push(`${profile.anchor || profile.ref}'s evidence did not explicitly establish clothing.`)
+      continue
+    }
+
+    const offered = animaTagList(Array.isArray(item.outfit)
+      ? item.outfit
+      : String(item.outfit || '').split(/[,+]/)).slice(0, 12)
+    if (!offered.length) {
+      rejected.push(`${profile.anchor || profile.ref}'s update had no clothing tags; use "nude" for an explicitly bare state.`)
+      continue
+    }
+    const before = uniqueStrings(currentOutfits[profile.ref] || [])
+    const unsupported = offered.filter((tag) => {
+      if (BARE_STATE_RE.test(tag)) {
+        return !(BARE_STATE_RE.test(evidence) || UNDRESS_FULL_RE.test(evidence) || UNDRESS_VERB_RE.test(evidence))
+      }
+      if (isNotClothing(tag)) return true
+      // Existing garments may be carried forward. Anything new must be named
+      // or synonym-grounded in the latest passage itself.
+      return !garmentSupported(tag, passage, before, null)
+    })
+    if (unsupported.length) {
+      rejected.push(`${profile.anchor || profile.ref}'s proposed outfit contained unsupported clothing: ${unsupported.join(', ')}.`)
+      continue
+    }
+    if (before.join('\u0000') === offered.join('\u0000')) continue
+    updatesByRef.set(profile.ref, {
+      ref: profile.ref,
+      name: profile.anchor || profile.promptName || profile.ref,
+      outfit: offered,
+      evidence,
+    })
+  }
+  return { updates: [...updatesByRef.values()], rejected }
+}
+
+async function syncWardrobeFromLatestPassage(userId, chatId, preset, settings) {
+  if (!preset) throw new Error('Choose an active story preset before syncing the wardrobe.')
+  if (activeStoryScan) throw new Error('A story scan is already running. Wait for it to finish, then sync the wardrobe.')
+  const located = await locateStoryMessage(userId, { chatId })
+  if (!located.target || located.targetIndex < 0) {
+    throw new Error('Could not find the latest assistant story passage in this chat.')
+  }
+  const resolvedChatId = String(chatId || located.chatId || '')
+  const target = located.target
+  const passage = cleanParserMessageText(target.content).slice(-6000)
+  if (!passage) throw new Error('The latest assistant message has no readable story text.')
+
+  // A latest passage may introduce the person whose clothes it establishes.
+  // Adopt that declaration before binding an update, or the result would be
+  // rejected merely because the wardrobe panel had not been refreshed first.
+  await absorbCastDeclarations(located.messages, located.targetIndex, preset, resolvedChatId)
+  const profiles = await getStoryProfiles(preset, settings, userId, resolvedChatId)
+  const state = await readSceneMemory(resolvedChatId, preset.name)
+  const currentOutfits = effectiveWardrobeForProfiles(state, profiles)
+  const input = buildWardrobeSyncInput(located.messages, located.targetIndex, target, profiles, state)
+  const report = {}
+  const raw = await quietLLM(WARDROBE_SYNC_RULES.trim(), input, settings, userId, true, null, report)
+  const parsed = parseWardrobeSyncReply(raw, profiles, passage, currentOutfits)
+
+  if (parsed.updates.length) {
+    const now = Date.now()
+    const outfits = {}
+    const outfitMeta = {}
+    for (const update of parsed.updates) {
+      outfits[update.ref] = update.outfit
+      outfitMeta[update.ref] = {
+        source: 'latest-passage',
+        at: now,
+        messageId: String(target.id || ''),
+        evidence: update.evidence,
+      }
+    }
+    await rememberSceneState(resolvedChatId, preset.name, { outfits, outfitMeta })
+    spindle.log.info('[lumidraw] wardrobe sync · ' + parsed.updates.map((update) =>
+      `${update.name}: ${update.outfit.join(', ')} <= "${update.evidence}"`).join(' · '))
+  } else {
+    spindle.log.info('[lumidraw] wardrobe sync · latest passage established no clothing changes')
+  }
+  for (const reason of parsed.rejected) spindle.log.info('[lumidraw] wardrobe sync ignored · ' + reason)
+  return {
+    updates: parsed.updates,
+    rejected: parsed.rejected,
+    messageId: String(target.id || ''),
+    model: report.model || '',
+  }
 }
 
 function buildAnimaParserInput(messages, targetIndex, target, settings, sceneState = null) {
@@ -2325,6 +2542,7 @@ async function absorbWearDeclarations(messages, targetIndex, profiles, chatId, s
   const key = sceneMemoryKey(chatId, scope)
   const previous = memory[key] || {}
   const outfits = { ...(previous.outfits || {}) }
+  const outfitMeta = { ...(previous.outfitMeta || {}) }
   const applied = []
   for (const entry of declared) {
     const wanted = normalizeIdentityText(entry.name)
@@ -2344,10 +2562,15 @@ async function absorbWearDeclarations(messages, targetIndex, profiles, chatId, s
     const before = (outfits[match.ref] || []).join('\u0000')
     if (before === entry.outfit.join('\u0000')) continue
     outfits[match.ref] = entry.outfit
+    outfitMeta[match.ref] = {
+      source: 'story-declaration',
+      at: Date.now(),
+      evidence: '[LUMIWEAR] declaration',
+    }
     applied.push({ name: match.anchor || match.ref, outfit: entry.outfit })
   }
   if (!applied.length) return []
-  memory[key] = { ...previous, outfits, at: Date.now() }
+  memory[key] = { ...previous, outfits, outfitMeta, at: Date.now() }
   await spindle.storage.setJson(SCENE_MEMORY_FILE, memory, { indent: 2 })
   for (const item of applied) {
     spindle.log.info(`[lumidraw] the story dressed ${item.name} · ${item.outfit.join(', ') || '(nothing)'}`)
@@ -8235,7 +8458,13 @@ async function runDirectImages(initialImages, ctx) {
 
   // What the parser explicitly says changed becomes state for the next image.
   try {
-    await applyDirectContinuity(ordered, { profiles, chatId, presetName: preset.name, grounding })
+    await applyDirectContinuity(ordered, {
+      profiles,
+      chatId,
+      presetName: preset.name,
+      grounding,
+      messageId: String((target && target.id) || ''),
+    })
   } catch (error) {
     spindle.log.warn('[lumidraw] direct · could not record continuity: ' + error.message)
   }
@@ -9224,10 +9453,11 @@ function directDefences(prompt, profiles, rating) {
 // Close the continuity loop Direct mode previously only read from. Sidecar
 // reports are persisted only when grounded in the current passage/context or in
 // the already-established wardrobe, so a parser hallucination is not learned.
-async function applyDirectContinuity(images, { profiles, chatId, presetName, grounding }) {
+async function applyDirectContinuity(images, { profiles, chatId, presetName, grounding, messageId = '' }) {
   const known = allKnownProfiles(profiles).filter((p) => p && p.ref)
   const memory = await readSceneMemory(chatId, presetName)
   const outfits = {}
+  const outfitMeta = {}
   for (const image of images || []) {
     for (const [name, raw] of Object.entries(image.outfits || {})) {
       const wanted = normalizeIdentityText(name)
@@ -9254,6 +9484,11 @@ async function applyDirectContinuity(images, { profiles, chatId, presetName, gro
       }
       if (!keep.length) continue
       outfits[match.ref] = keep
+      outfitMeta[match.ref] = {
+        source: 'story-parser',
+        at: Date.now(),
+        messageId,
+      }
       spindle.log.info(`[lumidraw] direct · the parser re-dressed ${match.anchor || match.ref} · ${keep.join(', ')}`)
     }
   }
@@ -9269,6 +9504,7 @@ async function applyDirectContinuity(images, { profiles, chatId, presetName, gro
     setting: setting && setting.length ? setting : undefined,
     lighting: lighting && lighting.length ? lighting : undefined,
     outfits: Object.keys(outfits).length ? outfits : null,
+    outfitMeta: Object.keys(outfitMeta).length ? outfitMeta : null,
   })
 }
 
@@ -10113,10 +10349,15 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
     }
   }
   const wornLooks = lookSnapshot()
+  const groundedOutfitMeta = Object.fromEntries(Object.keys(groundedOutfits).map((ref) => [ref, {
+    source: 'story-parser',
+    at: Date.now(),
+  }]))
   await rememberSceneState(chatId, preset.name, {
     setting: establishedSetting,
     lighting: establishedLighting,
     outfits: Object.keys(groundedOutfits).length ? groundedOutfits : null,
+    outfitMeta: Object.keys(groundedOutfitMeta).length ? groundedOutfitMeta : null,
     // Recorded without a grounding check, unlike outfits. An outfit is inferred
     // from prose and can be wrong; a Look was chosen — named by the parser, or
     // matched on an alias, or configured as the default — so there is nothing to
@@ -10236,7 +10477,7 @@ function extractParserReasoning(res) {
   }
   const text = parts.filter(Boolean).join('\n').trim()
   if (!text) return ''
-  return /"images"\s*:|"scene"\s*:/.test(text) ? text : ''
+  return /"images"\s*:|"scene"\s*:|"updates"\s*:/.test(text) ? text : ''
 }
 
 // `report`, when supplied, is filled in with what ACTUALLY happened — the model
@@ -12513,6 +12754,17 @@ spindle.onFrontendMessage(async (payload, userId) => {
             spindle.log.info(`[lumidraw] wardrobe scan could not read the chat: ${error.message}`)
           }
         }
+        let synced = []
+        let syncRejected = []
+        let syncModel = ''
+        let syncMessageId = ''
+        if (payload.syncLatest) {
+          const result = await syncWardrobeFromLatestPassage(userId, chatId, preset, settings)
+          synced = result.updates || []
+          syncRejected = result.rejected || []
+          syncModel = result.model || ''
+          syncMessageId = result.messageId || ''
+        }
         // Swapping a cast member for one from your library.
         //
         // The story declares a character with whatever tags it invented. If you
@@ -12600,26 +12852,41 @@ spindle.onFrontendMessage(async (payload, userId) => {
           const key = sceneMemoryKey(chatId, await sceneScopeFor(chatId, presetName))
           const previous = memory[key] || entry || {}
           const outfits = { ...(previous.outfits || {}) }
+          const outfitMeta = { ...(previous.outfitMeta || {}) }
           for (const [ref, value] of Object.entries(payload.set)) {
             const tags = animaTagList(String(value || '').split(',')).slice(0, 12)
-            if (tags.length) outfits[ref] = tags
-            else delete outfits[ref]
+            if (tags.length) {
+              outfits[ref] = tags
+              outfitMeta[ref] = { source: 'manual', at: Date.now(), evidence: '' }
+            } else {
+              delete outfits[ref]
+              delete outfitMeta[ref]
+            }
             spindle.log.info(`[lumidraw] wardrobe edited by hand · ${ref} — ${tags.length ? tags.join(', ') : '(cleared)'}`)
           }
-          memory[key] = { ...previous, outfits, at: Date.now() }
+          memory[key] = { ...previous, outfits, outfitMeta, at: Date.now() }
           await spindle.storage.setJson(SCENE_MEMORY_FILE, memory, { indent: 2 })
         }
 
         const fresh = await readSceneMemory(chatId, presetName)
         const worn = fresh.outfits || {}
+        const wornMeta = fresh.outfitMeta || {}
         const rows = []
         for (const profile of allKnownProfiles(profiles)) {
           if (!profile || !profile.ref) continue
+          const recorded = worn[profile.ref] || []
+          const fallback = profile.defaultOutfit || []
+          const stateMeta = wornMeta[profile.ref] || {}
           rows.push({
             ref: profile.ref,
             name: profile.promptName || profile.anchor || profile.ref,
-            tags: (worn[profile.ref] || []).join(', '),
-            fallback: (profile.defaultOutfit || []).join(', '),
+            tags: recorded.join(', '),
+            fallback: fallback.join(', '),
+            wardrobeSource: recorded.length ? String(stateMeta.source || 'remembered')
+              : (fallback.length ? 'default' : 'none'),
+            wardrobeAt: Number(stateMeta.at) || 0,
+            wardrobeEvidence: String(stateMeta.evidence || ''),
+            wardrobeMessageId: String(stateMeta.messageId || ''),
             // Only cast members carry a library id, so only they are removable —
             // the main character and the persona come from the preset itself and
             // there is nothing sensible to remove them from.
@@ -12648,7 +12915,18 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // invisible, even though 0.54.0 stopped writing anonymous refs.
         for (const [ref, tags] of Object.entries(worn)) {
           if (rows.some((row) => row.ref === ref)) continue
-          rows.push({ ref, name: ref, tags: (tags || []).join(', '), fallback: '', orphan: true })
+          const stateMeta = wornMeta[ref] || {}
+          rows.push({
+            ref,
+            name: ref,
+            tags: (tags || []).join(', '),
+            fallback: '',
+            orphan: true,
+            wardrobeSource: String(stateMeta.source || 'remembered'),
+            wardrobeAt: Number(stateMeta.at) || 0,
+            wardrobeEvidence: String(stateMeta.evidence || ''),
+            wardrobeMessageId: String(stateMeta.messageId || ''),
+          })
         }
         const characterLib = await getCharacters()
         const library = characterLib.map((item) => ({
@@ -12666,7 +12944,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // opened — which is why a character that demonstrably exists could not
         // be found. Every wardrobe reply now carries the current library.
         reply = ok(payload, requestId, { rows, chatId, preset: presetName, added, scanError, removed, swapped,
-          library, characters: characterLib, addedFromLibrary, dressed })
+          library, characters: characterLib, addedFromLibrary, dressed, synced, syncRejected, syncModel, syncMessageId })
         break
       }
 

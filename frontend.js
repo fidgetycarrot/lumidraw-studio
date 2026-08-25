@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.17'
+const EXTENSION_VERSION = '1.3.18'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -531,6 +531,10 @@ function realSetup(ctx) {
     .ld-btn.ld-primary { font-weight:700; background:#3f4458; }
     .ld-btn.ld-wide { width:100%; }
     .ld-compact { font-size:12px; padding:4px 8px; }
+    .ld-wardrobe-row > div:first-child { flex-wrap:wrap; }
+    .ld-wardrobe-row .ld-wardrobe-input { min-width:160px; }
+    .ld-wardrobe-row [data-act="wardrobe-save-one"],
+    .ld-wardrobe-row [data-act="wardrobe-clear-one"] { flex:0 0 auto; }
     .ld-section-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
     .ld-status { font-size:12px; color:var(--lumiverse-text-muted, #a2a5b4); white-space:pre-wrap; word-break:break-word; }
     .ld-status.ld-err { color:#e5737f; }
@@ -736,6 +740,7 @@ function realSetup(ctx) {
       .ld-statebar { display:flex; overflow-x:auto; }
       .ld-state-pill { flex:0 0 auto; max-width:82vw; }
       .ld-row.ld-mobile-stack { flex-direction:column; align-items:stretch; }
+      .ld-wardrobe-row .ld-wardrobe-input { flex:1 1 100% !important; }
       .ld-story-picker { align-items:flex-end; padding:0; }
       .ld-story-dialog { width:100%; max-height:90vh; border-radius:14px 14px 0 0; }
       .ld-text-editor-area { margin:8px; width:calc(100% - 16px) !important; }
@@ -966,7 +971,8 @@ function realSetup(ctx) {
               <div style="margin-top:11px;padding-top:9px;border-top:1px solid var(--ld-border, rgba(255,255,255,.08))">
                 <div style="display:flex;align-items:center;gap:8px">
                   <span class="ld-label" style="margin:0">Wardrobe of record — this chat</span>
-                  <button class="ld-btn ld-compact" data-act="wardrobe-refresh" title="Read what LumiDraw currently believes everyone is wearing">↻</button>
+                  <button class="ld-btn ld-compact" data-act="wardrobe-refresh" title="Reload the saved wardrobe state">↻</button>
+                  <button class="ld-btn ld-compact" data-act="wardrobe-sync" title="Ask the parser to extract explicit clothing changes from the latest story passage; no image is generated">Sync latest passage</button>
                 </div>
                 <div class="ld-wardrobe-rows" style="margin-top:6px"></div>
                 <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
@@ -974,7 +980,7 @@ function realSetup(ctx) {
                   <button class="ld-btn ld-compact" data-act="wardrobe-add" title="Put this saved character into the cast this chat actually uses">Add to cast</button>
                 </div>
                 <div class="ld-help" style="margin-top:3px">Somebody in the story who is not on the character card — from a lorebook, say — goes here. This writes to whatever this chat reads from, which the preset editor's cast list does not.</div>
-                <div class="ld-help">What images are built from when the passage does not describe clothing. Edit a line and press Save to correct it; clear a line to make LumiDraw learn it again from the next scan. This beats the character's default outfit, which is only used when nothing is recorded here.</div>
+                <div class="ld-help">What images use when the passage does not describe clothing. Save and clear act on one character only. Sync latest passage runs the parser without generating an image and changes only clothing explicitly established there; silence leaves everyone untouched.</div>
                 <div class="ld-status ld-wardrobe-status" style="font-size:11px"></div>
               </div>
             </div>
@@ -1503,7 +1509,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       @media(max-width:700px){
         .ld-reset-grid{grid-template-columns:1fr}
         .ld-reset-hero{grid-template-columns:1fr}
-        .ld-reset-hero .ld-reset-inline{flex-wrap:wrap}
+        .ld-reset-inline{flex-wrap:wrap}
         .ld-reset-rail{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scrollbar-width:none;scroll-snap-type:x proximity}
         .ld-reset-rail::-webkit-scrollbar{display:none}
         .ld-reset-tab{scroll-snap-align:start}
@@ -1548,6 +1554,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       castSummary: $('.ld-cast-summary'),
       castStatus: $('.ld-cast-status'),
       wardrobeRefresh: $('[data-act="wardrobe-refresh"]'),
+      wardrobeSync: $('[data-act="wardrobe-sync"]'),
       wardrobeRows: $('.ld-wardrobe-rows'),
       wardrobeAdd: $('.ld-wardrobe-add'),
       wardrobeAddButton: $('[data-act="wardrobe-add"]'),
@@ -1640,8 +1647,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (controls.castStatus) castCard.appendChild(controls.castStatus)
     cast.appendChild(castCard)
 
-    const wardrobeCard = card('Wardrobe of record', 'This is the clothing state LumiDraw uses when a passage does not restate an outfit.')
-    wardrobeCard.appendChild(inline(make('span', 'ld-label', 'Current wardrobe'), controls.wardrobeRefresh))
+    const wardrobeCard = card('Wardrobe of record', 'Save and clear affect one character. Sync latest passage parses explicit clothing changes without generating an image; silence changes nothing.')
+    wardrobeCard.appendChild(inline(make('span', 'ld-label', 'Current wardrobe'), controls.wardrobeRefresh, controls.wardrobeSync))
     if (controls.wardrobeRows) wardrobeCard.appendChild(controls.wardrobeRows)
     wardrobeCard.appendChild(field('Add a saved character to this chat', inline(controls.wardrobeAdd, controls.wardrobeAddButton)))
     if (controls.wardrobeStatus) wardrobeCard.appendChild(controls.wardrobeStatus)
@@ -4608,8 +4615,26 @@ ${entry.prompt || ''}`.trim()
     }
     box.innerHTML = rows.map((row) => {
       const name = String(row.name || row.ref).replace(/[<>&]/g, '')
+      const attrName = name.replace(/"/g, '')
+      const ref = String(row.ref || '').replace(/[<>&"]/g, '')
       const tags = String(row.tags || '').replace(/"/g, '&quot;')
       const hint = row.tags ? '' : (row.fallback ? `falls back to: ${String(row.fallback).replace(/[<>&]/g, '')}` : 'nothing recorded')
+      const sourceLabels = {
+        manual: 'manually set',
+        'latest-passage': 'synced from latest passage',
+        'story-parser': 'updated by the story parser',
+        'story-declaration': 'updated by the story declaration',
+        remembered: 'remembered wardrobe',
+        default: 'saved character default',
+        none: 'no clothing recorded',
+      }
+      const source = sourceLabels[String(row.wardrobeSource || '')] || 'remembered wardrobe'
+      const when = Number(row.wardrobeAt) > 0
+        ? ` · ${new Date(Number(row.wardrobeAt)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+        : ''
+      const evidenceText = String(row.wardrobeEvidence || '').replace(/[<>&]/g, '').trim()
+      const evidence = evidenceText ? ` · “${evidenceText.slice(0, 120)}”` : ''
+      const provenance = `<div class="ld-help ld-wardrobe-provenance" style="margin:2px 0 0 2px">Current source: ${source}${when}${evidence}</div>`
       // A story-declared character can be removed; one you wrote by hand is only
       // unlinked from this preset. The mark says which, so the button is never a
       // surprise. "any chat" means it predates chat scoping and cannot be
@@ -4652,16 +4677,19 @@ ${entry.prompt || ''}`.trim()
       const opener = (row.source === 'library' && row.id)
         ? `<a href="#" class="ld-wardrobe-open" data-id="${row.id}" title="${where}" style="min-width:96px;font-size:12px;opacity:.8;text-decoration:underline;cursor:pointer">${name}${row.orphan ? ' *' : ''}${mark}</a>`
         : `<span title="${where}" style="min-width:96px;font-size:12px;opacity:.8">${name}${row.orphan ? ' *' : ''}${mark}</span>`
-      return `<div style="margin-bottom:6px">
+      return `<div class="ld-wardrobe-row" data-ref="${ref}" style="margin-bottom:8px">
       <div style="display:flex;gap:6px;align-items:center">
         ${opener}
-        <input class="ld-wardrobe-input" data-ref="${row.ref}" style="flex:1" value="${tags}" placeholder="${hint}" />
+        <input class="ld-wardrobe-input" data-ref="${ref}" style="flex:1" value="${tags}" placeholder="${hint}" />
+        <button class="ld-btn ld-compact" data-act="wardrobe-save-one" data-ref="${ref}" data-name="${attrName}" title="Save only ${attrName}'s current outfit">Save</button>
+        <button class="ld-btn ld-compact" data-act="wardrobe-clear-one" data-ref="${ref}" data-name="${attrName}" title="Clear only ${attrName}'s current outfit and return to the saved default"${row.tags ? '' : ' disabled'}>Clear</button>
         ${swap}
         ${remove}
       </div>
+      ${provenance}
       ${appearance}
       </div>`
-    }).join('') + '<button class="ld-btn ld-compact" data-act="wardrobe-save" style="margin-top:4px">Save wardrobe</button>'
+    }).join('')
   }
 
   // The wardrobe record is keyed by chat, but the settings panel is not opened by
@@ -4828,7 +4856,9 @@ ${entry.prompt || ''}`.trim()
       // and when it does it says whose clothes changed.
       const wore = res.dressed && res.dressed.length
         ? ` The story re-dressed ${res.dressed.map((item) => item.name).join(', ')}.` : ''
-      setStatus('.ld-wardrobe-status', where + '.' + found + wore, res.chatId ? 'good' : 'err')
+      setStatus('.ld-wardrobe-status', scan
+        ? where + '.' + found + wore
+        : `Reloaded this chat's saved wardrobe state.`, res.chatId ? 'good' : 'err')
     } catch (e) {
       setStatus('.ld-wardrobe-status', e.message, 'err')
     }
@@ -4869,9 +4899,40 @@ ${entry.prompt || ''}`.trim()
 
   if ($('[data-act="wardrobe-refresh"]')) {
     $('[data-act="wardrobe-refresh"]').addEventListener('click', () => {
-      setStatus('.ld-wardrobe-status', 'Reading this chat for cast declarations…', '')
-      loadCasts()
-      loadWardrobe(false, true)
+      setStatus('.ld-wardrobe-status', 'Reloading the saved wardrobe…', '')
+      loadWardrobe(false, false)
+    })
+  }
+  if ($('[data-act="wardrobe-sync"]')) {
+    $('[data-act="wardrobe-sync"]').addEventListener('click', async (event) => {
+      const button = event.currentTarget
+      const oldText = button.textContent
+      button.disabled = true
+      button.textContent = 'Syncing…'
+      setStatus('.ld-wardrobe-status', 'Parsing the latest story passage for explicit clothing changes. No image will be generated…', '')
+      try {
+        const res = await call('wardrobe', { chatId: lastSeenChatId, syncLatest: true }, 300000)
+        wardrobeLibrary = res.library || wardrobeLibrary
+        if (Array.isArray(res.characters)) { characters = res.characters; renderCharacterList() }
+        renderWardrobeRows(res.rows)
+        renderWardrobeAdd(res.rows)
+        loadCasts({ chatId: lastSeenChatId }).catch(() => {})
+        const updates = res.synced || []
+        const ignored = res.syncRejected || []
+        if (updates.length) {
+          const names = updates.map((item) => item.name).join(', ')
+          const suffix = ignored.length ? ` ${ignored.length} unsupported proposal${ignored.length === 1 ? ' was' : 's were'} ignored.` : ''
+          setStatus('.ld-wardrobe-status', `Synced ${names} from the latest passage. No image was generated.${suffix}`, 'good')
+        } else {
+          const suffix = ignored.length ? ` ${ignored[0]}` : ''
+          setStatus('.ld-wardrobe-status', `The latest passage established no usable clothing change, so nothing was changed.${suffix}`, ignored.length ? 'err' : 'good')
+        }
+      } catch (e) {
+        setStatus('.ld-wardrobe-status', e.message, 'err')
+      } finally {
+        button.disabled = false
+        button.textContent = oldText
+      }
     })
   }
   // The save button is created by renderWardrobeRows, so the listener is delegated.
@@ -4920,16 +4981,25 @@ ${entry.prompt || ''}`.trim()
         }
         return
       }
-      const button = event.target.closest('[data-act="wardrobe-save"]')
-      if (!button) return
-      const set = {}
-      for (const input of document.querySelectorAll('.ld-wardrobe-input')) {
-        set[input.getAttribute('data-ref')] = input.value
-      }
+      const save = event.target.closest('[data-act="wardrobe-save-one"]')
+      const clear = event.target.closest('[data-act="wardrobe-clear-one"]')
+      if (!save && !clear) return
+      const button = save || clear
+      const ref = button.getAttribute('data-ref')
+      const name = button.getAttribute('data-name') || ref || 'Character'
+      const row = button.closest('.ld-wardrobe-row')
+      const input = row && row.querySelector('.ld-wardrobe-input')
+      if (!ref || !input) return
+      const set = { [ref]: clear ? '' : input.value }
       try {
         const res = await call('wardrobe', { set, chatId: lastSeenChatId }, 15000)
         renderWardrobeRows(res.rows)
-        setStatus('.ld-wardrobe-status', 'Saved. The next image uses this.', 'good')
+        const returned = (res.rows || []).find((item) => String(item.ref || '') === String(ref)) || {}
+        setStatus('.ld-wardrobe-status', clear
+          ? (returned.fallback
+            ? `${name}'s current outfit was cleared. The saved character default is now the fallback.`
+            : `${name}'s current outfit was cleared. No clothing is recorded until the story or you establishes it.`)
+          : `Saved only ${name}'s current outfit. Other characters were untouched.`, 'good')
       } catch (e) {
         setStatus('.ld-wardrobe-status', e.message, 'err')
       }
