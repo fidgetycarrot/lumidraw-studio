@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.14'
+const EXTENSION_VERSION = '1.3.15'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -423,14 +423,15 @@ function realSetup(ctx) {
       background: rgb(18,19,24);
     }
     .ld-head-title { font-weight: 700; margin-right: 6px; white-space: nowrap; }
-    .ld-main-nav { display:flex; align-items:center; gap:4px; flex:1; }
+    .ld-main-nav { display:flex; align-items:center; gap:4px; flex:1; min-width:0; }
     .ld-main-tab {
+      flex:0 0 auto; white-space:nowrap;
       background: none; border: none; color: var(--lumiverse-text-muted, #a2a5b4);
       cursor: pointer; padding: 7px 10px; border-radius: 8px; font-size: 12px;
     }
     .ld-main-tab:hover { color: var(--lumiverse-text, #eceef4); }
     .ld-main-tab.ld-active { color: var(--lumiverse-text, #eceef4); background: var(--lumiverse-fill, #262833); }
-    .ld-settings-rail { display:flex; gap:4px; flex-wrap:wrap; margin:0 0 10px; }
+    .ld-settings-rail { display:flex; flex:0 0 auto; gap:4px; flex-wrap:wrap; min-height:34px; margin:0 0 10px; }
     .ld-settings-tab { flex:0 0 auto; padding:5px 11px; border-radius:7px; cursor:pointer;
       border:1px solid var(--lumiverse-border, #333744); background:transparent;
       color: var(--lumiverse-text-muted, #a2a5b4); font:inherit; font-size:12px; }
@@ -464,7 +465,7 @@ function realSetup(ctx) {
     }
     .ld-global-status { display:none; }
     .ld-view { flex:1 1 auto; min-height:0; overflow:hidden; display:none; }
-    .ld-view.ld-active { display:flex; }
+    .ld-view.ld-active { display:flex; min-width:0; }
 
     .ld-mobile-tabs { display:none; flex:0 0 auto; gap:4px; overflow-x:auto; padding:7px 8px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
     .ld-mobile-tab {
@@ -587,7 +588,15 @@ function realSetup(ctx) {
     .ld-preset-name { flex:1; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .ld-preset-model { font-size:10px; color:var(--lumiverse-text-muted, #a2a5b4); display:block; overflow:hidden; text-overflow:ellipsis; }
 
-    .ld-form-view { width:min(920px, 100%); margin:0 auto; padding:12px; box-sizing:border-box; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
+    .ld-form-view { flex:1 1 auto; min-width:0; min-height:0; width:min(920px, 100%); margin:0 auto; padding:12px; box-sizing:border-box; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; display:flex; flex-direction:column; gap:10px; }
+    /* These forms are scroll containers. Letting their children use flex's
+       default shrink behavior can compress a subsection rail to a colored
+       8px line on short portrait screens. Content keeps its natural height
+       and scrolls beneath the rail instead. */
+    .ld-form-view > * { flex-shrink:0; }
+    .ld-form-view > .ld-reset-rail, .ld-form-view > .ld-settings-rail {
+      position:sticky; top:0; z-index:12; background:#121318;
+    }
     .ld-story-hero { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; }
     .ld-profile-block { margin-top:9px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px; background:var(--lumiverse-fill-subtle, #1a1b22); overflow:hidden; }
     .ld-profile-block > summary { cursor:pointer; padding:9px 11px; font-size:12px; font-weight:650; user-select:none; }
@@ -601,7 +610,7 @@ function realSetup(ctx) {
 
     .ld-textarea-wrap { position:relative; }
     .ld-textarea-wrap textarea { padding-right:42px !important; }
-    .ld-textarea-expand { position:absolute; top:5px; right:5px; z-index:2; min-width:30px; height:28px; padding:0 6px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:7px; background:#17181e; color:var(--lumiverse-text-muted, #a2a5b4); cursor:pointer; font-size:15px; line-height:1; }
+    .ld-textarea-expand { position:absolute; top:5px; right:5px; z-index:2; min-width:30px; height:28px; padding:0 6px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:7px; background:#17181e; color:var(--lumiverse-text-muted, #a2a5b4); cursor:pointer; touch-action:manipulation; font-size:15px; line-height:1; }
     .ld-textarea-expand:hover { color:var(--lumiverse-text, #eceef4); }
 
     /* Keep one cursor shape inside the desktop workspace. The controls remain
@@ -612,7 +621,7 @@ function realSetup(ctx) {
     }
 
     .ld-lightbox {
-      position:fixed; inset:0; z-index:9600; display:none; align-items:center; justify-content:center;
+      position:fixed; inset:0; z-index:2147482800; display:none; align-items:center; justify-content:center;
       padding:18px; background:rgba(0,0,0,.86); color:var(--lumiverse-text, #eceef4);
     }
     .ld-lightbox.ld-open { display:flex; }
@@ -645,7 +654,7 @@ function realSetup(ctx) {
     .ld-dt-field:first-child { margin-top:0; }
     .ld-dt-settings .ld-profile-block { margin-top:7px; }
 
-    .ld-story-picker { position:fixed; inset:0; z-index:9200; display:none; align-items:center; justify-content:center; padding:14px; background:var(--lumiverse-modal-backdrop, rgba(0,0,0,.62)); }
+    .ld-story-picker { position:fixed; inset:0; z-index:2147482600; display:none; align-items:center; justify-content:center; padding:14px; background:var(--lumiverse-modal-backdrop, rgba(0,0,0,.62)); }
     .ld-story-picker.ld-open { display:flex; }
     .ld-story-dialog { width:min(680px,100%); max-height:min(84vh,820px); display:flex; flex-direction:column; overflow:hidden; background:#17181e; border:1px solid var(--lumiverse-border, #3d4050); border-radius:12px; box-shadow:0 18px 60px rgba(0,0,0,.55); color:var(--lumiverse-text, #eceef4); }
     .ld-story-head { display:flex; align-items:center; gap:10px; padding:12px 14px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
@@ -662,7 +671,7 @@ function realSetup(ctx) {
     .ld-story-preview { font-size:12px; line-height:1.4; color:var(--lumiverse-text-muted, #a2a5b4); display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
     .ld-story-empty { padding:24px 12px; text-align:center; color:var(--lumiverse-text-muted, #a2a5b4); }
 
-    .ld-text-editor { position:fixed; inset:0; z-index:9400; display:none; align-items:center; justify-content:center; padding:14px; background:var(--lumiverse-modal-backdrop, rgba(0,0,0,.68)); }
+    .ld-text-editor { position:fixed; inset:0; z-index:2147482900; display:none; align-items:center; justify-content:center; padding:14px; background:var(--lumiverse-modal-backdrop, rgba(0,0,0,.68)); }
     .ld-text-editor.ld-open { display:flex; }
     .ld-text-editor-dialog { width:min(960px,100%); height:min(88dvh,920px); display:flex; flex-direction:column; overflow:hidden; background:#17181e; border:1px solid var(--lumiverse-border, #3d4050); border-radius:12px; box-shadow:0 18px 60px rgba(0,0,0,.58); }
     .ld-text-editor-head, .ld-text-editor-actions { display:flex; align-items:center; gap:8px; padding:11px 13px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
@@ -675,8 +684,9 @@ function realSetup(ctx) {
       .ld-panel { width:calc(100vw - 12px); max-width:none; height:min(92dvh, 900px); max-height:calc(100dvh - 12px); }
       .ld-head { flex-wrap:wrap; }
       .ld-head-title { flex:1 1 calc(100% - 84px); }
-      .ld-main-nav { order:3; flex:1 1 100%; overflow-x:auto; }
-      .ld-main-tab { flex:1 0 auto; text-align:center; }
+      .ld-main-nav { order:3; flex:0 0 100%; width:100%; min-height:32px; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; scrollbar-width:none; scroll-snap-type:x proximity; }
+      .ld-main-nav::-webkit-scrollbar, .ld-mobile-tabs::-webkit-scrollbar, .ld-settings-rail::-webkit-scrollbar { display:none; }
+      .ld-main-tab { flex:1 0 auto; text-align:center; scroll-snap-align:start; touch-action:manipulation; }
       .ld-statebar { grid-template-columns:1fr; gap:5px; padding:6px 8px; }
       .ld-state-pill { padding:5px 8px; }
       .ld-mobile-tabs { display:flex; }
@@ -690,13 +700,23 @@ function realSetup(ctx) {
       .ld-history { grid-template-columns:repeat(2,minmax(0,1fr)); }
       .ld-lora-grid { grid-template-columns:1fr; }
       .ld-form-view { padding:8px; }
+      .ld-form-view > .ld-reset-rail, .ld-form-view > .ld-settings-rail { top:0; }
+      .ld-settings-rail { flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; scrollbar-width:none; }
       .ld-story-hero { grid-template-columns:1fr; }
       .ld-profile-grid { grid-template-columns:1fr; }
-      .ld-text-editor { align-items:stretch; justify-content:stretch; overflow:hidden; box-sizing:border-box; padding:env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
-      .ld-text-editor-dialog { width:100%; height:100%; max-height:100%; min-height:0; border-radius:0; border:none; }
+      /* iOS zooms focused controls smaller than 16px, shifting the fixed panel
+         on every focus/caret correction. Keep typing at a no-zoom size. */
+      .ld-panel input, .ld-panel select, .ld-panel textarea { font-size:16px !important; }
+      .ld-story-picker input, .ld-lightbox input, .ld-lightbox select, .ld-lightbox textarea { font-size:16px !important; }
+      .ld-textarea-wrap textarea { padding-right:52px !important; }
+      .ld-textarea-expand { top:6px; right:6px; min-width:40px; height:38px; font-size:18px; }
+      /* visualViewport-backed dimensions keep the editor inside the portion
+         of the screen that remains visible above the software keyboard. */
+      .ld-text-editor { inset:auto 0 auto 0; top:var(--ld-editor-viewport-top, 0px); width:100vw; height:var(--ld-editor-viewport-height, 100dvh); min-height:0; align-items:stretch; justify-content:stretch; overflow:hidden; box-sizing:border-box; padding:env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+      .ld-text-editor-dialog { width:100%; height:100%; max-height:none; min-height:0; border-radius:0; border:none; }
       .ld-text-editor-head, .ld-text-editor-actions { padding-left:max(13px, env(safe-area-inset-left)); padding-right:max(13px, env(safe-area-inset-right)); }
       .ld-text-editor-actions { padding-bottom:max(11px, env(safe-area-inset-bottom)); }
-      .ld-text-editor-area { flex:1; min-height:0 !important; margin:10px; width:calc(100% - 20px) !important; }
+      .ld-text-editor-area { flex:1 1 auto; height:auto !important; min-height:0 !important; margin:10px; width:calc(100% - 20px) !important; overflow:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
       .ld-lightbox { align-items:stretch; justify-content:stretch; box-sizing:border-box; overflow:hidden; padding:env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
       .ld-lightbox-dialog { width:100%; height:100%; max-height:100%; min-height:0; border:0; border-radius:0; }
       .ld-lightbox-stage { padding:4px; }
@@ -1290,7 +1310,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       </div>
     </div>
     <div class="ld-text-editor" aria-hidden="true">
-      <div class="ld-text-editor-dialog" role="dialog" aria-modal="true" aria-label="Expanded text editor">
+      <div class="ld-text-editor-dialog" id="ld-text-editor-dialog" role="dialog" aria-modal="true" aria-label="Expanded text editor">
         <div class="ld-text-editor-head"><span class="ld-text-editor-title">Edit text</span><button class="ld-x ld-text-editor-close" title="Cancel and close">✕</button></div>
         <textarea class="ld-text-editor-area" spellcheck="true"></textarea>
         <div class="ld-text-editor-actions"><span class="ld-help" style="margin-right:auto">Escape cancels · ⌘/Ctrl+Enter applies</span><button class="ld-btn ld-text-editor-cancel">Cancel</button><button class="ld-btn ld-primary ld-text-editor-apply">Apply</button></div>
@@ -1299,6 +1319,20 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   `)
 
   const $ = (sel) => dom.query(sel)
+
+  // Keep a restored/selected tab visible without using scrollIntoView(), which
+  // also moves the vertical form and is especially disruptive above a phone
+  // keyboard. This adjusts only the tab rail's horizontal position.
+  function revealHorizontalItem(item, scrollHost = item && item.parentElement) {
+    if (!item || !scrollHost) return
+    requestAnimationFrame(() => {
+      if (!item.isConnected || !scrollHost.isConnected) return
+      const itemRect = item.getBoundingClientRect()
+      const hostRect = scrollHost.getBoundingClientRect()
+      if (itemRect.left < hostRect.left) scrollHost.scrollLeft -= hostRect.left - itemRect.left + 4
+      else if (itemRect.right > hostRect.right) scrollHost.scrollLeft += itemRect.right - hostRect.right + 4
+    })
+  }
 
   // LUMIDRAW_UI_RESET_V1_1
   // UI reset: present features by user intent instead of by implementation layer.
@@ -1371,19 +1405,25 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       for (const [name, label] of items) {
         const btn = make('button', 'ld-reset-tab', label)
         btn.type = 'button'
+        btn.setAttribute('role', 'tab')
         btn.dataset.resetTab = name
         nav.appendChild(btn)
         buttons[name] = btn
       }
       const set = (name) => {
         if (!buttons[name]) name = defaultName
-        for (const [id, btn] of Object.entries(buttons)) btn.classList.toggle('ld-active', id === name)
+        for (const [id, btn] of Object.entries(buttons)) {
+          const active = id === name
+          btn.classList.toggle('ld-active', active)
+          btn.setAttribute('aria-selected', String(active))
+        }
         const root = nav.parentElement
         if (root) {
           for (const pane of root.querySelectorAll(':scope > .ld-reset-section')) {
             pane.classList.toggle('ld-active', pane.dataset.resetSection === name)
           }
         }
+        revealHorizontalItem(buttons[name], nav)
         try { localStorage.setItem(key, name) } catch { /* best effort */ }
       }
       for (const [name, btn] of Object.entries(buttons)) btn.addEventListener('click', () => set(name))
@@ -1395,11 +1435,11 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const resetStyle = document.createElement('style')
     resetStyle.setAttribute('data-lumidraw-ui-reset-v11', '1')
     resetStyle.textContent = `
-      .ld-reset-rail{display:flex;gap:5px;flex-wrap:wrap;margin:0 0 2px;padding:3px;border:1px solid var(--lumiverse-border,#3d4050);border-radius:10px;background:#121318}
-      .ld-reset-tab{appearance:none;border:0;border-radius:7px;padding:7px 11px;background:transparent;color:var(--lumiverse-text-muted,#a2a5b4);font:inherit;font-size:12px;cursor:pointer}
+      .ld-reset-rail{display:flex;flex:0 0 auto;gap:5px;flex-wrap:wrap;min-height:38px;margin:0 0 2px;padding:3px;border:1px solid var(--lumiverse-border,#3d4050);border-radius:10px;background:#121318}
+      .ld-reset-tab{appearance:none;flex:0 0 auto;white-space:nowrap;border:0;border-radius:7px;padding:7px 11px;background:transparent;color:var(--lumiverse-text-muted,#a2a5b4);font:inherit;font-size:12px;cursor:pointer;touch-action:manipulation}
       .ld-reset-tab:hover{color:var(--lumiverse-text,#eceef4)}
       .ld-reset-tab.ld-active{background:var(--lumiverse-fill,#262833);color:var(--lumiverse-text,#eceef4);font-weight:650}
-      .ld-reset-section{display:none;flex-direction:column;gap:9px}
+      .ld-reset-section{display:none;flex:0 0 auto;flex-direction:column;gap:9px}
       .ld-reset-section.ld-active{display:flex}
       .ld-reset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
       .ld-reset-field{min-width:0}
@@ -1424,8 +1464,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         .ld-reset-grid{grid-template-columns:1fr}
         .ld-reset-hero{grid-template-columns:1fr}
         .ld-reset-hero .ld-reset-inline{flex-wrap:wrap}
-        .ld-reset-rail{flex-wrap:nowrap;overflow-x:auto}
-        .ld-reset-tab{white-space:nowrap}
+        .ld-reset-rail{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scrollbar-width:none;scroll-snap-type:x proximity}
+        .ld-reset-rail::-webkit-scrollbar{display:none}
+        .ld-reset-tab{scroll-snap-align:start}
       }
     `
     storyView.appendChild(resetStyle)
@@ -1817,6 +1858,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   window[INSTANCE_KEY] = liveInstance
   const FULLSCREEN_KEY = 'lumidraw_panel_fullscreen_v1'
   let expandedTextarea = null
+  let expandedTextareaState = null
   let lightboxIndex = 0
   let lightboxItems = []
   // The prompt an image was actually made with, kept so a re-parse can be undone.
@@ -2107,12 +2149,17 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   function setMainView(name, persist = true) {
     const allowed = new Set(['studio', 'story', 'presets', 'settings'])
     const next = allowed.has(name) ? name : 'studio'
+    let activeTab = null
     for (const tab of dom.queryAll('.ld-main-tab')) {
-      tab.classList.toggle('ld-active', tab.getAttribute('data-tab') === next)
+      const active = tab.getAttribute('data-tab') === next
+      tab.classList.toggle('ld-active', active)
+      tab.setAttribute('aria-current', active ? 'page' : 'false')
+      if (active) activeTab = tab
     }
     for (const view of dom.queryAll('.ld-view')) {
       view.classList.toggle('ld-active', view.getAttribute('data-view') === next)
     }
+    revealHorizontalItem(activeTab)
     if (persist) {
       try { localStorage.setItem(MAIN_VIEW_KEY, next) } catch { /* best effort */ }
     }
@@ -3214,34 +3261,88 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     return parentLabel ? parentLabel.textContent.trim() : 'Expanded text editor'
   }
 
+  // Safari lays fixed overlays out against the full page viewport even after
+  // the on-screen keyboard has reduced the visible area. Track visualViewport
+  // so the editor follows the screen the user can actually see.
+  function syncTextEditorViewport() {
+    if (!textEditor.classList.contains('ld-open')) return
+    const viewport = window.visualViewport
+    const height = Math.max(1, Math.round(viewport ? viewport.height : window.innerHeight))
+    const top = Math.max(0, Math.round(viewport ? viewport.offsetTop : 0))
+    textEditor.style.setProperty('--ld-editor-viewport-height', `${height}px`)
+    textEditor.style.setProperty('--ld-editor-viewport-top', `${top}px`)
+  }
+
+  function rememberTextareaState(textarea) {
+    let start = 0
+    let end = 0
+    let direction = 'none'
+    try {
+      start = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : 0
+      end = Number.isFinite(textarea.selectionEnd) ? textarea.selectionEnd : start
+      direction = textarea.selectionDirection || 'none'
+    } catch { /* selection may be unavailable on an unfocused mobile field */ }
+    const scrollHost = textarea.closest('.ld-form-view, .ld-pane-body, .ld-lightbox-regen, .ld-story-list')
+    return {
+      start,
+      end,
+      direction,
+      textareaScrollTop: textarea.scrollTop || 0,
+      scrollHost,
+      hostScrollTop: scrollHost ? scrollHost.scrollTop : 0,
+      hostScrollLeft: scrollHost ? scrollHost.scrollLeft : 0,
+    }
+  }
+
   function openTextEditor(textarea) {
     if (!textarea) return
     expandedTextarea = textarea
+    expandedTextareaState = rememberTextareaState(textarea)
     textEditorTitle.textContent = textareaTitle(textarea)
     textEditorArea.value = textarea.value || ''
     textEditor.classList.add('ld-open')
     textEditor.setAttribute('aria-hidden', 'false')
     document.body.classList.add('ld-fullscreen-lock')
-    setTimeout(() => {
-      textEditorArea.focus()
-      textEditorArea.setSelectionRange(textEditorArea.value.length, textEditorArea.value.length)
-    }, 0)
+    syncTextEditorViewport()
+    requestAnimationFrame(() => {
+      try { textEditorArea.focus({ preventScroll: true }) } catch { textEditorArea.focus() }
+      const state = expandedTextareaState
+      if (state) {
+        try { textEditorArea.setSelectionRange(state.start, state.end, state.direction) } catch { /* best effort */ }
+        textEditorArea.scrollTop = state.textareaScrollTop
+      }
+      syncTextEditorViewport()
+    })
   }
 
   function closeTextEditor(apply) {
-    if (apply && expandedTextarea) {
-      expandedTextarea.value = textEditorArea.value
-      expandedTextarea.dispatchEvent(new Event('input', { bubbles: true }))
-      expandedTextarea.dispatchEvent(new Event('change', { bubbles: true }))
+    const origin = expandedTextarea
+    const state = expandedTextareaState
+    if (apply && origin) {
+      origin.value = textEditorArea.value
+      origin.dispatchEvent(new Event('input', { bubbles: true }))
+      origin.dispatchEvent(new Event('change', { bubbles: true }))
     }
     expandedTextarea = null
+    expandedTextareaState = null
     textEditor.classList.remove('ld-open')
     textEditor.setAttribute('aria-hidden', 'true')
-    document.body.classList.toggle('ld-fullscreen-lock', panel.classList.contains('ld-fullscreen') && panel.classList.contains('ld-open'))
+    document.body.classList.toggle('ld-fullscreen-lock', lightbox.classList.contains('ld-open') ||
+      (panel.classList.contains('ld-fullscreen') && panel.classList.contains('ld-open')))
+    requestAnimationFrame(() => {
+      // Do not refocus the small source field: that would reopen the keyboard
+      // and ask Safari to scroll the panel a second time. Just restore its
+      // container and internal scroll positions.
+      if (origin && origin.isConnected && state) origin.scrollTop = state.textareaScrollTop
+      if (state && state.scrollHost && state.scrollHost.isConnected) {
+        state.scrollHost.scrollTop = state.hostScrollTop
+        state.scrollHost.scrollLeft = state.hostScrollLeft
+      }
+    })
   }
 
   function decorateTextareas() {
-    for (const textarea of dom.queryAll('.ld-panel textarea')) {
+    for (const textarea of dom.queryAll('.ld-panel textarea, .ld-lightbox textarea')) {
       if (textarea.readOnly || textarea.dataset.ldExpandable === '1') continue
       textarea.dataset.ldExpandable = '1'
       const wrapper = document.createElement('div')
@@ -3254,6 +3355,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       button.textContent = '⛶'
       button.title = `Expand ${textareaTitle(textarea)}`
       button.setAttribute('aria-label', button.title)
+      button.setAttribute('aria-haspopup', 'dialog')
+      button.setAttribute('aria-controls', 'ld-text-editor-dialog')
       button.addEventListener('click', () => openTextEditor(textarea))
       wrapper.appendChild(button)
     }
@@ -3805,12 +3908,17 @@ ${entry.prompt || ''}`.trim()
 
   function setSettingsSection(name, persist = true) {
     const next = ['connection', 'advanced'].includes(name) ? name : 'connection'
+    let activeTab = null
     for (const tab of dom.queryAll('.ld-settings-tab')) {
-      tab.classList.toggle('ld-active', tab.getAttribute('data-settings-tab') === next)
+      const active = tab.getAttribute('data-settings-tab') === next
+      tab.classList.toggle('ld-active', active)
+      tab.setAttribute('aria-selected', String(active))
+      if (active) activeTab = tab
     }
     for (const card of dom.queryAll('[data-settings-section]')) {
       card.style.display = card.getAttribute('data-settings-section') === next ? '' : 'none'
     }
+    revealHorizontalItem(activeTab)
     if (persist) {
       try { localStorage.setItem(SETTINGS_SECTION_KEY, next) } catch { /* best effort */ }
     }
@@ -4972,6 +5080,12 @@ ${entry.prompt || ''}`.trim()
       closeTextEditor(true)
     }
   })
+  const textEditorViewport = window.visualViewport
+  if (textEditorViewport) {
+    textEditorViewport.addEventListener('resize', syncTextEditorViewport)
+    textEditorViewport.addEventListener('scroll', syncTextEditorViewport)
+  }
+  window.addEventListener('resize', syncTextEditorViewport)
   decorateTextareas()
   try { setFullscreen(localStorage.getItem(FULLSCREEN_KEY) === '1', false) } catch { setFullscreen(false, false) }
 
@@ -6083,6 +6197,11 @@ ${entry.prompt || ''}`.trim()
     if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
     window.removeEventListener('keydown', onStoryPickerKeyDown)
+    window.removeEventListener('resize', syncTextEditorViewport)
+    if (textEditorViewport) {
+      textEditorViewport.removeEventListener('resize', syncTextEditorViewport)
+      textEditorViewport.removeEventListener('scroll', syncTextEditorViewport)
+    }
     document.removeEventListener('click', onDocumentImageClick, true)
     for (const unsubscribe of imageLifecycleUnsubs.splice(0)) { try { if (typeof unsubscribe === 'function') unsubscribe() } catch { /* ignore */ } }
     for (const timer of imageAttachRetryTimers.values()) clearTimeout(timer)
