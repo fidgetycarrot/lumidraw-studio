@@ -8090,7 +8090,12 @@ function finalizeDirectImagePrompt(image, ctx) {
   for (const note of image.notes || []) trace('parser cleanup', 'applied', note)
   if ((image.present || []).length) trace('presence roster', 'clean',
     image.present.map((entry) => `${entry.name}: "${entry.evidence}"`).join(' · '))
-  let body = sanitizeDirectNames(image.prompt, profiles, trace)
+  // scene_summary is extracted separately so the parser formats the existing
+  // passage instead of composing the action inside a free-form prompt. Insert
+  // it mechanically after the leading count tags, then run the same name and
+  // identity checks over the combined prompt that Draw Things will receive.
+  const summarized = injectDirectSceneSummary(image.prompt, image.scene_summary, trace)
+  let body = sanitizeDirectNames(summarized, profiles, trace)
   const locked = applyIdentityLock(body, profiles, trace)
   body = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
     .join(', ').replace(/\s*,\s*BREAK\s*,\s*/g, ' BREAK ').replace(/\s{2,}/g, ' ').trim()
@@ -8129,6 +8134,39 @@ function directSceneSentence(prompt) {
   let index = 0
   while (index < tags.length && (DIRECT_COUNT_TAG_RE.test(tags[index]) || DIRECT_COUNT_FULL_RE.test(tags[index]))) index++
   return tags[index] || ''
+}
+
+function normalizeDirectSceneSummary(value) {
+  const compact = String(value || '')
+    .replace(/\bBREAK\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200)
+  if (!compact) return ''
+  return compact.split(/\s+/).slice(0, 18).join(' ')
+}
+
+function injectDirectSceneSummary(prompt, summary, trace = null) {
+  const sentence = normalizeDirectSceneSummary(summary)
+  const raw = String(prompt || '').trim()
+  if (!sentence || !raw) return raw
+  const blocks = raw.split(/\bBREAK\b/).map((block) => block.trim())
+  const frame = String(blocks[0] || '')
+  const normalizedFrame = normalizeIdentityText(frame)
+  const normalizedSentence = normalizeIdentityText(sentence)
+  if (normalizedSentence && normalizedFrame.includes(normalizedSentence)) {
+    if (trace) trace('scene summary', 'clean', 'already present in the shared frame; not inserted twice')
+    return raw
+  }
+  const tags = frame.split(',').map((tag) => tag.trim()).filter(Boolean)
+  let at = 0
+  while (at < tags.length &&
+    (DIRECT_COUNT_TAG_RE.test(tags[at]) || DIRECT_COUNT_FULL_RE.test(normalizeDirectCountTag(tags[at])))) at++
+  tags.splice(at, 0, sentence)
+  blocks[0] = tags.join(', ')
+  const combined = blocks.join(' BREAK ')
+  if (trace) trace('scene summary', 'applied', `inserted after ${at} leading count tag${at === 1 ? '' : 's'}`)
+  return combined
 }
 
 // Turn the prompts the parser wrote into images. Everything the compiler used to
@@ -8173,9 +8211,15 @@ async function runDirectImages(initialImages, ctx) {
       extra: preset.extra,
       dims,
       origin: { ...origin, mode: 'direct', alt: markdownAltText(finalPrompt) },
-      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, aspect: image.aspect, rating: image.rating, present: image.present || [] } },
+      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, sceneSummary: image.scene_summary || '', aspect: image.aspect, rating: image.rating, present: image.present || [] } },
     }, userId, scan)
-    results.push({ ok: true, entry, anchor: image.anchor, prompt: finalPrompt })
+    results.push({
+      ok: true,
+      entry,
+      anchor: image.anchor,
+      prompt: finalPrompt,
+      sceneStatement: image.scene_summary || directSceneSentence(image.prompt),
+    })
     if (entry && entry.images && entry.images[0] && target && target.id) {
       placements.push(await placeGeneratedStoryImage(userId, {
         chatId,
@@ -8207,7 +8251,12 @@ async function runDirectImages(initialImages, ctx) {
     parserEngine: 'direct',
     rawReply,
     error: '',
-    entries: results.map((item, index) => ({ anchor: item.anchor, prompt: item.prompt, present: (ordered[index] && ordered[index].present) || [] })),
+    entries: results.map((item, index) => ({
+      anchor: item.anchor,
+      prompt: item.prompt,
+      sceneStatement: item.sceneStatement || '',
+      present: (ordered[index] && ordered[index].present) || [],
+    })),
     lastCompiledPrompt: results.length ? results[results.length - 1].prompt : '',
     contextPreview: parserInput.contextPreview,
     ledgerPreview: parserInput.ledgerPreview,
@@ -8233,12 +8282,13 @@ const BODY_STATE_TAGS = new Set([
 ])
 
 const DIRECT_RULES = `
-You write the FINAL prompt for Anima, an image model trained on Danbooru tags.
-LumiDraw does not edit, reorder, or second-guess your prompt — what you write
-is what is drawn — so these rules are the whole job.
+You are a DATA FORMATTER for an image-generation pipeline. Translate the
+already-written CURRENT PASSAGE into a structured data record. Do not continue,
+embellish, or rewrite the story. Extract only visible action, geometry, clothing,
+identity, and camera tags. Do not add commentary or reasoning.
 
 OUTPUT — only this JSON, compact, no markdown, no commentary:
-{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","prompt":"the finished prompt","aspect":"3:4|4:3|1:1|16:9|9:16","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
+{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence, at most 18 words, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
 Omit "setting" and "outfits" entirely when nothing has changed.
 
 CHOOSING THE MOMENT
@@ -8249,45 +8299,52 @@ CHOOSING THE MOMENT
 PRESENCE — decide this first, before writing the prompt.
 - List in "present" everyone physically in the frame, each with an evidence
   quote copied exactly from the CURRENT PASSAGE — 3-8 consecutive words showing
-  them acting, being touched, or being looked at. The quote is checked against
-  the passage; a paraphrase voids the entry.
+  them acting, being touched, or being looked at. The quote is checked verbatim;
+  a paraphrase voids the entry.
 - Talked about, remembered, phoned, imagined, expected, or arriving next is NOT
-  present. A character sheet means the story knows them, not that the camera sees
-  them. Most passages involve only one or two known people.
+  present. A person who only appears inside dialogue has no action evidence.
+- The character sheets are everyone this story knows, not everyone in the
+  picture. Most passages involve one or two known people.
 - Use the exact sheet name in "present". A physically present stranger with no
   sheet uses a two-word visual label instead. Every BREAK run must belong to
   someone in "present". No run for anyone else, ever.
 
-PROMPT SHAPE — exactly this order:
+SCENE SUMMARY — the technical statement of what is depicted.
+- Write one plain sentence, at most 18 words. State visible action and geometry
+  once; include no appearance, clothing, scenery, camera, lighting, or rating.
+- Use each known person's vetted SENTENCE NAME from the sheet. The summary is
+  the roster: every known character run below must belong to someone named here.
+  If a sheet has no SENTENCE NAME, use its supplied pronoun instead.
+- In explicit images, use the precise clinical term for any visible sexual act
+  or anatomy. In safe or sensitive images, never name a sexual act.
+- LumiDraw inserts this field mechanically into the final prompt. Do not copy
+  the sentence into the "prompt" string.
+
+PROMPT SHAPE — exactly this order inside the "prompt" field:
 1. Count tags for everyone in frame. These are real Danbooru tags — 1girl,
    2girls, 1boy — pluralized, never "2girl". The frame's total must equal the
    character runs that follow.
-2. ONE scene sentence in plain words, at most 18 words: who does what to whom,
-   the geometry stated once. In explicit scenes use the clinical word (fellatio,
-   penis), never a euphemism; in safe or sensitive scenes never name a sexual
-   act. No appearance, clothing, or scenery in this sentence. Do not write the
-   rating into the prompt — LumiDraw places it from your "rating" field.
-3. Camera, setting, lighting as short tags. Use trained framing words only:
+2. Camera, setting, lighting as short tags. LumiDraw inserts scene_summary
+   between the leading count tags and these tags. Use trained framing words only:
    portrait, upper body, cowboy shot, full body, wide shot; from above, from
    below, from side, from behind, from front; dutch angle, pov. Choose a frame
-   that includes everything the sentence depends on — a hip-level act is not a
+   that includes everything the summary depends on — a hip-level act is not a
    portrait — but inside a vehicle or other tight interior, never wider than
    cowboy shot.
-4. " BREAK ", then one run per character listed in "present". Each run starts:
-   count tag, that person's SENTENCE NAME (or RUN LABEL), IDENTITY ANCHOR copied exactly; then
-   anatomy (per the rule below), clothing, pose, action, expression. One
-   character's traits never appear inside another's run.
+3. " BREAK ", then one run per character listed in "present". Each run starts:
+   count tag, that person's SENTENCE NAME (or RUN LABEL), IDENTITY ANCHOR copied
+   exactly; then anatomy (per the rule below), clothing, pose, action,
+   expression. One character's traits never appear inside another's run.
 
 NAMES
-- Name each person in the scene sentence, and open their BREAK run with the same
-  SENTENCE NAME immediately after the count tag ("1girl, Jamie Brennan, blonde
-  hair, …"). The repeated safe name binds that description to that body.
+- Use the same vetted SENTENCE NAME in scene_summary and immediately after the
+  count tag at the start of that person's BREAK run ("1girl, Jamie Brennan,
+  blonde hair, …"). The repeated safe name binds that description to that body.
 - Use the SENTENCE NAME from the sheet exactly. Never abbreviate it or invent a
   shorter form. If the sheet has no safe SENTENCE NAME, use a pronoun in the
-  sentence and the supplied short visual label as the run heading.
+  summary and the supplied short RUN LABEL as the run heading.
 - A real name marked unsafe by the sheet is NEVER written. Use its safe prompt
-  name instead. If no safe SENTENCE NAME exists, use the sheet's supplied RUN
-  LABEL as the run heading.
+  name instead. Names may appear only in scene_summary and at run headings.
 
 KEEP EACH RUN TIGHT — at most 18 tags, each thing said once:
 - One hair colour. One tag per garment, with its modifiers merged: write
@@ -8345,10 +8402,9 @@ overt sexual context; explicit = a sexual act or visible genitals.
 ASPECT — 16:9 for a wide scene or two figures side by side, 4:3 for two close
 figures, 3:4 for a single figure, 1:1 for a tight emblematic shot.
 
-NEVER: prose paragraphs beyond the one scene sentence, reasoning or
-self-corrections ("no wait"), the same concept twice in different words,
-invented tags, an unsafe/alternate character name, or anything from the banned
-list.
+NEVER: prose paragraphs beyond scene_summary, reasoning or self-corrections
+("no wait"), the same concept twice in different words, invented tags, an
+unsafe/alternate character name, or anything from the banned list.
 `
 
 // The context the parser needs to write a good prompt, in the plainest form
@@ -8945,7 +9001,8 @@ function directPresenceContradictions(image, profiles) {
   // Compatibility fallback if the parser omitted/voided presence: use safe names
   // in the frame sentence to catch a right-sentence/wrong-sheet contradiction.
   if (!expected.length) {
-    const frame = (String((image && image.prompt) || '').split(/\bBREAK\b/)[0] || '').toLowerCase()
+    const frame = [String((image && image.scene_summary) || ''),
+      String((image && image.prompt) || '').split(/\bBREAK\b/)[0] || ''].join(' ').toLowerCase()
     const named = []
     for (const p of allKnownProfiles(profiles)) {
       const form = directSentenceName(p)
@@ -9045,9 +9102,11 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '') {
         if (list.length) outfits[name] = list
       }
     }
+    const sceneSummary = normalizeDirectSceneSummary(item.scene_summary)
     images.push({
       anchor: String(item.anchor || '').trim(),
       prompt,
+      scene_summary: sceneSummary,
       aspect: VALID_ASPECTS.has(String(item.aspect || '')) ? String(item.aspect) : '3:4',
       notes,
       present,
@@ -11796,9 +11855,9 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
         results.push({
           ok: true,
           anchor: item.anchor || '',
-          sceneStatement: directSceneSentence(item.prompt),
+          sceneStatement: item.scene_summary || directSceneSentence(item.prompt),
           prompt: finalized.prompt,
-          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, aspect: item.aspect, rating: item.rating, present: item.present || [] } },
+          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, sceneSummary: item.scene_summary || '', aspect: item.aspect, rating: item.rating, present: item.present || [] } },
           aspect: item.aspect || '',
           negativePrompt: finalized.negativePrompt,
           trace: traceLines,
