@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.15'
+const EXTENSION_VERSION = '1.3.16'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -896,13 +896,15 @@ function realSetup(ctx) {
           <div class="ld-card">
             <div class="ld-subtitle">Illustration mode</div>
             <select class="ld-mode">
-              <option value="off">Off — manual only</option>
-              <option value="inline">Inline — story model writes &lt;dt-image&gt; tags</option>
-              <option value="parser">Parser — separate model extracts the scene, then LumiDraw compiles it</option>
-              <option value="direct">Direct — separate model writes the finished image prompt</option>
+              <option value="off">Off — no story illustrations</option>
+              <option value="inline">Inline — story model requests images</option>
+              <option value="parser-manual">Parser — manual scans only</option>
+              <option value="parser-auto">Parser — automatic after replies</option>
+              <option value="direct-manual">Direct — manual scans only</option>
+              <option value="direct-auto">Direct — automatic after replies</option>
             </select>
-            <div class="ld-mode-note ld-help">Parser and Direct both use the separate parser model and support rescanning old messages. Parser extracts scene data for LumiDraw to compile; Direct gives the parser the character/wardrobe/place rules and uses its finished prompt without the compiler.</div>
-            <label style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px"><input type="checkbox" class="ld-autoscan" style="width:auto" /> Auto-scan after each story message when supported</label>
+            <div class="ld-mode-note ld-help">Choose the prompt pipeline and its trigger together. Manual keeps the Scan buttons available without running after every reply; automatic runs the same pipeline after each saved story reply.</div>
+            <input type="checkbox" class="ld-autoscan" hidden aria-hidden="true" tabindex="-1" />
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-strip-directives" style="width:auto" /> Hide generated images and image-request directives from the story model</label>
             <div class="ld-help">Some presets teach the model to request pictures by writing markdown such as <code>![tags](/api/v1/images/gen)</code>. Those never render, and each one left in the history teaches the model to write another. This removes them from what the model sees for each generation — your stored messages are never modified. Real images, including LumiDraw's own, are always left alone.</div>
@@ -1320,6 +1322,44 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   const $ = (sel) => dom.query(sel)
 
+  // The backend deliberately keeps `mode` and `autoScan` as separate saved
+  // fields for compatibility. The UI presents one honest behavior choice so
+  // nobody has to discover that "Direct + unchecked" secretly means manual.
+  function storyModeFromBehavior(value) {
+    const behavior = String(value || '')
+    if (behavior.startsWith('direct')) return 'direct'
+    if (behavior.startsWith('parser')) return 'parser'
+    if (behavior === 'inline') return 'inline'
+    return 'off'
+  }
+
+  function storyAutoScanFromBehavior(value) {
+    return /-(?:auto)$/.test(String(value || ''))
+  }
+
+  function storyBehaviorFromSettings(mode, autoScan) {
+    const normalized = storyModeFromBehavior(mode)
+    if (normalized === 'direct' || normalized === 'parser') {
+      return `${normalized}-${autoScan === false ? 'manual' : 'auto'}`
+    }
+    return normalized
+  }
+
+  function selectedStoryMode() {
+    const select = $('.ld-mode')
+    return storyModeFromBehavior(select ? select.value : settings.mode)
+  }
+
+  function selectedStoryAutoScan() {
+    const select = $('.ld-mode')
+    return storyAutoScanFromBehavior(select ? select.value : storyBehaviorFromSettings(settings.mode, settings.autoScan))
+  }
+
+  function syncLegacyAutoScanField() {
+    const legacy = $('.ld-autoscan')
+    if (legacy) legacy.checked = selectedStoryAutoScan()
+  }
+
   // Keep a restored/selected tab visible without using scrollIntoView(), which
   // also moves the vertical form and is especially disruptive above a phone
   // keyboard. This adjusts only the tab rail's horizontal position.
@@ -1560,8 +1600,11 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (controls.presetSelect) {
       behavior.appendChild(field('Generation preset', controls.presetSelect, 'Model, sampler, steps, dimensions, LoRAs, and Draw Things settings only.'))
     }
-    behavior.appendChild(field('Mode', controls.mode, 'Off is manual. Inline uses story-authored image tags. Parser uses a separate prompt-conversion call.'))
-    behavior.appendChild(checkbox(controls.autoScan, 'Automatically illustrate new story replies'))
+    behavior.appendChild(field('Behavior', controls.mode,
+      'Choose the prompt pipeline and trigger together. Manual options use the Scan buttons only; automatic options run after each saved story reply. Off means no story illustrations.'))
+    // Kept in the DOM only as a compatibility mirror for the backend's saved
+    // `autoScan` field. It is no longer a second user-facing control.
+    if (controls.autoScan) behavior.appendChild(controls.autoScan)
     behavior.appendChild(checkbox(controls.charTags, 'Use chat character image tags as a fallback'))
     behavior.appendChild(checkbox(controls.strip, 'Hide image-request directives from the story model',
       'Keeps dead image-request markup from teaching the story model to repeat it. Stored messages are not changed.'))
@@ -3008,19 +3051,20 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const oldButton = $('[data-act="scan-old"]')
     const scan = liveScanStatus
     const active = !!(scan && !['done', 'cancelled', 'error'].includes(scan.stage))
+    const modeNow = selectedStoryMode()
+    const parserDriven = modeNow === 'parser' || modeNow === 'direct'
     if (cancelButton) {
       cancelButton.style.display = active ? '' : 'none'
       cancelButton.disabled = !active || scan.cancellable === false
       cancelButton.textContent = scan && scan.stage === 'cancelling' ? 'Cancelling…' : 'Cancel parser'
     }
-    if (scanButton) scanButton.disabled = active
+    if (scanButton) scanButton.disabled = active || !parserDriven
     // Direct is a rescanning mode too. openStoryPicker already accepts both —
     // this gate was left behind when Direct was promoted from a checkbox to a
     // mode, so the button it guards sat greyed out while the thing behind it
     // worked perfectly.
     if (oldButton) {
-      const modeNow = ($('.ld-mode') ? $('.ld-mode').value : settings.mode)
-      oldButton.disabled = active || (modeNow !== 'parser' && modeNow !== 'direct')
+      oldButton.disabled = active || !parserDriven
     }
     if (!scan || !scan.startedAt) {
       stopScanElapsedTimer()
@@ -3171,7 +3215,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
 
   async function openStoryPicker() {
-    const mode = $('.ld-mode') ? $('.ld-mode').value : settings.mode
+    const mode = selectedStoryMode()
     if (mode !== 'parser' && mode !== 'direct') {
       setStatus('.ld-gen-status', 'Choose Parser or Direct mode in the Story tab before rescanning an old message.', 'err')
       return
@@ -4064,7 +4108,7 @@ ${entry.prompt || ''}`.trim()
         // model should not require committing to it first.
         parserModel: $('.ld-parser-model') ? $('.ld-parser-model').value.trim() : undefined,
         parserConnection: $('.ld-parser-conn') ? $('.ld-parser-conn').value : undefined,
-        mode: $('.ld-mode') ? $('.ld-mode').value : undefined,
+        mode: selectedStoryMode(),
         attempt,
       }, 300000)
       const results = Array.isArray(res.results) ? res.results : []
@@ -4087,7 +4131,7 @@ ${entry.prompt || ''}`.trim()
         return
       }
       const syncReparseDebug = (entry, index, source = 'image reparse candidate') => {
-        const mode = res.mode || ($('.ld-mode') ? $('.ld-mode').value : 'parser')
+        const mode = res.mode || selectedStoryMode()
         storyDebug = {
           ...(storyDebug || {}),
           mode,
@@ -4970,7 +5014,7 @@ ${entry.prompt || ''}`.trim()
           imageUrl: item.image.url,
           parserModel: $('.ld-parser-model') ? $('.ld-parser-model').value.trim() : undefined,
           parserConnection: $('.ld-parser-conn') ? $('.ld-parser-conn').value : undefined,
-          mode: $('.ld-mode') ? $('.ld-mode').value : undefined,
+          mode: selectedStoryMode(),
         }, 1800000)
         history = Array.isArray(res.history) ? res.history : history
         renderHistory()
@@ -5557,6 +5601,9 @@ ${entry.prompt || ''}`.trim()
   })
 
   async function pushSettings(statusMsg) {
+    const storyMode = selectedStoryMode()
+    const storyAutoScan = selectedStoryAutoScan()
+    syncLegacyAutoScanField()
     const res = await call('save_settings', {
       host: $('.ld-host').value,
       port: $('.ld-port').value,
@@ -5567,8 +5614,8 @@ ${entry.prompt || ''}`.trim()
       cloudPort: $('.ld-cloud-port').value,
       cloudModel: $('.ld-cloud-model').value,
       cloudFallback: $('.ld-cloud-fallback').checked,
-      mode: $('.ld-mode').value,
-      autoScan: $('.ld-autoscan').checked,
+      mode: storyMode,
+      autoScan: storyAutoScan,
       parserEngine: $('.ld-parser-engine').value,
       parserConnection: $('.ld-parser-conn').value,
       parserModel: $('.ld-parser-model').value,
@@ -5580,7 +5627,7 @@ ${entry.prompt || ''}`.trim()
       maxImages: $('.ld-maximg').value,
       minImages: $('.ld-minimg').value,
       autoCharTags: $('.ld-chartags').checked,
-      directMode: $('.ld-mode') ? $('.ld-mode').value === 'direct' : false,
+      directMode: storyMode === 'direct',
       chatLeads: $('.ld-chat-leads') ? $('.ld-chat-leads').checked : true,
       stripImageDirectives: $('.ld-strip-directives').checked,
       sizeChatImages: $('.ld-size-images') ? $('.ld-size-images').checked : false,
@@ -5609,7 +5656,7 @@ ${entry.prompt || ''}`.trim()
   }
 
   function updateParserEngineUI() {
-    const mode = $('.ld-mode') ? $('.ld-mode').value : (settings.mode || 'off')
+    const mode = selectedStoryMode()
     const direct = mode === 'direct'
     const engine = $('.ld-parser-engine') ? $('.ld-parser-engine').value : (settings.parserEngine || 'legacy')
     const note = $('.ld-parser-engine-note')
@@ -5640,17 +5687,21 @@ ${entry.prompt || ''}`.trim()
   function updateScanLabel() {
     const btn = $('[data-act="scan"]')
     const oldBtn = $('[data-act="scan-old"]')
-    const mode = $('.ld-mode') ? $('.ld-mode').value : 'off'
+    const mode = selectedStoryMode()
     const parserDriven = mode === 'parser' || mode === 'direct'
     const engine = $('.ld-parser-engine') ? $('.ld-parser-engine').value : 'legacy'
     if (btn) {
       btn.textContent = mode === 'off'
-        ? 'Scan latest 📖 (mode: Off — set in Story)'
+        ? 'Scan latest 📖 (Off)'
         : mode === 'direct'
           ? 'Scan latest 📖 (Direct)'
           : mode === 'parser'
             ? `Scan latest 📖 (${engine === 'anima' ? 'Anima hybrid' : 'Legacy'})`
             : `Scan latest 📖 (${mode})`
+      btn.disabled = !parserDriven
+      btn.title = parserDriven
+        ? `Run ${mode === 'direct' ? 'Direct' : 'Parser'} manually on the latest assistant message`
+        : 'Manual scanning is available with a Parser or Direct manual/automatic behavior'
     }
     if (oldBtn) {
       oldBtn.disabled = !parserDriven
@@ -5732,9 +5783,14 @@ ${entry.prompt || ''}`.trim()
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-autoscan', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break']) {
+  for (const sel of ['.ld-mode', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
+      if (sel === '.ld-mode') {
+        syncLegacyAutoScanField()
+        updateScanLabel()
+        renderLiveScanStatus()
+      }
       if (sel === '.ld-parser-conn') {
         const conn = $('.ld-parser-conn')
         const modelInput = $('.ld-parser-model')
@@ -6071,7 +6127,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-cloud-port').value = settings.cloudPort || 7864
       $('.ld-cloud-model').value = settings.cloudModel || ''
       $('.ld-cloud-fallback').checked = settings.cloudFallback !== false
-      $('.ld-mode').value = settings.mode || 'off'
+      $('.ld-mode').value = storyBehaviorFromSettings(settings.mode || 'off', settings.autoScan)
       $('.ld-autoscan').checked = settings.autoScan !== false
       $('.ld-maximg').value = settings.maxImages || 2
       $('.ld-minimg').value = settings.minImages || 0
