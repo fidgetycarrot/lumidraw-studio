@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.19'
+const EXTENSION_VERSION = '1.3.20'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -4164,6 +4164,7 @@ ${entry.prompt || ''}`.trim()
             index: candidateIndex + 1,
             selected: candidateIndex === index,
             anchor: candidate.anchor || '',
+            momentEvidence: candidate.momentEvidence || '',
             sceneStatement: candidate.sceneStatement || '',
             prompt: candidate.prompt || '',
           })),

@@ -8256,19 +8256,19 @@ const SUBJECT_BREAK_MARK = '\u0000SUBJECT_BREAK'
 // as non-negotiable are present, and puts back the ones that are not.
 // ===========================================================================
 
-// Direct generation and image reparsing must evaluate roster/run contradictions
-// identically. Keeping this outside runDirectImages prevents the lightbox's
-// prompt-only path from silently falling back to the structured compiler.
-async function reconcileDirectPresence(initialImages, ctx) {
+// Direct generation and image reparsing must evaluate roster, run, and moment
+// grounding identically. Keeping this outside runDirectImages prevents the
+// lightbox's prompt-only path from silently falling back to the old compiler.
+async function reconcileDirectGrounding(initialImages, ctx) {
   let images = Array.isArray(initialImages) ? initialImages : []
   let rawReply = ctx.rawReply
   const { instruction, settings, profiles, parserInput, userId, scan } = ctx
   const passage = (parserInput && parserInput.currentPassage) || ''
   if (!instruction || !settings || !images.length || !parserInput) return { images, rawReply }
 
-  const contradictions = images.map((image) => directPresenceContradictions(image, profiles)).filter(Boolean)
+  const contradictions = images.map((image) => directGroundingContradictions(image, profiles)).filter(Boolean)
   const contradictionScore = (list) => (list || []).reduce((sum, item) =>
-    sum + (item.missing || []).length + (item.extra || []).length, 0)
+    sum + (item.missing || []).length + (item.extra || []).length + (item.moment ? 3 : 0), 0)
   const firstScore = contradictionScore(contradictions)
   if (!contradictions.length) return { images, rawReply }
 
@@ -8279,15 +8279,19 @@ async function reconcileDirectPresence(initialImages, ctx) {
   const detail = contradictions.map((c) => {
     const missing = c.missing.map((p) => p.anchor || p.ref).join(', ') || 'none'
     const extra = c.extra.map((p) => p.anchor || p.ref).join(', ') || 'none'
-    return `missing runs: ${missing}; wrong/extra runs: ${extra}`
+    const moment = c.moment ? `; moment evidence: ${c.moment.reason}` : ''
+    return `missing runs: ${missing}; wrong/extra runs: ${extra}${moment}`
   }).join(' | ')
-  spindle.log.warn(`[lumidraw] direct · present roster and runs disagree (${names.join(' / ') || detail}); re-parsing once`)
-  if (scan) setStoryScanStage(scan, 'parsing', 'The parser paired the scene with the wrong character sheet; re-reading once.')
+  spindle.log.warn(`[lumidraw] direct · scene grounding failed (${names.join(' / ') || detail}); re-parsing once`)
+  if (scan) setStoryScanStage(scan, 'parsing', 'The proposed image was not fully grounded in the current passage; re-reading once.')
   const retryInstruction = instruction +
-    '\n\nYOUR PREVIOUS ATTEMPT WAS REJECTED. Your validated present roster and the character BREAK runs did not match. ' +
+    '\n\nYOUR PREVIOUS ATTEMPT WAS REJECTED. Its physical-presence roster, character runs, or depicted moment was not grounded correctly. ' +
     `The mismatch was: ${detail}. ` +
     'Every validated present person needs exactly one matching run, and no run may copy a different known sheet. ' +
-    'Re-read the CURRENT PASSAGE, verify each 3-8 word evidence quote, and rewrite in the SAME JSON format.'
+    'The moment_evidence must be an exact 6-20 word quote proving the pictured action or visible state is occurring NOW. ' +
+    'Dialogue, a hypothetical, a plan, a fantasy, a memory, a future act, or a negated act cannot ground an image. ' +
+    'The scene_summary may restate only that evidence; discard any disputed action instead of preserving it. ' +
+    'Re-read the CURRENT PASSAGE, verify every evidence quote, and rewrite in the SAME JSON format.'
   try {
     const retryRaw = await quietLLM(retryInstruction, parserInput.input, settings, userId, true, scan || null)
     const retry = parseDirectImages(
@@ -8296,18 +8300,24 @@ async function reconcileDirectPresence(initialImages, ctx) {
       profiles,
       passage,
       settings.maxSubjects || 2)
-    const retryBad = retry.images.map((image) => directPresenceContradictions(image, profiles)).filter(Boolean)
+    const retryBad = retry.images.map((image) => directGroundingContradictions(image, profiles)).filter(Boolean)
     const retryScore = contradictionScore(retryBad)
     if (retry.images.length && retryScore < firstScore) {
-      spindle.log.info('[lumidraw] direct · retry resolved the presence/run mismatch' +
+      spindle.log.info('[lumidraw] direct · retry improved scene grounding' +
         (retryBad.length ? ' partially' : ' completely'))
       images = retry.images
       rawReply = retryRaw
     } else {
-      spindle.log.warn('[lumidraw] direct · retry did not improve the mismatch; using the mechanically guarded first attempt')
+      spindle.log.warn('[lumidraw] direct · retry did not improve scene grounding; inspecting the mechanically guarded first attempt')
     }
   } catch (error) {
-    spindle.log.warn('[lumidraw] direct · mismatch retry failed (' + error.message + '); using the first attempt')
+    spindle.log.warn('[lumidraw] direct · grounding retry failed (' + error.message + '); inspecting the first attempt')
+  }
+  const unsupported = images.map((image) => directMomentContradiction(image)).filter(Boolean)
+  if (unsupported.length) {
+    const reason = unsupported.map((item) => item.reason).join(' · ')
+    spindle.log.warn('[lumidraw] direct · stopped before Draw Things — depicted moment remained ungrounded: ' + reason)
+    throw new Error('LumiDraw stopped before generating because the parser could not prove that its chosen moment was happening in the current passage. ' + reason)
   }
   return { images, rawReply }
 }
@@ -8318,6 +8328,7 @@ async function reconcileDirectPresence(initialImages, ctx) {
 function finalizeDirectImagePrompt(image, ctx) {
   const { preset, profiles, prefix, trace } = ctx
   for (const note of image.notes || []) trace('parser cleanup', 'applied', note)
+  if (image.moment_evidence) trace('moment evidence', 'clean', `"${image.moment_evidence}"`)
   if ((image.present || []).length) trace('presence roster', 'clean',
     image.present.map((entry) => `${entry.name}: "${entry.evidence}"`).join(' · '))
   // scene_summary is extracted separately so the parser formats the existing
@@ -8341,6 +8352,11 @@ function finalizeDirectImagePrompt(image, ctx) {
     spindle.log.info('[lumidraw] direct defences · ' + defences.notes.join(' · ') +
       (defences.negatives.length ? ` · negatives: ${defences.negatives.join(', ')}` : ''))
   }
+  const countDefences = directGroupCountDefences(body)
+  if (countDefences.notes.length) {
+    trace('group count', 'applied', countDefences.notes.join(' · ') +
+      (countDefences.negatives.length ? ` · negatives: ${countDefences.negatives.join(', ')}` : ''))
+  }
 
   const headerRaw = reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), image.rating)
   const hadHeaderBreak = /\bBREAK\b/.test(headerRaw)
@@ -8351,7 +8367,8 @@ function finalizeDirectImagePrompt(image, ctx) {
   }
   const header = headerParts.join(', ')
   const prompt = joinPromptParts([header, image.rating || '', ...defences.positive, body])
-  const negativePrompt = negativeWith(preset.negativePrompt || '', defences.negatives)
+  const negativePrompt = negativeWith(preset.negativePrompt || '',
+    uniqueStrings([...defences.negatives, ...countDefences.negatives]))
   const detrapped = stripSubwordTraps(prompt)
   for (const hit of detrapped.hits) {
     trace('subword trap', 'applied', `removed ${hit.words.join(', ')} — ${hit.why}`)
@@ -8410,7 +8427,7 @@ function injectDirectSceneSummary(prompt, summary, trace = null, maxWords = 18) 
 // behind, the identity lock in the middle, send.
 async function runDirectImages(initialImages, ctx) {
   const { preset, profiles, userId, chatId, scan, parserInput, target, instruction, settings } = ctx
-  const reconciled = await reconcileDirectPresence(initialImages, ctx)
+  const reconciled = await reconcileDirectGrounding(initialImages, ctx)
   let images = reconciled.images
   const rawReply = reconciled.rawReply
   await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
@@ -8446,12 +8463,13 @@ async function runDirectImages(initialImages, ctx) {
       extra: preset.extra,
       dims,
       origin: { ...origin, mode: 'direct', alt: markdownAltText(finalPrompt) },
-      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, sceneSummary: image.scene_summary || '', aspect: image.aspect, rating: image.rating, present: image.present || [] } },
+      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, momentEvidence: image.moment_evidence || '', sceneSummary: image.scene_summary || '', aspect: image.aspect, rating: image.rating, present: image.present || [] } },
     }, userId, scan)
     results.push({
       ok: true,
       entry,
       anchor: image.anchor,
+      momentEvidence: image.moment_evidence || '',
       prompt: finalPrompt,
       sceneStatement: image.scene_summary || directSceneSentence(image.prompt),
     })
@@ -8496,6 +8514,7 @@ async function runDirectImages(initialImages, ctx) {
       anchor: item.anchor,
       prompt: item.prompt,
       sceneStatement: item.sceneStatement || '',
+      momentEvidence: (ordered[index] && ordered[index].moment_evidence) || '',
       present: (ordered[index] && ordered[index].present) || [],
     })),
     lastCompiledPrompt: results.length ? results[results.length - 1].prompt : '',
@@ -8529,13 +8548,21 @@ embellish, or rewrite the story. Extract only visible action, geometry, clothing
 identity, and camera tags. Do not add commentary or reasoning.
 
 OUTPUT — only this JSON, compact, no markdown, no commentary:
-{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
+{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","moment_evidence":"6-20 exact consecutive words from the CURRENT PASSAGE proving the depicted moment is occurring now","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
 Omit "setting" and "outfits" entirely when nothing has changed.
 
 CHOOSING THE MOMENT
 - Illustrate only the CURRENT PASSAGE. Prior context resolves who and where;
   it never supplies the moment.
 - Pick the single clearest drawable beat. One clear action, not three.
+- Before composing anything, copy 6-20 exact consecutive words into
+  "moment_evidence" that prove the pictured action or visible state is occurring
+  NOW. This is checked verbatim. It must contain the actual event, not merely the
+  names of people who are present.
+- Dialogue about an act does not make it happen. Hypothetical, proposed, planned,
+  desired, remembered, imagined, expected, future, conditional, and negated acts
+  are not drawable current events. If the passage does not contain a direct quote
+  proving an act is happening now, choose a different visible moment.
 
 PRESENCE — decide this first, before writing the prompt.
 - List in "present" everyone physically in the frame, each with an evidence
@@ -8555,11 +8582,18 @@ SCENE SUMMARY — the technical statement of what is depicted.
 - Write one plain sentence within the configured SCENE SUMMARY word limit.
   State visible action and geometry once; include no appearance, clothing,
   scenery, camera, lighting, or rating.
+- Restate ONLY what "moment_evidence" proves. Never promote dialogue, a possible
+  scenario, intention, memory, or anticipated next step into the pictured action.
 - Use each known person's vetted SENTENCE NAME from the sheet. The summary is
   the roster: every known character run below must belong to someone named here.
   If a sheet has no SENTENCE NAME, use its supplied pronoun instead.
 - In explicit images, use the precise clinical term for any visible sexual act
   or anatomy. In safe or sensitive images, never name a sexual act.
+- Grammar is physical ownership: the grammatical subject performs the action
+  and the object receives it. Never reverse actor and recipient. For penetration,
+  the penetrating person or part is the actor and the receiving person is the
+  object. Never invent anatomy, a toy, or an unnamed fourth participant to make
+  an impossible sentence work; choose a simpler supported moment instead.
 - LumiDraw inserts this field mechanically into the final prompt. Do not copy
   the sentence into the "prompt" string.
 
@@ -8633,6 +8667,13 @@ mentioned recently.
 - Never invent garments. Someone in nothing but an oversized shirt is
   "no pants, barefoot" — say so instead of quietly adding jeans or shoes.
 - Body states (bulge, midriff, cleavage, navel) are not garments.
+- In a group image, keep every garment exclusively inside its owner's BREAK run,
+  immediately after that owner's identity/anatomy and before pose, action, and
+  expression. Never place clothing in the shared frame or borrow a visually
+  strong garment from another sheet. When the established state explicitly says
+  no footwear remains, keep "barefoot" beside that owner's bare-state tag; if
+  footwear remains, name it in that same owner's run. Never fill an unstated
+  footwear detail with another person's shoes or boots.
 
 SETTING — when the passage moves the characters somewhere new, put the new
 location's tags in "setting" so LumiDraw remembers the move. Omit it when they
@@ -8814,7 +8855,7 @@ function subjectLimitRule(maxSubjects = 2) {
   if (max === 2) {
     return `MAXIMUM CHARACTERS PER IMAGE: 2. This is a hard ceiling and the proven reliability setting. If more than two people occupy the moment, choose the two whose participation carries it; a witness is left out. SCENE SUMMARY: at most ${summaryWords} words.`
   }
-  return `MAXIMUM CHARACTERS PER IMAGE: ${max}. This is a hard ceiling. When the chosen moment physically includes ${max} participating people, include all ${max}; do not collapse the scene to two merely because two is easier. If more than ${max} are present, keep the ${max} whose participation carries the moment. Every included person needs independent evidence and exactly one separate BREAK run. Group scenes are less reliable, so keep positions and ownership exceptionally explicit. SCENE SUMMARY: at most ${summaryWords} words.`
+  return `MAXIMUM CHARACTERS PER IMAGE: ${max}. This is a hard ceiling. When the chosen moment physically includes ${max} participating people, include all ${max}; do not collapse the scene to two merely because two is easier. If more than ${max} are present, keep the ${max} whose participation carries the moment. Every included person needs independent evidence and exactly one separate BREAK run. In a group scene, give every person exactly one supported physical role or position, keep every garment in its owner's run, and never imply an unnamed extra actor. Group scenes are less reliable, so keep positions and ownership exceptionally explicit. SCENE SUMMARY: at most ${summaryWords} words.`
 }
 
 function buildDirectInstruction(profiles, options = {}) {
@@ -9243,6 +9284,65 @@ function dropUndeclaredRuns(prompt, present, profiles) {
   return { prompt: [frame, ...kept, ...rest].join(' BREAK '), notes }
 }
 
+// Presence proves who is physically available; it does not prove that the event
+// in scene_summary is actually happening. The parser now supplies one separate
+// quote for the depicted moment. Exact-text validation catches invented evidence,
+// while the narrow non-current markers catch the failure that motivated this
+// guard: dialogue or speculation being promoted into a performed action.
+const DIRECT_NONCURRENT_MOMENT_RE = /\b(?:talk(?:s|ed|ing)?\s+about|discuss(?:es|ed|ing)?|describ(?:es|ed|ing)?|imagin(?:es|ed|ing)?|fantasi(?:es|ed|ing)|fantasiz(?:es|ed|ing)?|dream(?:s|ed|ing)?\s+(?:of|about)|remember(?:s|ed|ing)?|recall(?:s|ed|ing)?|hypothetical|pretend(?:s|ed|ing)?|propos(?:es|ed|ing)?|suggest(?:s|ed|ing)?|plans?\s+to|planned\s+to|intends?\s+to|intended\s+to|wants?\s+to|wanted\s+to|hopes?\s+to|hoped\s+to|expects?\s+to|expected\s+to|going\s+to|about\s+to|what\s+if|would\s+(?:be|have|do|try)|could\s+(?:be|have|do|try)|might\s+(?:be|have|do|try)|did\s+not\s+happen|didn't\s+happen|was\s+not\s+happening|wasn't\s+happening|never\s+happened)\b/i
+
+function directEvidenceInsideDialogue(passage, evidence) {
+  const words = normalizeIdentityText(evidence).split(/\s+/).filter(Boolean)
+  if (!words.length) return false
+  let match = null
+  try {
+    match = new RegExp(words.map(escapeRegExp).join('[^a-z0-9]+'), 'i').exec(String(passage || ''))
+  } catch { return false }
+  if (!match) return false
+  const before = String(passage || '').slice(0, match.index)
+  const straightQuotes = (before.match(/"/g) || []).length
+  const insideStraight = straightQuotes % 2 === 1
+  const insideSmart = before.lastIndexOf('“') > before.lastIndexOf('”')
+  return insideStraight || insideSmart
+}
+
+function assessDirectMomentEvidence(value, passage) {
+  const evidence = String(value || '').replace(/\s+/g, ' ').trim().slice(0, 360)
+  const evidenceNorm = normalizeIdentityText(evidence)
+  const passageNorm = normalizeIdentityText(passage)
+  const words = evidenceNorm ? evidenceNorm.split(/\s+/).filter(Boolean).length : 0
+  if (!evidenceNorm) return { valid: false, reason: 'moment_evidence was missing', evidence, words }
+  if (words < 6 || words > 20) {
+    return { valid: false, reason: `moment_evidence had ${words} words; expected 6-20`, evidence, words }
+  }
+  if (!passageNorm.includes(evidenceNorm)) {
+    return { valid: false, reason: 'moment_evidence was not an exact quote from the current passage', evidence, words }
+  }
+  if (directEvidenceInsideDialogue(passage, evidence)) {
+    return { valid: false, reason: 'moment_evidence came from dialogue rather than narrated action', evidence, words }
+  }
+  const noncurrent = DIRECT_NONCURRENT_MOMENT_RE.exec(evidence)
+  DIRECT_NONCURRENT_MOMENT_RE.lastIndex = 0
+  if (noncurrent) {
+    return {
+      valid: false,
+      reason: `moment_evidence described a non-current possibility ("${noncurrent[0]}")`,
+      evidence,
+      words,
+    }
+  }
+  return { valid: true, reason: '', evidence, words }
+}
+
+function directMomentContradiction(image) {
+  if (!image) return { reason: 'image record was missing', evidence: '' }
+  const assessment = image.momentEvidenceAssessment || { valid: false, reason: 'moment_evidence was not validated' }
+  return assessment.valid ? null : {
+    reason: assessment.reason || 'moment_evidence was not valid',
+    evidence: assessment.evidence || image.moment_evidence || '',
+  }
+}
+
 // Compare the validated roster with the runs that survived parsing. Missing
 // validated people are enough to retry: an extra wrong run may already have been
 // removed by dropUndeclaredRuns, so requiring an extra here would hide the exact
@@ -9277,6 +9377,18 @@ function directPresenceContradictions(image, profiles) {
     return null
   }
   return (missing.length || extra.length) ? { missing, extra, source: 'present' } : null
+}
+
+function directGroundingContradictions(image, profiles) {
+  const presence = directPresenceContradictions(image, profiles)
+  const moment = directMomentContradiction(image)
+  if (!presence && !moment) return null
+  return {
+    missing: (presence && presence.missing) || [],
+    extra: (presence && presence.extra) || [],
+    source: (presence && presence.source) || 'moment',
+    moment,
+  }
 }
 
 function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', maxSubjects = 2) {
@@ -9367,11 +9479,21 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
       }
     }
     const sceneSummary = normalizeDirectSceneSummary(item.scene_summary, summaryWordLimit)
+    const momentEvidence = String(item.moment_evidence || '').replace(/\s+/g, ' ').trim().slice(0, 360)
+    const momentEvidenceAssessment = assessDirectMomentEvidence(momentEvidence, passage)
+    if (!momentEvidenceAssessment.valid) {
+      spindle.log.warn('[lumidraw] direct · proposed moment is not grounded · ' + momentEvidenceAssessment.reason +
+        (momentEvidence ? ` · "${momentEvidence.slice(0, 100)}"` : ''))
+    } else {
+      spindle.log.info('[lumidraw] direct · moment evidence · "' + momentEvidence + '"')
+    }
     images.push({
       anchor: String(item.anchor || '').trim(),
       prompt,
       scene_summary: sceneSummary,
       sceneSummaryWordLimit: summaryWordLimit,
+      moment_evidence: momentEvidence,
+      momentEvidenceAssessment,
       aspect: VALID_ASPECTS.has(String(item.aspect || '')) ? String(item.aspect) : '3:4',
       notes,
       present,
@@ -9453,6 +9575,34 @@ function applyIdentityLock(prompt, profiles, trace = null) {
     trace('identity lock', 'applied', `put back what the parser dropped — ${restored.join('; ')}`)
   }
   return { prompt: text, restored }
+}
+
+// Three- and four-person prompts are where an otherwise correct roster most
+// often grows one invented body. Keep the proven one/two-person path unchanged.
+// For a group, negate only the next count in each trained gender family: a
+// 1girl/2boys frame gets 2girls and 3boys as overshoot guards. This does not
+// suppress either requested count and remains independent of scene content.
+function directGroupCountDefences(prompt) {
+  const out = { negatives: [], notes: [] }
+  const tags = String(prompt || '').split(/\bBREAK\b/)[0]
+    .split(',').map((tag) => tag.trim()).filter(Boolean)
+  let female = 0
+  let male = 0
+  let total = 0
+  for (const tag of tags) {
+    const match = DIRECT_COUNT_FULL_RE.exec(normalizeDirectCountTag(tag))
+    if (!match) break
+    const n = Number(match[1])
+    const kind = directCountBase(match[2])
+    total += n
+    if (['girl', 'woman', 'female'].includes(kind)) female += n
+    if (['boy', 'man', 'male'].includes(kind)) male += n
+  }
+  if (total < 3 || (!female && !male)) return out
+  out.negatives.push(female ? `${female + 1}girls` : '1girl')
+  out.negatives.push(male ? `${male + 1}boys` : '1boy')
+  out.notes.push(`exact ${total}-person group guarded against a one-person gender-count overshoot`)
+  return out
 }
 
 // The compiler's two anatomy defences, rebuilt for a prompt LumiDraw did not
@@ -12120,7 +12270,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
     if (!direct.images.length) {
       parseError = direct.error || 'Direct mode returned no usable prompt.'
     } else {
-      const reconciled = await reconcileDirectPresence(direct.images, {
+      const reconciled = await reconcileDirectGrounding(direct.images, {
         preset, profiles, userId, chatId, scan: null, rawReply: raw, parserInput,
         instruction, settings,
       })
@@ -12134,9 +12284,10 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
         results.push({
           ok: true,
           anchor: item.anchor || '',
+          momentEvidence: item.moment_evidence || '',
           sceneStatement: item.scene_summary || directSceneSentence(item.prompt),
           prompt: finalized.prompt,
-          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, sceneSummary: item.scene_summary || '', aspect: item.aspect, rating: item.rating, present: item.present || [] } },
+          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, momentEvidence: item.moment_evidence || '', sceneSummary: item.scene_summary || '', aspect: item.aspect, rating: item.rating, present: item.present || [] } },
           aspect: item.aspect || '',
           negativePrompt: finalized.negativePrompt,
           trace: traceLines,
