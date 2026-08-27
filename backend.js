@@ -8287,7 +8287,7 @@ async function reconcileDirectGrounding(initialImages, ctx) {
   const retryInstruction = instruction +
     '\n\nYOUR PREVIOUS ATTEMPT WAS REJECTED. Its physical-presence roster, character runs, or depicted moment was not grounded correctly. ' +
     `The mismatch was: ${detail}. ` +
-    'Every validated present person needs exactly one matching run, and no run may copy a different known sheet. ' +
+    'Every validated present person needs exactly one matching BREAK run (one/two people) or spatial group subject (three/four people), and no subject may bind a different known sheet. ' +
     'The moment_evidence must be an exact 6-20 word quote proving the pictured action or visible state is occurring NOW. ' +
     'Dialogue, a hypothetical, a plan, a fantasy, a memory, a future act, or a negated act cannot ground an image. ' +
     'The scene_summary may restate only that evidence; discard any disputed action instead of preserving it. ' +
@@ -8322,6 +8322,208 @@ async function reconcileDirectGrounding(initialImages, ctx) {
   return { images, rawReply }
 }
 
+const DIRECT_GROUP_POSITIONS = new Set([
+  'left', 'center-left', 'center', 'center-right', 'right',
+  'foreground', 'midground', 'background',
+])
+
+function directGroupFallbackPositions(count) {
+  if (count >= 4) return ['left', 'center-left', 'center-right', 'right']
+  return ['left', 'center', 'right']
+}
+
+function normalizeDirectGroupPosition(value, index = 0, count = 3) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/\s+/g, '-')
+  if (DIRECT_GROUP_POSITIONS.has(normalized)) return normalized
+  return directGroupFallbackPositions(count)[index] || `position-${index + 1}`
+}
+
+function directGroupPositionPhrase(position) {
+  if (position === 'left') return 'on the left'
+  if (position === 'center-left') return 'at center-left'
+  if (position === 'center') return 'in the center'
+  if (position === 'center-right') return 'at center-right'
+  if (position === 'right') return 'on the right'
+  if (position === 'foreground') return 'in the foreground'
+  if (position === 'midground') return 'in the midground'
+  if (position === 'background') return 'in the background'
+  return `at ${String(position || 'a distinct position').replace(/-/g, ' ')}`
+}
+
+function directGroupCountTag(subject, profiles) {
+  const profile = subject && (subject.profileRef
+    ? allKnownProfiles(profiles).find((item) => item && item.ref === subject.profileRef)
+    : directProfileForPresenceName(subject.name, profiles))
+  const raw = normalizeDirectCountTag((profile && profile.countTag) || (subject && subject.countTag) || '1other')
+  const match = DIRECT_COUNT_FULL_RE.exec(raw)
+  if (!match) return '1other'
+  const kind = directCountBase(match[2])
+  if (['girl', 'woman', 'female'].includes(kind)) return '1girl'
+  if (['boy', 'man', 'male'].includes(kind)) return '1boy'
+  return '1other'
+}
+
+function directGroupCounts(subjects, profiles) {
+  const counts = new Map([['girl', 0], ['boy', 0], ['other', 0]])
+  for (const subject of subjects || []) {
+    const match = DIRECT_COUNT_FULL_RE.exec(directGroupCountTag(subject, profiles))
+    const kind = match ? directCountBase(match[2]) : 'other'
+    counts.set(kind, (counts.get(kind) || 0) + 1)
+  }
+  return [...counts.entries()].filter(([, count]) => count > 0).map(([kind, count]) =>
+    `${count}${count === 1 ? kind : DIRECT_COUNT_PLURALS[kind]}`)
+}
+
+function directGroupProfileFor(subject, profiles) {
+  if (!subject) return null
+  return (subject.profileRef && allKnownProfiles(profiles).find((item) => item && item.ref === subject.profileRef)) ||
+    directProfileForPresenceName(subject.name, profiles)
+}
+
+function directGroupIsMiddleAged(profile) {
+  if (!profile) return false
+  const identity = Array.isArray(profile.identityTags)
+    ? profile.identityTags
+    : String(profile.identityTags || '').split(',')
+  const text = normalizeIdentityText([
+    profile.subject,
+    ...(profile.appearance || []),
+    ...identity,
+  ].join(' '))
+  return /\b(?:middle aged|mature (?:adult )?(?:man|woman|male|female)|(?:4[0-9]|5[0-9]|6[0-9]) years? old|forehead wrinkles|crow s feet)\b/.test(text)
+}
+
+function directGroupSubjectLabel(subject, profiles) {
+  const profile = directGroupProfileFor(subject, profiles)
+  const count = directGroupCountTag(subject, profiles)
+  let noun = count === '1girl' ? 'adult woman' : count === '1boy' ? 'adult man' : 'adult person'
+  if (directGroupIsMiddleAged(profile)) noun = `middle-aged ${noun}`
+  return `the ${noun} ${directGroupPositionPhrase(subject && subject.position)}`
+}
+
+function directGroupYouthCoded(value) {
+  return /\b(?:young adult(?: male| man| female| woman)?|young man|young woman|youthful(?: face)?|boyish|girlish|teenage|teenager|adolescent)\b/i.test(String(value || ''))
+}
+
+function neutralizeDirectGroupYouthText(value) {
+  return String(value || '')
+    .replace(/\byoung adult (?:male|man)\b/gi, 'adult man')
+    .replace(/\byoung adult (?:female|woman)\b/gi, 'adult woman')
+    .replace(/\byoung man\b/gi, 'adult man')
+    .replace(/\byoung woman\b/gi, 'adult woman')
+    .replace(/\b(?:youthful(?: face)?|boyish|girlish)\b/gi, '')
+    .replace(/\b(?:teenage|teenager|adolescent)\b/gi, 'adult')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .trim()
+}
+
+function directGroupIdentityTags(subject, profiles, rating, banned) {
+  const profile = directGroupProfileFor(subject, profiles)
+  if (!profile) return []
+  const explicitAdult = ['nsfw', 'explicit'].includes(String(rating || '').toLowerCase())
+  const baseNoun = /\b(?:adult|young adult|middle-aged|mature)\s+(?:man|woman|male|female)\b/i
+  let tags = directAnchorFor(profile).filter((tag) => !baseNoun.test(tag))
+  if (explicitAdult) tags = tags.filter((tag) => !directGroupYouthCoded(tag))
+  return uniqueStrings(applyBannedToList(tags, banned)).slice(0, 27)
+}
+
+function directGroupAnatomyTags(subject, profiles, rating, banned) {
+  if (!subject || !subject.includeSavedAnatomy || !['nsfw', 'explicit'].includes(String(rating || '').toLowerCase())) return []
+  const profile = directGroupProfileFor(subject, profiles)
+  if (!profile) return []
+  return uniqueStrings(applyBannedToList(animaTagList(profile.anatomy || []), banned)).slice(0, 8)
+}
+
+function directGroupReplaceNames(value, subjects, profiles) {
+  let text = String(value || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim()
+  const bindings = []
+  for (const subject of subjects || []) {
+    const profile = directGroupProfileFor(subject, profiles)
+    const label = directGroupSubjectLabel(subject, profiles)
+    const forms = uniqueStrings([
+      subject && subject.name,
+      profile && profile.anchor,
+      profile && profile.promptName,
+      profile && directSentenceName(profile),
+    ].filter(Boolean)).sort((a, b) => b.length - a.length)
+    for (const form of forms) bindings.push({ form, label })
+  }
+  bindings.sort((a, b) => b.form.length - a.form.length)
+  for (const binding of bindings) {
+    const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(binding.form)}(?=$|[^a-z0-9])`, 'gi')
+    text = text.replace(pattern, (whole, lead) => `${lead}${binding.label}`)
+  }
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function upperFirst(value) {
+  const text = String(value || '')
+  return text ? text[0].toUpperCase() + text.slice(1) : ''
+}
+
+function directGroupIsSpatial(image) {
+  return !!(image && Array.isArray(image.groupSubjects) && image.groupSubjects.length >= 3)
+}
+
+function serializeDirectGroupPrompt(image, profiles, banned, trace = null) {
+  const subjects = (image.groupSubjects || []).slice(0, 4)
+  const counts = directGroupCounts(subjects, profiles)
+  const lines = [`${counts.join(', ')},`]
+  const groupScene = directGroupReplaceNames(image.group_scene || image.scene_summary || '', subjects, profiles)
+  if (groupScene) lines.push(`Scene: ${groupScene.replace(/[.]+$/g, '')}.`)
+
+  const frame = String(image.prompt || '').split(/\bBREAK\b/)[0]
+    .split(',').map((tag) => tag.trim()).filter((tag) =>
+      tag && !DIRECT_COUNT_TAG_RE.test(tag) && !DIRECT_COUNT_FULL_RE.test(normalizeDirectCountTag(tag)))
+  const cameraEnvironment = uniqueStrings(applyBannedToList([
+    ...frame, ...(image.setting || []), ...(image.lighting || []),
+  ], banned))
+  if (cameraEnvironment.length) lines.push(`Camera and environment: ${cameraEnvironment.join(', ')}.`)
+
+  const explicitAdult = ['nsfw', 'explicit'].includes(String(image.rating || '').toLowerCase())
+  let youthRemoved = 0
+  for (const subject of subjects) {
+    const label = directGroupSubjectLabel(subject, profiles)
+    const identity = directGroupIdentityTags(subject, profiles, image.rating, banned)
+    const anatomy = directGroupAnatomyTags(subject, profiles, image.rating, banned)
+    const stable = uniqueStrings([...identity, ...anatomy])
+    if (stable.length) lines.push(`${upperFirst(label)} has ${stable.join(', ')}.`)
+    const identityKeys = new Set(stable.map(normalizeIdentityText))
+    let details = animaTagList(Array.isArray(subject.details)
+      ? subject.details
+      : String(subject.details || '').split(','))
+    details = applyBannedToList(details, banned).filter((tag) => {
+      if (identityKeys.has(normalizeIdentityText(tag))) return false
+      if (explicitAdult && directGroupYouthCoded(tag)) { youthRemoved++; return false }
+      return true
+    }).slice(0, 14)
+    if (details.length) lines.push(`${upperFirst(label)}: ${details.join(', ')}.`)
+  }
+
+  const shared = directGroupReplaceNames(image.shared_interaction || '', subjects, profiles)
+  if (shared) lines.push(`Shared interaction: ${shared.replace(/[.]+$/g, '')}.`)
+  const relation = directGroupReplaceNames(image.spatial_relation || '', subjects, profiles)
+  if (relation) lines.push(`Spatial relation: ${relation.replace(/[.]+$/g, '')}.`)
+  let serialized = directGroupReplaceNames(lines.filter(Boolean).join(' '), subjects, profiles)
+  if (explicitAdult) {
+    const neutralized = neutralizeDirectGroupYouthText(serialized)
+    if (neutralized !== serialized) youthRemoved++
+    serialized = neutralized
+  }
+  if (trace) {
+    trace('spatial group', 'applied',
+      `${subjects.length} subjects serialized with repeated positions and no BREAK` +
+      (youthRemoved ? ` · removed ${youthRemoved} youth-coded adult descriptor${youthRemoved === 1 ? '' : 's'}` : ''))
+  }
+  return serialized
+}
+
+function directGroupAdultDefences(image) {
+  if (!directGroupIsSpatial(image) || !['nsfw', 'explicit'].includes(String(image.rating || '').toLowerCase())) return []
+  return ['child', 'underage', 'teenager', 'preteen', 'toddler', 'shota', 'loli']
+}
+
 // The exact non-generating half of Direct mode. Automatic scans and lightbox
 // reparses both pass through here, so a preview is the prompt Draw Things would
 // actually receive rather than a compiler-shaped approximation.
@@ -8331,19 +8533,24 @@ function finalizeDirectImagePrompt(image, ctx) {
   if (image.moment_evidence) trace('moment evidence', 'clean', `"${image.moment_evidence}"`)
   if ((image.present || []).length) trace('presence roster', 'clean',
     image.present.map((entry) => `${entry.name}: "${entry.evidence}"`).join(' · '))
-  // scene_summary is extracted separately so the parser formats the existing
-  // passage instead of composing the action inside a free-form prompt. Insert
-  // it mechanically after the leading count tags, then run the same name and
-  // identity checks over the combined prompt that Draw Things will receive.
-  const summarized = injectDirectSceneSummary(
-    image.prompt,
-    image.scene_summary,
-    trace,
-    image.sceneSummaryWordLimit || 18)
-  let body = sanitizeDirectNames(summarized, profiles, trace)
-  const locked = applyIdentityLock(body, profiles, trace)
-  body = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
-    .join(', ').replace(/\s*,\s*BREAK\s*,\s*/g, ' BREAK ').replace(/\s{2,}/g, ' ').trim()
+  let body = ''
+  if (directGroupIsSpatial(image)) {
+    body = serializeDirectGroupPrompt(image, profiles, preset.bannedTags, trace)
+  } else {
+    // scene_summary is extracted separately so the parser formats the existing
+    // passage instead of composing the action inside a free-form prompt. Insert
+    // it mechanically after the leading count tags, then run the same name and
+    // identity checks over the combined prompt that Draw Things will receive.
+    const summarized = injectDirectSceneSummary(
+      image.prompt,
+      image.scene_summary,
+      trace,
+      image.sceneSummaryWordLimit || 18)
+    body = sanitizeDirectNames(summarized, profiles, trace)
+    const locked = applyIdentityLock(body, profiles, trace)
+    body = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
+      .join(', ').replace(/\s*,\s*BREAK\s*,\s*/g, ' BREAK ').replace(/\s{2,}/g, ' ').trim()
+  }
 
   const defences = directDefences(body, profiles, image.rating)
   if (defences.notes.length) {
@@ -8368,7 +8575,7 @@ function finalizeDirectImagePrompt(image, ctx) {
   const header = headerParts.join(', ')
   const prompt = joinPromptParts([header, image.rating || '', ...defences.positive, body])
   const negativePrompt = negativeWith(preset.negativePrompt || '',
-    uniqueStrings([...defences.negatives, ...countDefences.negatives]))
+    uniqueStrings([...defences.negatives, ...countDefences.negatives, ...directGroupAdultDefences(image)]))
   const detrapped = stripSubwordTraps(prompt)
   for (const hit of detrapped.hits) {
     trace('subword trap', 'applied', `removed ${hit.words.join(', ')} — ${hit.why}`)
@@ -8463,7 +8670,7 @@ async function runDirectImages(initialImages, ctx) {
       extra: preset.extra,
       dims,
       origin: { ...origin, mode: 'direct', alt: markdownAltText(finalPrompt) },
-      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, momentEvidence: image.moment_evidence || '', sceneSummary: image.scene_summary || '', aspect: image.aspect, rating: image.rating, present: image.present || [] } },
+      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, momentEvidence: image.moment_evidence || '', sceneSummary: image.scene_summary || '', aspect: image.aspect, rating: image.rating, present: image.present || [], spatialGroup: directGroupIsSpatial(image), groupSource: image.groupSource || '', groupScene: image.group_scene || '', groupSubjects: image.groupSubjects || [], sharedInteraction: image.shared_interaction || '', spatialRelation: image.spatial_relation || '' } },
     }, userId, scan)
     results.push({
       ok: true,
@@ -8548,8 +8755,10 @@ embellish, or rewrite the story. Extract only visible action, geometry, clothing
 identity, and camera tags. Do not add commentary or reasoning.
 
 OUTPUT — only this JSON, compact, no markdown, no commentary:
-{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","moment_evidence":"6-20 exact consecutive words from the CURRENT PASSAGE proving the depicted moment is occurring now","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
-Omit "setting" and "outfits" entirely when nothing has changed.
+{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","moment_evidence":"6-20 exact consecutive words from the CURRENT PASSAGE proving the depicted moment is occurring now","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","group_scene":"3/4-person scenes only: short name-free visual context","group_subjects":[{"name":"exact sheet name","position":"left|center|right|foreground|midground|background","include_saved_anatomy":false,"details":["complete current clothing","pose","one-person action","expression","gaze"]}],"shared_interaction":"3/4-person scenes only: one name-free joint action using spatial labels","spatial_relation":"3/4-person scenes only: one name-free placement statement using spatial labels","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
+Omit "group_scene", "group_subjects", "shared_interaction", and
+"spatial_relation" for one/two-person scenes. Omit "setting" and "outfits"
+entirely when nothing has changed.
 
 CHOOSING THE MOMENT
 - Illustrate only the CURRENT PASSAGE. Prior context resolves who and where;
@@ -8575,8 +8784,9 @@ PRESENCE — decide this first, before writing the prompt.
   picture. Many passages involve only one or two known people, but actual
   physical presence and the configured maximum decide the roster.
 - Use the exact sheet name in "present". A physically present stranger with no
-  sheet uses a two-word visual label instead. Every BREAK run must belong to
-  someone in "present". No run for anyone else, ever.
+  sheet uses a two-word visual label instead. Every legacy BREAK run or spatial
+  group subject must belong to someone in "present". No subject for anyone else,
+  ever.
 
 SCENE SUMMARY — the technical statement of what is depicted.
 - Write one plain sentence within the configured SCENE SUMMARY word limit.
@@ -8597,7 +8807,7 @@ SCENE SUMMARY — the technical statement of what is depicted.
 - LumiDraw inserts this field mechanically into the final prompt. Do not copy
   the sentence into the "prompt" string.
 
-PROMPT SHAPE — exactly this order inside the "prompt" field:
+PROMPT SHAPE — for ONE OR TWO people, exactly this order inside "prompt":
 1. Count tags for everyone in frame. These are real Danbooru tags — 1girl,
    2girls, 1boy — pluralized, never "2girl". The frame's total must equal the
    character runs that follow.
@@ -8612,6 +8822,33 @@ PROMPT SHAPE — exactly this order inside the "prompt" field:
    count tag, that person's SENTENCE NAME (or RUN LABEL), IDENTITY ANCHOR copied
    exactly; then anatomy (per the rule below), clothing, pose, action,
    expression. One character's traits never appear inside another's run.
+
+SPATIAL GROUP SHAPE — for THREE OR FOUR people only:
+- Do not write BREAK and do not put people, names, count tags, appearance,
+  clothing, actions, expressions, or relations inside "prompt". For a group,
+  "prompt" contains camera, setting, and lighting tags only.
+- Return one "group_subjects" entry for every person in "present", in visual
+  order. Use distinct, concrete positions such as left/center/right or
+  foreground/midground/background. "name" is the exact sheet name and is only
+  an internal binding; LumiDraw removes names before the diffusion prompt.
+- LumiDraw supplies permanent identity mechanically. "details" contains only
+  this subject's complete current clothing, pose, one-person action, expression,
+  and gaze as tight visual tags. Do not repeat permanent appearance there.
+- Set "include_saved_anatomy" true only when this nsfw/explicit picture visibly
+  exposes that subject's saved anatomy or the depicted act requires it. LumiDraw
+  copies the saved anatomy mechanically; never invent anatomy in "details".
+- Put a joint action or physical contact in "shared_interaction" exactly once,
+  using spatial labels such as "the adult man on the left" — never a name or a
+  pronoun. Put shared placement/distance in "spatial_relation" exactly once.
+- "group_scene" is one short name-free context clause. Do not repeat the shared
+  action, subject traits, clothing, camera, or environment in it.
+- ONE FACT, ONE OWNER. Every visible trait, garment, expression, pose, gaze, and
+  one-person action belongs to exactly one group subject. A shared interaction,
+  spatial relation, camera fact, or environment fact appears exactly once.
+- For nsfw/explicit adult scenes, never use youth-coded descriptors such as
+  "young man", "young adult male", "youthful", or "boyish". Use "adult man"
+  for the younger adult and distinguish only an older participant with supported
+  age facts such as "45 years old" or "middle-aged adult man".
 
 NAMES
 - Use the same vetted SENTENCE NAME in scene_summary and immediately after the
@@ -8638,7 +8875,8 @@ THE CHARACTER SHEETS ARE PASTE-EXACT TEXT, NOT NOTES.
 - Never invent appearance. A person the sheet does not cover is described from
   the passage alone, briefly.
 - Obey the configured MAXIMUM CHARACTERS PER IMAGE below. Include physically
-  participating people up to that limit, each with one separate BREAK run.
+  participating people up to that limit, each with one separate BREAK run for
+  one/two-person scenes or one spatial group subject for three/four-person scenes.
   Never add a bystander merely to fill the available slots.
 
 ANATOMY
@@ -8667,9 +8905,9 @@ mentioned recently.
 - Never invent garments. Someone in nothing but an oversized shirt is
   "no pants, barefoot" — say so instead of quietly adding jeans or shoes.
 - Body states (bulge, midriff, cleavage, navel) are not garments.
-- In a group image, keep every garment exclusively inside its owner's BREAK run,
-  immediately after that owner's identity/anatomy and before pose, action, and
-  expression. Never place clothing in the shared frame or borrow a visually
+- In a group image, keep every garment exclusively inside its owner's BREAK run
+  or spatial-subject details, before pose, action, and expression. Never place
+  clothing in the shared frame or borrow a visually
   strong garment from another sheet. When the established state explicitly says
   no footwear remains, keep "barefoot" beside that owner's bare-state tag; if
   footwear remains, name it in that same owner's run. Never fill an unstated
@@ -8746,7 +8984,7 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
     const lines = [name]
     const sentenceName = directSentenceName(profile)
     if (sentenceName) {
-      lines.push('  SENTENCE NAME: ' + sentenceName + ' — use this exact safe name in the scene sentence AND immediately after the count tag in this person\'s BREAK run')
+      lines.push('  SENTENCE NAME: ' + sentenceName + ' — use this exact safe name in scene_summary; for one/two people also use it after the count tag in the BREAK run; for three/four people use it only as the internal group_subjects name')
       if (normalizeIdentityText(sentenceName) !== normalizeIdentityText(name)) {
         lines.push('  REAL NAME IS UNSAFE IN IMAGE TEXT: never write "' + name + '"; use the SENTENCE NAME above')
       }
@@ -8755,7 +8993,7 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
       lines.push('  RUN LABEL: ' + directFallbackNoun(profile) + ' — use this exact label immediately after the count tag')
     }
     if (profile.countTag) lines.push('  COUNT TAG: ' + animaTag(profile.countTag))
-    if (anchor.length) lines.push('  IDENTITY ANCHOR (copy exactly): ' + anchor.join(', '))
+    if (anchor.length) lines.push('  IDENTITY ANCHOR: ' + anchor.join(', ') + ' — copy exactly into one/two-person BREAK runs; LumiDraw inserts it mechanically for spatial groups, so do not repeat it in group details')
     if ((profile.anatomy || []).length) {
       lines.push('  SAVED ANATOMY (the anatomy rule decides when): ' + animaTagList(profile.anatomy).join(', '))
     }
@@ -8855,7 +9093,7 @@ function subjectLimitRule(maxSubjects = 2) {
   if (max === 2) {
     return `MAXIMUM CHARACTERS PER IMAGE: 2. This is a hard ceiling and the proven reliability setting. If more than two people occupy the moment, choose the two whose participation carries it; a witness is left out. SCENE SUMMARY: at most ${summaryWords} words.`
   }
-  return `MAXIMUM CHARACTERS PER IMAGE: ${max}. This is a hard ceiling. When the chosen moment physically includes ${max} participating people, include all ${max}; do not collapse the scene to two merely because two is easier. If more than ${max} are present, keep the ${max} whose participation carries the moment. Every included person needs independent evidence and exactly one separate BREAK run. In a group scene, give every person exactly one supported physical role or position, keep every garment in its owner's run, and never imply an unnamed extra actor. Group scenes are less reliable, so keep positions and ownership exceptionally explicit. SCENE SUMMARY: at most ${summaryWords} words.`
+  return `MAXIMUM CHARACTERS PER IMAGE: ${max}. This is a hard ceiling. When the chosen moment physically includes ${max} participating people, include all ${max}; do not collapse the scene to two merely because two is easier. If more than ${max} are present, keep the ${max} whose participation carries the moment. Every included person needs independent evidence. A one/two-person image uses the proven BREAK-run format. A three/four-person image MUST use the spatial group fields and MUST NOT use BREAK. Give every group subject one distinct supported position, keep every fact and garment with exactly one owner, and never imply an unnamed extra actor. LumiDraw will serialize the spatial plan mechanically for Anima. SCENE SUMMARY: at most ${summaryWords} words.`
 }
 
 function buildDirectInstruction(profiles, options = {}) {
@@ -9343,13 +9581,108 @@ function directMomentContradiction(image) {
   }
 }
 
+function parseDirectGroupFields(item, prompt, present, presenceFieldDeclared, profiles, maximum, notes) {
+  if (maximum < 3) return { subjects: [], source: '' }
+  const allowedNames = new Set((present || []).map((entry) => normalizeIdentityText(entry && entry.name)).filter(Boolean))
+  const allowedProfileRefs = new Set((present || []).map((entry) => {
+    const profile = directProfileForPresenceName(entry && entry.name, profiles)
+    return profile && profile.ref
+  }).filter(Boolean))
+  const raw = Array.isArray(item.group_subjects) ? item.group_subjects : []
+  let source = raw.length ? 'parser spatial plan' : ''
+  let candidates = raw.map((entry) => ({
+    name: String((entry && entry.name) || '').trim().slice(0, 80),
+    position: String((entry && entry.position) || '').trim(),
+    countTag: String((entry && (entry.count_tag || entry.countTag)) || '').trim(),
+    includeSavedAnatomy: !!(entry && (entry.include_saved_anatomy || entry.includeSavedAnatomy)),
+    details: animaTagList(Array.isArray(entry && entry.details)
+      ? entry.details
+      : String((entry && entry.details) || '').split(',')).slice(0, 14),
+  }))
+
+  if (candidates.length < 3) {
+    const legacy = String(prompt || '').split(/\bBREAK\b/).slice(1).map((run) => {
+      const tags = run.split(',').map((tag) => tag.trim()).filter(Boolean)
+      const profile = matchDirectRunProfile(run, profiles)
+      const heading = tags[1] || ''
+      return {
+        name: (profile && (profile.anchor || profile.promptName || profile.ref)) || heading,
+        profileRef: profile && profile.ref,
+        countTag: tags[0] || (profile && profile.countTag) || '',
+        position: '',
+        includeSavedAnatomy: !!(profile && (profile.anatomy || []).some((tag) =>
+          normalizeIdentityText(run).includes(normalizeIdentityText(tag)))),
+        details: tags.slice(profile ? 2 : 1),
+      }
+    }).filter((entry) => entry.name)
+    if (legacy.length >= 3) {
+      candidates = legacy
+      source = 'legacy BREAK fallback'
+      notes.push('converted the parser\'s three/four-person BREAK runs into the spatial group format')
+    } else if ((present || []).length >= 3) {
+      candidates = present.map((entry) => {
+        const profile = directProfileForPresenceName(entry.name, profiles)
+        return {
+          name: entry.name,
+          profileRef: profile && profile.ref,
+          countTag: (profile && profile.countTag) || '',
+          position: '',
+          includeSavedAnatomy: false,
+          details: [],
+        }
+      })
+      source = 'presence fallback'
+      notes.push('the parser omitted spatial subjects; built their identity bindings from the validated presence roster')
+    }
+  }
+
+  const subjects = []
+  const used = new Set()
+  for (const entry of candidates.slice(0, maximum)) {
+    const profile = (entry.profileRef && allKnownProfiles(profiles).find((item) => item && item.ref === entry.profileRef)) ||
+      directProfileForPresenceName(entry.name, profiles)
+    const nameKey = normalizeIdentityText(entry.name)
+    if (presenceFieldDeclared && !allowedNames.has(nameKey) && !(profile && allowedProfileRefs.has(profile.ref))) {
+      notes.push(`dropped spatial subject "${entry.name || 'unnamed'}" — not in the validated present roster`)
+      continue
+    }
+    const key = (profile && `profile:${profile.ref}`) || `name:${nameKey}`
+    if (!nameKey || used.has(key)) continue
+    used.add(key)
+    subjects.push({
+      name: entry.name,
+      profileRef: profile && profile.ref,
+      countTag: String((profile && profile.countTag) || entry.countTag || '1other'),
+      position: entry.position,
+      includeSavedAnatomy: !!entry.includeSavedAnatomy,
+      details: animaTagList(entry.details || []).slice(0, 14),
+    })
+  }
+  if (subjects.length < 3) return { subjects: [], source: '' }
+
+  const fallbacks = directGroupFallbackPositions(subjects.length)
+  const occupied = new Set()
+  for (let index = 0; index < subjects.length; index++) {
+    let position = normalizeDirectGroupPosition(subjects[index].position, index, subjects.length)
+    if (occupied.has(position)) {
+      position = fallbacks.find((candidate) => !occupied.has(candidate)) || `position-${index + 1}`
+      notes.push(`gave ${subjects[index].name} a distinct spatial position (${position})`)
+    }
+    subjects[index].position = position
+    occupied.add(position)
+  }
+  return { subjects, source }
+}
+
 // Compare the validated roster with the runs that survived parsing. Missing
 // validated people are enough to retry: an extra wrong run may already have been
 // removed by dropUndeclaredRuns, so requiring an extra here would hide the exact
 // Jamie/Erin failure after the guard did its first job.
 function directPresenceContradictions(image, profiles) {
-  const runs = String((image && image.prompt) || '').split(/\bBREAK\b/).slice(1)
-    .map((run) => matchDirectRunProfile(run, profiles)).filter(Boolean)
+  const runs = directGroupIsSpatial(image)
+    ? (image.groupSubjects || []).map((subject) => directGroupProfileFor(subject, profiles)).filter(Boolean)
+    : String((image && image.prompt) || '').split(/\bBREAK\b/).slice(1)
+      .map((run) => matchDirectRunProfile(run, profiles)).filter(Boolean)
   const runRefs = new Set(runs.map((p) => p.ref))
   const expected = []
   for (const entry of (image && image.present) || []) {
@@ -9487,6 +9820,12 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
     } else {
       spindle.log.info('[lumidraw] direct · moment evidence · "' + momentEvidence + '"')
     }
+    const group = parseDirectGroupFields(
+      item, prompt, present, presenceFieldDeclared, profiles, subjectMaximum, notes)
+    if (group.subjects.length) {
+      spindle.log.info(`[lumidraw] direct · spatial group · ${group.subjects.map((subject) =>
+        `${subject.name} ${subject.position}`).join(' · ')} (${group.source})`)
+    }
     images.push({
       anchor: String(item.anchor || '').trim(),
       prompt,
@@ -9499,6 +9838,11 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
       present,
       presenceFieldDeclared,
       rating: ANIMA_SAFETY_TAGS.includes(ratingRaw) ? ratingRaw : '',
+      group_scene: String(item.group_scene || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 320),
+      groupSubjects: group.subjects,
+      groupSource: group.source,
+      shared_interaction: String(item.shared_interaction || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 420),
+      spatial_relation: String(item.spatial_relation || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 320),
       setting: animaTagList(tagsFrom(item.setting || [], 8)),
       // Accepted for forward compatibility if a parser returns it, though the
       // compact Direct schema does not require a lighting sidecar.
@@ -12287,7 +12631,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
           momentEvidence: item.moment_evidence || '',
           sceneStatement: item.scene_summary || directSceneSentence(item.prompt),
           prompt: finalized.prompt,
-          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, momentEvidence: item.moment_evidence || '', sceneSummary: item.scene_summary || '', aspect: item.aspect, rating: item.rating, present: item.present || [] } },
+          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, momentEvidence: item.moment_evidence || '', sceneSummary: item.scene_summary || '', aspect: item.aspect, rating: item.rating, present: item.present || [], spatialGroup: directGroupIsSpatial(item), groupSource: item.groupSource || '', groupScene: item.group_scene || '', groupSubjects: item.groupSubjects || [], sharedInteraction: item.shared_interaction || '', spatialRelation: item.spatial_relation || '' } },
           aspect: item.aspect || '',
           negativePrompt: finalized.negativePrompt,
           trace: traceLines,

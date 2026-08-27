@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.20'
+const EXTENSION_VERSION = '1.3.21'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -989,7 +989,7 @@ function realSetup(ctx) {
                 <input type="checkbox" class="ld-direct-mode" />
                 <span><strong>Direct mode</strong> — let the parser write the prompt</span>
               </label>
-              <div class="ld-help" style="margin-top:4px">The parser gets your character sheets, the wardrobe of record and the place, and writes the finished Danbooru prompt itself. None of the compiler runs: no garment substitutes, no inferred orientation, no species negatives. Only your <strong>Always include</strong> tags are checked, and they are only ever added back, never rewritten. Off = the existing pipeline, unchanged.</div>
+              <div class="ld-help" style="margin-top:4px">The parser gets your character sheets, wardrobe, and place. With one or two people it writes the finished Danbooru prompt. With three or four it returns a spatial plan that LumiDraw formats into left/center/right subject clauses for Anima. The older compiler stays off: no garment substitutes or inferred orientation. Off = the existing pipeline, unchanged.</div>
             </div>
             <div class="ld-row" style="margin-top:9px">
               <div><span class="ld-label">Minimum images (0 = model decides)</span><input class="ld-minimg" type="number" min="0" max="4" step="1" /></div>
@@ -999,10 +999,10 @@ function realSetup(ctx) {
               <span class="ld-label">Maximum characters per image (Direct mode)</span>
               <select class="ld-maxsubjects">
                 <option value="2">2 — proven default</option>
-                <option value="3">3 — group scenes</option>
-                <option value="4">4 — experimental</option>
+                <option value="3">3 — spatial group mode</option>
+                <option value="4">4 — experimental spatial group</option>
               </select>
-              <div class="ld-help" style="margin-top:3px">Two remains the reliable fallback. Three and four preserve more participants but increase identity, clothing, and positioning errors.</div>
+              <div class="ld-help" style="margin-top:3px">Two remains the unchanged reliable fallback. Three and four use repeated spatial labels, one owner per detail, and no BREAK separators. They preserve more participants but remain experimental.</div>
             </div>
           </div>
           <div class="ld-card">
@@ -1630,7 +1630,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     imageCount.appendChild(field('Maximum images', controls.maxImages))
     behavior.appendChild(imageCount)
     behavior.appendChild(field('Maximum characters per image (Direct mode)', controls.maxSubjects,
-      '2 is the proven default. 3 and 4 keep larger group scenes intact but increase identity, clothing, and positioning errors.'))
+      '2 keeps the unchanged BREAK format. 3 and 4 use repeated spatial labels and one owner per detail, with no BREAK separators.'))
     setup.appendChild(behavior)
 
     const display = card('Chat image display')
