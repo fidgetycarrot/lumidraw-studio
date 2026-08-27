@@ -77,6 +77,7 @@ const DEFAULT_SETTINGS = {
   useLoomLedger: true,     // Anima only: extract the latest <loomledger> block as continuity reference
   maxImages: 2,           // max illustrations per story message
   minImages: 0,           // required illustrations per reply (0 = model's discretion)
+  maxSubjects: 2,         // Direct mode: maximum separately-described people in one image
   autoCharTags: true,     // use active character image tags as a profile fallback
   directMode: false,      // the parser writes the finished prompt; the compiler does not run
   chatLeads: true,        // the chat's own character and persona outrank the cast's
@@ -156,6 +157,7 @@ async function getSettings() {
   settings.directMode = settings.mode === 'direct'
   settings.subjectBinding = settings.parserEngine === 'anima' // backward-compatible debug/profile flag
   settings.parserContextMessages = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
+  settings.maxSubjects = Math.max(2, Math.min(4, Number(settings.maxSubjects) || 2))
   settings.useLoomLedger = settings.useLoomLedger !== false
   settings.optimizedPreviews = settings.optimizedPreviews !== false
   settings.deleteImagesWithChats = settings.deleteImagesWithChats !== false
@@ -8288,7 +8290,12 @@ async function reconcileDirectPresence(initialImages, ctx) {
     'Re-read the CURRENT PASSAGE, verify each 3-8 word evidence quote, and rewrite in the SAME JSON format.'
   try {
     const retryRaw = await quietLLM(retryInstruction, parserInput.input, settings, userId, true, scan || null)
-    const retry = parseDirectImages(retryRaw, settings.maxImages || images.length || 1, profiles, passage)
+    const retry = parseDirectImages(
+      retryRaw,
+      settings.maxImages || images.length || 1,
+      profiles,
+      passage,
+      settings.maxSubjects || 2)
     const retryBad = retry.images.map((image) => directPresenceContradictions(image, profiles)).filter(Boolean)
     const retryScore = contradictionScore(retryBad)
     if (retry.images.length && retryScore < firstScore) {
@@ -8317,7 +8324,11 @@ function finalizeDirectImagePrompt(image, ctx) {
   // passage instead of composing the action inside a free-form prompt. Insert
   // it mechanically after the leading count tags, then run the same name and
   // identity checks over the combined prompt that Draw Things will receive.
-  const summarized = injectDirectSceneSummary(image.prompt, image.scene_summary, trace)
+  const summarized = injectDirectSceneSummary(
+    image.prompt,
+    image.scene_summary,
+    trace,
+    image.sceneSummaryWordLimit || 18)
   let body = sanitizeDirectNames(summarized, profiles, trace)
   const locked = applyIdentityLock(body, profiles, trace)
   body = applyBannedToList(locked.prompt.split(','), preset.bannedTags)
@@ -8359,18 +8370,19 @@ function directSceneSentence(prompt) {
   return tags[index] || ''
 }
 
-function normalizeDirectSceneSummary(value) {
+function normalizeDirectSceneSummary(value, maxWords = 18) {
+  const limit = Math.max(18, Math.min(30, Number(maxWords) || 18))
   const compact = String(value || '')
     .replace(/\bBREAK\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 200)
+    .slice(0, 320)
   if (!compact) return ''
-  return compact.split(/\s+/).slice(0, 18).join(' ')
+  return compact.split(/\s+/).slice(0, limit).join(' ')
 }
 
-function injectDirectSceneSummary(prompt, summary, trace = null) {
-  const sentence = normalizeDirectSceneSummary(summary)
+function injectDirectSceneSummary(prompt, summary, trace = null, maxWords = 18) {
+  const sentence = normalizeDirectSceneSummary(summary, maxWords)
   const raw = String(prompt || '').trim()
   if (!sentence || !raw) return raw
   const blocks = raw.split(/\bBREAK\b/).map((block) => block.trim())
@@ -8517,7 +8529,7 @@ embellish, or rewrite the story. Extract only visible action, geometry, clothing
 identity, and camera tags. Do not add commentary or reasoning.
 
 OUTPUT — only this JSON, compact, no markdown, no commentary:
-{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence, at most 18 words, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
+{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
 Omit "setting" and "outfits" entirely when nothing has changed.
 
 CHOOSING THE MOMENT
@@ -8533,14 +8545,16 @@ PRESENCE — decide this first, before writing the prompt.
 - Talked about, remembered, phoned, imagined, expected, or arriving next is NOT
   present. A person who only appears inside dialogue has no action evidence.
 - The character sheets are everyone this story knows, not everyone in the
-  picture. Most passages involve one or two known people.
+  picture. Many passages involve only one or two known people, but actual
+  physical presence and the configured maximum decide the roster.
 - Use the exact sheet name in "present". A physically present stranger with no
   sheet uses a two-word visual label instead. Every BREAK run must belong to
   someone in "present". No run for anyone else, ever.
 
 SCENE SUMMARY — the technical statement of what is depicted.
-- Write one plain sentence, at most 18 words. State visible action and geometry
-  once; include no appearance, clothing, scenery, camera, lighting, or rating.
+- Write one plain sentence within the configured SCENE SUMMARY word limit.
+  State visible action and geometry once; include no appearance, clothing,
+  scenery, camera, lighting, or rating.
 - Use each known person's vetted SENTENCE NAME from the sheet. The summary is
   the roster: every known character run below must belong to someone named here.
   If a sheet has no SENTENCE NAME, use its supplied pronoun instead.
@@ -8589,9 +8603,9 @@ THE CHARACTER SHEETS ARE PASTE-EXACT TEXT, NOT NOTES.
   the passage failed to repeat it. What the sheet states is true in every image.
 - Never invent appearance. A person the sheet does not cover is described from
   the passage alone, briefly.
-- AT MOST TWO characters per image. Three or more is where this model swaps
-  faces, bodies, and clothes; choose the two whose moment carries the scene. A
-  third person who merely witnesses the beat is left out, not squeezed in.
+- Obey the configured MAXIMUM CHARACTERS PER IMAGE below. Include physically
+  participating people up to that limit, each with one separate BREAK run.
+  Never add a bystander merely to fill the available slots.
 
 ANATOMY
 - ALWAYS INCLUDE traits are part of the identity anchor and appear in every
@@ -8786,8 +8800,26 @@ function countRule(maxImages = 2) {
   return `HOW MANY: return ONE image. Most passages have one moment worth drawing, and one good picture beats two where the second is filler. Add a second ONLY if the passage genuinely contains another distinct moment — a different place, a different pair of people, a real change of situation — not a second angle on the same beat. Never more than ${max}. The limit is a ceiling, not a target.`
 }
 
+function directSubjectLimit(value = 2) {
+  return Math.max(2, Math.min(4, Number(value) || 2))
+}
+
+function directSceneSummaryWordLimit(maxSubjects = 2) {
+  return { 2: 18, 3: 24, 4: 30 }[directSubjectLimit(maxSubjects)]
+}
+
+function subjectLimitRule(maxSubjects = 2) {
+  const max = directSubjectLimit(maxSubjects)
+  const summaryWords = directSceneSummaryWordLimit(max)
+  if (max === 2) {
+    return `MAXIMUM CHARACTERS PER IMAGE: 2. This is a hard ceiling and the proven reliability setting. If more than two people occupy the moment, choose the two whose participation carries it; a witness is left out. SCENE SUMMARY: at most ${summaryWords} words.`
+  }
+  return `MAXIMUM CHARACTERS PER IMAGE: ${max}. This is a hard ceiling. When the chosen moment physically includes ${max} participating people, include all ${max}; do not collapse the scene to two merely because two is easier. If more than ${max} are present, keep the ${max} whose participation carries the moment. Every included person needs independent evidence and exactly one separate BREAK run. Group scenes are less reliable, so keep positions and ownership exceptionally explicit. SCENE SUMMARY: at most ${summaryWords} words.`
+}
+
 function buildDirectInstruction(profiles, options = {}) {
-  return [DIRECT_RULES.trim(), '', countRule(options.maxImages), '', directContext(profiles, options)].join('\n')
+  return [DIRECT_RULES.trim(), '', countRule(options.maxImages), '',
+    subjectLimitRule(options.maxSubjects), '', directContext(profiles, options)].join('\n')
 }
 
 // The scene the parser writes, with nothing but structural checks. `prompt` is
@@ -9002,6 +9034,7 @@ function firstDirectTag(block) {
 }
 
 function limitDirectSubjectRuns(prompt, maxSubjects = 2) {
+  const maximum = directSubjectLimit(maxSubjects)
   const notes = []
   const blocks = String(prompt || '').split(/\bBREAK\b/).map((b) => b.trim()).filter(Boolean)
   if (blocks.length < 2) return { prompt: String(prompt || ''), notes }
@@ -9015,9 +9048,9 @@ function limitDirectSubjectRuns(prompt, maxSubjects = 2) {
   }
   if (!subjectRuns.length) return { prompt: String(prompt || ''), notes }
 
-  const kept = subjectRuns.slice(0, Math.max(1, maxSubjects))
-  for (const run of subjectRuns.slice(Math.max(1, maxSubjects))) {
-    notes.push(`dropped an extra character run ("${run.split(',').slice(0, 3).join(', ')}…") — Anima is capped at two described subjects`)
+  const kept = subjectRuns.slice(0, maximum)
+  for (const run of subjectRuns.slice(maximum)) {
+    notes.push(`dropped an extra character run ("${run.split(',').slice(0, 3).join(', ')}…") — the configured maximum is ${maximum} described subjects`)
   }
 
   const normalizedRuns = kept.map((run) => {
@@ -9246,7 +9279,9 @@ function directPresenceContradictions(image, profiles) {
   return (missing.length || extra.length) ? { missing, extra, source: 'present' } : null
 }
 
-function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '') {
+function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', maxSubjects = 2) {
+  const subjectMaximum = directSubjectLimit(maxSubjects)
+  const summaryWordLimit = directSceneSummaryWordLimit(subjectMaximum)
   let text = extractParserText(raw)
   const parsed = (() => {
     try { return JSON.parse(sanitizeJsonText(text)) } catch { /* fall through */ }
@@ -9311,7 +9346,7 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '') {
     if (declared.skipped && !presenceFieldDeclared) {
       spindle.log.info('[lumidraw] direct · presence check skipped — the parser omitted the present field')
     }
-    const limited = limitDirectSubjectRuns(declared.prompt, 2)
+    const limited = limitDirectSubjectRuns(declared.prompt, subjectMaximum)
     const deduped = dedupeDirectRuns(limited.prompt, profiles)
     const prompt = deduped.prompt
     const notes = [...declared.notes, ...limited.notes, ...deduped.notes]
@@ -9331,11 +9366,12 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '') {
         if (list.length) outfits[name] = list
       }
     }
-    const sceneSummary = normalizeDirectSceneSummary(item.scene_summary)
+    const sceneSummary = normalizeDirectSceneSummary(item.scene_summary, summaryWordLimit)
     images.push({
       anchor: String(item.anchor || '').trim(),
       prompt,
       scene_summary: sceneSummary,
+      sceneSummaryWordLimit: summaryWordLimit,
       aspect: VALID_ASPECTS.has(String(item.aspect || '')) ? String(item.aspect) : '3:4',
       notes,
       present,
@@ -11574,6 +11610,7 @@ async function scanStoryCore(userId, options = {}) {
       const instruction = directMode
         ? buildDirectInstruction(profilesForPrompt, {
           maxImages: settings.maxImages || 2,
+          maxSubjects: settings.maxSubjects || 2,
           wardrobe: (rememberedState && rememberedState.outfits) || null,
           clothingDigest: digest,
           places: savedPlacesForParser,
@@ -11592,7 +11629,7 @@ async function scanStoryCore(userId, options = {}) {
       assertStoryScanActive(scan)
       setStoryScanStage(scan, 'compiling', 'Parser returned structured JSON; compiling the Anima prompt.')
       if (directMode) {
-        const direct = parseDirectImages(out, settings.maxImages || 2, profiles, passage)
+        const direct = parseDirectImages(out, settings.maxImages || 2, profiles, passage, settings.maxSubjects || 2)
         if (!direct.images.length) {
           // A refusal is a decision, not a fault. Reported as itself, at info
           // rather than warn, and WITHOUT the "Direct mode:" prefix that made it
@@ -12053,6 +12090,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const instruction = directMode
     ? buildDirectInstruction(profilesForPrompt, {
       maxImages: settings.maxImages || 2,
+      maxSubjects: settings.maxSubjects || 2,
       wardrobe: (rememberedState && rememberedState.outfits) || null,
       clothingDigest: reparseDigest,
       places: savedPlacesForParser,
@@ -12078,7 +12116,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   let parseError = ''
   const results = []
   if (directMode) {
-    const direct = parseDirectImages(raw, settings.maxImages || 2, profiles, passage)
+    const direct = parseDirectImages(raw, settings.maxImages || 2, profiles, passage, settings.maxSubjects || 2)
     if (!direct.images.length) {
       parseError = direct.error || 'Direct mode returned no usable prompt.'
     } else {
@@ -12327,6 +12365,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         }
         if (payload.minImages !== undefined) {
           settings.minImages = Math.max(0, Math.min(4, Number(payload.minImages) || 0))
+        }
+        if (payload.maxSubjects !== undefined) {
+          settings.maxSubjects = Math.max(2, Math.min(4, Number(payload.maxSubjects) || 2))
         }
         await spindle.storage.setJson(SETTINGS_FILE, settings, { indent: 2 })
         reply = ok(payload, requestId, { settings })

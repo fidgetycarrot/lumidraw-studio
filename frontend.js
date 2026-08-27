@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.18'
+const EXTENSION_VERSION = '1.3.19'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -995,6 +995,15 @@ function realSetup(ctx) {
               <div><span class="ld-label">Minimum images (0 = model decides)</span><input class="ld-minimg" type="number" min="0" max="4" step="1" /></div>
               <div><span class="ld-label">Maximum images</span><input class="ld-maximg" type="number" min="1" max="4" step="1" /></div>
             </div>
+            <div style="margin-top:9px">
+              <span class="ld-label">Maximum characters per image (Direct mode)</span>
+              <select class="ld-maxsubjects">
+                <option value="2">2 — proven default</option>
+                <option value="3">3 — group scenes</option>
+                <option value="4">4 — experimental</option>
+              </select>
+              <div class="ld-help" style="margin-top:3px">Two remains the reliable fallback. Three and four preserve more participants but increase identity, clothing, and positioning errors.</div>
+            </div>
           </div>
           <div class="ld-card">
             <span class="ld-label ld-parser-instruction-label">Legacy parser instruction</span>
@@ -1536,6 +1545,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       deleteChatImages: $('.ld-delete-chat-images'),
       minImages: $('.ld-minimg'),
       maxImages: $('.ld-maximg'),
+      maxSubjects: $('.ld-maxsubjects'),
       parserEngine: $('.ld-parser-engine'),
       parserEngineNote: $('.ld-parser-engine-note'),
       parserContext: $('.ld-parser-context'),
@@ -1619,6 +1629,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     imageCount.appendChild(field('Minimum images', controls.minImages, '0 lets the model decide.'))
     imageCount.appendChild(field('Maximum images', controls.maxImages))
     behavior.appendChild(imageCount)
+    behavior.appendChild(field('Maximum characters per image (Direct mode)', controls.maxSubjects,
+      '2 is the proven default. 3 and 4 keep larger group scenes intact but increase identity, clothing, and positioning errors.'))
     setup.appendChild(behavior)
 
     const display = card('Chat image display')
@@ -5696,6 +5708,7 @@ ${entry.prompt || ''}`.trim()
       protocol: $('.ld-protocol').value,
       maxImages: $('.ld-maximg').value,
       minImages: $('.ld-minimg').value,
+      maxSubjects: $('.ld-maxsubjects') ? $('.ld-maxsubjects').value : 2,
       autoCharTags: $('.ld-chartags').checked,
       directMode: storyMode === 'direct',
       chatLeads: $('.ld-chat-leads') ? $('.ld-chat-leads').checked : true,
@@ -5853,7 +5866,7 @@ ${entry.prompt || ''}`.trim()
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-maximg', '.ld-minimg', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break']) {
+  for (const sel of ['.ld-mode', '.ld-maximg', '.ld-minimg', '.ld-maxsubjects', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-mode') {
@@ -6201,6 +6214,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-autoscan').checked = settings.autoScan !== false
       $('.ld-maximg').value = settings.maxImages || 2
       $('.ld-minimg').value = settings.minImages || 0
+      if ($('.ld-maxsubjects')) $('.ld-maxsubjects').value = String(settings.maxSubjects || 2)
       $('.ld-chartags').checked = settings.autoCharTags !== false
       // Direct mode is represented by the main mode selector. The backend
       // still mirrors directMode for compatibility with older saved settings.
