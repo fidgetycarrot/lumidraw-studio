@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.21'
+const EXTENSION_VERSION = '1.3.22'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -2615,6 +2615,11 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     }
     input.setAttribute('data-dt-key', key)
     input.setAttribute('data-dt-kind', kind)
+    // Keep the workspace snapshot current while a number/text field is being
+    // edited. Mobile browsers can defer "change" until well after a nearby
+    // button tap; listening to input prevents Update preset from racing a
+    // visibly edited high-res width or height.
+    if (kind !== 'select') input.addEventListener('input', onDraftControlChange)
     input.addEventListener('change', onDraftControlChange)
     wrap.appendChild(input)
     return wrap

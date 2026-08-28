@@ -1094,8 +1094,8 @@ function describeDtRejection(message) {
   if (ranged) {
     return `Draw Things will not accept the value LumiDraw captured for ${ranged[1]}: it must be${ranged[2]}. ` +
       `This usually means the value is meaningful inside the Draw Things app but not through its generation API — ` +
-      `-1 for "off", for instance. ${ranged[1]} has been dropped and will be omitted from now on, so Draw Things ` +
-      `uses its own setting. Clear the list in Settings if you change it there.`
+      `-1 for "off", for instance. LumiDraw could not safely remove the corresponding request field, so this generation stopped. ` +
+      `Clear the compatibility list in Settings after changing that setting in Draw Things.`
   }
   const match = /Unrecognized keys:\s*\[([^\]]*)\]/i.exec(text)
   if (!match) return text
@@ -1116,6 +1116,77 @@ function describeDtRejection(message) {
 const RESERVED_PAYLOAD_KEYS = new Set(['prompt', 'negative_prompt', 'seed', 'batch_count'])
 const RESERVED_CANONICAL = new Set(['prompt', 'negativeprompt', 'seed', 'batchcount'])
 
+const canonicalPayloadKey = (key) => String(key).toLowerCase().replace(/[_-]/g, '')
+
+// Draw Things accepts its public request names but sometimes reports a different
+// internal name in validation errors. Treat each row as one setting so the
+// rejection learner removes and remembers the key that is actually in our
+// payload instead of claiming the setting is only active inside Draw Things.
+const DT_REJECTION_KEY_GROUPS = [
+  ['hires_fix_width', 'hires_first_pass_width', 'hiresFixWidth', 'hiresFirstPassWidth'],
+  ['hires_fix_height', 'hires_first_pass_height', 'hiresFixHeight', 'hiresFirstPassHeight'],
+]
+
+function equivalentDtPayloadKeys(left, right) {
+  const a = canonicalPayloadKey(left)
+  const b = canonicalPayloadKey(right)
+  if (a === b) return true
+  return DT_REJECTION_KEY_GROUPS.some((group) => {
+    const canonicalGroup = group.map(canonicalPayloadKey)
+    return canonicalGroup.includes(a) && canonicalGroup.includes(b)
+  })
+}
+
+function payloadKeysForRejections(rejectedKeys, payload) {
+  const matches = []
+  for (const payloadKey of Object.keys(payload || {})) {
+    if ((rejectedKeys || []).some((rejectedKey) => equivalentDtPayloadKeys(rejectedKey, payloadKey))) {
+      matches.push(payloadKey)
+    }
+  }
+  return matches
+}
+
+function falseLike(value) {
+  if (value === false || value === 0) return true
+  return ['false', 'off', 'no', 'disabled', '0'].includes(String(value || '').trim().toLowerCase())
+}
+
+function sanitizeDrawThingsPayload(payload) {
+  const keys = Object.keys(payload || {})
+  const hiresToggle = keys.find((key) => canonicalPayloadKey(key) === 'hiresfix')
+  const hiresDependent = new Set([
+    'hiresfixwidth', 'hiresfixheight', 'hiresfixstrength',
+    'hiresfirstpasswidth', 'hiresfirstpassheight',
+  ])
+  const hiresDimensions = new Set([
+    'hiresfixwidth', 'hiresfixheight', 'hiresfirstpasswidth', 'hiresfirstpassheight',
+  ])
+  const dropped = []
+
+  for (const key of keys) {
+    const canonical = canonicalPayloadKey(key)
+    if (hiresToggle && falseLike(payload[hiresToggle]) && hiresDependent.has(canonical)) {
+      delete payload[key]
+      dropped.push(key)
+      continue
+    }
+    if (hiresDimensions.has(canonical)) {
+      const dimension = Number(payload[key])
+      if (!Number.isFinite(dimension) || dimension < 128 || dimension > 2048) {
+        delete payload[key]
+        dropped.push(key)
+      }
+    }
+  }
+
+  if (dropped.length) {
+    spindle.log.info('[lumidraw] omitted inactive or invalid high-res setting(s): ' + dropped.join(', ') +
+      ' — the saved preset is unchanged and Draw Things will use its own dormant values.')
+  }
+  return payload
+}
+
 function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   const payload = {}
 
@@ -1132,14 +1203,13 @@ function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   // The same name printed twice is the tell — one canonical setting reached by
   // two spellings. Sync captures snake_case from GET /; a preset's extras may
   // hold camelCase. Both are distinct JavaScript keys and neither looks wrong.
-  const canonicalKey = (key) => String(key).toLowerCase().replace(/[_-]/g, '')
   const seenByCanonical = new Map()
 
   const assign = (source) => {
     if (!source || typeof source !== 'object') return
     for (const [key, value] of Object.entries(source)) {
       if (value === undefined || value === null || value === '') continue
-      const canonical = canonicalKey(key)
+      const canonical = canonicalPayloadKey(key)
       if (RESERVED_CANONICAL.has(canonical)) {
         if (!RESERVED_PAYLOAD_KEYS.has(key)) {
           spindle.log.info(`[lumidraw] ignoring "${key}" from the preset — LumiDraw sets that per request. ` +
@@ -1162,6 +1232,7 @@ function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   // Extras first so the visible workspace/preset always wins on conflict.
   assign(extra)
   assign(config)
+  sanitizeDrawThingsPayload(payload)
 
   payload.prompt = prompt || ''
   if (negativePrompt) payload.negative_prompt = negativePrompt
@@ -1297,7 +1368,11 @@ function rejectedKeysIn(message) {
 
 async function dtGenerate(settings, payload, attempt = 0) {
   const rejected = await getRejectedKeys()
-  const dropped = Object.keys(payload).filter((key) => rejected.has(key) && !RESERVED_PAYLOAD_KEYS.has(key))
+  // Match aliases here too. Older LumiDraw builds may have remembered the
+  // internal name from Draw Things while the outgoing payload uses its public
+  // name (hires_first_pass_height vs hires_fix_height, for example).
+  const dropped = payloadKeysForRejections([...rejected], payload)
+    .filter((key) => !RESERVED_PAYLOAD_KEYS.has(key))
   if (dropped.length) {
     for (const key of dropped) delete payload[key]
     spindle.log.info('[lumidraw] omitted setting(s) Draw Things has rejected before: ' + dropped.join(', '))
@@ -1323,7 +1398,7 @@ async function dtGenerate(settings, payload, attempt = 0) {
     // first one it trips over — so retrying ONCE meant one failed generation
     // per bad key before the config settled. Now it converges within a single
     // generation.
-    const stillPresent = offenders.filter((key) => key in payload)
+    const stillPresent = payloadKeysForRejections(offenders, payload)
     if (stillPresent.length && attempt < 5) {
       await rememberRejectedKeys(stillPresent)
       spindle.log.warn('[lumidraw] Draw Things refused ' + stillPresent.join(', ') +
