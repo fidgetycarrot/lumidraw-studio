@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.22'
+const EXTENSION_VERSION = '1.3.23'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -4640,6 +4640,7 @@ ${entry.prompt || ''}`.trim()
       const sourceLabels = {
         manual: 'manually set',
         'latest-passage': 'synced from latest passage',
+        'scene-card': 'updated from the scene card',
         'story-parser': 'updated by the story parser',
         'story-declaration': 'updated by the story declaration',
         remembered: 'remembered wardrobe',
