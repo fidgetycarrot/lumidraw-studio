@@ -8561,7 +8561,7 @@ async function reconcileDirectGrounding(initialImages, ctx) {
     '\n\nYOUR PREVIOUS ATTEMPT WAS REJECTED. Its physical-presence roster, character runs, or depicted moment was not grounded correctly. ' +
     `The mismatch was: ${detail}. ` +
     'Every validated present person needs exactly one matching BREAK run (one/two people) or spatial group subject (three/four people), and no subject may bind a different known sheet. ' +
-    'The moment_evidence must be an exact 6-20 word quote proving the pictured action or visible state is occurring NOW. ' +
+    'The moment_evidence must be an exact 3-20 word quote proving the pictured action or visible state is occurring NOW. ' +
     'Dialogue, a hypothetical, a plan, a fantasy, a memory, a future act, or a negated act cannot ground an image. ' +
     'The scene_summary may restate only that evidence; discard any disputed action instead of preserving it. ' +
     'Re-read the CURRENT PASSAGE, verify every evidence quote, and rewrite in the SAME JSON format.'
@@ -8590,7 +8590,38 @@ async function reconcileDirectGrounding(initialImages, ctx) {
   if (unsupported.length) {
     const reason = unsupported.map((item) => item.reason).join(' · ')
     spindle.log.warn('[lumidraw] direct · stopped before Draw Things — depicted moment remained ungrounded: ' + reason)
-    throw new Error('LumiDraw stopped before generating because the parser could not prove that its chosen moment was happening in the current passage. ' + reason)
+    const message = 'LumiDraw stopped before generating because the parser could not prove that its chosen moment was happening in the current passage. ' + reason
+    // A stopped Direct run used to leave the previous successful result in the
+    // Debug panel. That made the one place meant to explain a failure show an
+    // unrelated scene. Preserve the guarded parser reply and its rejected
+    // evidence before throwing so the next report is the run that actually
+    // failed, even when Draw Things was never contacted.
+    try {
+      await saveStoryDebug({
+        mode: 'direct',
+        parserEngine: 'direct',
+        debugSource: 'failed-grounding',
+        rawReply,
+        error: message,
+        entries: images.map((image) => ({
+          anchor: image.anchor || '',
+          prompt: image.prompt || '',
+          sceneStatement: image.scene_summary || '',
+          momentEvidence: image.moment_evidence || '',
+          momentEvidenceError: (directMomentContradiction(image) || {}).reason || '',
+          present: image.present || [],
+          rejected: true,
+        })),
+        lastCompiledPrompt: '',
+        contextPreview: parserInput.contextPreview || '',
+        ledgerPreview: parserInput.ledgerPreview || '',
+        contextMessageCount: parserInput.contextMessageCount || 0,
+        ledgerFound: !!parserInput.ledgerFound,
+      })
+    } catch (error) {
+      spindle.log.warn('[lumidraw] direct · could not save failed grounding debug: ' + error.message)
+    }
+    throw new Error(message)
   }
   return { images, rawReply }
 }
@@ -9163,7 +9194,7 @@ embellish, or rewrite the story. Extract only visible action, geometry, clothing
 identity, and camera tags. Do not add commentary or reasoning.
 
 OUTPUT — only this JSON, compact, no markdown, no commentary:
-{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","moment_evidence":"6-20 exact consecutive words from the CURRENT PASSAGE proving the depicted moment is occurring now","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","group_scene":"3/4-person scenes only: short name-free visual context","group_subjects":[{"name":"exact sheet name","position":"left|center|right|foreground|midground|background","include_saved_anatomy":false,"details":["complete current clothing","pose","one-person action","expression","gaze"]}],"shared_interaction":"3/4-person scenes only: one name-free joint action using spatial labels","spatial_relation":"3/4-person scenes only: one name-free placement statement using spatial labels","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
+{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","moment_evidence":"3-20 exact consecutive words from the CURRENT PASSAGE proving the depicted moment is occurring now","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","group_scene":"3/4-person scenes only: short name-free visual context","group_subjects":[{"name":"exact sheet name","position":"left|center|right|foreground|midground|background","include_saved_anatomy":false,"details":["complete current clothing","pose","one-person action","expression","gaze"]}],"shared_interaction":"3/4-person scenes only: one name-free joint action using spatial labels","spatial_relation":"3/4-person scenes only: one name-free placement statement using spatial labels","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
 Omit "group_scene", "group_subjects", "shared_interaction", and
 "spatial_relation" for one/two-person scenes. Omit "setting" and "outfits"
 entirely when nothing has changed.
@@ -9172,7 +9203,7 @@ CHOOSING THE MOMENT
 - Illustrate only the CURRENT PASSAGE. Prior context resolves who and where;
   it never supplies the moment.
 - Pick the single clearest drawable beat. One clear action, not three.
-- Before composing anything, copy 6-20 exact consecutive words into
+- Before composing anything, copy 3-20 exact consecutive words into
   "moment_evidence" that prove the pictured action or visible state is occurring
   NOW. This is checked verbatim. It must contain the actual event, not merely the
   names of people who are present.
@@ -9940,16 +9971,33 @@ const DIRECT_NONCURRENT_MOMENT_RE = /\b(?:talk(?:s|ed|ing)?\s+about|discuss(?:es
 function directEvidenceInsideDialogue(passage, evidence) {
   const words = normalizeIdentityText(evidence).split(/\s+/).filter(Boolean)
   if (!words.length) return false
-  let match = null
+  const raw = String(passage || '')
+  // Attribute quotes are markup, not speech. Replace tags with same-length
+  // whitespace so evidence indexes stay aligned while style="..." cannot flip
+  // the dialogue parity for later narrated prose.
+  const searchable = raw.replace(/<[^>]*>/g, (tag) => ' '.repeat(tag.length))
+  let pattern = null
   try {
-    match = new RegExp(words.map(escapeRegExp).join('[^a-z0-9]+'), 'i').exec(String(passage || ''))
+    pattern = new RegExp(words.map(escapeRegExp).join('[^a-z0-9]+'), 'ig')
   } catch { return false }
-  if (!match) return false
-  const before = String(passage || '').slice(0, match.index)
-  const straightQuotes = (before.match(/"/g) || []).length
-  const insideStraight = straightQuotes % 2 === 1
-  const insideSmart = before.lastIndexOf('“') > before.lastIndexOf('”')
-  return insideStraight || insideSmart
+  let found = false
+  for (let match = pattern.exec(searchable); match; match = pattern.exec(searchable)) {
+    found = true
+    const before = searchable.slice(0, match.index)
+    const rawBefore = raw.slice(0, match.index).toLowerCase()
+    const straightQuotes = (before.match(/"/g) || []).length
+    const insideStraight = straightQuotes % 2 === 1
+    const insideSmart = before.lastIndexOf('“') > before.lastIndexOf('”')
+    // Lumiverse commonly colors spoken lines with <font>. Those lines can lack
+    // literal quote characters, so recognize the element itself as dialogue.
+    const insideFont = rawBefore.lastIndexOf('<font') > rawBefore.lastIndexOf('</font>')
+    const insideQuoteElement = rawBefore.lastIndexOf('<q') > rawBefore.lastIndexOf('</q>')
+    // The same words can occur first in speech and later in narration. One
+    // genuinely narrated occurrence is enough to ground the quote.
+    if (!insideStraight && !insideSmart && !insideFont && !insideQuoteElement) return false
+    if (!match[0].length) pattern.lastIndex++
+  }
+  return found
 }
 
 function assessDirectMomentEvidence(value, passage) {
@@ -9958,8 +10006,8 @@ function assessDirectMomentEvidence(value, passage) {
   const passageNorm = normalizeIdentityText(passage)
   const words = evidenceNorm ? evidenceNorm.split(/\s+/).filter(Boolean).length : 0
   if (!evidenceNorm) return { valid: false, reason: 'moment_evidence was missing', evidence, words }
-  if (words < 6 || words > 20) {
-    return { valid: false, reason: `moment_evidence had ${words} words; expected 6-20`, evidence, words }
+  if (words < 3 || words > 20) {
+    return { valid: false, reason: `moment_evidence had ${words} words; expected 3-20`, evidence, words }
   }
   if (!passageNorm.includes(evidenceNorm)) {
     return { valid: false, reason: 'moment_evidence was not an exact quote from the current passage', evidence, words }
