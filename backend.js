@@ -1035,9 +1035,23 @@ async function getStoryDebug() {
   return spindle.storage.getJson(STORY_DEBUG_FILE, { fallback: null })
 }
 
-async function saveStoryDebug(debug) {
-  const value = { ...(debug || {}), at: Date.now() }
+async function saveStoryDebug(debug, userId = '') {
+  const previous = await getStoryDebug()
+  const requestedStart = Math.max(1, Number((debug && debug.runStartedAt) || Date.now()))
+  const previousStart = Math.max(0, Number((previous && (previous.runStartedAt || previous.at)) || 0))
+  // A generation can spend minutes in Draw Things after parsing. If the user
+  // reparses something newer during that time, the older scan must not reclaim
+  // Debug merely because it happened to finish last.
+  if (previous && previousStart > requestedStart) return previous
+  const value = {
+    ...(debug || {}),
+    runStartedAt: requestedStart,
+    runId: String((debug && debug.runId) ||
+      `debug-${requestedStart}-${String((debug && debug.sourceMessageId) || 'message')}`),
+    at: Date.now(),
+  }
   await spindle.storage.setJson(STORY_DEBUG_FILE, value, { indent: 2 })
+  if (userId) notifyFrontend(userId, 'story_debug_updated', { debug: value })
   return value
 }
 
@@ -8626,12 +8640,15 @@ async function reconcileDirectGrounding(initialImages, ctx) {
         mode: 'direct',
         parserEngine: 'direct',
         debugSource: 'failed-grounding',
+        sourceChatId: String((scan && scan.chatId) || ctx.chatId || ''),
         sourceMessageId: String((target && target.id) || ''),
         sourceSwipeId: target && Number.isInteger(target.swipeId) ? target.swipeId : null,
         sourceSwipeCount: Number((target && target.swipeCount) || 0),
         sourceContentSource: String((target && target.contentSource) || ''),
         rawReply,
         error: message,
+        runStartedAt: Number((scan && scan.startedAt) || (ctx && ctx.runStartedAt) || Date.now()),
+        selectedEntryIndex: null,
         entries: images.map((image) => ({
           anchor: image.anchor || '',
           prompt: image.prompt || '',
@@ -8641,6 +8658,7 @@ async function reconcileDirectGrounding(initialImages, ctx) {
           momentEvidenceContext: directMomentEvidenceContext(
             parserInput.currentPassage || '', image.moment_evidence || ''),
           present: image.present || [],
+          ...directGroupMechanicsDebug(image, profiles, (ctx.preset && ctx.preset.bannedTags) || ''),
           rejected: true,
         })),
         lastCompiledPrompt: '',
@@ -8648,7 +8666,7 @@ async function reconcileDirectGrounding(initialImages, ctx) {
         ledgerPreview: parserInput.ledgerPreview || '',
         contextMessageCount: parserInput.contextMessageCount || 0,
         ledgerFound: !!parserInput.ledgerFound,
-      })
+      }, userId)
     } catch (error) {
       spindle.log.warn('[lumidraw] direct · could not save failed grounding debug: ' + error.message)
     }
@@ -8760,14 +8778,129 @@ function directGroupIdentityTags(subject, profiles, rating, banned) {
   const baseNoun = /\b(?:adult|young adult|middle-aged|mature)\s+(?:man|woman|male|female)\b/i
   let tags = directAnchorFor(profile).filter((tag) => !baseNoun.test(tag))
   if (explicitAdult) tags = tags.filter((tag) => !directGroupYouthCoded(tag))
-  return uniqueStrings(applyBannedToList(tags, banned)).slice(0, 27)
+  tags = uniqueStrings(applyBannedToList(tags, banned))
+
+  // Three full 27-tag sheets drown the action and make similar people harder,
+  // not easier, to bind. Spend a small identity budget on the traits that split
+  // bodies fastest, while keeping author-declared Always Include tags first.
+  const alwaysInclude = new Set(animaTagList(profile.identityTags || []).map(normalizeIdentityText))
+  const rank = (tag) => {
+    const value = normalizeIdentityText(tag)
+    if (alwaysInclude.has(value)) return 0
+    if (/\b(?:[2-9][0-9] years? old|middle aged|mature|wrinkles?|crow s feet)\b/.test(value)) return 1
+    if (/\b(?:hair|bun|braids?|ponytails?|bangs)\b/.test(value)) return 2
+    if (/\b(?:eyes?|heterochromia)\b/.test(value)) return 3
+    if (/\b(?:skin|tan|tanned|pale|dark skinned|light skinned|freckles)\b/.test(value)) return 4
+    if (/\b(?:tattoo|scar|birthmark|piercing|glasses|horns?|ears?|tail|wings?)\b/.test(value)) return 5
+    if (/\b(?:slender|slim|thin|petite|curvy|voluptuous|muscular|athletic|toned|lean|stocky|chubby|plump|tall|short|broad shoulders|narrow waist|breasts?|hips?|butt|ass)\b/.test(value)) return 6
+    return 7
+  }
+  return tags.map((tag, index) => ({ tag, index, rank: rank(tag) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .slice(0, 14)
+    .map((entry) => entry.tag)
 }
 
-function directGroupAnatomyTags(subject, profiles, rating, banned) {
-  if (!subject || !subject.includeSavedAnatomy || !['nsfw', 'explicit'].includes(String(rating || '').toLowerCase())) return []
+const GROUP_ACT_NAMES = new Set(['fellatio', 'cunnilingus', 'handjob', 'vaginal', 'anal', 'masturbation'])
+const GROUP_ACT_ALIASES = new Map([
+  ['blowjob', 'fellatio'], ['blow job', 'fellatio'], ['deepthroat', 'fellatio'],
+  ['deepthroating', 'fellatio'], ['irrumatio', 'fellatio'],
+  ['hand job', 'handjob'], ['vaginal intercourse', 'vaginal'],
+  ['vaginal penetration', 'vaginal'], ['anal sex', 'anal'],
+  ['anal penetration', 'anal'], ['masturbating', 'masturbation'],
+])
+
+function normalizeGroupAct(value) {
+  const text = normalizeIdentityText(value)
+  if (GROUP_ACT_NAMES.has(text)) return text
+  return GROUP_ACT_ALIASES.get(text) || ''
+}
+
+const GROUP_ACT_ANATOMY = {
+  fellatio: { recipient: ['penis'] },
+  cunnilingus: { recipient: ['vulva'] },
+  handjob: { recipient: ['penis'] },
+  vaginal: { actor: ['penis'], recipient: ['vulva'] },
+  anal: { actor: ['penis'], recipient: ['anus'] },
+  masturbation: { actor: ['penis', 'vulva'] },
+}
+
+function directAnatomyTagFamily(tag) {
+  const value = String(tag || '')
+  if (PENIS_ANATOMY_RE.test(value) || /\b(?:balls?|scrotum)\b/i.test(value)) return 'penis'
+  if (FEMALE_ANATOMY_RE.test(value) || /\b(?:female genitalia|female genitals)\b/i.test(value)) return 'vulva'
+  if (/\b(?:anus|asshole)\b/i.test(value)) return 'anus'
+  return ''
+}
+
+function directGroupSubjectKey(subject) {
+  if (!subject) return ''
+  return subject.profileRef ? `profile:${subject.profileRef}` : `name:${normalizeIdentityText(subject.name)}`
+}
+
+function directGroupAnatomyTags(subject, profiles, rating, banned, image) {
+  if (!subject || !['nsfw', 'explicit'].includes(String(rating || '').toLowerCase())) return []
   const profile = directGroupProfileFor(subject, profiles)
   if (!profile) return []
-  return uniqueStrings(applyBannedToList(animaTagList(profile.anatomy || []), banned)).slice(0, 8)
+  const saved = animaTagList(profile.anatomy || [])
+  if (!saved.length) return []
+  if (subject.includeSavedAnatomy) {
+    return uniqueStrings(applyBannedToList(saved, banned)).slice(0, 8)
+  }
+  const key = directGroupSubjectKey(subject)
+  const needed = new Set()
+  for (const interaction of (image && image.groupInteractions) || []) {
+    const rule = GROUP_ACT_ANATOMY[interaction.act]
+    if (!rule) continue
+    if (interaction.actorKey === key) for (const family of rule.actor || []) needed.add(family)
+    if (interaction.recipientKey === key) for (const family of rule.recipient || []) needed.add(family)
+  }
+  if (!needed.size) return []
+  const granted = saved.filter((tag) => needed.has(directAnatomyTagFamily(tag)))
+  return uniqueStrings(applyBannedToList(granted, banned)).slice(0, 8)
+}
+
+function directGroupInteractionSentence(interaction, subjects, profiles) {
+  const actorSubject = (subjects || []).find((subject) => directGroupSubjectKey(subject) === interaction.actorKey)
+  const recipientSubject = (subjects || []).find((subject) => directGroupSubjectKey(subject) === interaction.recipientKey)
+  if (!actorSubject || !recipientSubject) return ''
+  const actor = directGroupSubjectLabel(actorSubject, profiles)
+  const recipient = directGroupSubjectLabel(recipientSubject, profiles)
+  const self = interaction.actorKey === interaction.recipientKey
+  switch (interaction.act) {
+    case 'fellatio': return `${upperFirst(actor)} is performing fellatio on ${recipient}.`
+    case 'cunnilingus': return `${upperFirst(actor)} is performing cunnilingus on ${recipient}.`
+    case 'handjob': return `${upperFirst(actor)} is giving ${recipient} a handjob.`
+    case 'vaginal': return `${upperFirst(actor)} is penetrating ${recipient} vaginally.`
+    case 'anal': return `${upperFirst(actor)} is penetrating ${recipient} anally.`
+    case 'masturbation': return self ? `${upperFirst(actor)} is masturbating.` : ''
+    default: return ''
+  }
+}
+
+function directGroupMechanicsDebug(image, profiles, banned = '') {
+  const subjects = (image && image.groupSubjects) || []
+  return {
+    rating: String((image && image.rating) || ''),
+    aspect: String((image && image.aspect) || ''),
+    groupSource: String((image && image.groupSource) || ''),
+    groupInteractions: ((image && image.groupInteractions) || []).map((interaction) => ({
+      actor: interaction.actorName || interaction.actorKey || '',
+      act: interaction.act || '',
+      recipient: interaction.recipientName || interaction.recipientKey || '',
+    })),
+    groupSubjects: subjects.map((subject) => {
+      const inserted = directGroupAnatomyTags(
+        subject, profiles, (image && image.rating) || '', banned, image)
+      return {
+        name: subject.name || '',
+        position: subject.position || '',
+        includeSavedAnatomy: !!subject.includeSavedAnatomy,
+        anatomyInserted: inserted.length > 0,
+        anatomyFamilies: uniqueStrings(inserted.map(directAnatomyTagFamily).filter(Boolean)),
+      }
+    }),
+  }
 }
 
 function directGroupReplaceNames(value, subjects, profiles) {
@@ -8918,7 +9051,10 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
   const subjects = (image.groupSubjects || []).slice(0, 4)
   const counts = directGroupCounts(subjects, profiles)
   const lines = [`${counts.join(', ')},`]
-  const groupScene = directGroupReplaceNames(image.group_scene || image.scene_summary || '', subjects, profiles)
+  // Structured interactions own sexual acts. Falling back to scene_summary in
+  // that case would state the same act twice and weaken subject binding.
+  const groupSceneSource = image.group_scene || ((image.groupInteractions || []).length ? '' : image.scene_summary) || ''
+  const groupScene = directGroupReplaceNames(groupSceneSource, subjects, profiles)
   if (groupScene) lines.push(`Scene: ${groupScene.replace(/[.]+$/g, '')}.`)
 
   const frame = String(image.prompt || '').split(/\bBREAK\b/)[0]
@@ -8934,7 +9070,7 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
   for (const subject of subjects) {
     const label = directGroupSubjectLabel(subject, profiles)
     const identity = directGroupIdentityTags(subject, profiles, image.rating, banned)
-    const anatomy = directGroupAnatomyTags(subject, profiles, image.rating, banned)
+    const anatomy = directGroupAnatomyTags(subject, profiles, image.rating, banned, image)
     const stable = uniqueStrings([...identity, ...anatomy])
     if (stable.length) lines.push(`${upperFirst(label)} has ${stable.join(', ')}.`)
     const identityKeys = new Set(stable.map(normalizeIdentityText))
@@ -8959,7 +9095,15 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
     if (details.length) lines.push(`${upperFirst(label)}: ${details.join(', ')}.`)
   }
 
-  const shared = directGroupReplaceNames(image.shared_interaction || '', subjects, profiles)
+  const interactionLines = (image.groupInteractions || [])
+    .map((interaction) => directGroupInteractionSentence(interaction, subjects, profiles))
+    .filter(Boolean)
+  for (const line of interactionLines) lines.push(line)
+  let shared = directGroupReplaceNames(image.shared_interaction || '', subjects, profiles)
+  if (interactionLines.length && (ANATOMY_ACT_RE.test(shared) || /\bmasturbat\w*\b/i.test(shared))) {
+    shared = ''
+    if (trace) trace('shared interaction', 'applied', 'sexual act removed from free text; carried by structured interactions')
+  }
   if (shared) lines.push(`Shared interaction: ${shared.replace(/[.]+$/g, '')}.`)
   const relation = directGroupReplaceNames(image.spatial_relation || '', subjects, profiles)
   if (relation) lines.push(`Spatial relation: ${relation.replace(/[.]+$/g, '')}.`)
@@ -8972,6 +9116,7 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
   if (trace) {
     trace('spatial group', 'applied',
       `${subjects.length} subjects serialized with repeated positions and no BREAK` +
+      ((image.groupInteractions || []).length ? ` · ${(image.groupInteractions || []).length} structured interaction(s)` : '') +
       (youthRemoved ? ` · removed ${youthRemoved} youth-coded adult descriptor${youthRemoved === 1 ? '' : 's'}` : ''))
   }
   return serialized
@@ -9121,16 +9266,58 @@ async function runDirectImages(initialImages, ctx) {
     for (const note of resolved.notes) spindle.log.info('[lumidraw] direct · wardrobe resolve · ' + note)
   }
 
-  for (let index = 0; index < ordered.length; index++) {
-    assertStoryScanActive(scan)
-    const image = ordered[index]
-    setStoryScanStage(scan, 'generating',
-      `Sending image ${index + 1} of ${ordered.length} to Draw Things.`)
+  // Debug follows the parser, not the much slower image generator. Compile all
+  // selected prompts now and publish them before Draw Things starts. If a
+  // generation later errors, the panel still explains the prompt that was sent.
+  const prepared = ordered.map((image) => {
     const finalized = finalizeDirectImagePrompt(image, {
       preset, profiles, prefix, trace, wardrobe: image.resolvedWardrobe,
     })
-    const finalPrompt = finalized.prompt
-    const negativePrompt = finalized.negativePrompt
+    return {
+      image,
+      prompt: finalized.prompt,
+      negativePrompt: finalized.negativePrompt,
+      mechanics: directGroupMechanicsDebug(image, profiles, preset.bannedTags || ''),
+    }
+  })
+  const debugBase = {
+    mode: 'direct',
+    parserEngine: 'direct',
+    sourceChatId: String(chatId || ''),
+    sourceMessageId: String((target && target.id) || ''),
+    sourceSwipeId: target && Number.isInteger(target.swipeId) ? target.swipeId : null,
+    sourceSwipeCount: Number((target && target.swipeCount) || 0),
+    sourceContentSource: String((target && target.contentSource) || ''),
+    rawReply,
+    error: '',
+    runStartedAt: Number((scan && scan.startedAt) || Date.now()),
+    contextPreview: parserInput.contextPreview,
+    ledgerPreview: parserInput.ledgerPreview,
+    contextMessageCount: parserInput.contextMessageCount,
+    ledgerFound: parserInput.ledgerFound,
+  }
+  const debugEntries = prepared.map(({ image, prompt, mechanics }) => ({
+    anchor: image.anchor || '',
+    prompt,
+    sceneStatement: image.scene_summary || directSceneSentence(image.prompt),
+    momentEvidence: image.moment_evidence || '',
+    present: image.present || [],
+    ...mechanics,
+  }))
+  let storyDebug = await saveStoryDebug({
+    ...debugBase,
+    debugSource: `${String((scan && scan.source) || 'story scan')} · parsed`,
+    selectedEntryIndex: debugEntries.length || null,
+    entries: debugEntries,
+    lastCompiledPrompt: debugEntries.length ? debugEntries[debugEntries.length - 1].prompt : '',
+    trace: traceLines,
+  }, userId)
+
+  for (let index = 0; index < ordered.length; index++) {
+    assertStoryScanActive(scan)
+    const { image, prompt: finalPrompt, negativePrompt, mechanics: groupMechanics } = prepared[index]
+    setStoryScanStage(scan, 'generating',
+      `Sending image ${index + 1} of ${ordered.length} to Draw Things.`)
 
     const dims = aspectDims(preset.config, image.aspect)
     const entry = await generateAndUpload({
@@ -9140,7 +9327,7 @@ async function runDirectImages(initialImages, ctx) {
       extra: preset.extra,
       dims,
       origin: { ...origin, mode: 'direct', alt: markdownAltText(finalPrompt) },
-      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, momentEvidence: image.moment_evidence || '', sceneSummary: image.scene_summary || '', aspect: image.aspect, rating: image.rating, present: image.present || [], spatialGroup: directGroupIsSpatial(image), groupSource: image.groupSource || '', groupScene: image.group_scene || '', groupSubjects: image.groupSubjects || [], sharedInteraction: image.shared_interaction || '', spatialRelation: image.spatial_relation || '' } },
+      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, momentEvidence: image.moment_evidence || '', sceneSummary: image.scene_summary || '', present: image.present || [], spatialGroup: directGroupIsSpatial(image), groupScene: image.group_scene || '', sharedInteraction: image.shared_interaction || '', spatialRelation: image.spatial_relation || '', ...groupMechanics } },
     }, userId, scan)
     results.push({
       ok: true,
@@ -9182,31 +9369,16 @@ async function runDirectImages(initialImages, ctx) {
     spindle.log.info(`[lumidraw] direct mode registered ${placements.length} native image mount(s) for the story message`)
   }
 
-  await saveStoryDebug({
-    mode: 'direct',
-    parserEngine: 'direct',
-    sourceMessageId: String((target && target.id) || ''),
-    sourceSwipeId: target && Number.isInteger(target.swipeId) ? target.swipeId : null,
-    sourceSwipeCount: Number((target && target.swipeCount) || 0),
-    sourceContentSource: String((target && target.contentSource) || ''),
-    rawReply,
-    error: '',
-    entries: results.map((item, index) => ({
-      anchor: item.anchor,
-      prompt: item.prompt,
-      sceneStatement: item.sceneStatement || '',
-      momentEvidence: (ordered[index] && ordered[index].moment_evidence) || '',
-      present: (ordered[index] && ordered[index].present) || [],
-    })),
+  storyDebug = await saveStoryDebug({
+    ...debugBase,
+    debugSource: `${String((scan && scan.source) || 'story scan')} · generated`,
+    selectedEntryIndex: results.length || null,
+    entries: debugEntries,
     lastCompiledPrompt: results.length ? results[results.length - 1].prompt : '',
-    contextPreview: parserInput.contextPreview,
-    ledgerPreview: parserInput.ledgerPreview,
-    contextMessageCount: parserInput.contextMessageCount,
-    ledgerFound: parserInput.ledgerFound,
     trace: traceLines,
-  })
+  }, userId)
   spindle.log.info(`[lumidraw] direct mode produced ${results.length} image(s); parser body stayed direct, continuity/defences were mechanical`)
-  return { mode: 'direct', processed: results.length, results, messageId: target && target.id }
+  return { mode: 'direct', processed: results.length, results, messageId: target && target.id, storyDebug }
 }
 
 
@@ -9241,8 +9413,8 @@ CONTENT SCOPE
   definitions below require.
 
 OUTPUT — only this JSON, compact, no markdown, no commentary:
-{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","moment_evidence":"3-20 exact consecutive words from the CURRENT PASSAGE proving the depicted moment is occurring now","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","group_scene":"3/4-person scenes only: short name-free visual context","group_subjects":[{"name":"exact sheet name","position":"left|center|right|foreground|midground|background","include_saved_anatomy":false,"details":["complete current clothing","pose","one-person action","expression","gaze"]}],"shared_interaction":"3/4-person scenes only: one name-free joint action using spatial labels","spatial_relation":"3/4-person scenes only: one name-free placement statement using spatial labels","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
-Omit "group_scene", "group_subjects", "shared_interaction", and
+{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","moment_evidence":"3-20 exact consecutive words from the CURRENT PASSAGE proving the depicted moment is occurring now","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","group_scene":"3/4-person scenes only: short name-free visual context","group_subjects":[{"name":"exact sheet name","position":"left|center|right|foreground|midground|background","include_saved_anatomy":false,"details":["complete current clothing","pose","one-person action","expression","gaze"]}],"group_interactions":[{"actor":"exact sheet name","act":"fellatio|cunnilingus|handjob|vaginal|anal|masturbation","recipient":"exact sheet name"}],"shared_interaction":"3/4-person scenes only: one name-free NONSEXUAL joint action using spatial labels","spatial_relation":"3/4-person scenes only: one name-free placement statement using spatial labels","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
+Omit "group_scene", "group_subjects", "group_interactions", "shared_interaction", and
 "spatial_relation" for one/two-person scenes. Omit "setting" and "outfits"
 entirely when nothing has changed.
 
@@ -9325,11 +9497,12 @@ SPATIAL GROUP SHAPE — for THREE OR FOUR people only:
   this subject's complete current clothing, pose, one-person action, expression,
   and gaze as tight visual tags. Do not repeat permanent appearance there.
 - Set "include_saved_anatomy" true only when this nsfw/explicit picture visibly
-  exposes that subject's saved anatomy or the depicted act requires it. LumiDraw
-  copies the saved anatomy mechanically; never invent anatomy in "details".
-- Put a joint action or physical contact in "shared_interaction" exactly once,
-  using spatial labels such as "the adult man on the left" — never a name or a
-  pronoun. Put shared placement/distance in "spatial_relation" exactly once.
+  exposes that subject's saved anatomy WITHOUT a sexual act. LumiDraw derives
+  act-required anatomy from group_interactions; never invent anatomy in "details".
+- Put a NONSEXUAL joint action or physical contact in "shared_interaction"
+  exactly once, using spatial labels such as "the adult man on the left" —
+  never a name or pronoun. Put shared placement/distance in "spatial_relation"
+  exactly once.
 - "group_scene" is one short name-free context clause. Do not repeat the shared
   action, subject traits, clothing, camera, or environment in it.
 - ONE FACT, ONE OWNER. Every visible trait, garment, expression, pose, gaze, and
@@ -9339,6 +9512,22 @@ SPATIAL GROUP SHAPE — for THREE OR FOUR people only:
   "young man", "young adult male", "youthful", or "boyish". Use "adult man"
   for the younger adult and distinguish only an older participant with supported
   age facts such as "45 years old" or "middle-aged adult man".
+
+INTERACTIONS — visible sexual acts in a three/four-person image go in
+"group_interactions", not in shared_interaction.
+- Return one entry per distinct act. Multiple simultaneous acts are multiple
+  entries. "actor" is the performing or penetrating person; "recipient" is the
+  receiving person. Never reverse them.
+- Use exact sheet names, and only people already listed in "present". A spectator
+  is in NO interaction entry. Watching or merely standing nearby is not an
+  interaction.
+- "act" must be exactly one of: fellatio, cunnilingus, handjob, vaginal, anal,
+  masturbation. Do not invent another term. Vaginal includes cowgirl,
+  missionary, doggystyle, and mating press; anal means anal penetration.
+- Masturbation is self-directed: use the same exact name for actor and recipient.
+- Sexual acts live in group_interactions exactly once. scene_summary may state
+  the supported pictured moment, but group_scene and shared_interaction must not
+  repeat the act.
 
 NAMES
 - Use the same vetted SENTENCE NAME in scene_summary and immediately after the
@@ -10104,8 +10293,62 @@ function directMomentContradiction(image) {
   }
 }
 
+function parseDirectGroupInteractions(item, subjects, profiles, notes) {
+  const raw = Array.isArray(item && item.group_interactions) ? item.group_interactions : []
+  const out = []
+  const seen = new Set()
+  const findSubject = (name) => {
+    const wanted = normalizeIdentityText(name)
+    if (!wanted) return null
+    const profile = directProfileForPresenceName(name, profiles)
+    return (subjects || []).find((subject) =>
+      normalizeIdentityText(subject.name) === wanted ||
+      !!(profile && subject.profileRef && subject.profileRef === profile.ref)) || null
+  }
+  for (const entry of raw.slice(0, 8)) {
+    const actorName = String((entry && entry.actor) || '').trim()
+    let recipientName = String((entry && entry.recipient) || '').trim()
+    const rawAct = String((entry && entry.act) || '').trim()
+    const act = normalizeGroupAct(rawAct)
+    if (!actorName || !act) {
+      notes.push(`dropped an interaction — missing actor or unrecognized act "${rawAct}"`)
+      continue
+    }
+    if (!recipientName && act === 'masturbation') recipientName = actorName
+    if (!recipientName) {
+      notes.push(`dropped interaction "${actorName} · ${act}" — recipient was missing`)
+      continue
+    }
+    const actor = findSubject(actorName)
+    const recipient = findSubject(recipientName)
+    if (!actor || !recipient) {
+      notes.push(`dropped interaction "${actorName} → ${recipientName}" — one name is not in the validated spatial roster`)
+      continue
+    }
+    const actorKey = directGroupSubjectKey(actor)
+    const recipientKey = directGroupSubjectKey(recipient)
+    if (act === 'masturbation' && actorKey !== recipientKey) {
+      notes.push(`dropped interaction "${actorName} → ${recipientName}" — masturbation must be self-directed`)
+      continue
+    }
+    if (act !== 'masturbation' && actorKey === recipientKey) {
+      notes.push(`dropped self-directed ${act} interaction for "${actorName}"`)
+      continue
+    }
+    const key = `${actorKey}|${act}|${recipientKey}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({
+      actorKey, recipientKey, act,
+      actorName: actor.name,
+      recipientName: recipient.name,
+    })
+  }
+  return out
+}
+
 function parseDirectGroupFields(item, prompt, present, presenceFieldDeclared, profiles, maximum, notes) {
-  if (maximum < 3) return { subjects: [], source: '' }
+  if (maximum < 3) return { subjects: [], interactions: [], source: '' }
   const allowedNames = new Set((present || []).map((entry) => normalizeIdentityText(entry && entry.name)).filter(Boolean))
   const allowedProfileRefs = new Set((present || []).map((entry) => {
     const profile = directProfileForPresenceName(entry && entry.name, profiles)
@@ -10181,7 +10424,7 @@ function parseDirectGroupFields(item, prompt, present, presenceFieldDeclared, pr
       details: animaTagList(entry.details || []).slice(0, 14),
     })
   }
-  if (subjects.length < 3) return { subjects: [], source: '' }
+  if (subjects.length < 3) return { subjects: [], interactions: [], source: '' }
 
   const fallbacks = directGroupFallbackPositions(subjects.length)
   const occupied = new Set()
@@ -10194,7 +10437,8 @@ function parseDirectGroupFields(item, prompt, present, presenceFieldDeclared, pr
     subjects[index].position = position
     occupied.add(position)
   }
-  return { subjects, source }
+  const interactions = parseDirectGroupInteractions(item, subjects, profiles, notes)
+  return { subjects, interactions, source }
 }
 
 // Compare the validated roster with the runs that survived parsing. Missing
@@ -10347,7 +10591,15 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
       item, prompt, present, presenceFieldDeclared, profiles, subjectMaximum, notes)
     if (group.subjects.length) {
       spindle.log.info(`[lumidraw] direct · spatial group · ${group.subjects.map((subject) =>
-        `${subject.name} ${subject.position}`).join(' · ')} (${group.source})`)
+        `${subject.name} ${subject.position}`).join(' · ')} (${group.source})` +
+        (group.interactions.length ? ` · ${group.interactions.length} structured interaction(s)` : ''))
+    }
+    const requestedAspect = VALID_ASPECTS.has(String(item.aspect || '')) ? String(item.aspect) : '3:4'
+    const aspect = group.subjects.length >= 3 && ['3:4', '1:1', '9:16'].includes(requestedAspect)
+      ? '16:9'
+      : requestedAspect
+    if (aspect !== requestedAspect) {
+      notes.push(`upgraded aspect ${requestedAspect} → 16:9 for a ${group.subjects.length}-person scene`)
     }
     images.push({
       anchor: String(item.anchor || '').trim(),
@@ -10356,13 +10608,14 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
       sceneSummaryWordLimit: summaryWordLimit,
       moment_evidence: momentEvidence,
       momentEvidenceAssessment,
-      aspect: VALID_ASPECTS.has(String(item.aspect || '')) ? String(item.aspect) : '3:4',
+      aspect,
       notes,
       present,
       presenceFieldDeclared,
       rating: ANIMA_SAFETY_TAGS.includes(ratingRaw) ? ratingRaw : '',
       group_scene: String(item.group_scene || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 320),
       groupSubjects: group.subjects,
+      groupInteractions: group.interactions,
       groupSource: group.source,
       shared_interaction: String(item.shared_interaction || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 420),
       spatial_relation: String(item.spatial_relation || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 320),
@@ -12539,6 +12792,16 @@ async function scanStoryCore(userId, options = {}) {
     return { mode: settings.mode, processed: 0, skipped: true, startupEcho: true, note }
   }
 
+  const storyDebugMeta = {
+    runStartedAt: Number((scan && scan.startedAt) || Date.now()),
+    debugSource: String((scan && scan.source) || options.source || (options.auto ? 'automatic scan' : 'manual scan')),
+    sourceChatId: String(chatId || ''),
+    sourceMessageId: String((target && target.id) || ''),
+    sourceSwipeId: target && Number.isInteger(target.swipeId) ? target.swipeId : null,
+    sourceSwipeCount: Number((target && target.swipeCount) || 0),
+    sourceContentSource: String((target && target.contentSource) || ''),
+  }
+
   // The story may have introduced someone. Read that before compiling, so the new
   // profile is locked for this very image rather than the next one.
   try {
@@ -12681,11 +12944,13 @@ async function scanStoryCore(userId, options = {}) {
     }
     await updateMessageContent(target.id, target.contentKey, content, userId, chatId)
     const storyDebug = await saveStoryDebug({
+      ...storyDebugMeta,
       mode: 'inline',
       subjectBinding: false,
       entries: debugEntries,
+      selectedEntryIndex: debugEntries.length ? 1 : null,
       lastCompiledPrompt: debugEntries.find((entry) => entry.compiledPrompt)?.compiledPrompt || '',
-    })
+    }, userId)
     return { mode: 'inline', processed: done, note: `${done}/${tags.length} tag(s) illustrated.`, storyDebug }
   }
 
@@ -12787,6 +13052,20 @@ async function scanStoryCore(userId, options = {}) {
       if (directMode) {
         const direct = parseDirectImages(out, settings.maxImages || 2, profiles, passage, settings.maxSubjects || 2)
         if (!direct.images.length) {
+          await saveStoryDebug({
+            ...storyDebugMeta,
+            mode: 'direct',
+            parserEngine: 'direct',
+            rawReply: out,
+            error: direct.error || 'Direct mode returned no usable prompt.',
+            entries: [],
+            selectedEntryIndex: null,
+            lastCompiledPrompt: '',
+            contextPreview: parserInput.contextPreview || '',
+            ledgerPreview: parserInput.ledgerPreview || '',
+            contextMessageCount: parserInput.contextMessageCount || 0,
+            ledgerFound: !!parserInput.ledgerFound,
+          }, userId)
           // A refusal is a decision, not a fault. Reported as itself, at info
           // rather than warn, and WITHOUT the "Direct mode:" prefix that made it
           // read as an internal failure.
@@ -12806,6 +13085,7 @@ async function scanStoryCore(userId, options = {}) {
         parsed = parseParserScenes(out, settings.maxImages || 2, profiles)
       } catch (error) {
         const storyDebug = await saveStoryDebug({
+          ...storyDebugMeta,
           mode: 'parser',
           parserEngine: 'anima',
           subjectBinding: true,
@@ -12817,7 +13097,7 @@ async function scanStoryCore(userId, options = {}) {
           ledgerPreview: parserInput.ledgerPreview,
           contextMessageCount: parserInput.contextMessageCount,
           ledgerFound: parserInput.ledgerFound,
-        })
+        }, userId)
         if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
         return {
           mode: 'parser',
@@ -12828,7 +13108,7 @@ async function scanStoryCore(userId, options = {}) {
       if (!parsed.length) {
         if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
         if (target.id) await markProcessed(target.id, target.content)
-        const storyDebug = await saveStoryDebug({ mode: 'parser', parserEngine: 'anima', subjectBinding: true, rawReply: out, entries: [], lastCompiledPrompt: '', contextPreview: parserInput.contextPreview, ledgerPreview: parserInput.ledgerPreview, contextMessageCount: parserInput.contextMessageCount, ledgerFound: parserInput.ledgerFound })
+        const storyDebug = await saveStoryDebug({ ...storyDebugMeta, mode: 'parser', parserEngine: 'anima', subjectBinding: true, rawReply: out, entries: [], lastCompiledPrompt: '', contextPreview: parserInput.contextPreview, ledgerPreview: parserInput.ledgerPreview, contextMessageCount: parserInput.contextMessageCount, ledgerFound: parserInput.ledgerFound }, userId)
         return { mode: 'parser', messageId: String(target.id || ''), note: `Parser (${instrLabel}) judged no visual moment.`, storyDebug }
       }
 
@@ -12854,6 +13134,7 @@ async function scanStoryCore(userId, options = {}) {
       if (!acceptedParsed.length) {
         const reason = debugEntries.map((entry) => entry.error).filter(Boolean).join(' ') || 'Structured parser returned no complete visual scenes.'
         const storyDebug = await saveStoryDebug({
+          ...storyDebugMeta,
           mode: 'parser',
           parserEngine: 'anima',
           subjectBinding: true,
@@ -12865,7 +13146,7 @@ async function scanStoryCore(userId, options = {}) {
           ledgerPreview: parserInput.ledgerPreview,
           contextMessageCount: parserInput.contextMessageCount,
           ledgerFound: parserInput.ledgerFound,
-        })
+        }, userId)
         if (hasParserTrigger(target.content)) { await updateMessageContent(target.id, target.contentKey, stripParserTrigger(target.content), userId, chatId) }
         return { mode: 'parser', processed: 0, note: `Parser result was incomplete, so LumiDraw skipped Draw Things rather than generating a character-only image. ${reason}`, storyDebug }
       }
@@ -12920,17 +13201,19 @@ async function scanStoryCore(userId, options = {}) {
       // are rendered through ctx.dom.inject on the frontend.
       if (target.id) await markProcessed(target.id, target.content)
       const storyDebug = await saveStoryDebug({
+        ...storyDebugMeta,
         mode: 'parser',
         parserEngine: 'anima',
         subjectBinding: true,
         rawReply: out,
         entries: debugEntries,
+        selectedEntryIndex: debugEntries.length ? 1 : null,
         lastCompiledPrompt: debugEntries.find((entry) => entry.compiledPrompt)?.compiledPrompt || '',
         contextPreview: parserInput.contextPreview,
         ledgerPreview: parserInput.ledgerPreview,
         contextMessageCount: parserInput.contextMessageCount,
         ledgerFound: parserInput.ledgerFound,
-      })
+      }, userId)
       return {
         mode: 'parser',
         messageId: String(target.id || ''),
@@ -13011,10 +13294,11 @@ async function scanStoryCore(userId, options = {}) {
 
     if (target.id) await markProcessed(target.id, target.content)
     const storyDebug = await saveStoryDebug({
-      mode: 'parser', parserEngine: 'legacy', subjectBinding: false, rawReply: out,
+      ...storyDebugMeta, mode: 'parser', parserEngine: 'legacy', subjectBinding: false, rawReply: out,
       entries: parsed.map((item, index) => ({ anchor: item.anchor, compiledPrompt: [lead, prefix, lines[index]].filter(Boolean).join(', ') })),
+      selectedEntryIndex: parsed.length ? 1 : null,
       lastCompiledPrompt: [lead, prefix, lines[0]].filter(Boolean).join(', '),
-    })
+    }, userId)
     return { mode: 'parser', messageId: String(target.id || ''), processed: mds.length, note: `Illustrated ${mds.length} moment(s) via ${instrLabel}. First prompt: ` + firstPrompt.slice(0, 120), storyDebug }
   }
 
@@ -13289,7 +13573,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
     } else {
       const reconciled = await reconcileDirectGrounding(direct.images, {
         preset, profiles, userId, chatId, scan: null, rawReply: raw, parserInput,
-        instruction, settings, target,
+        instruction, settings, target, runStartedAt: startedAt,
       })
       raw = reconciled.rawReply
       const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
@@ -13305,14 +13589,19 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
         const finalized = finalizeDirectImagePrompt(item, {
           preset, profiles, prefix, trace, wardrobe: resolvedWardrobe.outfits,
         })
+        const groupMechanics = directGroupMechanicsDebug(item, profiles, preset.bannedTags || '')
         results.push({
           ok: true,
           anchor: item.anchor || '',
           momentEvidence: item.moment_evidence || '',
           sceneStatement: item.scene_summary || directSceneSentence(item.prompt),
           prompt: finalized.prompt,
-          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, momentEvidence: item.moment_evidence || '', sceneSummary: item.scene_summary || '', aspect: item.aspect, rating: item.rating, present: item.present || [], spatialGroup: directGroupIsSpatial(item), groupSource: item.groupSource || '', groupScene: item.group_scene || '', groupSubjects: item.groupSubjects || [], sharedInteraction: item.shared_interaction || '', spatialRelation: item.spatial_relation || '' } },
+          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, momentEvidence: item.moment_evidence || '', sceneSummary: item.scene_summary || '', present: item.present || [], spatialGroup: directGroupIsSpatial(item), groupScene: item.group_scene || '', sharedInteraction: item.shared_interaction || '', spatialRelation: item.spatial_relation || '', ...groupMechanics } },
           aspect: item.aspect || '',
+          rating: item.rating || '',
+          groupSource: item.groupSource || '',
+          groupSubjects: groupMechanics.groupSubjects,
+          groupInteractions: groupMechanics.groupInteractions,
           negativePrompt: finalized.negativePrompt,
           trace: traceLines,
         })
@@ -13350,7 +13639,13 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
     }
   }
 
-  return { origin, messageId, chatId, preset, settings, results, report, parserMs, raw, parseError }
+  return {
+    origin, messageId, chatId, preset, settings, results, report, parserMs, raw, parseError,
+    runStartedAt: startedAt,
+    sourceSwipeId: Number.isInteger(target.swipeId) ? target.swipeId : null,
+    sourceSwipeCount: Number(target.swipeCount || 0),
+    sourceContentSource: String(target.contentSource || ''),
+  }
 }
 
 // Generate one replacement image and swap it into the story message in place.
@@ -14352,8 +14647,39 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (!imageUrl) throw new Error('Re-parsing needs to know which image to work from.')
 
         const parse = await reparseSourceMessage(userId, imageUrl, payload)
+        const directReparse = parse.settings.mode === 'direct' || parse.settings.directMode === true
+        const usableEntries = parse.results.filter((item) => item && item.ok).map((item) => ({
+          anchor: item.anchor || '',
+          prompt: item.prompt || '',
+          compiledPrompt: item.prompt || '',
+          sceneStatement: item.sceneStatement || '',
+          momentEvidence: item.momentEvidence || '',
+          rating: item.rating || '',
+          aspect: item.aspect || '',
+          groupSource: item.groupSource || '',
+          groupSubjects: item.groupSubjects || [],
+          groupInteractions: item.groupInteractions || [],
+        }))
+        const storyDebug = await saveStoryDebug({
+          mode: directReparse ? 'direct' : 'parser',
+          parserEngine: directReparse ? 'direct' : parse.settings.parserEngine,
+          debugSource: 'image reparse',
+          sourceChatId: String(parse.chatId || ''),
+          sourceMessageId: String(parse.messageId || ''),
+          sourceSwipeId: parse.sourceSwipeId,
+          sourceSwipeCount: parse.sourceSwipeCount || 0,
+          sourceContentSource: parse.sourceContentSource || '',
+          runStartedAt: parse.runStartedAt,
+          model: parse.report.model || parse.settings.parserModel || '',
+          provider: parse.report.provider || '',
+          parserMs: parse.parserMs,
+          rawReply: String(parse.raw || ''),
+          error: parse.parseError || (!parse.results.length ? 'The parser judged this passage to have no visual moment.' : ''),
+          entries: usableEntries,
+          selectedEntryIndex: usableEntries.length ? 1 : null,
+          lastCompiledPrompt: usableEntries[0] ? usableEntries[0].prompt : '',
+        }, userId)
         if (parse.parseError) {
-          const directReparse = parse.settings.mode === 'direct' || parse.settings.directMode === true
           reply = ok(payload, requestId, {
             reparsed: false,
             note: directReparse
@@ -14363,6 +14689,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
             model: parse.report.model || '',
             overrideNote: parse.report.overrideNote || '',
             raw: String(parse.raw || '').slice(0, 600),
+            storyDebug,
           })
           break
         }
@@ -14375,6 +14702,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
             model: parse.report.model || '',
             overrideNote: parse.report.overrideNote || '',
             raw: String(parse.raw || '').slice(0, 600),
+            storyDebug,
           })
           break
         }
@@ -14395,10 +14723,40 @@ spindle.onFrontendMessage(async (payload, userId) => {
           usage: parse.report.usage || null,
           presetName: parse.preset.name || '',
           messageId: parse.messageId,
+          storyDebug,
           note: usable
             ? `Parsed in ${(parse.parserMs / 1000).toFixed(1)}s — ${usable} of ${parse.results.length} scene(s) usable.`
             : 'The parser ran but produced no usable scene.',
         })
+        break
+      }
+
+      case 'select_story_debug_entry': {
+        const current = await getStoryDebug()
+        if (!current || !current.runId || String(payload.runId || '') !== String(current.runId)) {
+          reply = ok(payload, requestId, { saved: false, stale: true, storyDebug: current || null })
+          break
+        }
+        const requested = Number(payload.selectedEntryIndex)
+        const entries = Array.isArray(current.entries) ? current.entries : []
+        const index = Number.isInteger(requested) && requested >= 1 && requested <= entries.length
+          ? requested
+          : null
+        const selected = index ? entries[index - 1] : null
+        const storyDebug = await saveStoryDebug({
+          ...current,
+          debugSource: String(payload.debugSource || (index ? 'image reparse candidate' : 'original image prompt')),
+          selectedEntryIndex: index,
+          lastCompiledPrompt: selected
+            ? String(selected.prompt || selected.compiledPrompt || '')
+            : String(payload.prompt || current.lastCompiledPrompt || ''),
+          entries: entries.map((entry, entryIndex) => ({
+            ...entry,
+            index: entryIndex + 1,
+            selected: index === entryIndex + 1,
+          })),
+        }, userId)
+        reply = ok(payload, requestId, { saved: true, storyDebug })
         break
       }
 

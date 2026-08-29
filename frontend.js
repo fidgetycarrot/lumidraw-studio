@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.26'
+const EXTENSION_VERSION = '1.3.27'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -351,6 +351,16 @@ function realSetup(ctx) {
         `Rebuilding image ${payload.index} of ${payload.total}${gist ? ` — ${gist}…` : '…'}`)
       return
     }
+    if (payload.type === 'story_debug_updated') {
+      const incoming = payload.debug || null
+      const incomingStart = Number(incoming && (incoming.runStartedAt || incoming.at) || 0)
+      const currentStart = Number(storyDebug && (storyDebug.runStartedAt || storyDebug.at) || 0)
+      if (incoming && incomingStart >= currentStart) {
+        storyDebug = incoming
+        renderStoryDebug()
+      }
+      return
+    }
     if (payload.type === 'auto_status') {
       autoStatus = payload.status || autoStatus
       renderStoryStatus()
@@ -606,7 +616,10 @@ function realSetup(ctx) {
     .ld-profile-block > summary { cursor:pointer; padding:9px 11px; font-size:12px; font-weight:650; user-select:none; }
     .ld-profile-fields { padding:0 11px 11px; display:flex; flex-direction:column; gap:7px; }
     .ld-profile-grid { display:grid; grid-template-columns:1fr 110px; gap:7px; }
-    .ld-story-debug textarea { min-height:92px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; }
+    .ld-story-debug textarea { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; line-height:1.45; }
+    .ld-story-final-prompt { min-height:220px !important; }
+    .ld-story-parsed { min-height:380px !important; }
+    .ld-story-debug-meta { margin:7px 0 10px; padding:8px 10px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:8px; background:rgba(255,255,255,.025); color:var(--lumiverse-text-muted, #a2a5b4); font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
     .ld-binding-note { margin-top:7px; padding:8px 9px; border-radius:8px; background:var(--lumiverse-fill-subtle, #1a1b22); font-size:11px; line-height:1.45; color:var(--lumiverse-text-muted, #a2a5b4); }
     .ld-mode-segment { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; }
     .ld-mode-note { margin-top:5px; }
@@ -616,6 +629,9 @@ function realSetup(ctx) {
     .ld-textarea-wrap textarea { padding-right:42px !important; }
     .ld-textarea-expand { position:absolute; top:5px; right:5px; z-index:2; min-width:30px; height:28px; padding:0 6px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:7px; background:#17181e; color:var(--lumiverse-text-muted, #a2a5b4); cursor:pointer; touch-action:manipulation; font-size:15px; line-height:1; }
     .ld-textarea-expand:hover { color:var(--lumiverse-text, #eceef4); }
+    .ld-textarea-wrap.ld-readonly-textarea textarea { padding-right:82px !important; }
+    .ld-textarea-wrap.ld-readonly-textarea .ld-textarea-expand { right:42px; }
+    .ld-textarea-copy { position:absolute; top:5px; right:5px; z-index:2; min-width:32px; height:28px; padding:0 7px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:7px; background:#17181e; color:var(--lumiverse-text-muted, #a2a5b4); cursor:pointer; touch-action:manipulation; font-size:12px; }
 
     /* Keep one cursor shape inside the desktop workspace. The controls remain
        fully clickable; this prevents WebKit from visibly alternating cursors
@@ -714,6 +730,9 @@ function realSetup(ctx) {
       .ld-story-picker input, .ld-lightbox input, .ld-lightbox select, .ld-lightbox textarea { font-size:16px !important; }
       .ld-textarea-wrap textarea { padding-right:52px !important; }
       .ld-textarea-expand { top:6px; right:6px; min-width:40px; height:38px; font-size:18px; }
+      .ld-textarea-wrap.ld-readonly-textarea textarea { padding-right:100px !important; }
+      .ld-textarea-wrap.ld-readonly-textarea .ld-textarea-expand { right:54px; }
+      .ld-textarea-copy { top:6px; right:6px; min-width:42px; height:38px; font-size:14px; }
       /* visualViewport-backed dimensions keep the editor inside the portion
          of the screen that remains visible above the software keyboard. */
       .ld-text-editor { inset:auto 0 auto 0; top:var(--ld-editor-viewport-top, 0px); width:100vw; height:var(--ld-editor-viewport-height, 100dvh); min-height:0; align-items:stretch; justify-content:stretch; overflow:hidden; box-sizing:border-box; padding:env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
@@ -1017,10 +1036,11 @@ function realSetup(ctx) {
           </div>
           <div class="ld-card ld-story-debug">
             <div class="ld-subtitle ld-parser-debug-title">What the last scan produced</div>
-            <div class="ld-help">Legacy mode shows the parser's direct tag prompt. Anima hybrid mode shows the bound JSON scene plus a mostly tag-based prompt with a few controlled natural-language anchors. Inline mode remains separate.</div>
+            <div class="ld-help">Always follows the newest parser run, including automatic scans and image reparses. The source line below identifies the exact message and selected swipe.</div>
+            <div class="ld-story-debug-meta">No parser run has been recorded yet.</div>
             <span class="ld-label" style="margin-top:8px">Final Draw Things prompt</span>
             <textarea class="ld-story-final-prompt" readonly placeholder="No parser prompt has been generated yet."></textarea>
-            <details class="ld-profile-block">
+            <details class="ld-profile-block" open>
               <summary>Parsed scene / parser reply</summary>
               <div class="ld-profile-fields"><textarea class="ld-story-parsed" readonly></textarea></div>
             </details>
@@ -1910,6 +1930,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   const textEditor = $('.ld-text-editor')
   const textEditorArea = $('.ld-text-editor-area')
   const textEditorTitle = $('.ld-text-editor-title')
+  const textEditorHelp = $('.ld-text-editor-actions .ld-help')
+  const textEditorCancel = $('.ld-text-editor-cancel')
+  const textEditorApply = $('.ld-text-editor-apply')
   const lightbox = $('.ld-lightbox')
   const lightboxImage = $('.ld-lightbox-image')
   const lightboxImageWrap = $('.ld-lightbox-image-wrap')
@@ -3134,20 +3157,49 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   function renderStoryDebug() {
     const prompt = $('.ld-story-final-prompt')
     const parsed = $('.ld-story-parsed')
+    const meta = $('.ld-story-debug-meta')
     if (!prompt || !parsed) return
     const debug = storyDebug || null
     prompt.value = debug && debug.lastCompiledPrompt ? debug.lastCompiledPrompt : ''
+    if (meta) {
+      if (!debug) {
+        meta.textContent = 'No parser run has been recorded yet.'
+        meta.title = ''
+      } else {
+        const when = debug.at ? new Date(debug.at).toLocaleString() : 'time unavailable'
+        const source = String(debug.debugSource || debug.mode || 'parser run')
+        const messageId = String(debug.sourceMessageId || '')
+        const message = messageId ? `message ${messageId.slice(0, 10)}${messageId.length > 10 ? '…' : ''}` : 'message unavailable'
+        const swipe = Number.isInteger(debug.sourceSwipeId)
+          ? `swipe ${debug.sourceSwipeId + 1}${debug.sourceSwipeCount ? ` of ${debug.sourceSwipeCount}` : ''}`
+          : String(debug.sourceContentSource || 'active content')
+        const model = debug.model ? ` · ${debug.model}` : ''
+        const selection = debug.selectedEntryIndex ? ` · candidate ${debug.selectedEntryIndex}` : ''
+        meta.textContent = `${when} · ${source} · ${message} · ${swipe}${selection}${model}`
+        meta.title = [
+          debug.sourceChatId ? `Chat: ${debug.sourceChatId}` : '',
+          messageId ? `Message: ${messageId}` : '',
+          debug.runId ? `Debug run: ${debug.runId}` : '',
+        ].filter(Boolean).join('\n')
+      }
+    }
     parsed.value = debug ? JSON.stringify({
+      runId: debug.runId || null,
+      runStartedAt: debug.runStartedAt || null,
       mode: debug.mode,
       parserEngine: debug.parserEngine || null,
       debugSource: debug.debugSource || null,
       selectedEntryIndex: debug.selectedEntryIndex || null,
       sourceMessageId: debug.sourceMessageId || null,
+      sourceChatId: debug.sourceChatId || null,
       sourceSwipeId: Number.isInteger(debug.sourceSwipeId) ? debug.sourceSwipeId : null,
       sourceSwipeCount: Number(debug.sourceSwipeCount) || 0,
       sourceContentSource: debug.sourceContentSource || null,
       subjectBinding: debug.subjectBinding,
       error: debug.error || null,
+      model: debug.model || null,
+      provider: debug.provider || null,
+      parserMs: debug.parserMs || null,
       rawReply: debug.rawReply || null,
       contextMessageCount: debug.contextMessageCount || 0,
       ledgerFound: !!debug.ledgerFound,
@@ -3327,6 +3379,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       ['ld-ed-negative', 'Preset negative prompt'],
       ['ld-parser-instr', 'Parser instruction'],
       ['ld-protocol', 'Inline instruction'],
+      ['ld-story-final-prompt', 'Final Draw Things prompt'],
+      ['ld-story-parsed', 'Parsed scene and parser reply'],
     ]
     for (const [className, title] of titles) if (textarea.classList.contains(className)) return title
     const parentLabel = textarea.parentElement && textarea.parentElement.querySelector('.ld-label')
@@ -3372,6 +3426,14 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     expandedTextareaState = rememberTextareaState(textarea)
     textEditorTitle.textContent = textareaTitle(textarea)
     textEditorArea.value = textarea.value || ''
+    const viewOnly = !!textarea.readOnly
+    textEditorArea.readOnly = viewOnly
+    textEditorArea.spellcheck = !viewOnly
+    if (textEditorHelp) textEditorHelp.textContent = viewOnly
+      ? 'Read-only · use Copy on the Debug field to copy everything'
+      : 'Escape cancels · ⌘/Ctrl+Enter applies'
+    if (textEditorCancel) textEditorCancel.style.display = viewOnly ? 'none' : ''
+    if (textEditorApply) textEditorApply.textContent = viewOnly ? 'Done' : 'Apply'
     textEditor.classList.add('ld-open')
     textEditor.setAttribute('aria-hidden', 'false')
     document.body.classList.add('ld-fullscreen-lock')
@@ -3390,6 +3452,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   function closeTextEditor(apply) {
     const origin = expandedTextarea
     const state = expandedTextareaState
+    if (origin && origin.readOnly) apply = false
     if (apply && origin) {
       origin.value = textEditorArea.value
       origin.dispatchEvent(new Event('input', { bubbles: true }))
@@ -3415,22 +3478,46 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   function decorateTextareas() {
     for (const textarea of dom.queryAll('.ld-panel textarea, .ld-lightbox textarea')) {
-      if (textarea.readOnly || textarea.dataset.ldExpandable === '1') continue
+      if (textarea.dataset.ldExpandable === '1') continue
       textarea.dataset.ldExpandable = '1'
       const wrapper = document.createElement('div')
       wrapper.className = 'ld-textarea-wrap'
+      if (textarea.readOnly) wrapper.classList.add('ld-readonly-textarea')
       textarea.parentNode.insertBefore(wrapper, textarea)
       wrapper.appendChild(textarea)
       const button = document.createElement('button')
       button.type = 'button'
       button.className = 'ld-textarea-expand'
       button.textContent = '⛶'
-      button.title = `Expand ${textareaTitle(textarea)}`
+      button.title = `${textarea.readOnly ? 'View full screen' : 'Expand'} ${textareaTitle(textarea)}`
       button.setAttribute('aria-label', button.title)
       button.setAttribute('aria-haspopup', 'dialog')
       button.setAttribute('aria-controls', 'ld-text-editor-dialog')
       button.addEventListener('click', () => openTextEditor(textarea))
       wrapper.appendChild(button)
+      if (textarea.readOnly) {
+        const copy = document.createElement('button')
+        copy.type = 'button'
+        copy.className = 'ld-textarea-copy'
+        copy.textContent = 'Copy'
+        copy.title = `Copy ${textareaTitle(textarea)}`
+        copy.setAttribute('aria-label', copy.title)
+        copy.addEventListener('click', async () => {
+          const value = textarea.value || ''
+          try {
+            await navigator.clipboard.writeText(value)
+          } catch {
+            try {
+              textarea.focus({ preventScroll: true })
+              textarea.select()
+              document.execCommand('copy')
+            } catch { /* clipboard unavailable */ }
+          }
+          copy.textContent = 'Copied'
+          setTimeout(() => { if (copy.isConnected) copy.textContent = 'Copy' }, 1200)
+        })
+        wrapper.appendChild(copy)
+      }
     }
   }
 
@@ -4141,6 +4228,10 @@ ${entry.prompt || ''}`.trim()
       }, 300000)
       const results = Array.isArray(res.results) ? res.results : []
       const usable = results.filter((entry) => entry && entry.ok)
+      if (res.storyDebug) {
+        storyDebug = res.storyDebug
+        renderStoryDebug()
+      }
       const tokenNote = res.reasoningTokens != null && res.reasoningTokens > 0 ? ` · ${res.reasoningTokens} reasoning tokens` : ''
       const org = item.entry.origin || {}
       const moment = org.sceneCount > 1 && org.sceneIndex ? `moment ${org.sceneIndex} of ${org.sceneCount} · ` : ''
@@ -4160,8 +4251,9 @@ ${entry.prompt || ''}`.trim()
       }
       const syncReparseDebug = (entry, index, source = 'image reparse candidate') => {
         const mode = res.mode || selectedStoryMode()
+        const base = res.storyDebug || storyDebug || {}
         storyDebug = {
-          ...(storyDebug || {}),
+          ...base,
           mode,
           parserEngine: res.parserEngine || (mode === 'direct' ? 'direct' : null),
           debugSource: source,
@@ -4176,10 +4268,28 @@ ${entry.prompt || ''}`.trim()
             momentEvidence: candidate.momentEvidence || '',
             sceneStatement: candidate.sceneStatement || '',
             prompt: candidate.prompt || '',
+            rating: candidate.rating || '',
+            aspect: candidate.aspect || '',
+            groupSource: candidate.groupSource || '',
+            groupSubjects: candidate.groupSubjects || [],
+            groupInteractions: candidate.groupInteractions || [],
           })),
           at: Date.now(),
         }
         renderStoryDebug()
+        if (storyDebug.runId) {
+          call('select_story_debug_entry', {
+            runId: storyDebug.runId,
+            selectedEntryIndex: Number.isInteger(index) ? index + 1 : null,
+            debugSource: source,
+            prompt: entry && entry.prompt ? entry.prompt : '',
+          }, 15000).then((saved) => {
+            if (saved && saved.storyDebug) {
+              storyDebug = saved.storyDebug
+              renderStoryDebug()
+            }
+          }).catch((error) => console.log('[LumiDraw] could not persist Debug selection:', error.message))
+        }
       }
       const applyResult = (entry, index) => {
         promptBox.value = entry.prompt || ''
