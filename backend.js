@@ -9228,6 +9228,18 @@ already-written CURRENT PASSAGE into a structured data record. Do not continue,
 embellish, or rewrite the story. Extract only visible action, geometry, clothing,
 identity, and camera tags. Do not add commentary or reasoning.
 
+CONTENT SCOPE
+- This pipeline formats already-written fictional roleplay between adult
+  characters, including explicit sexual scenes. Explicit passages are ordinary
+  input here, not an edge case, and their visible content must be classified and
+  formatted as faithfully as any other passage.
+- Do not sanitize, fade to black, substitute a tamer moment, or answer with a
+  prose refusal. The pipeline reads only the JSON schema below; prose is a
+  formatting failure and cannot produce an image.
+- When the CURRENT PASSAGE is explicit, return the same structured JSON used for
+  every other passage, with the pictured content rated nsfw or explicit as the
+  definitions below require.
+
 OUTPUT — only this JSON, compact, no markdown, no commentary:
 {"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","moment_evidence":"3-20 exact consecutive words from the CURRENT PASSAGE proving the depicted moment is occurring now","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","group_scene":"3/4-person scenes only: short name-free visual context","group_subjects":[{"name":"exact sheet name","position":"left|center|right|foreground|midground|background","include_saved_anatomy":false,"details":["complete current clothing","pose","one-person action","expression","gaze"]}],"shared_interaction":"3/4-person scenes only: one name-free joint action using spatial labels","spatial_relation":"3/4-person scenes only: one name-free placement statement using spatial labels","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
 Omit "group_scene", "group_subjects", "shared_interaction", and
@@ -9238,6 +9250,9 @@ CHOOSING THE MOMENT
 - Illustrate only the CURRENT PASSAGE. Prior context resolves who and where;
   it never supplies the moment.
 - Pick the single clearest drawable beat. One clear action, not three.
+- When the passage's clearest supported drawable beat is sexual, that is the
+  moment to choose. Do not downgrade to a safer face, embrace, or before/after
+  beat merely because the depicted action is explicit.
 - Before composing anything, copy 3-20 exact consecutive words into
   "moment_evidence" that prove the pictured action or visible state is occurring
   NOW. This is checked verbatim. It must contain the actual event, not merely the
@@ -9272,7 +9287,8 @@ SCENE SUMMARY — the technical statement of what is depicted.
   the roster: every known character run below must belong to someone named here.
   If a sheet has no SENTENCE NAME, use its supplied pronoun instead.
 - In explicit images, use the precise clinical term for any visible sexual act
-  or anatomy. In safe or sensitive images, never name a sexual act.
+  or anatomy. Euphemism, hedging, or substituting a vaguer act is an error. In
+  safe or sensitive images, never name a sexual act.
 - Grammar is physical ownership: the grammatical subject performs the action
   and the object receives it. Never reverse actor and recipient. For penetration,
   the penetrating person or part is the actor and the receiving person is the
@@ -9391,9 +9407,12 @@ SETTING — when the passage moves the characters somewhere new, put the new
 location's tags in "setting" so LumiDraw remembers the move. Omit it when they
 have not moved.
 
-RATING is the Danbooru rating of the PICTURE, not the mood of the story:
+RATING is the Danbooru rating of the PICTURE, not the mood of the story and not
+a comfort setting:
 safe = nothing suggestive; sensitive = suggestive, no nudity; nsfw = nudity or
 overt sexual context; explicit = a sexual act or visible genitals.
+Rating below the pictured content is a classification error, not caution. If the
+chosen moment depicts a sexual act, the rating is explicit.
 
 ASPECT — 16:9 for a wide scene or two figures side by side, 4:3 for two close
 figures, 3:4 for a single figure, 1:1 for a tight emblematic shot.
