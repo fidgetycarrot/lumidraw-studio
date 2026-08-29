@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.24'
+const EXTENSION_VERSION = '1.3.25'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -3142,6 +3142,10 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       parserEngine: debug.parserEngine || null,
       debugSource: debug.debugSource || null,
       selectedEntryIndex: debug.selectedEntryIndex || null,
+      sourceMessageId: debug.sourceMessageId || null,
+      sourceSwipeId: Number.isInteger(debug.sourceSwipeId) ? debug.sourceSwipeId : null,
+      sourceSwipeCount: Number(debug.sourceSwipeCount) || 0,
+      sourceContentSource: debug.sourceContentSource || null,
       subjectBinding: debug.subjectBinding,
       error: debug.error || null,
       rawReply: debug.rawReply || null,
@@ -6008,11 +6012,21 @@ ${entry.prompt || ''}`.trim()
     }
 
     let lastParserKey = ''
+    const parserInterceptorRegisteredAt = Date.now()
+    const parserTagBootGraceMs = 15000
     const onParserTrigger = (payload) => {
       try {
         // The tag interceptor may fire during streaming and again after the
         // message commits. Parser must run only at the committed boundary.
         if (payload && payload.isStreaming === true) return
+        // Registering the interceptor can replay every committed tag already in
+        // the rendered chat. Those are backlog, not new generations. The real
+        // GENERATION_ENDED listener remains active during this short window, so
+        // a genuinely new reply is still illustrated.
+        if (Date.now() - parserInterceptorRegisteredAt < parserTagBootGraceMs) {
+          console.log('[LumiDraw] ignored parser tag replayed during startup')
+          return
+        }
         const messageId = String(payload && payload.messageId || '')
         const chatId = String(payload && payload.chatId || '')
         const key = `${chatId}:${messageId}:${String(payload && payload.fullMatch || '')}`

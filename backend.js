@@ -2704,15 +2704,40 @@ async function fetchMessages(userId, explicitChatId = '') {
 }
 
 function messageBits(m) {
+  m = m || {}
   const contentKey = ('content' in m) ? 'content' : ('text' in m) ? 'text' : ('message' in m) ? 'message' : null
   const role = (m.role || m.sender || '').toString().toLowerCase()
   const isAssistant = role.includes('assistant') || role.includes('char') || role === 'ai'
   const isUser = role.includes('user') || role.includes('persona') || role === 'human'
+  const swipes = Array.isArray(m.swipes) ? m.swipes : []
+  const rawSwipeId = m.swipe_id !== undefined ? m.swipe_id
+    : (m.swipeId !== undefined ? m.swipeId
+      : (m.active_swipe_id !== undefined ? m.active_swipe_id : m.activeSwipeId))
+  const parsedSwipeId = rawSwipeId === null || rawSwipeId === undefined ? NaN : Number(rawSwipeId)
+  const swipeId = Number.isInteger(parsedSwipeId) && parsedSwipeId >= 0 ? parsedSwipeId : null
+  const activeSwipe = swipeId !== null && swipeId < swipes.length ? swipes[swipeId] : null
+  const swipeDates = Array.isArray(m.swipe_dates) ? m.swipe_dates
+    : (Array.isArray(m.swipeDates) ? m.swipeDates : [])
+  // Lumiverse intentionally treats swipes[swipe_id] as the displayed message.
+  // `content` is a legacy mirror and can drift after regeneration. Reading it
+  // illustrated an older hidden swipe while the visible message said something
+  // else — exactly the kind of mismatch an exact-evidence guard cannot explain.
+  const content = typeof activeSwipe === 'string'
+    ? activeSwipe
+    : (contentKey ? m[contentKey] : null)
+  const contentSource = typeof activeSwipe === 'string'
+    ? `swipes[${swipeId}]`
+    : (contentKey || '')
   return {
     id: m.id || m.messageId,
     contentKey,
-    content: contentKey ? m[contentKey] : null,
+    content,
+    contentSource,
+    swipeId,
+    swipeCount: swipes.length,
+    activeSwipeAt: swipeId !== null && swipeId < swipeDates.length ? swipeDates[swipeId] : null,
     createdAt: m.createdAt || m.created_at || m.timestamp || null,
+    updatedAt: m.updatedAt || m.updated_at || null,
     role,
     isAssistant,
     isUser,
@@ -8535,7 +8560,7 @@ const SUBJECT_BREAK_MARK = '\u0000SUBJECT_BREAK'
 async function reconcileDirectGrounding(initialImages, ctx) {
   let images = Array.isArray(initialImages) ? initialImages : []
   let rawReply = ctx.rawReply
-  const { instruction, settings, profiles, parserInput, userId, scan } = ctx
+  const { instruction, settings, profiles, parserInput, userId, scan, target } = ctx
   const passage = (parserInput && parserInput.currentPassage) || ''
   if (!instruction || !settings || !images.length || !parserInput) return { images, rawReply }
 
@@ -8601,6 +8626,10 @@ async function reconcileDirectGrounding(initialImages, ctx) {
         mode: 'direct',
         parserEngine: 'direct',
         debugSource: 'failed-grounding',
+        sourceMessageId: String((target && target.id) || ''),
+        sourceSwipeId: target && Number.isInteger(target.swipeId) ? target.swipeId : null,
+        sourceSwipeCount: Number((target && target.swipeCount) || 0),
+        sourceContentSource: String((target && target.contentSource) || ''),
         rawReply,
         error: message,
         entries: images.map((image) => ({
@@ -8609,6 +8638,8 @@ async function reconcileDirectGrounding(initialImages, ctx) {
           sceneStatement: image.scene_summary || '',
           momentEvidence: image.moment_evidence || '',
           momentEvidenceError: (directMomentContradiction(image) || {}).reason || '',
+          momentEvidenceContext: directMomentEvidenceContext(
+            parserInput.currentPassage || '', image.moment_evidence || ''),
           present: image.present || [],
           rejected: true,
         })),
@@ -9154,6 +9185,10 @@ async function runDirectImages(initialImages, ctx) {
   await saveStoryDebug({
     mode: 'direct',
     parserEngine: 'direct',
+    sourceMessageId: String((target && target.id) || ''),
+    sourceSwipeId: target && Number.isInteger(target.swipeId) ? target.swipeId : null,
+    sourceSwipeCount: Number((target && target.swipeCount) || 0),
+    sourceContentSource: String((target && target.contentSource) || ''),
     rawReply,
     error: '',
     entries: results.map((item, index) => ({
@@ -9998,6 +10033,19 @@ function directEvidenceInsideDialogue(passage, evidence) {
     if (!match[0].length) pattern.lastIndex++
   }
   return found
+}
+
+function directMomentEvidenceContext(passage, evidence) {
+  const raw = String(passage || '')
+  const words = normalizeIdentityText(evidence).split(/\s+/).filter(Boolean)
+  if (!raw || !words.length) return ''
+  let match = null
+  try { match = new RegExp(words.map(escapeRegExp).join('[^a-z0-9]+'), 'i').exec(raw) }
+  catch { return '' }
+  if (!match) return ''
+  const start = Math.max(0, match.index - 280)
+  const end = Math.min(raw.length, match.index + match[0].length + 280)
+  return raw.slice(start, end).replace(/\s+/g, ' ').trim().slice(0, 800)
 }
 
 function assessDirectMomentEvidence(value, passage) {
@@ -12005,6 +12053,51 @@ function releaseScanLane() {
 }
 const recentAutoScans = new Map()
 
+// Turning automatic illustration off must stop work that was already admitted,
+// not merely prevent the next trigger. This marks delayed and queued jobs before
+// they can reach the parser, and aborts the provider request for the one active
+// automatic scan. Explicit manual scans are deliberately left alone.
+function stopAutomaticScanWork(reason = 'Automatic illustration was turned off.') {
+  let stoppedJobs = 0
+  for (const job of autoScanJobs.values()) {
+    if (!job || job.cancelled) continue
+    job.cancelled = true
+    job.cancelReason = reason
+    stoppedJobs += 1
+    setAutoStatus(job.userId, {
+      mode: 'off', status: 'idle', messageId: job.messageId, chatId: job.chatId,
+      source: job.source, note: reason,
+    })
+  }
+
+  let stoppedActive = false
+  if (activeStoryScan && activeStoryScan.auto) {
+    stoppedActive = true
+    activeStoryScan.cancelled = true
+    activeStoryScan.note = reason
+    if (activeStoryScan.abortController) {
+      try { activeStoryScan.abortController.abort() } catch { /* ignore */ }
+    }
+    notifyFrontend(activeStoryScan.userId, 'scan_status', {
+      scan: {
+        id: activeStoryScan.id,
+        stage: 'cancelling',
+        note: reason,
+        messageId: activeStoryScan.messageId || '',
+        startedAt: activeStoryScan.startedAt,
+        elapsedMs: Date.now() - activeStoryScan.startedAt,
+        cancellable: false,
+      },
+    })
+  }
+
+  if (stoppedJobs || stoppedActive) {
+    spindle.log.warn('[lumidraw] automatic illustration stopped immediately' +
+      ' · jobs=' + stoppedJobs + ' · active=' + (stoppedActive ? 'yes' : 'no'))
+  }
+  return { stoppedJobs, stoppedActive }
+}
+
 // CHARACTER_MESSAGE_RENDERED fires for every message the host renders,
 // including the existing history it paints while a chat is loading. Without a
 // grace window, opening the app queued an automatic scan for the last old
@@ -12034,11 +12127,30 @@ const RENDERED_EVENT_GRACE_MS = 12000
 // the signal, and it was being logged and thrown away.
 let lastFrontendConnectAt = 0
 function isStartupRenderedEcho(source) {
-  if (!/rendered/i.test(String(source || ''))) return false
+  if (!/(?:rendered|parser-tag)/i.test(String(source || ''))) return false
   // Whichever came last. A backend restart and a page load both produce the same
   // burst, and only the most recent one bounds the window.
   const since = Date.now() - Math.max(BACKEND_STARTED_AT, lastFrontendConnectAt)
   return since < RENDERED_EVENT_GRACE_MS
+}
+
+const PARSER_TAG_RECENT_MS = 5 * 60 * 1000
+
+function messageTimeMs(value) {
+  if (value === null || value === undefined || value === '') return 0
+  const numeric = Number(value)
+  if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric
+  const parsed = Date.parse(String(value))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function parserTagMessageIsRecent(target, now = Date.now()) {
+  if (!target) return false
+  const at = Math.max(
+    messageTimeMs(target.activeSwipeAt),
+    messageTimeMs(target.updatedAt),
+    messageTimeMs(target.createdAt))
+  return at > 0 && now >= at && now - at <= PARSER_TAG_RECENT_MS
 }
 
 function autoScanKey(userId, chatId, messageId) {
@@ -12098,6 +12210,8 @@ function scheduleAutoStoryScan(userId, request = {}) {
     key, userId, chatId, messageId, source, sources: [source],
     expectedContent: String(request.content || '').slice(-7000),
     queuedAt: Date.now(),
+    cancelled: false,
+    cancelReason: '',
   }
   setAutoStatus(userId, {
     mode: 'parser', status: 'queued', messageId, chatId, source,
@@ -12108,6 +12222,12 @@ function scheduleAutoStoryScan(userId, request = {}) {
   const promise = (async () => {
     try {
       await wait(Math.max(250, Number(request.delayMs) || 650))
+      if (job.cancelled) {
+        return {
+          mode: 'off', processed: 0, skipped: true, cancelled: true,
+          note: job.cancelReason || 'Automatic illustration was turned off; no parser call was made.',
+        }
+      }
       const settings = await getSettings()
       if ((settings.mode !== 'parser' && settings.mode !== 'direct') || settings.autoScan === false) {
         const result = { mode: settings.mode, processed: 0, skipped: true, note: 'Parser auto-scan is disabled.' }
@@ -12150,6 +12270,30 @@ function scheduleAutoStoryScan(userId, request = {}) {
 
       let result
       try {
+        if (job.cancelled) {
+          return {
+            mode: 'off', processed: 0, skipped: true, cancelled: true,
+            note: job.cancelReason || 'Automatic illustration was turned off while this message waited; no parser call was made.',
+          }
+        }
+        // Settings may have changed while this message waited. Off/manual must
+        // be an immediate kill switch for queued automatic work, not something
+        // checked only before the queue formed.
+        const liveSettings = await getSettings()
+        if ((liveSettings.mode !== 'parser' && liveSettings.mode !== 'direct') || liveSettings.autoScan === false) {
+          const stopped = {
+            mode: liveSettings.mode,
+            processed: 0,
+            skipped: true,
+            note: 'Automatic illustration was turned off while this message waited; no parser call was made.',
+          }
+          recentAutoScans.set(key, Date.now())
+          setAutoStatus(userId, {
+            mode: liveSettings.mode, status: 'idle', messageId: job.messageId,
+            chatId: job.chatId, source, note: stopped.note,
+          })
+          return stopped
+        }
         // The wait may have been long. A manual Scan press, or the scan that
         // was holding the lane, may have illustrated this message in the
         // meantime — so ask again rather than illustrating it twice.
@@ -12361,6 +12505,20 @@ async function scanStoryCore(userId, options = {}) {
     scan.chatId = String(chatId || options.chatId || '')
   }
   assertStoryScanActive(scan)
+
+  // The parser-tag interceptor is a fallback for host builds where generation
+  // lifecycle events are unavailable. It also sees tags in old messages when
+  // a chat backlog is rendered or virtualized. Only a recently committed
+  // message/swipe may use this automatic fallback; old messages remain
+  // available through the explicit Scan picker.
+  if (options.auto && /parser-tag/i.test(String(options.source || '')) &&
+      !parserTagMessageIsRecent(target)) {
+    const note = 'Skipped an old parser tag from the rendered chat backlog; no parser call was made.'
+    spindle.log.info('[lumidraw] ignored old parser tag · message=' + String(target.id || '') +
+      ' · content-source=' + String(target.contentSource || 'unknown') +
+      (Number.isInteger(target.swipeId) ? ' · swipe=' + target.swipeId : ''))
+    return { mode: settings.mode, processed: 0, skipped: true, startupEcho: true, note }
+  }
 
   // The story may have introduced someone. Read that before compiling, so the new
   // profile is locked for this very image rather than the next one.
@@ -13112,7 +13270,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
     } else {
       const reconciled = await reconcileDirectGrounding(direct.images, {
         preset, profiles, userId, chatId, scan: null, rawReply: raw, parserInput,
-        instruction, settings,
+        instruction, settings, target,
       })
       raw = reconciled.rawReply
       const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
@@ -13368,7 +13526,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
           settings.maxSubjects = Math.max(2, Math.min(4, Number(payload.maxSubjects) || 2))
         }
         await spindle.storage.setJson(SETTINGS_FILE, settings, { indent: 2 })
-        reply = ok(payload, requestId, { settings })
+        const automaticStopped = ((settings.mode !== 'parser' && settings.mode !== 'direct') || settings.autoScan === false)
+          ? stopAutomaticScanWork('Automatic illustration was turned off. Queued work was discarded; the active automatic request was cancelled.')
+          : { stoppedJobs: 0, stoppedActive: false }
+        reply = ok(payload, requestId, { settings, automaticStopped })
         break
       }
 
