@@ -2129,6 +2129,33 @@ function cleanParserMessageText(text, { keepLedger = false } = {}) {
     .trim()
 }
 
+// The latest passage is intentionally bounded, but cutting exactly N
+// characters from the end can begin between an opening quote/font tag and its
+// closer. That orphaned closer used to flip dialogue parity for every later
+// paragraph. Prefer a complete paragraph near the budget edge. Very long
+// single paragraphs retain the old hard slice as a last-resort size bound; the
+// dialogue detector below is independently resilient to that case.
+function clipCleanParserPassage(value, maxChars = 6000) {
+  const text = String(value || '').trim()
+  const limit = Math.max(1000, Number(maxChars) || 6000)
+  if (text.length <= limit) return text
+  const nominal = text.length - limit
+  const next = text.indexOf('\n\n', nominal)
+  const previous = text.lastIndexOf('\n\n', nominal)
+  if (next >= 0 && text.length - (next + 2) >= Math.floor(limit * 0.55)) {
+    return text.slice(next + 2).trim()
+  }
+  if (previous >= 0 && text.length - (previous + 2) <= Math.floor(limit * 1.35)) {
+    return text.slice(previous + 2).trim()
+  }
+  if (next >= 0) return text.slice(next + 2).trim()
+  return text.slice(-limit).trim()
+}
+
+function clipParserPassage(text, maxChars = 6000) {
+  return clipCleanParserPassage(cleanParserMessageText(text), maxChars)
+}
+
 // Remembered outfits are keyed by subject ref; the parser needs names. Built here so
 // both parser entry points describe the wardrobe the same way.
 function wardrobeLinesFor(rememberedState, profiles) {
@@ -2351,7 +2378,7 @@ function buildWardrobeSyncInput(messages, targetIndex, target, profiles, state) 
     context.join('\n') || '(none)',
     '',
     'CURRENT PASSAGE — all evidence and updates must come from here',
-    cleanParserMessageText(target.content).slice(-6000),
+    clipParserPassage(target.content),
   ].join('\n')
 }
 
@@ -2432,7 +2459,7 @@ async function syncWardrobeFromLatestPassage(userId, chatId, preset, settings) {
   }
   const resolvedChatId = String(chatId || located.chatId || '')
   const target = located.target
-  const passage = cleanParserMessageText(target.content).slice(-6000)
+  const passage = clipParserPassage(target.content)
   if (!passage) throw new Error('The latest assistant message has no readable story text.')
 
   // A latest passage may introduce the person whose clothes it establishes.
@@ -2481,7 +2508,7 @@ async function syncWardrobeFromLatestPassage(userId, chatId, preset, settings) {
 }
 
 function buildAnimaParserInput(messages, targetIndex, target, settings, sceneState = null) {
-  const currentPassage = cleanParserMessageText(target.content).slice(-6000)
+  const currentPassage = clipParserPassage(target.content)
   const contextCount = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
   const previous = []
   if (contextCount > 0 && Number.isInteger(targetIndex) && targetIndex > 0) {
@@ -10369,11 +10396,26 @@ function directEvidenceInsideDialogue(passage, evidence) {
   let found = false
   for (let match = pattern.exec(searchable); match; match = pattern.exec(searchable)) {
     found = true
+    // Dialogue state belongs to the evidence's own paragraph. The parser input
+    // is a bounded tail of a potentially enormous message; an unmatched quote
+    // in an earlier clipped fragment must not poison every later paragraph.
     const before = searchable.slice(0, match.index)
-    const rawBefore = raw.slice(0, match.index).toLowerCase()
-    const straightQuotes = (before.match(/"/g) || []).length
+    const lfBoundary = before.lastIndexOf('\n\n')
+    const crlfBoundary = before.lastIndexOf('\r\n\r\n')
+    const paragraphStart = Math.max(lfBoundary >= 0 ? lfBoundary + 2 : 0,
+      crlfBoundary >= 0 ? crlfBoundary + 4 : 0)
+    const localBefore = searchable.slice(paragraphStart, match.index)
+    const rawBefore = raw.slice(paragraphStart, match.index).toLowerCase()
+    let straightQuotes = (localBefore.match(/"/g) || []).length
+    // A hard fallback slice can still begin inside one extremely long
+    // paragraph. If its first visible quote is immediately followed by space
+    // or a closing tag, it is an orphaned closer, not a new opening quote.
+    const firstStraight = localBefore.indexOf('"')
+    if (firstStraight >= 0 && !/[a-z0-9]/i.test(localBefore[firstStraight + 1] || '')) {
+      straightQuotes = Math.max(0, straightQuotes - 1)
+    }
     const insideStraight = straightQuotes % 2 === 1
-    const insideSmart = before.lastIndexOf('“') > before.lastIndexOf('”')
+    const insideSmart = localBefore.lastIndexOf('“') > localBefore.lastIndexOf('”')
     // Lumiverse commonly colors spoken lines with <font>. Those lines can lack
     // literal quote characters, so recognize the element itself as dialogue.
     const insideFont = rawBefore.lastIndexOf('<font') > rawBefore.lastIndexOf('</font>')
@@ -13209,7 +13251,7 @@ async function scanStoryCore(userId, options = {}) {
       return { mode: 'parser', note: 'This message was already illustrated — choose it again to force another parser run.' }
     }
     const usingCustom = !!(settings.parserInstruction && settings.parserInstruction.trim())
-    const passage = cleanParserMessageText(target.content).slice(-6000)
+    const passage = clipParserPassage(target.content)
 
     if (settings.parserEngine === 'anima' || settings.mode === 'direct') {
       // Hand the parser the location outright rather than hoping it survives
@@ -13747,7 +13789,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const target = messageBits(messages[targetIndex])
   if (!target.content) throw new Error('The source message has no readable text.')
 
-  const passage = cleanParserMessageText(target.content).slice(-6000)
+  const passage = clipParserPassage(target.content)
   const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
   const profiles = await getStoryProfiles(preset, settings, userId, chatId)
   try {
