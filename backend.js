@@ -8878,6 +8878,92 @@ function directGroupInteractionSentence(interaction, subjects, profiles) {
   }
 }
 
+function directRelationFragment(value, maxWords = 5) {
+  const compact = String(value || '')
+    .replace(/\bBREAK\b/gi, ' ')
+    .replace(/[\r\n<>\[\]{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,.;:!?]+|[\s,.;:!?]+$/g, '')
+    .trim()
+  return compact.split(/\s+/).filter(Boolean).slice(0, Math.max(1, maxWords)).join(' ')
+}
+
+function directRelationVerbKey(value) {
+  const raw = normalizeIdentityText(value).split(/\s+/)[0]
+  const irregular = {
+    held: 'hold', gave: 'giv', took: 'tak', sat: 'sit', stood: 'stand',
+    lay: 'ly', caught: 'catch', drew: 'draw', shook: 'shak',
+  }
+  if (irregular[raw]) return irregular[raw]
+  return raw
+    .replace(/ies$/i, 'y')
+    .replace(/ing$/i, '')
+    .replace(/ed$/i, '')
+    .replace(/es$/i, '')
+    .replace(/s$/i, '')
+    .replace(/([b-df-hj-np-tv-z])\1$/i, '$1')
+}
+
+function directRelationProfileFor(relation, role, profiles) {
+  const key = String((relation && relation[`${role}Key`]) || '')
+  if (key.startsWith('profile:')) {
+    const ref = key.slice('profile:'.length)
+    const profile = allKnownProfiles(profiles).find((item) => item && item.ref === ref)
+    if (profile) return profile
+  }
+  return directProfileForPresenceName((relation && relation[`${role}Name`]) || '', profiles)
+}
+
+function directRelationLabel(relation, role, image, profiles) {
+  const key = String((relation && relation[`${role}Key`]) || '')
+  const spatial = (image && image.groupSubjects) || []
+  const subject = spatial.find((item) => directGroupSubjectKey(item) === key)
+  if (subject) return directGroupSubjectLabel(subject, profiles)
+  const profile = directRelationProfileFor(relation, role, profiles)
+  const safeName = directSentenceName(profile)
+  if (safeName) return safeName
+  if (profile) return directFallbackNoun(profile)
+  return directRelationFragment((relation && relation[`${role}Name`]) || 'the other adult', 4)
+}
+
+function directPossessiveLabel(value) {
+  const text = String(value || '').trim()
+  return /s$/i.test(text) ? `${text}'` : `${text}'s`
+}
+
+function directRelationObject(value) {
+  const text = directRelationFragment(value, 4)
+  if (!text || /^(?:a|an|the|his|her|their)\b/i.test(text)) return text
+  return `${/^[aeiou]/i.test(text) ? 'an' : 'a'} ${text}`
+}
+
+// Ordinary physical relationships use the same exact subject binding as sexual
+// group interactions, but never participate in anatomy resolution. This is
+// deliberately general enough for contact, gaze, proximity, and object transfer.
+function directGroupRelationSentence(relation, image, profiles) {
+  const actor = directRelationLabel(relation, 'actor', image, profiles)
+  const target = directRelationLabel(relation, 'target', image, profiles)
+  const action = directRelationFragment(relation && relation.action, 5)
+  if (!actor || !target || !action) return ''
+  const actorPart = directRelationFragment(relation.actorPart, 3)
+  const targetPart = directRelationFragment(relation.targetPart, 3)
+  const object = directRelationObject(relation.object)
+  const actingSubject = actorPart ? `${directPossessiveLabel(actor)} ${actorPart}` : actor
+  const targetObject = targetPart ? `${directPossessiveLabel(target)} ${targetPart}` : target
+  if (object && /^(?:hands?|passes?|gives?|offers?|shows?)\b/i.test(action)) {
+    return `${upperFirst(actingSubject)} ${action} ${object}${/\bto$/i.test(action) ? '' : ' to'} ${targetObject}.`
+  }
+  if (object) return `${upperFirst(actingSubject)} ${action} ${object} toward ${targetObject}.`
+  return `${upperFirst(actingSubject)} ${action} ${targetObject}.`
+}
+
+function directGroupRelationSummary(image, profiles) {
+  return ((image && image.groupRelations) || [])
+    .map((relation) => directGroupRelationSentence(relation, image, profiles))
+    .filter(Boolean)
+    .join(' ')
+}
+
 function directGroupMechanicsDebug(image, profiles, banned = '') {
   const subjects = (image && image.groupSubjects) || []
   return {
@@ -8888,6 +8974,15 @@ function directGroupMechanicsDebug(image, profiles, banned = '') {
       actor: interaction.actorName || interaction.actorKey || '',
       act: interaction.act || '',
       recipient: interaction.recipientName || interaction.recipientKey || '',
+    })),
+    groupRelations: ((image && image.groupRelations) || []).map((relation) => ({
+      actor: relation.actorName || relation.actorKey || '',
+      action: relation.action || '',
+      target: relation.targetName || relation.targetKey || '',
+      evidence: relation.evidence || '',
+      actorPart: relation.actorPart || '',
+      targetPart: relation.targetPart || '',
+      object: relation.object || '',
     })),
     groupSubjects: subjects.map((subject) => {
       const inserted = directGroupAnatomyTags(
@@ -9047,13 +9142,16 @@ function applyDirectWardrobeLock(prompt, profiles, wardrobe, trace = null) {
   return next.join(' BREAK ').replace(/\s+/g, ' ').trim()
 }
 
+const DIRECT_NONSPATIAL_RELATION_RE = /\b(?:reaches?|squeezes?|touches?|presses?|holds?|grips?|pats?|hugs?|kisses?|hands?|passes?|gives?|offers?|shows?|takes?|pulls?|pushes?|rubs?|caresses?|strikes?|points?|waves?|leans?|looks?|watches?|steadies|supports?|restrains?)\b/i
+
 function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardrobe = null) {
   const subjects = (image.groupSubjects || []).slice(0, 4)
   const counts = directGroupCounts(subjects, profiles)
   const lines = [`${counts.join(', ')},`]
-  // Structured interactions own sexual acts. Falling back to scene_summary in
-  // that case would state the same act twice and weaken subject binding.
-  const groupSceneSource = image.group_scene || ((image.groupInteractions || []).length ? '' : image.scene_summary) || ''
+  // Structured interactions and relations own cross-person actions. Falling
+  // back to scene_summary would state them twice and weaken subject binding.
+  const hasStructuredRelationship = (image.groupInteractions || []).length || (image.groupRelations || []).length
+  const groupSceneSource = image.group_scene || (hasStructuredRelationship ? '' : image.scene_summary) || ''
   const groupScene = directGroupReplaceNames(groupSceneSource, subjects, profiles)
   if (groupScene) lines.push(`Scene: ${groupScene.replace(/[.]+$/g, '')}.`)
 
@@ -9099,14 +9197,26 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
     .map((interaction) => directGroupInteractionSentence(interaction, subjects, profiles))
     .filter(Boolean)
   for (const line of interactionLines) lines.push(line)
+  const relationLines = (image.groupRelations || [])
+    .map((relation) => directGroupRelationSentence(relation, image, profiles))
+    .filter(Boolean)
+  for (const line of relationLines) lines.push(line)
   let shared = directGroupReplaceNames(image.shared_interaction || '', subjects, profiles)
   if (interactionLines.length && (ANATOMY_ACT_RE.test(shared) || /\bmasturbat\w*\b/i.test(shared))) {
     shared = ''
     if (trace) trace('shared interaction', 'applied', 'sexual act removed from free text; carried by structured interactions')
   }
+  if (relationLines.length && shared) {
+    shared = ''
+    if (trace) trace('shared interaction', 'applied', 'ordinary contact removed from legacy free text; carried by structured relations')
+  }
   if (shared) lines.push(`Shared interaction: ${shared.replace(/[.]+$/g, '')}.`)
-  const relation = directGroupReplaceNames(image.spatial_relation || '', subjects, profiles)
-  if (relation) lines.push(`Spatial relation: ${relation.replace(/[.]+$/g, '')}.`)
+  let spatialRelation = directGroupReplaceNames(image.spatial_relation || '', subjects, profiles)
+  if (relationLines.length && DIRECT_NONSPATIAL_RELATION_RE.test(spatialRelation)) {
+    spatialRelation = ''
+    if (trace) trace('spatial relation', 'applied', 'action-like text removed; spatial_relation is placement only')
+  }
+  if (spatialRelation) lines.push(`Spatial relation: ${spatialRelation.replace(/[.]+$/g, '')}.`)
   let serialized = directGroupReplaceNames(lines.filter(Boolean).join(' '), subjects, profiles)
   if (explicitAdult) {
     const neutralized = neutralizeDirectGroupYouthText(serialized)
@@ -9117,6 +9227,7 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
     trace('spatial group', 'applied',
       `${subjects.length} subjects serialized with repeated positions and no BREAK` +
       ((image.groupInteractions || []).length ? ` · ${(image.groupInteractions || []).length} structured interaction(s)` : '') +
+      ((image.groupRelations || []).length ? ` · ${(image.groupRelations || []).length} structured general relation(s)` : '') +
       (youthRemoved ? ` · removed ${youthRemoved} youth-coded adult descriptor${youthRemoved === 1 ? '' : 's'}` : ''))
   }
   return serialized
@@ -9144,11 +9255,17 @@ function finalizeDirectImagePrompt(image, ctx) {
     // passage instead of composing the action inside a free-form prompt. Insert
     // it mechanically after the leading count tags, then run the same name and
     // identity checks over the combined prompt that Draw Things will receive.
+    const relationSummary = directGroupRelationSummary(image, profiles)
+    const relationLimit = relationSummary
+      ? Math.min(30, Math.max(image.sceneSummaryWordLimit || 18, (image.groupRelations || []).length * 12))
+      : (image.sceneSummaryWordLimit || 18)
+    if (relationSummary) trace('structured relations', 'applied',
+      `${(image.groupRelations || []).length} actor/action/target relation(s) replaced the free-form scene summary`)
     const summarized = injectDirectSceneSummary(
       image.prompt,
-      image.scene_summary,
+      relationSummary || image.scene_summary,
       trace,
-      image.sceneSummaryWordLimit || 18)
+      relationLimit)
     body = sanitizeDirectNames(summarized, profiles, trace)
     const locked = applyIdentityLock(body, profiles, trace)
     body = applyDirectWardrobeLock(locked.prompt, profiles, wardrobe, trace)
@@ -9413,10 +9530,11 @@ CONTENT SCOPE
   definitions below require.
 
 OUTPUT — only this JSON, compact, no markdown, no commentary:
-{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","moment_evidence":"3-20 exact consecutive words from the CURRENT PASSAGE proving the depicted moment is occurring now","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","group_scene":"3/4-person scenes only: short name-free visual context","group_subjects":[{"name":"exact sheet name","position":"left|center|right|foreground|midground|background","include_saved_anatomy":false,"details":["complete current clothing","pose","one-person action","expression","gaze"]}],"group_interactions":[{"actor":"exact sheet name","act":"fellatio|cunnilingus|handjob|vaginal|anal|masturbation","recipient":"exact sheet name"}],"shared_interaction":"3/4-person scenes only: one name-free NONSEXUAL joint action using spatial labels","spatial_relation":"3/4-person scenes only: one name-free placement statement using spatial labels","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
-Omit "group_scene", "group_subjects", "group_interactions", "shared_interaction", and
-"spatial_relation" for one/two-person scenes. Omit "setting" and "outfits"
-entirely when nothing has changed.
+{"images":[{"anchor":"5-12 exact consecutive words from the CURRENT PASSAGE","moment_evidence":"3-20 exact consecutive words from the CURRENT PASSAGE proving the depicted moment is occurring now","present":[{"name":"exact sheet name","evidence":"3-8 exact consecutive words from the CURRENT PASSAGE that show this person acting or being seen"}],"rating":"safe|sensitive|nsfw|explicit","scene_summary":"one plain sentence within the configured SCENE SUMMARY limit, using vetted SENTENCE NAMES but no appearance, clothing, or scenery","prompt":"the formatted prompt without the scene summary","aspect":"3:4|4:3|1:1|16:9|9:16","group_relations":[{"actor":"exact sheet name","action":"1-5 word present-tense visual action","target":"exact sheet name","evidence":"3-20 exact consecutive words from CURRENT PASSAGE proving this relation","actor_part":"optional body part","target_part":"optional body part","object":"optional visible item"}],"group_scene":"3/4-person scenes only: short name-free visual context","group_subjects":[{"name":"exact sheet name","position":"left|center|right|foreground|midground|background","include_saved_anatomy":false,"details":["complete current clothing","pose","one-person action","expression","gaze"]}],"group_interactions":[{"actor":"exact sheet name","act":"fellatio|cunnilingus|handjob|vaginal|anal|masturbation","recipient":"exact sheet name"}],"spatial_relation":"3/4-person scenes only: one name-free placement statement using spatial labels","setting":["location tags"],"outfits":{"Sheet Name":["complete outfit"]}}]}
+Omit "group_relations" when fewer than two people are present. Omit
+"group_scene", "group_subjects", "group_interactions", and "spatial_relation"
+for one/two-person scenes. Omit "setting" and "outfits" entirely when nothing
+has changed.
 
 CHOOSING THE MOMENT
 - Illustrate only the CURRENT PASSAGE. Prior context resolves who and where;
@@ -9466,8 +9584,33 @@ SCENE SUMMARY — the technical statement of what is depicted.
   the penetrating person or part is the actor and the receiving person is the
   object. Never invent anatomy, a toy, or an unnamed fourth participant to make
   an impossible sentence work; choose a simpler supported moment instead.
-- LumiDraw inserts this field mechanically into the final prompt. Do not copy
-  the sentence into the "prompt" string.
+- LumiDraw inserts this field mechanically when there are no structured general
+  relations. When group_relations exists, LumiDraw derives the final relational
+  sentence from those records instead. Do not copy either into "prompt".
+
+RELATIONS — for EVERY image with two or more people.
+- Put each visible NONSEXUAL person-to-person action, contact, gaze, support,
+  restraint, or object transfer in "group_relations". One distinct relationship
+  per entry; simultaneous relationships are separate entries. Do not collapse
+  two contacts into one sentence or choose only the first one.
+- "actor" performs the action and "target" receives it. Use exact sheet names,
+  and only people already validated in "present". Never reverse them.
+- "evidence" is an exact 3-20 word consecutive quote from CURRENT PASSAGE that
+  proves this specific relationship is happening now. It is checked just like
+  moment_evidence; dialogue, plans, memories, and invented paraphrases are void.
+- "action" is a literal 1-5 word third-person present-tense visual phrase such
+  as "squeezes", "looks at", "leans toward", "presses against", or "hands".
+  It contains no name, pronoun, body part, object, scenery, or explanation.
+- Use "actor_part" and "target_part" only when a body part is essential to the
+  geometry: hand/forearm, foot/ankle. Use "object" only for a visible transferred
+  or jointly handled item such as "coffee mug". Omit unused optional fields.
+- Sexual acts never go here; they use group_interactions when that field applies.
+  A general relation never inserts anatomy.
+- The same relationship must not be repeated in prompt, a BREAK run,
+  group_scene, or spatial_relation. Subject details may keep the person's own
+  pose, but not the other person's name or the cross-person contact.
+- If two or more people merely coexist with no visible relationship, omit the
+  field. Do not invent contact to fill it.
 
 PROMPT SHAPE — for ONE OR TWO people, exactly this order inside "prompt":
 1. Count tags for everyone in frame. These are real Danbooru tags — 1girl,
@@ -9483,7 +9626,8 @@ PROMPT SHAPE — for ONE OR TWO people, exactly this order inside "prompt":
 3. " BREAK ", then one run per character listed in "present". Each run starts:
    count tag, that person's SENTENCE NAME (or RUN LABEL), IDENTITY ANCHOR copied
    exactly; then anatomy (per the rule below), clothing, pose, action,
-   expression. One character's traits never appear inside another's run.
+   expression. One character's traits never appear inside another's run, and a
+   cross-person action belongs only in group_relations.
 
 SPATIAL GROUP SHAPE — for THREE OR FOUR people only:
 - Do not write BREAK and do not put people, names, count tags, appearance,
@@ -9499,10 +9643,9 @@ SPATIAL GROUP SHAPE — for THREE OR FOUR people only:
 - Set "include_saved_anatomy" true only when this nsfw/explicit picture visibly
   exposes that subject's saved anatomy WITHOUT a sexual act. LumiDraw derives
   act-required anatomy from group_interactions; never invent anatomy in "details".
-- Put a NONSEXUAL joint action or physical contact in "shared_interaction"
-  exactly once, using spatial labels such as "the adult man on the left" —
-  never a name or pronoun. Put shared placement/distance in "spatial_relation"
-  exactly once.
+- Put every NONSEXUAL joint action or physical contact in group_relations. Put
+  shared placement/distance in "spatial_relation" exactly once, using spatial
+  labels and no action verb.
 - "group_scene" is one short name-free context clause. Do not repeat the shared
   action, subject traits, clothing, camera, or environment in it.
 - ONE FACT, ONE OWNER. Every visible trait, garment, expression, pose, gaze, and
@@ -9514,7 +9657,7 @@ SPATIAL GROUP SHAPE — for THREE OR FOUR people only:
   age facts such as "45 years old" or "middle-aged adult man".
 
 INTERACTIONS — visible sexual acts in a three/four-person image go in
-"group_interactions", not in shared_interaction.
+"group_interactions", never in group_relations.
 - Return one entry per distinct act. Multiple simultaneous acts are multiple
   entries. "actor" is the performing or penetrating person; "recipient" is the
   receiving person. Never reverse them.
@@ -9526,8 +9669,8 @@ INTERACTIONS — visible sexual acts in a three/four-person image go in
   missionary, doggystyle, and mating press; anal means anal penetration.
 - Masturbation is self-directed: use the same exact name for actor and recipient.
 - Sexual acts live in group_interactions exactly once. scene_summary may state
-  the supported pictured moment, but group_scene and shared_interaction must not
-  repeat the act.
+  the supported pictured moment, but group_scene, group_relations, and
+  spatial_relation must not repeat the act.
 
 NAMES
 - Use the same vetted SENTENCE NAME in scene_summary and immediately after the
@@ -9666,7 +9809,7 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
     const lines = [name]
     const sentenceName = directSentenceName(profile)
     if (sentenceName) {
-      lines.push('  SENTENCE NAME: ' + sentenceName + ' — use this exact safe name in scene_summary; for one/two people also use it after the count tag in the BREAK run; for three/four people use it only as the internal group_subjects name')
+      lines.push('  SENTENCE NAME: ' + sentenceName + ' — use this exact safe name in scene_summary and group_relations; for one/two people also use it after the count tag in the BREAK run; for three/four people use it only as an internal structured binding name')
       if (normalizeIdentityText(sentenceName) !== normalizeIdentityText(name)) {
         lines.push('  REAL NAME IS UNSAFE IN IMAGE TEXT: never write "' + name + '"; use the SENTENCE NAME above')
       }
@@ -10347,6 +10490,106 @@ function parseDirectGroupInteractions(item, subjects, profiles, notes) {
   return out
 }
 
+function parseDirectGroupRelations(item, present, presenceFieldDeclared, spatialSubjects, profiles, passage, notes) {
+  const raw = Array.isArray(item && item.group_relations) ? item.group_relations : []
+  if (!raw.length) return []
+  if (!presenceFieldDeclared || (present || []).length < 2) {
+    notes.push('dropped general relations — fewer than two people had a validated present roster')
+    return []
+  }
+  const candidates = (spatialSubjects || []).length
+    ? spatialSubjects
+    : (present || []).map((entry) => {
+      const profile = directProfileForPresenceName(entry && entry.name, profiles)
+      return {
+        name: String((entry && entry.name) || '').trim(),
+        profileRef: profile && profile.ref,
+        countTag: (profile && profile.countTag) || '',
+      }
+    })
+  const findSubject = (name) => {
+    const wanted = normalizeIdentityText(name)
+    if (!wanted) return null
+    const profile = directProfileForPresenceName(name, profiles)
+    return candidates.find((subject) =>
+      normalizeIdentityText(subject && subject.name) === wanted ||
+      !!(profile && subject && subject.profileRef && subject.profileRef === profile.ref)) || null
+  }
+  const out = []
+  const seen = new Set()
+  for (const entry of raw.slice(0, 8)) {
+    const actorName = String((entry && entry.actor) || '').trim()
+    const targetName = String((entry && (entry.target || entry.recipient)) || '').trim()
+    const action = directRelationFragment(entry && entry.action, 5)
+    const evidence = String((entry && entry.evidence) || '').replace(/\s+/g, ' ').trim().slice(0, 360)
+    if (!actorName || !targetName || !action) {
+      notes.push('dropped a general relation — actor, action, and target are all required')
+      continue
+    }
+    const evidenceAssessment = assessDirectMomentEvidence(evidence, passage)
+    if (!evidenceAssessment.valid) {
+      notes.push(`dropped general relation "${actorName} · ${action} · ${targetName}" — ${evidenceAssessment.reason}`)
+      continue
+    }
+    const actionKey = directRelationVerbKey(action)
+    const evidenceSupportsAction = normalizeIdentityText(evidence).split(/\s+/)
+      .some((word) => directRelationVerbKey(word) === actionKey)
+    if (!actionKey || !evidenceSupportsAction) {
+      notes.push(`dropped general relation "${actorName} · ${action} · ${targetName}" — its action verb was not supported by the evidence quote`)
+      continue
+    }
+    if (normalizeGroupAct(action) || ANATOMY_ACT_RE.test(action) || /\bmasturbat\w*\b/i.test(action)) {
+      notes.push(`dropped general relation "${actorName} · ${action} · ${targetName}" — sexual acts belong in group_interactions`)
+      continue
+    }
+    const actor = findSubject(actorName)
+    const target = findSubject(targetName)
+    if (!actor || !target) {
+      notes.push(`dropped general relation "${actorName} → ${targetName}" — one name is not in the validated present roster`)
+      continue
+    }
+    const actorKey = directGroupSubjectKey(actor)
+    const targetKey = directGroupSubjectKey(target)
+    if (!actorKey || !targetKey || actorKey === targetKey) {
+      notes.push(`dropped self-directed general relation for "${actorName}" — keep one-person actions in that subject's details`)
+      continue
+    }
+    const actorPart = directRelationFragment(entry && (entry.actor_part || entry.actorPart), 3)
+      .replace(/^(?:his|her|their)\s+/i, '')
+    const targetPart = directRelationFragment(entry && (entry.target_part || entry.targetPart), 3)
+      .replace(/^(?:his|her|their)\s+/i, '')
+    const object = directRelationFragment(entry && entry.object, 4)
+    const ownedText = [action, actorPart, targetPart, object].join(' ')
+    const ownedNorm = normalizeIdentityText(ownedText)
+    const leakedName = candidates.find((subject) => {
+      const name = normalizeIdentityText(subject && subject.name)
+      return name && new RegExp(`(?:^| )${escapeRegExp(name)}(?: |$)`).test(ownedNorm)
+    })
+    if (leakedName || /\b(?:he|she|him|her|his|they|them|their)\b/i.test(action)) {
+      notes.push(`dropped general relation "${actorName} · ${action} · ${targetName}" — action fields must contain no names or pronouns`)
+      continue
+    }
+    const relation = {
+      actorKey,
+      targetKey,
+      actorName: actor.name,
+      targetName: target.name,
+      action,
+      evidence,
+      actorPart,
+      targetPart,
+      object,
+    }
+    const key = [actorKey, normalizeIdentityText(action), targetKey,
+      normalizeIdentityText(relation.actorPart), normalizeIdentityText(relation.targetPart),
+      normalizeIdentityText(relation.object)].join('|')
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(relation)
+  }
+  return out
+}
+
 function parseDirectGroupFields(item, prompt, present, presenceFieldDeclared, profiles, maximum, notes) {
   if (maximum < 3) return { subjects: [], interactions: [], source: '' }
   const allowedNames = new Set((present || []).map((entry) => normalizeIdentityText(entry && entry.name)).filter(Boolean))
@@ -10589,10 +10832,15 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
     }
     const group = parseDirectGroupFields(
       item, prompt, present, presenceFieldDeclared, profiles, subjectMaximum, notes)
+    const groupRelations = parseDirectGroupRelations(
+      item, present, presenceFieldDeclared, group.subjects, profiles, passage, notes)
     if (group.subjects.length) {
       spindle.log.info(`[lumidraw] direct · spatial group · ${group.subjects.map((subject) =>
         `${subject.name} ${subject.position}`).join(' · ')} (${group.source})` +
-        (group.interactions.length ? ` · ${group.interactions.length} structured interaction(s)` : ''))
+        (group.interactions.length ? ` · ${group.interactions.length} structured sexual interaction(s)` : '') +
+        (groupRelations.length ? ` · ${groupRelations.length} structured general relation(s)` : ''))
+    } else if (groupRelations.length) {
+      spindle.log.info(`[lumidraw] direct · ${groupRelations.length} structured two-person relation(s)`)
     }
     const requestedAspect = VALID_ASPECTS.has(String(item.aspect || '')) ? String(item.aspect) : '3:4'
     const aspect = group.subjects.length >= 3 && ['3:4', '1:1', '9:16'].includes(requestedAspect)
@@ -10616,6 +10864,7 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
       group_scene: String(item.group_scene || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 320),
       groupSubjects: group.subjects,
       groupInteractions: group.interactions,
+      groupRelations,
       groupSource: group.source,
       shared_interaction: String(item.shared_interaction || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 420),
       spatial_relation: String(item.spatial_relation || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 320),
@@ -13602,6 +13851,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
           groupSource: item.groupSource || '',
           groupSubjects: groupMechanics.groupSubjects,
           groupInteractions: groupMechanics.groupInteractions,
+          groupRelations: groupMechanics.groupRelations,
           negativePrompt: finalized.negativePrompt,
           trace: traceLines,
         })
@@ -14659,6 +14909,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           groupSource: item.groupSource || '',
           groupSubjects: item.groupSubjects || [],
           groupInteractions: item.groupInteractions || [],
+          groupRelations: item.groupRelations || [],
         }))
         const storyDebug = await saveStoryDebug({
           mode: directReparse ? 'direct' : 'parser',
