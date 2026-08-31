@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.29'
+const EXTENSION_VERSION = '1.3.30'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -1017,7 +1017,7 @@ function realSetup(ctx) {
             <div style="margin-top:9px">
               <span class="ld-label">Maximum characters per image (Direct mode)</span>
               <select class="ld-maxsubjects">
-                <option value="2">2 — proven default</option>
+                <option value="2">2 — spatial pair (recommended)</option>
                 <option value="3">3 — spatial group mode</option>
                 <option value="4">4 — experimental spatial group</option>
               </select>
@@ -4270,6 +4270,7 @@ ${entry.prompt || ''}`.trim()
             prompt: candidate.prompt || '',
             rating: candidate.rating || '',
             aspect: candidate.aspect || '',
+            sceneMood: candidate.sceneMood || '',
             groupSource: candidate.groupSource || '',
             groupSubjects: candidate.groupSubjects || [],
             groupInteractions: candidate.groupInteractions || [],
