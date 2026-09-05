@@ -8993,21 +8993,94 @@ function directRelationAction(value) {
     '$1 a $2 on')
 }
 
+function directRelationBodyPart(value) {
+  return directRelationFragment(value, 3).replace(/^(?:a|an|the|his|her|their|its)\s+/i, '')
+}
+
+function directRelationPartIsPlural(part) {
+  // Use the head of the supplied body-part phrase, not a generic trailing-s
+  // rule: "iris" is singular, and "back of hands" has a singular head.
+  const head = normalizeIdentityText(part).split(' of ')[0]
+  return /\band\b/.test(head) || /\b(?:arms|hands|fingers|forearms|elbows|wrists|shoulders|lips|eyes|ears|feet|legs|knees|thighs|ankles|palms|heels|toes|knuckles|teeth|hips|cheeks|eyebrows|fists)$/.test(head)
+}
+
+function directRelationAssembledAction(relation, actorPart, targetPart) {
+  let action = directRelationAction(relation && relation.action)
+  const plural = directRelationPartIsPlural(actorPart)
+  if (actorPart) {
+    const partPattern = escapeRegExp(actorPart).replace(/\s+/g, '\\s+')
+    // Repair only a copied direct object at the verb boundary. Never strip a
+    // body part from a different phrase such as "holds hands with" when the
+    // supplied actor_part is "hand", or from "points with a hand toward".
+    const copiedPart = new RegExp(`^([a-z]+)\\s+((?:a|an|the)\\s+)?${partPattern}(?=\\s|$)`, 'i')
+    action = action.replace(copiedPart, (match, verb, article) => {
+      // "back" can also be a direction. A matching field alone does not
+      // license deleting it from phrases such as "looks back toward".
+      if (!article && /^back$/i.test(actorPart) && /^(?:looks?|leans?|steps?|go(?:es)?|moves?|turns?|reach(?:es)?)$/i.test(verb)) return match
+      // A hand can rest/press, but it cannot "place on" somebody. Preserve
+      // those placement verbs in passive form when the body part is subject.
+      const passive = { places: 'placed', place: 'placed', puts: 'put', put: 'put',
+        sets: 'set', set: 'set', lays: 'laid', lay: 'laid', raises: 'raised', raise: 'raised',
+        lowers: 'lowered', lower: 'lowered', lifts: 'lifted', lift: 'lifted',
+        holds: 'held', hold: 'held', extends: 'extended', extend: 'extended',
+        bends: 'bent', bend: 'bent', folds: 'folded', fold: 'folded' }[verb.toLowerCase()]
+      return passive ? `${plural ? 'are' : 'is'} ${passive}` : verb
+    })
+  }
+  if (targetPart) {
+    const partPattern = escapeRegExp(targetPart).replace(/\s+/g, '\\s+')
+    // The target's owned body part is appended below; do not emit its copy
+    // at the end of the action as well. Keep the verb and all prepositions.
+    const copiedPart = new RegExp(`\\s+(?:(?:a|an|the)\\s+)?${partPattern}$`, 'i').exec(action)
+    if (copiedPart) {
+      const prefix = action.slice(0, copiedPart.index)
+      const linkedObject = /\b(?:at|on|onto|against|across|over|under|beneath|around|along|toward|towards|to|from|for|near|beside|behind|with|into|off)$/i.test(prefix)
+      const directObject = /^(?:touch(?:es)?|squeezes?|press(?:es)?|holds?|grips?|grasps?|brush(?:es)?|taps?|pats?|push(?:es)?|pulls?|supports?|stead(?:y|ies)|strokes?|rubs?|cups?|covers?|cradles?|grazes?|kiss(?:es)?)$/i.test(prefix)
+      if (linkedObject || directObject) action = prefix
+    }
+  }
+  if (plural) {
+    // Explicit inflections avoid corrupting verbs such as "presses" into
+    // "presse" or treating an unrelated word ending in s as a verb.
+    const agreement = {
+      is: 'are', has: 'have', does: 'do', rests: 'rest', presses: 'press',
+      touches: 'touch', brushes: 'brush', watches: 'watch', looks: 'look',
+      reaches: 'reach', places: 'place', lays: 'lay', puts: 'put', sets: 'set',
+      sits: 'sit', holds: 'hold', squeezes: 'squeeze', grips: 'grip', clasps: 'clasp',
+      taps: 'tap', pats: 'pat', pushes: 'push', pulls: 'pull', supports: 'support',
+      steadies: 'steady', strokes: 'stroke', slides: 'slide', wraps: 'wrap',
+      rubs: 'rub', cups: 'cup', covers: 'cover', cradles: 'cradle', grazes: 'graze',
+      trails: 'trail', lands: 'land', lies: 'lie', leans: 'lean', remains: 'remain',
+      stays: 'stay', tightens: 'tighten', loosens: 'loosen', maintains: 'maintain',
+      keeps: 'keep', releases: 'release', opens: 'open', closes: 'close',
+      raises: 'raise', lowers: 'lower', lifts: 'lift', meets: 'meet', follows: 'follow',
+      points: 'point', offers: 'offer', passes: 'pass', gives: 'give', shows: 'show',
+      hands: 'hand', takes: 'take',
+    }
+    action = action.replace(/^[a-z]+\b/i, (verb) => {
+      const corrected = agreement[verb.toLowerCase()]
+      return corrected ? (/^[A-Z]/.test(verb) ? upperFirst(corrected) : corrected) : verb
+    })
+  }
+  return action.trim()
+}
+
 // Ordinary physical relationships use the same exact subject binding as sexual
 // group interactions, but never participate in anatomy resolution. This is
 // deliberately general enough for contact, gaze, proximity, and object transfer.
 function directGroupRelationSentence(relation, image, profiles) {
   const actor = directRelationLabel(relation, 'actor', image, profiles)
   const target = directRelationLabel(relation, 'target', image, profiles)
-  const action = directRelationAction(relation && relation.action)
+  const actorPart = directRelationBodyPart(relation && relation.actorPart)
+  const targetPart = directRelationBodyPart(relation && relation.targetPart)
+  const action = directRelationAssembledAction(relation, actorPart, targetPart)
   if (!actor || !target || !action) return ''
-  const actorPart = directRelationFragment(relation.actorPart, 3)
-  const targetPart = directRelationFragment(relation.targetPart, 3)
   const object = directRelationObject(relation.object)
   const actingSubject = actorPart ? `${directPossessiveLabel(actor)} ${actorPart}` : actor
   const targetObject = targetPart ? `${directPossessiveLabel(target)} ${targetPart}` : target
   if (object && /^(?:hands?|passes?|gives?|offers?|shows?)\b/i.test(action)) {
-    return `${upperFirst(actingSubject)} ${action} ${object}${/\bto$/i.test(action) ? '' : ' to'} ${targetObject}.`
+    const transferAction = action.replace(/\s+to$/i, '')
+    return `${upperFirst(actingSubject)} ${transferAction} ${object} to ${targetObject}.`
   }
   if (object) return `${upperFirst(actingSubject)} ${action} ${object} toward ${targetObject}.`
   return `${upperFirst(actingSubject)} ${action} ${targetObject}.`
@@ -9154,6 +9227,7 @@ function directGroupMechanicsDebug(image, profiles, banned = '') {
       actorPart: relation.actorPart || '',
       targetPart: relation.targetPart || '',
       object: relation.object || '',
+      assembledSentence: directGroupRelationSentence(relation, image, profiles),
     })),
     groupSubjects: subjects.map((subject) => {
       const inserted = directGroupAnatomyTags(
@@ -9366,7 +9440,9 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
   const cameraEnvironment = uniqueStrings(applyBannedToList([
     ...frame, ...(image.setting || []), ...(image.lighting || []),
   ], banned).map(sceneText).filter(Boolean))
-  if (cameraEnvironment.length) lines.push(`Camera and environment: ${cameraEnvironment.join(', ')}.`)
+  // Framing tags describe the view. A literal "Camera" heading can also be
+  // read as a prop, so do not add that noun to every spatial scene.
+  if (cameraEnvironment.length) lines.push(`${cameraEnvironment.join(', ')}.`)
 
   for (const subject of subjects) {
     const label = directGroupSubjectIntroduction(subject, profiles)
@@ -9872,6 +9948,10 @@ RELATIONS — for EVERY image with two or more people.
 - Use "actor_part" and "target_part" only when a body part is essential to the
   geometry: hand/forearm, foot/ankle. Use "object" only for a visible transferred
   or jointly handled item such as "coffee mug". Omit unused optional fields.
+- When actor_part is supplied, that body part is the grammatical subject:
+  "forearm" + "rests across", "hands" + "rest on". Never copy the part into
+  action (not "rests forearm across"). Match the verb to singular/plural parts.
+  The target_part is appended separately too; never repeat it inside action.
 - Sexual acts never go here; they use group_interactions when that field applies.
   A general relation never inserts anatomy.
 - The same relationship must not be repeated in prompt, a BREAK run,
