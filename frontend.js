@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.30'
+const EXTENSION_VERSION = '1.3.31'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -1008,7 +1008,7 @@ function realSetup(ctx) {
                 <input type="checkbox" class="ld-direct-mode" />
                 <span><strong>Direct mode</strong> — let the parser write the prompt</span>
               </label>
-              <div class="ld-help" style="margin-top:4px">The parser gets your character sheets, wardrobe, and place. With one or two people it writes the finished Danbooru prompt. With three or four it returns a spatial plan that LumiDraw formats into left/center/right subject clauses for Anima. The older compiler stays off: no garment substitutes or inferred orientation. Off = the existing pipeline, unchanged.</div>
+              <div class="ld-help" style="margin-top:4px">The parser reads your character sheets, wardrobe, and place. Single-character images use a tag run. With two to four people, LumiDraw groups each person's saved appearance and current scene details under one heading, then uses short positional references for their interactions.</div>
             </div>
             <div class="ld-row" style="margin-top:9px">
               <div><span class="ld-label">Minimum images (0 = model decides)</span><input class="ld-minimg" type="number" min="0" max="4" step="1" /></div>
@@ -1021,7 +1021,7 @@ function realSetup(ctx) {
                 <option value="3">3 — spatial group mode</option>
                 <option value="4">4 — experimental spatial group</option>
               </select>
-              <div class="ld-help" style="margin-top:3px">Two remains the unchanged reliable fallback. Three and four use repeated spatial labels, one owner per detail, and no BREAK separators. They preserve more participants but remain experimental.</div>
+              <div class="ld-help" style="margin-top:3px">Two to four people use the spatial format: one introduction per character and short positional references. Your saved adult age descriptions are preserved. This controls the maximum number of people, not the number of images.</div>
             </div>
           </div>
           <div class="ld-card">
@@ -1650,7 +1650,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     imageCount.appendChild(field('Maximum images', controls.maxImages))
     behavior.appendChild(imageCount)
     behavior.appendChild(field('Maximum characters per image (Direct mode)', controls.maxSubjects,
-      '2 keeps the unchanged BREAK format. 3 and 4 use repeated spatial labels and one owner per detail, with no BREAK separators.'))
+      'Two to four people use one introduction per character with short positional references. Saved adult age descriptions are preserved.'))
     setup.appendChild(behavior)
 
     const display = card('Chat image display')

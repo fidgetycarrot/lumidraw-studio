@@ -8774,12 +8774,32 @@ function directGroupIsMiddleAged(profile) {
   return /\b(?:middle aged|mature (?:adult )?(?:man|woman|male|female)|(?:4[0-9]|5[0-9]|6[0-9]) years? old|forehead wrinkles|crow s feet)\b/.test(text)
 }
 
-function directGroupSubjectLabel(subject, profiles) {
-  const profile = directGroupProfileFor(subject, profiles)
+function directGroupSubjectNoun(subject, profiles) {
   const count = directGroupCountTag(subject, profiles)
-  let noun = count === '1girl' ? 'adult woman' : count === '1boy' ? 'adult man' : 'adult person'
-  if (directGroupIsMiddleAged(profile)) noun = `middle-aged ${noun}`
-  return `the ${noun} ${directGroupPositionPhrase(subject && subject.position)}`
+  return count === '1girl' ? 'woman' : count === '1boy' ? 'man' : 'person'
+}
+
+function directGroupAdultAge(profile) {
+  // The author's explicit adult age wording takes precedence over inferred
+  // maturity. Inspect the subject first, then saved identity and appearance.
+  const saved = profile ? [profile.subject, ...animaTagList(profile.identityTags || []),
+    ...animaTagList(profile.appearance || [])] : []
+  for (const value of saved) {
+    const text = normalizeIdentityText(value)
+    if (/\byoung adult\b/.test(text)) return 'young adult'
+    if (/\bmiddle aged\b/.test(text)) return 'middle-aged adult'
+    if (/\bmature (?:adult )?(?:man|woman|male|female|person)\b/.test(text)) return 'mature adult'
+  }
+  return directGroupIsMiddleAged(profile) ? 'middle-aged adult' : 'adult'
+}
+
+function directGroupSubjectLabel(subject, profiles) {
+  return `the ${directGroupSubjectNoun(subject, profiles)} ${directGroupPositionPhrase(subject && subject.position)}`
+}
+
+function directGroupSubjectIntroduction(subject, profiles) {
+  const age = directGroupAdultAge(directGroupProfileFor(subject, profiles))
+  return `the ${age} ${directGroupSubjectNoun(subject, profiles)} ${directGroupPositionPhrase(subject && subject.position)}`
 }
 
 function directGroupYouthCoded(value) {
@@ -8804,7 +8824,9 @@ function directGroupIdentityTags(subject, profiles, rating, banned) {
   if (!profile) return []
   const explicitAdult = ['nsfw', 'explicit'].includes(String(rating || '').toLowerCase())
   const baseNoun = /\b(?:adult|young adult|middle-aged|mature)\s+(?:man|woman|male|female)\b/i
-  let tags = directAnchorFor(profile).filter((tag) => !baseNoun.test(tag))
+  const introducedAge = normalizeIdentityText(directGroupAdultAge(profile))
+  let tags = directAnchorFor(profile).filter((tag) => !baseNoun.test(tag) &&
+    ![introducedAge, introducedAge.replace(/ adult$/, '')].includes(normalizeIdentityText(tag)))
   if (explicitAdult) tags = tags.filter((tag) => !directGroupYouthCoded(tag))
   tags = uniqueStrings(applyBannedToList(tags, banned))
 
@@ -8965,13 +8987,19 @@ function directRelationObject(value) {
   return `${/^[aeiou]/i.test(text) ? 'an' : 'a'} ${text}`
 }
 
+function directRelationAction(value) {
+  return directRelationFragment(value, 5).replace(
+    /^(tightens|loosens|maintains|keeps|releases)\s+(?:(?:a|the)\s+)?(hold|grip)(?:\s+on)?$/i,
+    '$1 a $2 on')
+}
+
 // Ordinary physical relationships use the same exact subject binding as sexual
 // group interactions, but never participate in anatomy resolution. This is
 // deliberately general enough for contact, gaze, proximity, and object transfer.
 function directGroupRelationSentence(relation, image, profiles) {
   const actor = directRelationLabel(relation, 'actor', image, profiles)
   const target = directRelationLabel(relation, 'target', image, profiles)
-  const action = directRelationFragment(relation && relation.action, 5)
+  const action = directRelationAction(relation && relation.action)
   if (!actor || !target || !action) return ''
   const actorPart = directRelationFragment(relation.actorPart, 3)
   const targetPart = directRelationFragment(relation.targetPart, 3)
@@ -9064,7 +9092,8 @@ function directSceneMoodDecision(image) {
 }
 
 function directGroupGazeResolvable(cue, image, profiles) {
-  const normalized = normalizeIdentityText(cue)
+  const normalized = normalizeIdentityText(directGroupReplaceNames(
+    cue, (image && image.groupSubjects) || [], profiles))
   if (!normalized) return true
   if (/\blooking at viewer\b/.test(normalized)) {
     const grounding = normalizeIdentityText([
@@ -9073,7 +9102,7 @@ function directGroupGazeResolvable(cue, image, profiles) {
     ].filter(Boolean).join(' '))
     return /\b(?:viewer|camera|fourth wall)\b/.test(grounding)
   }
-  if (!/\b(?:adult|middle aged) (?:man|woman|person)\b/.test(normalized)) return true
+  if (!/\b(?:man|woman|person)\b/.test(normalized)) return true
   const labels = ((image && image.groupSubjects) || [])
     .map((subject) => normalizeIdentityText(directGroupSubjectLabel(subject, profiles)))
     .filter(Boolean)
@@ -9134,6 +9163,8 @@ function directGroupMechanicsDebug(image, profiles, banned = '') {
       return {
         name: subject.name || '',
         position: subject.position || '',
+        subjectIntroduction: directGroupSubjectIntroduction(subject, profiles),
+        referenceLabel: directGroupSubjectLabel(subject, profiles),
         expressionCues: directExpressionCues(visibleDetails),
         expressionFamily: directExpressionFamily(visibleDetails),
         includeSavedAnatomy: !!subject.includeSavedAnatomy,
@@ -9150,19 +9181,32 @@ function directGroupReplaceNames(value, subjects, profiles) {
   for (const subject of subjects || []) {
     const profile = directGroupProfileFor(subject, profiles)
     const label = directGroupSubjectLabel(subject, profiles)
+    const noun = directGroupSubjectNoun(subject, profiles)
+    const position = directGroupPositionPhrase(subject && subject.position)
     const forms = uniqueStrings([
       subject && subject.name,
       profile && profile.anchor,
       profile && profile.promptName,
       profile && directSentenceName(profile),
+      // Accept older parser wording but reference the existing subject without
+      // repeating its age description. The introduction is serialized separately.
+      ...['', 'adult ', 'young adult ', 'middle-aged adult ', 'middle-aged ',
+        'mature adult ', 'mature '].map((age) => `the ${age}${noun} ${position}`),
     ].filter(Boolean)).sort((a, b) => b.length - a.length)
     for (const form of forms) bindings.push({ form, label })
   }
   bindings.sort((a, b) => b.form.length - a.form.length)
-  for (const binding of bindings) {
-    const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(binding.form)}(?=$|[^a-z0-9])`, 'gi')
-    text = text.replace(pattern, (whole, lead) => `${lead}${binding.label}`)
+  if (bindings.length) {
+    const labels = new Map(bindings.map(({ form, label }) => [form.toLowerCase(), label]))
+    const pattern = new RegExp(`(^|[^a-z0-9])(${bindings.map(({ form }) => escapeRegExp(form)).join('|')})(?=$|[^a-z0-9])`, 'gi')
+    // One pass prevents a character name from matching text we just inserted.
+    text = text.replace(pattern, (whole, lead, form) => `${lead}${labels.get(form.toLowerCase())}`)
   }
+  // Name replacement can produce "in the foreground in foreground". Collapse
+  // only adjacent repetitions of the same position; retain real relationships
+  // such as above, beside, and behind the other person.
+  const repeatedPosition = /\b((?:in|on|at)\s+(?:the\s+)?(center-left|center-right|foreground|midground|background|left|center|right))\s+(?:in|on|at)\s+(?:the\s+)?\2\b/gi
+  for (let pass = 0; pass < 3; pass++) text = text.replace(repeatedPosition, '$1')
   return text.replace(/\s+/g, ' ').trim()
 }
 
@@ -9294,15 +9338,23 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
   const subjects = (image.groupSubjects || []).slice(0, 4)
   const counts = directGroupCounts(subjects, profiles)
   const lines = [`${counts.join(', ')},`]
+  const explicitAdult = ['nsfw', 'explicit'].includes(String(image.rating || '').toLowerCase())
+  let youthRemoved = 0
+  const sceneText = (value) => {
+    const bound = directGroupReplaceNames(value, subjects, profiles)
+    const clean = explicitAdult ? neutralizeDirectGroupYouthText(bound) : bound
+    if (clean !== bound) youthRemoved++
+    return clean
+  }
   // Structured interactions and relations own cross-person actions. Falling
   // back to scene_summary would state them twice and weaken subject binding.
   const hasStructuredRelationship = (image.groupInteractions || []).length || (image.groupRelations || []).length
   const groupSceneSource = image.group_scene || (hasStructuredRelationship ? '' : image.scene_summary) || ''
-  const groupScene = directGroupReplaceNames(groupSceneSource, subjects, profiles)
+  const groupScene = sceneText(groupSceneSource)
   if (groupScene) lines.push(`Scene: ${groupScene.replace(/[.]+$/g, '')}.`)
   const mood = directSceneMoodDecision(image)
   if (mood.applied) {
-    lines.push(`Mood and energy: ${mood.applied}.`)
+    lines.push(`Mood and energy: ${sceneText(mood.applied)}.`)
     if (trace) trace('scene mood', 'applied', mood.applied)
   } else if (mood.requested && trace) {
     trace('scene mood', 'removed', mood.reason)
@@ -9313,17 +9365,14 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
       tag && !DIRECT_COUNT_TAG_RE.test(tag) && !DIRECT_COUNT_FULL_RE.test(normalizeDirectCountTag(tag)))
   const cameraEnvironment = uniqueStrings(applyBannedToList([
     ...frame, ...(image.setting || []), ...(image.lighting || []),
-  ], banned))
+  ], banned).map(sceneText).filter(Boolean))
   if (cameraEnvironment.length) lines.push(`Camera and environment: ${cameraEnvironment.join(', ')}.`)
 
-  const explicitAdult = ['nsfw', 'explicit'].includes(String(image.rating || '').toLowerCase())
-  let youthRemoved = 0
   for (const subject of subjects) {
-    const label = directGroupSubjectLabel(subject, profiles)
+    const label = directGroupSubjectIntroduction(subject, profiles)
     const identity = directGroupIdentityTags(subject, profiles, image.rating, banned)
     const anatomy = directGroupAnatomyTags(subject, profiles, image.rating, banned, image)
     const stable = uniqueStrings([...identity, ...anatomy])
-    if (stable.length) lines.push(`${upperFirst(label)} has ${stable.join(', ')}.`)
     const profile = directGroupProfileFor(subject, profiles)
     const identityKeys = new Set([
       ...stable,
@@ -9347,7 +9396,10 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
       return true
     })
     details = tightenDirectGroupExpressionDetails(details, subject, image, profiles, trace).slice(0, 18)
-    if (details.length) lines.push(`${upperFirst(label)}: ${details.join(', ')}.`)
+    const description = uniqueStrings([...stable, ...details.map(sceneText).filter(Boolean)])
+    // Introduce each body once, with appearance and current scene state together.
+    // Saved adult age wording must not pass through the parser-text scrubber.
+    lines.push(`${upperFirst(label)}: ${description.join(', ')}.`)
   }
 
   const interactionLines = (image.groupInteractions || [])
@@ -9358,7 +9410,7 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
     .map((relation) => directGroupRelationSentence(relation, image, profiles))
     .filter(Boolean)
   for (const line of relationLines) lines.push(line)
-  let shared = directGroupReplaceNames(image.shared_interaction || '', subjects, profiles)
+  let shared = sceneText(image.shared_interaction || '')
   if (interactionLines.length && (ANATOMY_ACT_RE.test(shared) || /\bmasturbat\w*\b/i.test(shared))) {
     shared = ''
     if (trace) trace('shared interaction', 'applied', 'sexual act removed from free text; carried by structured interactions')
@@ -9368,21 +9420,16 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
     if (trace) trace('shared interaction', 'applied', 'ordinary contact removed from legacy free text; carried by structured relations')
   }
   if (shared) lines.push(`Shared interaction: ${shared.replace(/[.]+$/g, '')}.`)
-  let spatialRelation = directGroupReplaceNames(image.spatial_relation || '', subjects, profiles)
+  let spatialRelation = sceneText(image.spatial_relation || '')
   if (relationLines.length && DIRECT_NONSPATIAL_RELATION_RE.test(spatialRelation)) {
     spatialRelation = ''
     if (trace) trace('spatial relation', 'applied', 'action-like text removed; spatial_relation is placement only')
   }
   if (spatialRelation) lines.push(`Spatial relation: ${spatialRelation.replace(/[.]+$/g, '')}.`)
-  let serialized = directGroupReplaceNames(lines.filter(Boolean).join(' '), subjects, profiles)
-  if (explicitAdult) {
-    const neutralized = neutralizeDirectGroupYouthText(serialized)
-    if (neutralized !== serialized) youthRemoved++
-    serialized = neutralized
-  }
+  const serialized = lines.filter(Boolean).join(' ')
   if (trace) {
     trace('spatial group', 'applied',
-      `${subjects.length} subjects serialized with repeated positions and no BREAK` +
+      `${subjects.length} subjects introduced once with saved adult age wording; short positional references and no BREAK` +
       ((image.groupInteractions || []).length ? ` · ${(image.groupInteractions || []).length} structured interaction(s)` : '') +
       ((image.groupRelations || []).length ? ` · ${(image.groupRelations || []).length} structured general relation(s)` : '') +
       (youthRemoved ? ` · removed ${youthRemoved} youth-coded adult descriptor${youthRemoved === 1 ? '' : 's'}` : ''))
@@ -9820,6 +9867,8 @@ RELATIONS — for EVERY image with two or more people.
 - "action" is a literal 1-5 word third-person present-tense visual phrase such
   as "squeezes", "looks at", "leans toward", "presses against", or "hands".
   It contains no name, pronoun, body part, object, scenery, or explanation.
+- Read it as "actor action target". Include necessary connecting words:
+  "tightens a hold on" is grammatical; "tightens hold" is incomplete.
 - Use "actor_part" and "target_part" only when a body part is essential to the
   geometry: hand/forearm, foot/ankle. Use "object" only for a visible transferred
   or jointly handled item such as "coffee mug". Omit unused optional fields.
@@ -9864,16 +9913,19 @@ SPATIAL MULTI-SUBJECT SHAPE — for TWO, THREE, OR FOUR people:
   act-required anatomy from group_interactions; never invent anatomy in "details".
 - Put every NONSEXUAL joint action or physical contact in group_relations. Put
   shared placement/distance in "spatial_relation" exactly once, using spatial
-  labels and no action verb.
+  labels and no action verb. Use short references such as "the woman on the
+  left". Add only relative placement, such as beside or above another subject;
+  never repeat a label's position as "in the foreground in foreground".
 - "group_scene" is one short name-free context clause. Do not repeat the shared
   action, subject traits, clothing, camera, or environment in it.
 - ONE FACT, ONE OWNER. Every visible trait, garment, expression, pose, gaze, and
   one-person action belongs to exactly one group subject. A shared interaction,
   spatial relation, camera fact, or environment fact appears exactly once.
-- For nsfw/explicit adult scenes, never use youth-coded descriptors such as
-  "young man", "young adult male", "youthful", or "boyish". Use "adult man"
-  for the younger adult and distinguish only an older participant with supported
-  age facts such as "45 years old" or "middle-aged adult man".
+- LumiDraw preserves the sheet's adult age wording in one introduction per
+  subject, including "young adult woman" when explicitly saved. Do not add,
+  remove, or guess an adult age category. Later references use gender and
+  position only; do not repeat "adult" or "middle-aged" on every mention.
+- Do not invent youth-coded descriptors such as "youthful" or "boyish".
 
 INTERACTIONS — visible sexual acts in a two-to-four-person image go in
 "group_interactions", never in group_relations.
@@ -10755,7 +10807,7 @@ function parseDirectGroupRelations(item, present, presenceFieldDeclared, spatial
   for (const entry of raw.slice(0, 8)) {
     const actorName = String((entry && entry.actor) || '').trim()
     const targetName = String((entry && (entry.target || entry.recipient)) || '').trim()
-    const action = directRelationFragment(entry && entry.action, 5)
+    const action = directRelationAction(entry && entry.action)
     const evidence = String((entry && entry.evidence) || '').replace(/\s+/g, ' ').trim().slice(0, 360)
     if (!actorName || !targetName || !action) {
       notes.push('dropped a general relation — actor, action, and target are all required')
