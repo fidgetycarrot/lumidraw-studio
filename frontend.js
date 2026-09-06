@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.32'
+const EXTENSION_VERSION = '1.3.33'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -990,8 +990,8 @@ function realSetup(ctx) {
               <div style="margin-top:11px;padding-top:9px;border-top:1px solid var(--ld-border, rgba(255,255,255,.08))">
                 <div style="display:flex;align-items:center;gap:8px">
                   <span class="ld-label" style="margin:0">Wardrobe of record — this chat</span>
-                  <button class="ld-btn ld-compact" data-act="wardrobe-refresh" title="Reload the saved wardrobe state">↻</button>
-                  <button class="ld-btn ld-compact" data-act="wardrobe-sync" title="Ask the parser to extract explicit clothing changes from the latest story passage; no image is generated">Sync latest passage</button>
+                  <button class="ld-btn ld-compact" data-act="wardrobe-refresh" title="Reload saved clothing only; does not run the parser">Refresh ↻</button>
+                  <button class="ld-btn ld-compact" data-act="wardrobe-sync" title="Optional: run the parser once to check the latest passage for clothing changes; no image is generated">Sync latest passage</button>
                 </div>
                 <div class="ld-wardrobe-rows" style="margin-top:6px"></div>
                 <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
@@ -999,7 +999,7 @@ function realSetup(ctx) {
                   <button class="ld-btn ld-compact" data-act="wardrobe-add" title="Put this saved character into the cast this chat actually uses">Add to cast</button>
                 </div>
                 <div class="ld-help" style="margin-top:3px">Somebody in the story who is not on the character card — from a lorebook, say — goes here. This writes to whatever this chat reads from, which the preset editor's cast list does not.</div>
-                <div class="ld-help">What images use when the passage does not describe clothing. Save and clear act on one character only. Sync latest passage runs the parser without generating an image and changes only clothing explicitly established there; silence leaves everyone untouched.</div>
+                <div class="ld-help">Keep the complete outfit here, with one garment per comma, including layers and shoes. The image prompt uses visible clothing; a covered shirt can remain saved beneath a hoodie. Save corrects one character, not a permanent lock: normal story scans update clothing from the passage and scene card while retaining unchanged garments. Clear returns that character to the saved default. Refresh only reloads this display. Sync latest passage is an optional extra parser check without generating an image.</div>
                 <div class="ld-status ld-wardrobe-status" style="font-size:11px"></div>
               </div>
             </div>
@@ -1679,8 +1679,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (controls.castStatus) castCard.appendChild(controls.castStatus)
     cast.appendChild(castCard)
 
-    const wardrobeCard = card('Wardrobe of record', 'Save and clear affect one character. Sync latest passage parses explicit clothing changes without generating an image; silence changes nothing.')
-    wardrobeCard.appendChild(inline(make('span', 'ld-label', 'Current wardrobe'), controls.wardrobeRefresh, controls.wardrobeSync))
+    const wardrobeCard = card('Wardrobe of record', 'Keep the complete outfit here, with one garment per comma, including layers and shoes. The image prompt uses visible clothing; a covered shirt can remain saved beneath a hoodie. Save corrects one character, not a permanent lock: normal story scans update clothing from the passage and scene card while retaining unchanged garments. Clear returns that character to the saved default. Refresh only reloads this display. Sync latest passage is an optional extra parser check without generating an image.')
+    wardrobeCard.appendChild(inline(make('span', 'ld-label', 'Complete current outfit'), controls.wardrobeRefresh, controls.wardrobeSync))
     if (controls.wardrobeRows) wardrobeCard.appendChild(controls.wardrobeRows)
     wardrobeCard.appendChild(field('Add a saved character to this chat', inline(controls.wardrobeAdd, controls.wardrobeAddButton)))
     if (controls.wardrobeStatus) wardrobeCard.appendChild(controls.wardrobeStatus)
@@ -4275,6 +4275,8 @@ ${entry.prompt || ''}`.trim()
             groupSubjects: candidate.groupSubjects || [],
             groupInteractions: candidate.groupInteractions || [],
             groupRelations: candidate.groupRelations || [],
+            wardrobeSnapshot: ((candidate.debug || {}).scene || {}).wardrobeSnapshot || {},
+            wardrobeDecisions: ((candidate.debug || {}).scene || {}).wardrobeDecisions || [],
           })),
           at: Date.now(),
         }
@@ -4736,15 +4738,15 @@ ${entry.prompt || ''}`.trim()
   }
 
   // --- wardrobe of record -----------------------------------------------------
-  // The compiler corrects the parser toward what it remembers, so a wrong record
-  // is worse than no record: it is defended. This is the correction.
+  // These rows edit the complete per-chat outfit, not just its visible layers.
+  // A manual correction is current state, not a lock against later story changes.
   let wardrobeLibrary = []
 
   function renderWardrobeRows(rows) {
     const box = $('.ld-wardrobe-rows')
     if (!box) return
     if (!rows || !rows.length) {
-      box.innerHTML = '<div class="ld-help" style="margin:0">No characters here yet. This chat starts from its current Lumiverse character/persona; add saved characters here or refresh to read story declarations.</div>'
+      box.innerHTML = '<div class="ld-help" style="margin:0">No characters here yet. This chat starts from its current Lumiverse character/persona; add saved characters here. Normal story scans can also discover declared characters.</div>'
       return
     }
     box.innerHTML = rows.map((row) => {
@@ -4815,8 +4817,8 @@ ${entry.prompt || ''}`.trim()
       return `<div class="ld-wardrobe-row" data-ref="${ref}" style="margin-bottom:8px">
       <div style="display:flex;gap:6px;align-items:center">
         ${opener}
-        <input class="ld-wardrobe-input" data-ref="${ref}" style="flex:1" value="${tags}" placeholder="${hint}" />
-        <button class="ld-btn ld-compact" data-act="wardrobe-save-one" data-ref="${ref}" data-name="${attrName}" title="Save only ${attrName}'s current outfit">Save</button>
+        <input class="ld-wardrobe-input" data-ref="${ref}" aria-label="${attrName}'s complete current outfit" title="Separate garments with commas; include underlayers and shoes, even when hidden in the image" style="flex:1" value="${tags}" placeholder="${hint}" />
+        <button class="ld-btn ld-compact" data-act="wardrobe-save-one" data-ref="${ref}" data-name="${attrName}" title="Correct only ${attrName}'s current outfit; later story clothing changes can still update it">Save</button>
         <button class="ld-btn ld-compact" data-act="wardrobe-clear-one" data-ref="${ref}" data-name="${attrName}" title="Clear only ${attrName}'s current outfit and return to the saved default"${row.tags ? '' : ' disabled'}>Clear</button>
         ${swap}
         ${remove}
@@ -4987,8 +4989,8 @@ ${entry.prompt || ''}`.trim()
         ? `Read from "${res.preset || 'no preset'}" · chat ${String(res.chatId).slice(-8)}`
         : `Read from "${res.preset || 'no preset'}" · NO CHAT IDENTIFIED — every chat is sharing one wardrobe record`
       const found = res.added && res.added.length ? ` Added from the story: ${res.added.join(', ')}.` : ''
-      // The answer to "refresh doesn't change the wardrobe of record": now it can,
-      // and when it does it says whose clothes changed.
+      // Legacy explicit scan callers can still discover story declarations.
+      // The Refresh button itself only reloads stored clothing.
       const wore = res.dressed && res.dressed.length
         ? ` The story re-dressed ${res.dressed.map((item) => item.name).join(', ')}.` : ''
       setStatus('.ld-wardrobe-status', scan
@@ -5134,7 +5136,7 @@ ${entry.prompt || ''}`.trim()
           ? (returned.fallback
             ? `${name}'s current outfit was cleared. The saved character default is now the fallback.`
             : `${name}'s current outfit was cleared. No clothing is recorded until the story or you establishes it.`)
-          : `Saved only ${name}'s current outfit. Other characters were untouched.`, 'good')
+          : `Saved only ${name}'s current outfit. Other characters were untouched; later story clothing changes can still update it.`, 'good')
       } catch (e) {
         setStatus('.ld-wardrobe-status', e.message, 'err')
       }

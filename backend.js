@@ -25,6 +25,9 @@ const HISTORY_FILE = 'history.json'
 const IMAGE_PLACEMENTS_FILE = 'image_placements.json'
 const STORY_DEBUG_FILE = 'story_debug.json'
 const SCENE_MEMORY_FILE = 'scene_memory.json'
+const WARDROBE_BACKUP_FILE = 'scene_memory_backup_pre_1_3_33.json'
+let wardrobeMigrationDone = false
+let wardrobeMigrationPending = null
 // A cast is WHO is in a story. A preset is WHAT the picture looks like. Those
 // change on completely different schedules — the visual settings are set once,
 // the cast changes per story — and welding them together is why switching
@@ -913,8 +916,42 @@ function sceneMemoryKey(chatId, presetName) {
 }
 
 async function getSceneMemory() {
+  await migrateWardrobeMemory()
   const value = await spindle.storage.getJson(SCENE_MEMORY_FILE, { fallback: {} })
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+// Normalize only clothing lists. Preserve every other field, timestamp and
+// per-character manual source. Never rewrite the live record without a backup.
+async function migrateWardrobeMemory() {
+  if (wardrobeMigrationDone) return
+  if (wardrobeMigrationPending) return wardrobeMigrationPending
+  wardrobeMigrationPending = (async () => {
+    const original = await spindle.storage.getJson(SCENE_MEMORY_FILE, { fallback: {} })
+    const repaired = normalizeWardrobeMemory(original)
+    if (JSON.stringify(original) !== JSON.stringify(repaired)) {
+      const backup = await spindle.storage.getJson(WARDROBE_BACKUP_FILE, { fallback: null })
+      if (backup === null) await spindle.storage.setJson(WARDROBE_BACKUP_FILE, original, { indent: 2 })
+      await spindle.storage.setJson(SCENE_MEMORY_FILE, repaired, { indent: 2 })
+      spindle.log.info('[lumidraw] wardrobe repair: separated packed garments and removed exact duplicates; original saved in ' + WARDROBE_BACKUP_FILE)
+    }
+    wardrobeMigrationDone = true
+  })()
+  try { await wardrobeMigrationPending } finally { wardrobeMigrationPending = null }
+}
+
+function normalizeWardrobeMemory(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const repaired = { ...value }
+  for (const [key, entry] of Object.entries(value)) {
+    if (!entry || typeof entry !== 'object' || !entry.outfits || typeof entry.outfits !== 'object' || Array.isArray(entry.outfits)) continue
+    const outfits = { ...entry.outfits }
+    for (const [ref, worn] of Object.entries(outfits)) {
+      if (typeof worn === 'string' || Array.isArray(worn)) outfits[ref] = wardrobeTagList(worn)
+    }
+    repaired[key] = { ...entry, outfits }
+  }
+  return repaired
 }
 
 // Entries written before memory was preset-scoped are keyed by chat alone. The
@@ -990,9 +1027,9 @@ async function rememberSceneState(chatId, presetName, {
     const mergedOutfits = { ...(previous.outfits || {}) }
     const mergedOutfitMeta = { ...(previous.outfitMeta || {}) }
     for (const [ref, worn] of Object.entries(wardrobe || {})) {
-      const items = uniqueStrings(worn || []).slice(0, 12)
+      const items = wardrobeTagList(worn)
       if (items.length) {
-        const before = uniqueStrings(mergedOutfits[ref] || [])
+        const before = wardrobeTagList(mergedOutfits[ref])
         const changed = before.join('\u0000') !== items.join('\u0000')
         mergedOutfits[ref] = items
         const detail = outfitMeta && outfitMeta[ref]
@@ -1944,7 +1981,7 @@ function sceneCardField(block, tag) {
 // never be interpreted as "sweatshirt and otherwise undressed".
 function sceneCardAttireTags(value) {
   const tags = []
-  for (const piece of String(value || '').split(/[,;\n]+/)) {
+  for (const piece of wardrobeTagList(value)) {
     let text = decodeBasicHtmlEntities(piece).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
     if (!text) continue
     const normalized = normalizeIdentityText(text)
@@ -2163,7 +2200,7 @@ function wardrobeLinesFor(rememberedState, profiles) {
   const lines = []
   for (const profile of allKnownProfiles(profiles)) {
     if (!profile || !profile.ref) continue
-    const tags = uniqueStrings(outfits[profile.ref] || [])
+    const tags = wardrobeTagList(outfits[profile.ref])
     if (!tags.length) continue
     // The ANCHOR, never the promptName. promptName exists for the image model —
     // the "Fanny reads as slang, write Price" escape hatch — but the parser reads
@@ -2244,6 +2281,10 @@ RULES
   passage did not remove, include every explicitly added garment, and use
   "nude", "topless", "bottomless", or "barefoot" when directly established.
 - Never guess a missing garment, color, shoes, underwear, or accessory.
+- Use ONE garment per array item, never "shirt, hoodie, pants" in one string.
+  Retain hidden inner layers in the full outfit; opening/removing a hoodie does
+  not replace the shirt beneath it. Keep socks and shoes as separate items.
+  Use garment nouns with brands ("Vans sneakers"), and preserve established fit.
 - Use each character's exact KNOWN CHARACTERS name. One update per character.
 `
 
@@ -2260,14 +2301,14 @@ function effectiveWardrobeForProfiles(state, profiles) {
   const result = {}
   for (const profile of allKnownProfiles(profiles)) {
     if (!profile || !profile.ref) continue
-    const recorded = uniqueStrings(saved[profile.ref] || [])
-    result[profile.ref] = recorded.length ? recorded : uniqueStrings(profile.defaultOutfit || [])
+    const recorded = wardrobeTagList(saved[profile.ref])
+    result[profile.ref] = recorded.length ? recorded : wardrobeTagList(profile.defaultOutfit)
   }
   return result
 }
 
 function partialWardrobeCoverage(outfit, evidence = '') {
-  const worn = uniqueStrings(outfit || [])
+  const worn = wardrobeTagList(outfit)
   const zones = new Set(worn.map(garmentZone).filter(Boolean))
   const evidenceText = normalizeIdentityText(evidence)
   const explicitlyBareBelow = /\b(?:nude|naked|undressed|bottomless|no pants|no bottoms|no underwear|no panties|boxers|briefs|panties|thong)\b/i.test(evidenceText)
@@ -2286,13 +2327,17 @@ function partialWardrobeCoverage(outfit, evidence = '') {
 }
 
 function mergePartialWardrobeObservation(observed, before, evidence = '') {
-  const offered = uniqueStrings(observed || []).filter((tag) =>
+  const offered = wardrobeTagList(observed).filter((tag) =>
     BARE_STATE_RE.test(tag) || garmentZone(tag) || GARMENT_RE.test(tag))
-  if (!offered.length) return { outfit: uniqueStrings(before || []), inferred: [], offered: [] }
+  if (!offered.length) return { outfit: wardrobeTagList(before), inferred: [], offered: [] }
   // A scene card states the current result rather than narrating the change, so
   // allow a same-family state (plain sweatshirt -> off-shoulder sweatshirt) to
   // replace the prior top while the zone merger restores silent bottoms.
-  const merged = mergeOutfitByZone(offered, before || [], 'changed into tracked current attire').outfit
+  const explicitInnerBottom = offered.some((tag) => UNDERWEAR_BOTTOM_RE.test(tag)) &&
+    !offered.some((tag) => OUTER_BOTTOM_RE.test(tag)) &&
+    /\b(?:boxers|briefs|panties|underwear|thong)\b/i.test(evidence)
+  const prior = wardrobeTagList(before).filter((tag) => !explicitInnerBottom || !OUTER_BOTTOM_RE.test(tag))
+  const merged = mergeOutfitByZone(offered, prior, evidence, { observation: true }).outfit
   const covered = partialWardrobeCoverage(merged, evidence)
   return { outfit: covered.outfit, inferred: covered.inferred, offered }
 }
@@ -2414,9 +2459,7 @@ function parseWardrobeSyncReply(raw, profiles, passage, currentOutfits = {}) {
       continue
     }
 
-    const offered = animaTagList(Array.isArray(item.outfit)
-      ? item.outfit
-      : String(item.outfit || '').split(/[,+]/)).slice(0, 12)
+    const offered = wardrobeTagList(item.outfit)
     if (!offered.length) {
       rejected.push(`${profile.anchor || profile.ref}'s update had no clothing tags; use "nude" for an explicitly bare state.`)
       continue
@@ -6725,13 +6768,17 @@ function subjectTagLine(item, scene, descriptors, { includeAppearance = true } =
     .filter((tag) => signaturePriority(tag) < 99)
     .sort((a, b) => signaturePriority(a) - signaturePriority(b))
   const ordinaryAppearance = visibleAppearance.filter((tag) => signaturePriority(tag) >= 99)
+  const visibleOutfit = visibleWardrobeFor(item.outfit, {
+    profiles: { cast: descriptors.map((entry) => entry.profile).filter(Boolean) },
+    profile: item.profile, frame: (scene.camera || []).join(', '),
+  }).visible
   // The subject's prose noun ("a half-elf woman") and proper name are
   // deliberately absent: neither is a booru tag, and the count tag in the
   // header already carries the subject count.
   const coreTags = uniqueStrings([
     ...signatureAppearance,
     ...ordinaryAppearance,
-    ...item.outfit,
+    ...visibleOutfit,
     ...poses,
     ...item.expression,
     ...actions,
@@ -6861,12 +6908,136 @@ function garmentFamily(tag) {
   const text = normalizeIdentityText(tag)
   if (!text) return ''
   for (const [re, canonical] of FAMILY_ALIASES) if (re.test(text)) return canonical
-  return text.split(/\s+/).pop()
+  const noun = text.match(/\b(?:sweatshirt|hoodie|pullover|sweater|cardigan|jacket|coat|blazer|vest|shirt|blouse|camisole|bra|dress|gown|robe|jumpsuit|overalls|shorts|pants|trousers|jeans|skirt|leggings|sweatpants|sneakers|shoes|boots|sandals|heels|socks|stockings|gloves|scarf|belt|hat)\b/)
+  return noun ? noun[0] : text.split(/\s+/).pop()
 }
 
-function mergeOutfitByZone(reported, remembered, passage = '') {
-  const worn = uniqueStrings(reported || [])
-  const memory = uniqueStrings(remembered || [])
+// This is deliberately clothing-scoped, not a change to global tag parsing.
+// It accepts older packed arrays and preserves unrecognized text for migration.
+function wardrobeTagList(value) {
+  const raw = (Array.isArray(value) ? value.flat(2) : [value])
+    .filter((item) => typeof item === 'string')
+  const pieces = []
+  for (const item of raw) {
+    for (let tag of item.split(/[,;\n+]+/)) {
+      tag = animaTag(tag).replace(/[’‘]/g, "'").trim()
+      if (!tag) continue
+      // A brand needs a garment noun. Never rewrite a sentence about vehicles.
+      if (/^(?:(?:black|white|red|blue|grey|gray|canvas|worn|old|new|scuffed|dirty|clean|checkered|checkerboard)\s+)*vans$/i.test(tag)) tag += ' sneakers'
+      const joined = tag.split(/\s+(?:and|under|underneath|beneath|over)\s+/)
+      if (joined.length > 1 && joined.every((part) => garmentZone(part) || GARMENT_RE.test(part))) {
+        pieces.push(...joined)
+      } else pieces.push(tag)
+    }
+  }
+  return uniqueStrings(pieces)
+}
+
+// A body zone is useful for coverage, but too coarse for continuity. Shirt,
+// pullover and coat may all be worn together; socks do not replace sneakers.
+function wardrobeSlot(tag) {
+  const zone = garmentZone(tag)
+  const text = normalizeIdentityText(tag)
+  if (zone === 'top') {
+    if (/\b(?:coat|jacket|blazer|cardigan|vest|cloak|poncho|bolero)\b/.test(text)) return 'top:outer'
+    if (/\b(?:hoodie|sweatshirt|sweater|pullover)\b/.test(text)) return 'top:middle'
+    if (/\b(?:bra|bustier|bandeau)\b/.test(text)) return 'top:under'
+    return 'top:base'
+  }
+  if (zone === 'feet') return /\bsocks\b/.test(text) ? 'feet:socks' : 'feet:shoes'
+  if (zone === 'bottom') return UNDERWEAR_BOTTOM_RE.test(tag) ? 'bottom:under' : 'bottom:outer'
+  return zone || 'accessory:' + garmentFamily(tag)
+}
+
+function wardrobeRemovedSlots(passage) {
+  const removed = new Set()
+  const text = String(passage || '')
+  const noun = '(?:hoodie|sweatshirt|sweater|pullover|cardigan|jacket|coat|blazer|vest|shirt|blouse|dress|robe|pants|jeans|shorts|skirt|sneakers|shoes|boots|socks|scarf|gloves)'
+  // Do not jump over a different object: removing a label FROM a shirt is
+  // not removing the shirt. Process explicit off/on events in passage order.
+  const garment = '(?:(?!(?:from|off|on|out|label|tag|stain|lint|button|zipper|hand)\\b)[\\w\u2019\'-]+\\s+){0,5}' + noun
+  const patterns = [
+    [true, '\\b(?:removes?|removed|discards?|discarded|sheds?|shed)\\s+' + garment + '\\b'],
+    [true, '\\b(?:takes?|took|pulls?|pulled|shrugs?|shrugged|slips?|slipped|kicks?|kicked)\\s+' + garment + '\\s+off\\b'],
+    [true, '\\b(?:takes?|took|pulls?|pulled|shrugs?|shrugged|slips?|slipped|kicks?|kicked)\\s+off\\s+' + garment + '\\b'],
+    [false, '\\b(?:puts?|put|pulls?|pulled|slips?|slipped|shrugs?|shrugged)\\s+(?:back\\s+)?on\\s+' + garment + '\\b'],
+    [false, '\\b(?:puts?|put|pulls?|pulled|slips?|slipped|shrugs?|shrugged)\\s+' + garment + '\\s+(?:back\\s+)?on\\b'],
+  ]
+  const events = []
+  for (const [off, pattern] of patterns) {
+    for (const match of text.matchAll(new RegExp(pattern, 'gi'))) {
+      const lead = text.slice(0, match.index).split(/[.!?;,\n]|\b(?:but|then|and)\b/i).pop()
+      if (/\b(?:not|never|no longer|without|if|unless|could|would|might|may|will|should|can|plans? to|wants? to|used to)\b|n['\u2019]t\b/i.test(lead)) continue
+      events.push({ index: match.index, slot: wardrobeSlot(match[0]), off })
+    }
+  }
+  for (const event of events.sort((a, b) => a.index - b.index)) {
+    if (event.off) removed.add(event.slot)
+    else removed.delete(event.slot)
+  }
+  return removed
+}
+
+function wardrobeVisualLabel(tag, profiles = null) {
+  let text = String(tag || '').replace(/[’‘]/g, "'").trim()
+  // Ownership belongs in state, not in the image's garment phrase. Names are
+  // matched atomically; merely borrowing an item does NOT establish its fit.
+  const names = uniqueStrings(allKnownProfiles(profiles).flatMap((profile) =>
+    [profile && profile.anchor, profile && profile.promptName,
+      String((profile && profile.anchor) || '').split(/\s+/)[0]]).filter(Boolean)).sort((a, b) => b.length - a.length)
+  for (const name of names) text = text.replace(new RegExp('\\b' + escapeRegExp(name) + "(?:'s|')\\s+", 'gi'), '')
+  text = text.replace(/^(?:(?:his|her|their|my|your|our)|(?:a|the)\s+(?:man|woman|boy|girl)'s|(?:men|women)'s)\s+/i, '')
+  // Old saved prompts may already contain a substituted spatial owner.
+  text = text.replace(/\bthe\s+(?:(?:young|middle-aged)\s+)?(?:adult\s+)?(?:man|woman)\s+(?:on the (?:left|right)|in the (?:foreground|midground|background|center))'s\s+/gi, '')
+  if (garmentZone(text) || GARMENT_RE.test(text)) text = text.replace(/\b(?:massive|huge|very large)\b/gi, 'oversized')
+  return animaTag(text).replace(/\s{2,}/g, ' ').trim()
+}
+
+// Derive display-only layers without erasing the complete wardrobe of record.
+function visibleWardrobeFor(outfit, { profiles = null, profile = null, frame = '' } = {}) {
+  const worn = wardrobeTagList(outfit)
+  const lookupProfiles = profiles || (profile ? { character: profile, cast: [] } : null)
+  const records = worn.map((item) => ({ item, label: wardrobeVisualLabel(item, lookupProfiles), slot: wardrobeSlot(item) }))
+  const hidden = []
+  const visible = []
+  const notes = []
+  const open = (label) => /\b(?:open|unzipped|unbuttoned|unfastened|off shoulder|off one shoulder|hanging off|sheer|transparent|mesh|see through)\b/i.test(label) &&
+    !/\b(?:not open|not unzipped|not unbuttoned)\b/i.test(label)
+  const closedCover = (record) => !open(record.label) && !isNotClothing(record.item) &&
+    !/\b(?:tied|knotted|wrapped) (?:around|about) (?:the |her |his |their )?(?:waist|hips)\b/i.test(record.label) &&
+    // A cardigan/jacket/coat may be open when unstated. Only conceal beneath
+    // those when closure is explicit; a pullover normally covers the shirt.
+    (record.slot === 'top:middle' || /\b(?:closed|zipped up|zipped closed|buttoned up|fastened)\b/.test(record.label))
+  for (const record of records) {
+    let cover = null
+    if (record.slot === 'top:base' || record.slot === 'top:under') {
+      cover = records.find((other) => other !== record &&
+        ((other.slot === 'top:middle' || other.slot === 'top:outer') && closedCover(other)))
+      if (!cover && record.slot === 'top:under') cover = records.find((other) => other.slot === 'top:base' && !open(other.label))
+    } else if (record.slot === 'top:middle') {
+      cover = records.find((other) => other.slot === 'top:outer' && closedCover(other))
+    } else if (record.slot === 'bottom:under') {
+      cover = records.find((other) => other.slot === 'bottom:outer' && !open(other.label))
+    }
+    if (cover && !/\b(?:visible|exposed|peeking|showing|tied around)\b/.test(record.label)) {
+      hidden.push({ item: record.item, coveredBy: cover.item })
+      continue
+    }
+    // Do not invent a full-body crop just to show established shoes.
+    if (record.slot.startsWith('feet:') && /\b(?:cowboy shot|close[- ]?up|headshot|upper body|bust shot)\b/i.test(frame)) {
+      hidden.push({ item: record.item, coveredBy: 'outside the stated crop' })
+      continue
+    }
+    if (record.label) visible.push(record.label)
+    if (record.label !== record.item) notes.push(record.item + ' → ' + record.label)
+  }
+  return { worn, visible: uniqueStrings(visible), hidden, notes }
+}
+
+function mergeOutfitByZone(reported, remembered, passage = '', { observation = false } = {}) {
+  const worn = wardrobeTagList(reported)
+  const removedSlots = wardrobeRemovedSlots(passage)
+  const memory = wardrobeTagList(remembered).filter((tag) => !removedSlots.has(wardrobeSlot(tag)))
   if (!worn.length || !memory.length) return { outfit: worn, restored: [], corrected: [] }
 
   // Memory's veto is limited to ADJECTIVE DRIFT: the same garment re-described.
@@ -6887,9 +7058,9 @@ function mergeOutfitByZone(reported, remembered, passage = '') {
   // see: a same-family REAL change ("she changed into a fresh white blouse" over a
   // remembered silk blouse). Its false positives — "changed the subject" — now
   // merely skip the correction, which is the direction we already prefer.
-  const changing = OUTFIT_CHANGE_RE.test(String(passage || ''))
+  const changing = observation || OUTFIT_CHANGE_RE.test(String(passage || ''))
   const corrected = []
-  if (!changing) {
+  {
     const memoryByFamily = new Map()
     for (const tag of memory) {
       const family = garmentFamily(tag)
@@ -6900,17 +7071,38 @@ function mergeOutfitByZone(reported, remembered, passage = '') {
       if (!family || !memoryByFamily.has(family)) continue
       const known = memoryByFamily.get(family)
       if (normalizeIdentityText(known) === normalizeIdentityText(worn[i])) continue
+      const stated = normalizeIdentityText(worn[i]).replace(/^(?:a|an|the)\s+/, '')
+      const generic = stated === family || (family === 'shirt' && stated === 't shirt')
+      const stateOnly = /^(open|closed|unzipped|unbuttoned|zipped up|buttoned up)\s+([\w -]+)$/i.exec(worn[i])
+      const stateVerbs = { open: /\bopens?\b/i, closed: /\bcloses?\b/i,
+        unzipped: /\bunzips?\b/i, unbuttoned: /\bunbuttons?\b/i,
+        'zipped up': /\bzips?\b/i, 'buttoned up': /\bbuttons?\b/i }
+      if (stateOnly && garmentFamily(stateOnly[2]) === family &&
+          normalizeIdentityText(stateOnly[2]) === family &&
+          (observation || normalizeIdentityText(passage).includes(normalizeIdentityText(stateOnly[1])) ||
+            stateVerbs[stateOnly[1].toLowerCase()].test(passage))) {
+        const base = known.replace(/\b(?:open|closed|unzipped|unbuttoned|zipped up|buttoned up)\b/gi, '').replace(/\s{2,}/g, ' ').trim()
+        worn[i] = `${stateOnly[1]} ${base}`
+        continue
+      }
+      // A generic re-mention does not discard established fit/colour. A real
+      // wearer-linked description or state change can correct old memory.
+      if (!generic && (changing || (stated.split(/\s+/).length > 1 &&
+          normalizeIdentityText(passage).includes(stated)))) continue
       corrected.push(`${worn[i]} → ${known}`)
       worn[i] = known
     }
   }
 
   const covered = new Set()
+  const occupiedSlots = new Set(worn.map(wardrobeSlot))
+  const explicitlyBareZones = new Set()
   for (const tag of worn) {
     for (const entry of BARE_ZONE_RE) {
       if (!entry.re.test(normalizeIdentityText(tag))) continue
       if (entry.zone === 'all') return { outfit: worn, restored: [], corrected }
       covered.add(entry.zone)
+      explicitlyBareZones.add(entry.zone)
     }
     const zone = garmentZone(tag)
     if (zone === 'full') { covered.add('full'); covered.add('top'); covered.add('bottom') }
@@ -6937,8 +7129,10 @@ function mergeOutfitByZone(reported, remembered, passage = '') {
       // red dress evaporated the moment the prose mentioned her jeans, leaving
       // her in jeans and nothing else — topless without anyone saying so.
       if (covered.has('full') || (covered.has('top') && covered.has('bottom'))) continue
-    } else if (covered.has(zone)) continue
+    } else if (explicitlyBareZones.has(zone) || occupiedSlots.has(wardrobeSlot(tag)) ||
+      (covered.has('full') && (zone === 'top' || zone === 'bottom'))) continue
     restored.push(tag)
+    occupiedSlots.add(wardrobeSlot(tag))
     if (zone === 'full') { covered.add('full'); covered.add('top'); covered.add('bottom') } else covered.add(zone)
   }
   return { outfit: uniqueStrings([...worn, ...restored]), restored, corrected }
@@ -7181,6 +7375,10 @@ function poseBelongsToRelation(pose, item, scene, descriptors) {
 
 function subjectIdentitySentences(item, scene, descriptors, profiles = null) {
   const name = displayName(item)
+  const visibleOutfit = visibleWardrobeFor(item.outfit, {
+    profiles: profiles || { cast: descriptors.map((entry) => entry.profile).filter(Boolean) },
+    profile: item.profile, frame: (scene.camera || []).join(', '),
+  }).visible
 
   // One appositive caption phrase per subject, not three narrative sentences.
   // "Sovi is an elf woman with… Sovi wears… Sovi is standing and laughing."
@@ -7235,7 +7433,7 @@ function subjectIdentitySentences(item, scene, descriptors, profiles = null) {
   // fine; in a multi-subject caption it was forty words downstream, which on a
   // model whose prior says 1boy wears trousers is not enough to win.
   const wornEarly = []
-  for (const value of item.outfit || []) {
+  for (const value of visibleOutfit) {
     const tag = animaTag(value)
     if (!tag) continue
     if (/^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs|dressed|clothed|undressed|fully clothed|partially clothed)$/.test(tag)) continue
@@ -7256,7 +7454,7 @@ function subjectIdentitySentences(item, scene, descriptors, profiles = null) {
 
   const clothes = []
   const stateWords = []
-  for (const value of item.outfit || []) {
+  for (const value of visibleOutfit) {
     const tag = animaTag(value)
     if (!tag) continue
     if (/^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs|dressed|clothed|undressed|fully clothed|partially clothed)$/.test(tag)) stateWords.push(tag)
@@ -7727,6 +7925,8 @@ function garmentSupported(tag, text, wardrobe, profile) {
   const known = [...(wardrobe || []), ...((profile && profile.defaultOutfit) || [])]
   if (known.some((item) => normalizeIdentityText(item).split(/\s+/).pop() === head)) return true
   const hay = normalizeIdentityText(text)
+  if (head === 'sneakers' && /\bvans\b/.test(hay) &&
+      /\b(?:wears?|wearing|wore|shoes|sneakers|feet|laces|lacing|pulls? on|puts? on|slips? on)\b/.test(hay)) return true
   if (new RegExp(`\\b${escapeRegExp(head)}\\b`).test(hay)) return true
   return GARMENT_SYNONYMS.some(([re, canonical]) => canonical === head && re.test(hay))
 }
@@ -9209,6 +9409,8 @@ function directGroupMechanicsDebug(image, profiles, banned = '') {
   const mood = directSceneMoodDecision(image)
   return {
     rating: String((image && image.rating) || ''),
+    wardrobeSnapshot: (image && image.wardrobeSnapshot) || {},
+    wardrobeDecisions: (image && image.wardrobeDecisions) || [],
     aspect: String((image && image.aspect) || ''),
     groupSource: String((image && image.groupSource) || ''),
     sceneMoodRequested: mood.requested,
@@ -9239,6 +9441,7 @@ function directGroupMechanicsDebug(image, profiles, banned = '') {
         position: subject.position || '',
         subjectIntroduction: directGroupSubjectIntroduction(subject, profiles),
         referenceLabel: directGroupSubjectLabel(subject, profiles),
+        clothing: ((image && image.clothingDebug) || {})[subject.profileRef || ((directGroupProfileFor(subject, profiles) || {}).ref)] || null,
         expressionCues: directExpressionCues(visibleDetails),
         expressionFamily: directExpressionFamily(visibleDetails),
         includeSavedAnatomy: !!subject.includeSavedAnatomy,
@@ -9295,7 +9498,8 @@ function directGroupIsSpatial(image) {
 
 function directWardrobeTag(value) {
   const tag = animaTag(value)
-  return !!tag && (BARE_STATE_RE.test(tag) || !!garmentZone(tag))
+  return !!tag && (BARE_STATE_RE.test(tag) ||
+    (!isNotClothing(tag) && !/\b(?:removed|taken off|not worn)\b/i.test(tag) && (!!garmentZone(tag) || GARMENT_RE.test(tag))))
 }
 
 function directWardrobeCandidateGrounded(tag, grounding, before, profile) {
@@ -9318,17 +9522,68 @@ function directWardrobeCandidateGrounded(tag, grounding, before, profile) {
   return false
 }
 
-function resolveDirectWardrobeForImage(image, profiles, baseWardrobe = {}, grounding = '') {
+// New clothing must belong to this wearer, not merely occur somewhere in the
+// scene. Possessive garment owners (Alice wears Ben's shirt) are not wearers.
+// Ambiguous clauses leave established clothing alone rather than lending a
+// strong garment across two subjects. An exact parser quote corroborates the
+// attributed clause; it is never a second path around wearer attribution.
+function wardrobeOwnerEvidence(profile, profiles, text, image = null) {
+  const known = allKnownProfiles(profiles).filter((item) => item && item.ref)
+  const names = known.flatMap((item) => uniqueStrings([item.anchor, item.promptName,
+    String(item.anchor || '').split(/\s+/)[0]]).filter(Boolean).map((name) => ({ name, ref: item.ref })))
+  const refsIn = (value) => new Set(names.filter(({ name }) => {
+    const pattern = new RegExp('\\b' + escapeRegExp(name) + "\\b(?!['\u2019](?:s\\b|\\s))", 'i')
+    return pattern.test(value)
+  }).map((item) => item.ref))
+  const activeRefs = new Set(((image && image.groupSubjects) || []).map((subject) =>
+    (directGroupProfileFor(subject, profiles) || {}).ref).filter(Boolean))
+  const roster = activeRefs.size ? known.filter((item) => activeRefs.has(item.ref)) : known
+  const gender = (item) => /girl|woman|female/i.test(String(item.countTag || item.subject || '')) ? 'she'
+    : (/boy|man|male/i.test(String(item.countTag || item.subject || '')) ? 'he' : '')
+  const wearingCue = /\b(?:wears?|wearing|wore|worn|dressed|clad|clothed|puts? on|put on|pulls? on|pulled on|slips? (?:on|into)|slipped (?:on|into)|changes? into|changed into|removes?|removed|takes? off|took off|unzips?|unzipped|zips?|zipped|unbuttons?|unbuttoned|buttons?|buttoned|adjusts?|adjusted|tugs?|tugged|slipping off|slipped off)\b/i
+  const nonEvent = /\b(?:will|would|might|could|should|plans? to|wants? to|used to|if|unless|not|never|without)\b|n['\u2019]t\b/i
+  const chunks = []
+  let current = ''
+  for (const clause of String(text || '').split(/(?<=[.!?])\s+|\n+|[;,]\s*|\s+(?:while|whereas|but)\s+|\s+and\s+(?=[A-Z][a-z])/)) {
+    const refs = refsIn(clause)
+    const pronoun = /^\s*(?:then\s+)?(she|he|her|his)\b/i.exec(clause)
+    if (refs.size) current = refs.size === 1 ? [...refs][0] : ''
+    else {
+      if (pronoun) {
+        const wanted = /^(?:she|her)$/i.test(pronoun[1]) ? 'she' : 'he'
+        const prior = known.find((item) => item.ref === current)
+        if (!prior || gender(prior) !== wanted) {
+          const candidates = roster.filter((item) => gender(item) === wanted)
+          current = candidates.length === 1 ? candidates[0].ref : ''
+        }
+      }
+    }
+    // A remembered grammatical subject is not an owner for every noun in the
+    // next sentence: "A hoodie lies on the seat" describes a nearby object.
+    const continuation = /^\s*(?:then\s+)?(?:wearing|dressed|clad|in\s|with\s|puts?\s|pulls?\s|slips?\s|removes?\s|takes?\s|unzips?\s|zips?\s|unbuttons?\s|buttons?\s|adjusts?\s|tugs?\s)/i.test(clause)
+    const garmentMentioned = GARMENT_RE.test(clause) || !!garmentZone(clause) || /\bvans\b/i.test(clause)
+    const wornDescription = garmentMentioned && (wearingCue.test(clause) ||
+      /\bin\s+(?:(?:a|an|the|her|his|their)\s+)?(?:[\w'-]+\s+){0,4}(?:shirt|hoodie|sweatshirt|coat|jacket|dress|jeans|pants|trousers|shorts|uniform)\b/i.test(clause) ||
+      /\b(?:her|his)\s+(?:[\w'-]+\s+){0,4}(?:shirt|hoodie|coat|jacket|dress|jeans|pants|shoes|boots)\b/i.test(clause))
+    if (current === profile.ref && (refs.size === 1 || pronoun || continuation) &&
+        !nonEvent.test(clause) && (wornDescription || BARE_STATE_RE.test(clause))) chunks.push(clause)
+  }
+  const subject = ((image && image.groupSubjects) || []).find((item) => (directGroupProfileFor(item, profiles) || {}).ref === profile.ref)
+  const evidence = String((subject && subject.clothingEvidence) || '').trim()
+  if (evidence && chunks.some((clause) => normalizeIdentityText(clause).includes(normalizeIdentityText(evidence)))) chunks.push(evidence)
+  return uniqueStrings(chunks).join('. ')
+}
+
+function resolveDirectWardrobeForImage(image, profiles, baseWardrobe = {}, grounding = '', currentPassage = grounding, { corrections = {} } = {}) {
   const known = allKnownProfiles(profiles).filter((profile) => profile && profile.ref)
   const outfits = {}
   for (const profile of known) {
-    outfits[profile.ref] = uniqueStrings(baseWardrobe[profile.ref] || profile.defaultOutfit || [])
+    outfits[profile.ref] = wardrobeTagList(baseWardrobe[profile.ref] || profile.defaultOutfit || [])
   }
   const candidates = new Map()
   const add = (profile, values, source) => {
     if (!profile || !profile.ref) return
-    const tags = animaTagList(values || []).filter(directWardrobeTag)
-    if (!tags.length) return
+    const tags = wardrobeTagList(values).filter(directWardrobeTag)
     const entry = candidates.get(profile.ref) || { profile, tags: [], sources: [] }
     entry.tags.push(...tags)
     entry.sources.push(source)
@@ -9353,35 +9608,54 @@ function resolveDirectWardrobeForImage(image, profiles, baseWardrobe = {}, groun
   const changes = {}
   const notes = []
   for (const [ref, entry] of candidates.entries()) {
-    const before = uniqueStrings(outfits[ref] || [])
+    if (Object.prototype.hasOwnProperty.call(corrections, ref)) {
+      outfits[ref] = wardrobeTagList(corrections[ref])
+      notes.push(`${entry.profile.anchor || ref}: kept the manual correction for this reparse`)
+      continue
+    }
+    const before = wardrobeTagList(outfits[ref])
+    const currentEvidence = wardrobeOwnerEvidence(entry.profile, profiles, currentPassage, image)
+    // Earlier prose can initialize an unknown wardrobe but cannot change an
+    // already-established outfit or trigger a current removal/change event.
+    const evidence = currentEvidence || (!before.length ? wardrobeOwnerEvidence(entry.profile, profiles, grounding, image) : '')
+    const removedSlots = wardrobeRemovedSlots(currentEvidence)
     const supported = uniqueStrings(entry.tags).filter((tag) =>
-      directWardrobeCandidateGrounded(tag, grounding, before, entry.profile))
+      !removedSlots.has(wardrobeSlot(tag)) && directWardrobeCandidateGrounded(tag, evidence, before, entry.profile))
     const dropped = uniqueStrings(entry.tags).filter((tag) => !supported.includes(tag))
     if (dropped.length) notes.push(`${entry.profile.anchor || ref}: ignored ungrounded ${dropped.join(', ')}`)
-    if (!supported.length) continue
-    const byZone = mergeOutfitByZone(supported, before, grounding).outfit
-    const merged = partialWardrobeCoverage(byZone, grounding).outfit
+    const remaining = before.filter((tag) => !removedSlots.has(wardrobeSlot(tag)))
+    if (!supported.length && !removedSlots.size) continue
+    const byZone = supported.length ? mergeOutfitByZone(supported, remaining, currentEvidence).outfit : remaining
+    const merged = partialWardrobeCoverage(byZone, currentEvidence).outfit
     outfits[ref] = merged
     if (before.join('\u0000') !== merged.join('\u0000')) {
       changes[ref] = merged
       notes.push(`${entry.profile.anchor || ref}: ${merged.join(', ')} (${uniqueStrings(entry.sources).join(' + ')})`)
     }
   }
+  image.wardrobeDecisions = notes.slice()
   return { outfits, changes, notes }
 }
 
-function applyDirectWardrobeLock(prompt, profiles, wardrobe, trace = null) {
-  if (!wardrobe || typeof wardrobe !== 'object') return String(prompt || '')
+function applyDirectWardrobeLock(prompt, profiles, wardrobe, trace = null, image = null) {
   const blocks = String(prompt || '').split(/\bBREAK\b/)
   if (blocks.length < 2) return String(prompt || '')
   const notes = []
   const next = [blocks[0]]
   for (const block of blocks.slice(1)) {
     const profile = matchDirectRunProfile(block, profiles)
-    const desired = profile && uniqueStrings(wardrobe[profile.ref] || [])
+    const supplied = profile && wardrobeTagList((wardrobe && wardrobe[profile.ref]) || [])
+    const fullOutfit = supplied && supplied.length ? supplied : wardrobeTagList(block).filter(directWardrobeTag)
+    const desired = profile && visibleWardrobeFor(fullOutfit, { profiles, profile, frame: blocks[0] }).visible
     const hasCoverage = desired && desired.some((tag) =>
       directWardrobeTag(tag) || /\b(?:clothes|clothing|outfit|uniform)\b/i.test(tag))
     if (!profile || !desired.length || !hasCoverage) { next.push(block); continue }
+    if (image) {
+      image.clothingDebug = image.clothingDebug || {}
+      image.wardrobeSnapshot = image.wardrobeSnapshot || {}
+      image.clothingDebug[profile.ref] = visibleWardrobeFor(fullOutfit, { profiles, profile, frame: blocks[0] })
+      image.wardrobeSnapshot[profile.ref] = fullOutfit
+    }
     const desiredKeys = new Set(desired.map(normalizeIdentityText))
     const protectedKeys = new Set([
       ...directAnchorFor(profile), ...identityLockFor(profile),
@@ -9413,6 +9687,8 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
   const counts = directGroupCounts(subjects, profiles)
   const lines = [`${counts.join(', ')},`]
   const explicitAdult = ['nsfw', 'explicit'].includes(String(image.rating || '').toLowerCase())
+  image.clothingDebug = {}
+  image.wardrobeSnapshot = Object.fromEntries(Object.entries(wardrobe || {}).map(([ref, worn]) => [ref, wardrobeTagList(worn)]))
   let youthRemoved = 0
   const sceneText = (value) => {
     const bound = directGroupReplaceNames(value, subjects, profiles)
@@ -9454,17 +9730,22 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
       ...stable,
       ...(profile ? directAnchorFor(profile) : []),
     ].map(normalizeIdentityText))
-    let details = animaTagList(Array.isArray(subject.details)
-      ? subject.details
-      : String(subject.details || '').split(','))
-    const desired = profile && uniqueStrings((wardrobe && wardrobe[profile.ref]) || [])
+    let details = wardrobeTagList(subject.details)
+    const desired = profile && wardrobeTagList((wardrobe && wardrobe[profile.ref]) || [])
     const hasCoverage = desired && desired.some((tag) =>
       directWardrobeTag(tag) || /\b(?:clothes|clothing|outfit|uniform)\b/i.test(tag))
-    if (desired && desired.length && hasCoverage) {
+    const worn = desired && desired.length && hasCoverage ? desired : details.filter(directWardrobeTag)
+    if (worn.length) {
       details = details.filter((tag) => !directWardrobeTag(tag))
-      details = uniqueStrings([...desired, ...details])
+      const clothing = visibleWardrobeFor(worn, { profiles, profile, frame: image.prompt || '' })
+      if (profile) {
+        image.clothingDebug[profile.ref] = clothing
+        image.wardrobeSnapshot[profile.ref] = clothing.worn
+      }
+      details = uniqueStrings([...clothing.visible, ...details])
       if (trace) trace('wardrobe lock', 'applied',
-        `${profile.anchor || profile.ref}: ${desired.join(', ')} (spatial subject)`)
+        `${(profile && (profile.anchor || profile.ref)) || subject.name}: visible ${clothing.visible.join(', ')}` +
+        (clothing.hidden.length ? `; retained but hidden: ${clothing.hidden.map((item) => item.item + ' (' + item.coveredBy + ')').join('; ')}` : ''))
     }
     details = applyBannedToList(details, banned).filter((tag) => {
       if (identityKeys.has(normalizeIdentityText(tag))) return false
@@ -9549,7 +9830,7 @@ function finalizeDirectImagePrompt(image, ctx) {
     const mooded = injectDirectSceneMood(summarized, image, trace)
     body = sanitizeDirectNames(mooded, profiles, trace)
     const locked = applyIdentityLock(body, profiles, trace)
-    body = applyDirectWardrobeLock(locked.prompt, profiles, wardrobe, trace)
+    body = applyDirectWardrobeLock(locked.prompt, profiles, wardrobe, trace, image)
     body = applyBannedToList(body.split(','), preset.bannedTags)
       .join(', ').replace(/\s*,\s*BREAK\s*,\s*/g, ' BREAK ').replace(/\s{2,}/g, ' ').trim()
   }
@@ -9681,7 +9962,7 @@ async function runDirectImages(initialImages, ctx) {
   const rememberedWardrobe = await readSceneMemory(chatId, preset.name)
   let rollingWardrobe = effectiveWardrobeForProfiles(rememberedWardrobe, profiles)
   for (const image of ordered) {
-    const resolved = resolveDirectWardrobeForImage(image, profiles, rollingWardrobe, grounding)
+    const resolved = resolveDirectWardrobeForImage(image, profiles, rollingWardrobe, grounding, passage)
     image.resolvedWardrobe = resolved.outfits
     image.resolvedWardrobeChanges = resolved.changes
     rollingWardrobe = resolved.outfits
@@ -10070,6 +10351,18 @@ WARDROBE — persistent story state, in this precedence:
 4) otherwise DEFAULT OUTFIT.
 Silence means unchanged — never reset to defaults because clothing has not been
 mentioned recently.
+- Each clothing array item describes ONE garment: ["grey t-shirt", "oversized
+  black hoodie", "yoga pants", "Vans sneakers"], never one comma-packed string.
+  Keep complete clothing state, including hidden layers, in "outfits" and the
+  wearer's details. LumiDraw selects the visible layers for the image itself.
+- Describe the wearer's actual garment, not its lender: use "oversized grey
+  t-shirt" when that fit is established, not "David's shirt". Borrowing alone
+  does not imply oversized. Retain colour, fit and closure state; distinguish
+  an open/unzipped hoodie from a closed pullover. Keep shoes and socks separate.
+- For added/changed clothes in spatial scenes, include "clothing_evidence" in
+  that subject's object: 3-20 exact current-passage words showing THAT wearer
+  dressed or changing. Omit it when unchanged. Never use another person's
+  clothing, future plans, or a carried garment as evidence of what is worn.
 - A change means writing the COMPLETE new outfit in the run AND in "outfits",
   keyed by the exact sheet name: every garment still worn, not just the one
   thing the passage named. Report "nude" rather than an empty list when
@@ -10971,9 +11264,8 @@ function parseDirectGroupFields(item, prompt, present, presenceFieldDeclared, pr
     position: String((entry && entry.position) || '').trim(),
     countTag: String((entry && (entry.count_tag || entry.countTag)) || '').trim(),
     includeSavedAnatomy: !!(entry && (entry.include_saved_anatomy || entry.includeSavedAnatomy)),
-    details: animaTagList(Array.isArray(entry && entry.details)
-      ? entry.details
-      : String((entry && entry.details) || '').split(',')).slice(0, 14),
+    clothingEvidence: String((entry && entry.clothing_evidence) || '').trim().slice(0, 280),
+    details: wardrobeTagList(entry && entry.details).slice(0, 24),
   }))
 
   if (candidates.length < 2) {
@@ -11184,7 +11476,7 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
       for (const [key, value] of Object.entries(item.outfits)) {
         const name = String(key || '').trim().slice(0, 64)
         if (!name) continue
-        const list = animaTagList(Array.isArray(value) ? value : String(value || '').split(',')).slice(0, 12)
+        const list = wardrobeTagList(value)
         if (list.length) outfits[name] = list
       }
     }
@@ -11395,7 +11687,7 @@ async function applyDirectContinuity(images, { profiles, chatId, presetName, gro
     for (const [ref, worn] of Object.entries(image.resolvedWardrobeChanges || {})) {
       const match = known.find((profile) => profile.ref === ref)
       if (!match || ANONYMOUS_REF_RE.test(ref)) continue
-      const list = uniqueStrings(worn || []).slice(0, 12)
+      const list = wardrobeTagList(worn)
       if (!list.length) continue
       outfits[ref] = list
       rolling[ref] = list
@@ -11406,6 +11698,9 @@ async function applyDirectContinuity(images, { profiles, chatId, presetName, gro
       }
       spindle.log.info(`[lumidraw] direct · recorded resolved wardrobe for ${match.anchor || ref} · ${list.join(', ')}`)
     }
+    // The resolver has already reconciled the raw sidecar. Do not process it
+    // again with weaker checks and overwrite the same image's final wardrobe.
+    if (image.resolvedWardrobe) continue
     for (const [name, raw] of Object.entries(image.outfits || {})) {
       const wanted = normalizeIdentityText(name)
       const match = known.find((p) =>
@@ -11415,7 +11710,7 @@ async function applyDirectContinuity(images, { profiles, chatId, presetName, gro
         continue
       }
       if (ANONYMOUS_REF_RE.test(match.ref)) continue
-      const list = animaTagList(Array.isArray(raw) ? raw : String(raw || '').split(',')).slice(0, 12)
+      const list = wardrobeTagList(raw)
       if (!list.length) continue
       const before = rolling[match.ref] || []
       const keep = list.filter((tag) => {
@@ -11463,7 +11758,7 @@ function escapeForRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null, rememberedLooks = null, places = [], breakInPreset = false } = {}) {
+function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTags = [], rememberedSetting = [], contextText = '', rememberedOutfits = null, rememberedLooks = null, places = [], breakInPreset = false, wardrobeCorrections = {} } = {}) {
   traceReset()
   // Matched before anything else uses it: the Place contributes to the negatives
   // (assembled with the descriptors) as well as to the setting (reconciled
@@ -11494,6 +11789,10 @@ function compileStructuredScene(scene, profiles, sourcePassage = '', { artistTag
   }))
 
   descriptors = stripBorrowedOutfit(descriptors, rememberedOutfits)
+  // Only an image-preview caller supplies these. A correction to the latest
+  // image must survive its stale source prose; ordinary new scans have none.
+  descriptors = descriptors.map((item) => Object.prototype.hasOwnProperty.call(wardrobeCorrections, item.subject.ref)
+    ? { ...item, outfit: wardrobeTagList(wardrobeCorrections[item.subject.ref]) } : item)
 
   // Underwear as the only bottom layer is not a "safe" image, whatever the
   // parser labelled it. The label drives the safety tag, the censorship defence
@@ -12215,8 +12514,8 @@ function negativeWith(presetNegative, extras) {
   return base ? `${base.replace(/[\s,]+$/, '')}, ${add.join(', ')}` : add.join(', ')
 }
 
-async function compileSceneWithPreset(sceneInput, preset, settings, userId, chatId, sourcePassage = '', contextText = '', digestLines = []) {
-  const memoryEntry = await readSceneMemory(chatId, preset.name)
+async function compileSceneWithPreset(sceneInput, preset, settings, userId, chatId, sourcePassage = '', contextText = '', digestLines = [], { persistMemory = true, memoryOverride = null, wardrobeCorrections = {} } = {}) {
+  const memoryEntry = memoryOverride || await readSceneMemory(chatId, preset.name)
   // Author intent is the floor; verified memory is the current truth. A story
   // that has moved keeps its new location, but a chat with no history yet
   // still starts in the place the preset declares.
@@ -12263,6 +12562,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
     contextText,
     rememberedOutfits: memoryEntry.outfits || null,
     rememberedLooks: memoryEntry.looks || null,
+    wardrobeCorrections,
     places: savedPlaces,
     breakInPreset: preset.useBreakSeparators === true ||
       (preset.useBreakSeparators === undefined && /\bBREAK\b/.test(String(preset.qualityTags || ''))),
@@ -12279,6 +12579,10 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   // Record the wardrobe as compiled — after the ownership check, so a rejected
   // garment is never learned as belonging to the wrong character.
   const establishedOutfits = outfitSnapshot()
+  // Snapshots keep the complete outfit, including layers omitted from the
+  // rendered prompt, so historical previews do not borrow today's clothing.
+  scene = { ...scene, wardrobeSnapshot: Object.fromEntries(Object.entries(establishedOutfits)
+    .map(([ref, worn]) => [ref, wardrobeTagList(worn)])) }
   const groundedOutfits = {}
   for (const [ref, worn] of Object.entries(establishedOutfits)) {
     if (ANONYMOUS_REF_RE.test(ref)) {
@@ -12299,11 +12603,12 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
     }
   }
   const wornLooks = lookSnapshot()
+  scene.wardrobeLooks = { ...wornLooks }
   const groundedOutfitMeta = Object.fromEntries(Object.keys(groundedOutfits).map((ref) => [ref, {
     source: 'story-parser',
     at: Date.now(),
   }]))
-  await rememberSceneState(chatId, preset.name, {
+  if (persistMemory) await rememberSceneState(chatId, preset.name, {
     setting: establishedSetting,
     lighting: establishedLighting,
     outfits: Object.keys(groundedOutfits).length ? groundedOutfits : null,
@@ -14075,6 +14380,95 @@ async function recallUserId() {
 }
 
 
+// An image reparse is a preview, not a new clothing event. Resolve source-time
+// attire in a detached object so an old scene card can never rewind the live
+// chat wardrobe, nor can merely opening/rejecting a candidate change it.
+function reparseWardrobeState(source, messages, targetIndex, profiles, currentState = {}) {
+  const known = allKnownProfiles(profiles).filter((profile) => profile && profile.ref)
+  const knownRefs = new Set(known.map((profile) => profile.ref))
+  const scene = (source && source.scene) || {}
+  const snapshot = scene.wardrobeSnapshot || scene.resolvedWardrobe ||
+    (source && source.wardrobeSnapshot)
+  const hasSnapshot = !!snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+  const isLatest = !messages.slice(targetIndex + 1).some((message) =>
+    String((messageBits(message || {}) || {}).content || '').trim())
+  const state = {
+    ...currentState,
+    // Only current reparses may use the live wardrobe. A historical image with
+    // no snapshot reconstructs tracker/declaration state below, then lets the
+    // existing clothing digest fill unknowns from the source-time narrative.
+    outfits: {},
+    outfitMeta: {},
+    looks: { ...(isLatest ? currentState.looks : scene.wardrobeLooks) },
+    reparseCorrections: {},
+  }
+  const seed = isLatest ? (currentState.outfits || {}) : (hasSnapshot ? snapshot : {})
+  const preservedRefs = new Set()
+  for (const [ref, tags] of Object.entries(seed)) {
+    if (!knownRefs.has(ref)) continue
+    state.outfits[ref] = wardrobeTagList(tags || [])
+    const meta = (currentState.outfitMeta || {})[ref]
+    if ((!isLatest && hasSnapshot) || (isLatest && meta && meta.source === 'manual')) {
+      preservedRefs.add(ref)
+      if (isLatest) {
+        state.outfitMeta[ref] = { ...meta }
+        state.reparseCorrections[ref] = state.outfits[ref].slice()
+      }
+    }
+  }
+  // A newly created snapshot can fill a latest-message wardrobe gap without
+  // overriding an intentional manual correction made after image generation.
+  if (hasSnapshot && isLatest) {
+    for (const [ref, tags] of Object.entries(snapshot)) {
+      if (knownRefs.has(ref) && !(state.outfits[ref] || []).length) {
+        state.outfits[ref] = wardrobeTagList(tags || [])
+      }
+    }
+  }
+  const start = !isLatest && !hasSnapshot ? 0 : targetIndex
+  for (let i = start; i <= targetIndex && i < messages.length; i++) {
+    const bits = messageBits(messages[i] || {})
+    if (!bits || typeof bits.content !== 'string') continue
+    // Tracker attire is a partial observation; a LUMIWEAR declaration is a
+    // whole-outfit replacement and wins when both occur in this message.
+    for (const observation of sceneCardWardrobeObservations(bits.content, profiles)) {
+      const profile = known.find((item) => item.ref === observation.ref)
+      if (!profile || preservedRefs.has(profile.ref)) continue
+      const before = state.outfits[profile.ref] || profile.defaultOutfit || []
+      state.outfits[profile.ref] = mergePartialWardrobeObservation(
+        observation.attire, before, observation.evidence).outfit
+      state.outfitMeta[profile.ref] = {
+        source: 'reparse-scene-card', messageId: String(bits.id || ''), evidence: observation.evidence,
+      }
+    }
+    for (const declaration of extractWearDeclarations(bits.content)) {
+      const profile = wardrobeProfileForName(declaration.name, profiles)
+      if (!profile || !profile.ref || !knownRefs.has(profile.ref) || preservedRefs.has(profile.ref)) continue
+      state.outfits[profile.ref] = wardrobeTagList(declaration.outfit || [])
+      state.outfitMeta[profile.ref] = {
+        source: 'reparse-story-declaration', messageId: String(bits.id || ''), evidence: '[LUMIWEAR] declaration',
+      }
+    }
+  }
+  return state
+}
+
+function wardrobeDebugForReplacement(source, prompt, debug) {
+  if (source && source.prompt === prompt && source.scene) return { trace: source.trace || [], scene: source.scene }
+  const origin = (source && source.origin) || {}
+  if (!origin.messageId || !origin.chatId || !debug || String(debug.sourceMessageId || '') !== String(origin.messageId || '') ||
+      String(debug.sourceChatId || '') !== String(origin.chatId || '')) return null
+  const entries = debug.entries || []
+  const selected = entries[(Number(debug.selectedEntryIndex) || 1) - 1]
+  const match = selected && String(selected.prompt || '') === prompt ? selected
+    : entries.find((item) => String(item.prompt || '') === prompt)
+  if (!match || !match.wardrobeSnapshot) return null
+  return { trace: [], scene: {
+    direct: debug.mode === 'direct', wardrobeSnapshot: match.wardrobeSnapshot,
+    sceneSummary: match.sceneStatement || '', groupSubjects: match.groupSubjects || [],
+  } }
+}
+
 // Shared by "Re-run parser" (one image) and "Replace all" (every image in the
 // message). One parse, however many images are being rebuilt — changing a
 // character's tags does not need a new reading of the passage, only a new
@@ -14124,18 +14518,8 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const passage = clipParserPassage(target.content)
   const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
   const profiles = await getStoryProfiles(preset, settings, userId, chatId)
-  try {
-    await absorbSceneCardWardrobe(target.content, profiles, chatId, preset.name, String(target.id || ''))
-  } catch (error) {
-    spindle.log.warn('[lumidraw] could not absorb scene-card clothing during reparse: ' + error.message)
-  }
-  try {
-    await absorbWearDeclarations(messages, targetIndex, profiles, chatId,
-      await sceneScopeFor(chatId, preset.name))
-  } catch (error) {
-    spindle.log.warn('[lumidraw] could not absorb declared clothing during reparse: ' + error.message)
-  }
-  const rememberedState = await readSceneMemory(chatId, preset.name)
+  const currentState = await readSceneMemory(chatId, preset.name)
+  const rememberedState = reparseWardrobeState(source, messages, targetIndex, profiles, currentState)
   const directMode = settings.mode === 'direct' || settings.directMode === true
   const profilesForPrompt = directMode
     ? gateDirectProfiles(profiles, directEvidenceFor(messages, targetIndex, settings))
@@ -14207,7 +14591,8 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
         const trace = (label, status, detail) => traceLines.push({ label, status, detail })
         const resolvedWardrobe = resolveDirectWardrobeForImage(
           item, profiles, reparseWardrobe,
-          [passage, parserInput.contextPreview || ''].filter(Boolean).join('\n'))
+          [passage, parserInput.contextPreview || ''].filter(Boolean).join('\n'), passage,
+          { corrections: rememberedState.reparseCorrections })
         reparseWardrobe = resolvedWardrobe.outfits
         const finalized = finalizeDirectImagePrompt(item, {
           preset, profiles, prefix, trace, wardrobe: resolvedWardrobe.outfits,
@@ -14219,7 +14604,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
           momentEvidence: item.moment_evidence || '',
           sceneStatement: item.scene_summary || directSceneSentence(item.prompt),
           prompt: finalized.prompt,
-          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, momentEvidence: item.moment_evidence || '', sceneSummary: item.scene_summary || '', sceneMood: item.sceneMood || '', present: item.present || [], spatialGroup: directGroupIsSpatial(item), groupScene: item.group_scene || '', sharedInteraction: item.shared_interaction || '', spatialRelation: item.spatial_relation || '', ...groupMechanics } },
+          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, momentEvidence: item.moment_evidence || '', sceneSummary: item.scene_summary || '', sceneMood: item.sceneMood || '', present: item.present || [], spatialGroup: directGroupIsSpatial(item), groupScene: item.group_scene || '', sharedInteraction: item.shared_interaction || '', spatialRelation: item.spatial_relation || '', wardrobeSnapshot: resolvedWardrobe.outfits, ...groupMechanics } },
           aspect: item.aspect || '',
           rating: item.rating || '',
           sceneMood: item.sceneMood || '',
@@ -14248,7 +14633,8 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
         continue
       }
       const compiled = await compileSceneWithPreset(
-        item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '', reparseDigest)
+        item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '', reparseDigest,
+        { persistMemory: false, memoryOverride: rememberedState, wardrobeCorrections: rememberedState.reparseCorrections })
       results.push({
         ok: true,
         anchor: item.anchor || '',
@@ -14312,6 +14698,7 @@ async function replaceOneImage(userId, payload) {
         extra,
         seed,
         origin: { ...origin, regeneratedFrom: imageUrl },
+        debug: payload.sceneDebug || wardrobeDebugForReplacement(source, prompt, await getStoryDebug()),
       }, userId)
 
       const newUrl = entry.images && entry.images[0] ? entry.images[0].url : ''
@@ -14993,7 +15380,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           const outfits = { ...(previous.outfits || {}) }
           const outfitMeta = { ...(previous.outfitMeta || {}) }
           for (const [ref, value] of Object.entries(payload.set)) {
-            const tags = animaTagList(String(value || '').split(',')).slice(0, 12)
+            const tags = wardrobeTagList(value)
             if (tags.length) {
               outfits[ref] = tags
               outfitMeta[ref] = { source: 'manual', at: Date.now(), evidence: '' }
@@ -15244,6 +15631,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
               negativePrompt: scene.negativePrompt,
               reuseSeed: false,
               chatImageUrl: '',
+              sceneDebug: scene.debug || null,
             })
             replaced.push({ index: index + 1, ok: swap.replaced, newUrl: swap.newUrl, note: swap.note })
             if (!swap.replaced) notes.push(`Image ${index + 1}: ${swap.note}`)
@@ -15286,6 +15674,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           groupSubjects: item.groupSubjects || [],
           groupInteractions: item.groupInteractions || [],
           groupRelations: item.groupRelations || [],
+          wardrobeSnapshot: ((item.debug || {}).scene || {}).wardrobeSnapshot || {},
+          wardrobeDecisions: ((item.debug || {}).scene || {}).wardrobeDecisions || [],
         }))
         const storyDebug = await saveStoryDebug({
           mode: directReparse ? 'direct' : 'parser',
