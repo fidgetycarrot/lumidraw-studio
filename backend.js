@@ -2337,7 +2337,9 @@ function mergePartialWardrobeObservation(observed, before, evidence = '') {
     !offered.some((tag) => OUTER_BOTTOM_RE.test(tag)) &&
     /\b(?:boxers|briefs|panties|underwear|thong)\b/i.test(evidence)
   const prior = wardrobeTagList(before).filter((tag) => !explicitInnerBottom || !OUTER_BOTTOM_RE.test(tag))
-  const merged = mergeOutfitByZone(offered, prior, evidence, { observation: true }).outfit
+  const merged = mergeOutfitByZone(offered, prior, evidence, {
+    observation: true, complete: wardrobeHasEnsemble(offered),
+  }).outfit
   const covered = partialWardrobeCoverage(merged, evidence)
   return { outfit: covered.outfit, inferred: covered.inferred, offered }
 }
@@ -7034,7 +7036,12 @@ function visibleWardrobeFor(outfit, { profiles = null, profile = null, frame = '
   return { worn, visible: uniqueStrings(visible), hidden, notes }
 }
 
-function mergeOutfitByZone(reported, remembered, passage = '', { observation = false } = {}) {
+function wardrobeHasEnsemble(tags) {
+  const slots = new Set(wardrobeTagList(tags).map(wardrobeSlot))
+  return slots.has('full') || (slots.has('top:base') && slots.has('bottom:outer'))
+}
+
+function mergeOutfitByZone(reported, remembered, passage = '', { observation = false, complete = false } = {}) {
   const worn = wardrobeTagList(reported)
   const removedSlots = wardrobeRemovedSlots(passage)
   const memory = wardrobeTagList(remembered).filter((tag) => !removedSlots.has(wardrobeSlot(tag)))
@@ -7115,6 +7122,10 @@ function mergeOutfitByZone(reported, remembered, passage = '', { observation = f
   // is persistent state, not merely an anti-nudity guard.
   const restored = []
   for (const tag of memory) {
+    // A blouse-and-trousers ensemble is stronger than a partial top mention.
+    // Do not put yesterday's hoodie/coat over the newly reported outfit.
+    if (complete && ['top:middle', 'top:outer'].includes(wardrobeSlot(tag)) &&
+        !occupiedSlots.has(wardrobeSlot(tag))) continue
     const zone = garmentZone(tag)
     if (!zone) {
       if (!GARMENT_RE.test(tag)) continue
@@ -9619,13 +9630,20 @@ function resolveDirectWardrobeForImage(image, profiles, baseWardrobe = {}, groun
     // already-established outfit or trigger a current removal/change event.
     const evidence = currentEvidence || (!before.length ? wardrobeOwnerEvidence(entry.profile, profiles, grounding, image) : '')
     const removedSlots = wardrobeRemovedSlots(currentEvidence)
-    const supported = uniqueStrings(entry.tags).filter((tag) =>
+    let supported = uniqueStrings(entry.tags).filter((tag) =>
       !removedSlots.has(wardrobeSlot(tag)) && directWardrobeCandidateGrounded(tag, evidence, before, entry.profile))
+    const explicitlyDescribed = supported.filter((tag) => {
+      const family = garmentFamily(tag)
+      return family && new RegExp('\\b' + escapeRegExp(family) + '\\b', 'i').test(normalizeIdentityText(currentEvidence))
+    })
+    const complete = wardrobeHasEnsemble(explicitlyDescribed)
+    if (complete) supported = supported.filter((tag) =>
+      !['top:middle', 'top:outer'].includes(wardrobeSlot(tag)) || explicitlyDescribed.includes(tag))
     const dropped = uniqueStrings(entry.tags).filter((tag) => !supported.includes(tag))
     if (dropped.length) notes.push(`${entry.profile.anchor || ref}: ignored ungrounded ${dropped.join(', ')}`)
     const remaining = before.filter((tag) => !removedSlots.has(wardrobeSlot(tag)))
     if (!supported.length && !removedSlots.size) continue
-    const byZone = supported.length ? mergeOutfitByZone(supported, remaining, currentEvidence).outfit : remaining
+    const byZone = supported.length ? mergeOutfitByZone(supported, remaining, currentEvidence, { complete }).outfit : remaining
     const merged = partialWardrobeCoverage(byZone, currentEvidence).outfit
     outfits[ref] = merged
     if (before.join('\u0000') !== merged.join('\u0000')) {
@@ -14407,17 +14425,11 @@ function reparseWardrobeState(source, messages, targetIndex, profiles, currentSt
   for (const [ref, tags] of Object.entries(seed)) {
     if (!knownRefs.has(ref)) continue
     state.outfits[ref] = wardrobeTagList(tags || [])
-    const meta = (currentState.outfitMeta || {})[ref]
-    if ((!isLatest && hasSnapshot) || (isLatest && meta && meta.source === 'manual')) {
+    if (!isLatest && hasSnapshot) {
       preservedRefs.add(ref)
-      if (isLatest) {
-        state.outfitMeta[ref] = { ...meta }
-        state.reparseCorrections[ref] = state.outfits[ref].slice()
-      }
     }
   }
-  // A newly created snapshot can fill a latest-message wardrobe gap without
-  // overriding an intentional manual correction made after image generation.
+  // Fill gaps without granting story memory any special manual authority.
   if (hasSnapshot && isLatest) {
     for (const [ref, tags] of Object.entries(snapshot)) {
       if (knownRefs.has(ref) && !(state.outfits[ref] || []).length) {
@@ -14467,6 +14479,100 @@ function wardrobeDebugForReplacement(source, prompt, debug) {
     direct: debug.mode === 'direct', wardrobeSnapshot: match.wardrobeSnapshot,
     sceneSummary: match.sceneStatement || '', groupSubjects: match.groupSubjects || [],
   } }
+}
+
+// Image corrections live in image metadata, never in the chat's wardrobe.
+function imageOutfitCorrections(source, requested, profiles) {
+  const known = new Set(allKnownProfiles(profiles).filter(Boolean).map((profile) => profile.ref))
+  const result = {}
+  for (const [ref, tags] of Object.entries(requested === undefined ? (((source && source.scene) || {}).imageOutfitCorrections || {}) : {})) {
+    if (known.has(ref)) result[ref] = wardrobeTagList(tags)
+  }
+  if (requested !== undefined && (!requested || typeof requested !== 'object' || Array.isArray(requested))) throw new Error('Image outfit corrections must be keyed by character.')
+  for (const [ref, value] of Object.entries(requested || {})) {
+    if (!known.has(ref)) throw new Error('An outfit correction names a character no longer in this chat. Reopen the image editor.')
+    if (value === null) { delete result[ref]; continue }
+    const tags = wardrobeTagList(value)
+    if (!tags.length) throw new Error('Enter an outfit or uncheck that character’s image correction.')
+    if (tags.length > 40 || tags.join(', ').length > 1600) throw new Error('That outfit correction is too long. Use a short garment list.')
+    result[ref] = tags
+  }
+  return result
+}
+
+async function imageWardrobeContext(userId, imageUrl) {
+  const source = (await getHistory()).find((item) => (item.images || []).some((image) => image && image.url === imageUrl))
+  if (!source) throw new Error('This image is no longer in LumiDraw history.')
+  const settings = await getSettings()
+  const presets = await getPresets()
+  const origin = source.origin || {}
+  const preset = presets.find((item) => item.name === origin.presetName) || presets.find((item) => item.name === settings.activePreset)
+  if (!preset) throw new Error('No preset is available to identify this image’s characters.')
+  const profiles = await getStoryProfiles(preset, settings, userId, String(origin.chatId || ''))
+  return { source, profiles, preset, settings }
+}
+
+function imageWardrobeRows(source, profiles) {
+  const scene = (source && source.scene) || {}
+  const snapshot = scene.wardrobeSnapshot || {}
+  const corrections = imageOutfitCorrections(source, undefined, profiles)
+  const subjects = [...(scene.groupSubjects || []), ...(scene.subjects || []), ...(scene.present || [])]
+  const visibleRefs = new Set(subjects.map((subject) => {
+    const profile = directGroupProfileFor(subject, profiles) || wardrobeProfileForName(subject.ref || subject.name || '', profiles)
+    return profile && profile.ref
+  }).filter(Boolean))
+  for (const run of String(source.prompt || '').split(/\bBREAK\b/).slice(1)) {
+    const profile = matchDirectRunProfile(run, profiles)
+    if (profile) visibleRefs.add(profile.ref)
+  }
+  return allKnownProfiles(profiles).filter((profile) => profile &&
+    (visibleRefs.has(profile.ref) || (!visibleRefs.size && Object.prototype.hasOwnProperty.call(snapshot, profile.ref))))
+    .map((profile) => ({ ref: profile.ref, name: profile.anchor || profile.ref,
+      tags: wardrobeTagList(corrections[profile.ref] || snapshot[profile.ref]).join(', '),
+      corrected: Object.prototype.hasOwnProperty.call(corrections, profile.ref),
+      recorded: Object.prototype.hasOwnProperty.call(snapshot, profile.ref),
+    }))
+}
+
+function applyImageOutfitCorrections(prompt, sceneInput, profiles, corrections) {
+  const scene = { ...(sceneInput || {}), wardrobeSnapshot: { ...((sceneInput || {}).wardrobeSnapshot || {}) }, imageOutfitCorrections: corrections }
+  if (!Object.keys(corrections).length) return { prompt, scene }
+  if (prompt === (sceneInput || {}).outfitCorrectionPrompt && JSON.stringify(corrections) === JSON.stringify((sceneInput || {}).imageOutfitCorrections || {})) return { prompt, scene }
+  let result = prompt
+  for (const [ref, outfit] of Object.entries(corrections)) {
+    const profile = allKnownProfiles(profiles).find((item) => item && item.ref === ref)
+    const subject = (scene.groupSubjects || []).find((item) => (directGroupProfileFor(item, profiles) || {}).ref === ref)
+    const introduction = subject && (subject.subjectIntroduction || directGroupSubjectIntroduction(subject, profiles))
+    const marker = introduction ? introduction + ':' : ''
+    const at = marker ? result.toLowerCase().indexOf(marker.toLowerCase()) : -1
+    if (at >= 0) {
+      const start = at + marker.length
+      const stop = result.indexOf('. ', start)
+      const end = stop < 0 ? result.replace(/\.$/, '').length : stop
+      const identity = new Set([...directAnchorFor(profile), ...identityLockFor(profile)].map(normalizeIdentityText))
+      const kept = wardrobeTagList(result.slice(start, end)).filter((tag) => identity.has(normalizeIdentityText(tag)) || !directWardrobeTag(tag))
+      const clothing = visibleWardrobeFor(outfit, { profiles, profile, frame: result.slice(0, at) })
+      result = result.slice(0, start) + ' ' + uniqueStrings([...clothing.visible, ...kept]).join(', ') + result.slice(end)
+      scene.groupSubjects = (scene.groupSubjects || []).map((item) => item === subject ? { ...item, clothing } : item)
+    } else {
+      const hasRun = result.split(/\bBREAK\b/).slice(1).some((run) => (matchDirectRunProfile(run, profiles) || {}).ref === ref)
+      if (!hasRun) throw new Error('This prompt cannot safely bind that outfit to its character. Re-run parser with the correction first; no image was generated.')
+      result = applyDirectWardrobeLock(result, { character: profile, cast: [] }, { [ref]: outfit }, () => {})
+    }
+    scene.wardrobeSnapshot[ref] = outfit.slice()
+  }
+  scene.outfitCorrectionPrompt = result
+  return { prompt: result, scene }
+}
+
+async function commitImageOutfitsToStory(context, corrections) {
+  const origin = context.source.origin || {}
+  if (!origin.chatId || !Object.keys(corrections).length) throw new Error('No story-scoped outfit correction to save.')
+  const outfits = Object.fromEntries(Object.entries(corrections).map(([ref, tags]) => [ref, tags.slice()]))
+  const outfitMeta = Object.fromEntries(Object.keys(outfits).map((ref) => [ref, { source: 'image-correction', at: Date.now(), messageId: origin.messageId || '' }]))
+  await rememberSceneState(origin.chatId, context.preset.name, { outfits, outfitMeta })
+  const state = await readSceneMemory(origin.chatId, context.preset.name)
+  if (Object.keys(outfits).some((ref) => JSON.stringify(wardrobeTagList((state.outfits || {})[ref])) !== JSON.stringify(outfits[ref]))) throw new Error('The image was generated, but the story wardrobe could not be saved.')
 }
 
 // Shared by "Re-run parser" (one image) and "Replace all" (every image in the
@@ -14520,6 +14626,8 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   const profiles = await getStoryProfiles(preset, settings, userId, chatId)
   const currentState = await readSceneMemory(chatId, preset.name)
   const rememberedState = reparseWardrobeState(source, messages, targetIndex, profiles, currentState)
+  rememberedState.reparseCorrections = imageOutfitCorrections(source, overrides.outfitCorrections, profiles)
+  for (const [ref, outfit] of Object.entries(rememberedState.reparseCorrections)) rememberedState.outfits[ref] = outfit.slice()
   const directMode = settings.mode === 'direct' || settings.directMode === true
   const profilesForPrompt = directMode
     ? gateDirectProfiles(profiles, directEvidenceFor(messages, targetIndex, settings))
@@ -14604,7 +14712,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
           momentEvidence: item.moment_evidence || '',
           sceneStatement: item.scene_summary || directSceneSentence(item.prompt),
           prompt: finalized.prompt,
-          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, momentEvidence: item.moment_evidence || '', sceneSummary: item.scene_summary || '', sceneMood: item.sceneMood || '', present: item.present || [], spatialGroup: directGroupIsSpatial(item), groupScene: item.group_scene || '', sharedInteraction: item.shared_interaction || '', spatialRelation: item.spatial_relation || '', wardrobeSnapshot: resolvedWardrobe.outfits, ...groupMechanics } },
+          debug: { trace: traceLines, scene: { direct: true, anchor: item.anchor, momentEvidence: item.moment_evidence || '', sceneSummary: item.scene_summary || '', sceneMood: item.sceneMood || '', present: item.present || [], spatialGroup: directGroupIsSpatial(item), groupScene: item.group_scene || '', sharedInteraction: item.shared_interaction || '', spatialRelation: item.spatial_relation || '', wardrobeSnapshot: resolvedWardrobe.outfits, ...groupMechanics, imageOutfitCorrections: rememberedState.reparseCorrections } },
           aspect: item.aspect || '',
           rating: item.rating || '',
           sceneMood: item.sceneMood || '',
@@ -14635,6 +14743,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
       const compiled = await compileSceneWithPreset(
         item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '', reparseDigest,
         { persistMemory: false, memoryOverride: rememberedState, wardrobeCorrections: rememberedState.reparseCorrections })
+      compiled.scene.imageOutfitCorrections = rememberedState.reparseCorrections
       results.push({
         ok: true,
         anchor: item.anchor || '',
@@ -14650,6 +14759,12 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
     }
   }
 
+  for (const result of results) {
+    if (result.ok && result.debug && result.debug.scene) {
+      result.debug.scene.outfitCorrectionPrompt = result.prompt
+      result.outfitRows = imageWardrobeRows({ prompt: result.prompt, scene: result.debug.scene }, profiles)
+    }
+  }
   return {
     origin, messageId, chatId, preset, settings, results, report, parserMs, raw, parseError,
     runStartedAt: startedAt,
@@ -14666,12 +14781,25 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
 async function replaceOneImage(userId, payload) {
       const imageUrl = String(payload.imageUrl || '').trim()
       if (!imageUrl) throw new Error('Regeneration needs the image being replaced.')
-      const prompt = String(payload.prompt || '').trim()
+      let prompt = String(payload.prompt || '').trim()
       if (!prompt) throw new Error('The prompt cannot be empty.')
 
       const history = await getHistory()
       const source = history.find((item) => (item.images || []).some((image) => image && image.url === imageUrl))
       const origin = (source && source.origin) || {}
+      let sceneDebug = payload.sceneDebug || wardrobeDebugForReplacement(source, prompt, await getStoryDebug())
+      let outfitContext = null
+      let outfitCorrections = {}
+      if (payload.outfitCorrections !== undefined || Object.keys(((source || {}).scene || {}).imageOutfitCorrections || {}).length) {
+        outfitContext = await imageWardrobeContext(userId, imageUrl)
+        outfitCorrections = imageOutfitCorrections(source, payload.outfitCorrections, outfitContext.profiles)
+        const corrected = applyImageOutfitCorrections(prompt, (sceneDebug || {}).scene || (source || {}).scene, outfitContext.profiles, outfitCorrections)
+        prompt = corrected.prompt
+        sceneDebug = { ...(sceneDebug || {}), scene: corrected.scene }
+      }
+      if (payload.updateStoryWardrobe === true && (!outfitContext || !origin.chatId || !Object.keys(outfitCorrections).length)) {
+        throw new Error('Select at least one outfit correction on a story image before updating the story wardrobe.')
+      }
 
       // Recipe priority: the exact config this image was made with, then the
       // preset it came from, then the active preset. A regeneration must not
@@ -14698,11 +14826,19 @@ async function replaceOneImage(userId, payload) {
         extra,
         seed,
         origin: { ...origin, regeneratedFrom: imageUrl },
-        debug: payload.sceneDebug || wardrobeDebugForReplacement(source, prompt, await getStoryDebug()),
+        debug: sceneDebug,
       }, userId)
 
       const newUrl = entry.images && entry.images[0] ? entry.images[0].url : ''
       if (!newUrl) throw new Error('Draw Things returned no image.')
+      let outfitStoryUpdated = false
+      let outfitStoryError = ''
+      if (payload.updateStoryWardrobe === true) {
+        try {
+          await commitImageOutfitsToStory(outfitContext, outfitCorrections)
+          outfitStoryUpdated = true
+        } catch (error) { outfitStoryError = error.message }
+      }
 
       // Put it back where the old one was. A failure here is not fatal: the
       // new image already exists in History and the panel says so.
@@ -14720,7 +14856,7 @@ async function replaceOneImage(userId, payload) {
         if (nativeReplacement) {
           replaced = true
           note = 'Replaced the native LumiDraw image in place.'
-          return { entry, newUrl, replaced, note }
+          return { entry, newUrl, replaced, note, outfitStoryUpdated, outfitStoryError }
         }
         const target = await locateMessageByImageUrl(userId, imageUrl, {
           ...origin,
@@ -14772,7 +14908,7 @@ async function replaceOneImage(userId, payload) {
         spindle.log.warn('[lumidraw] regeneration replace failed: ' + error.message)
       }
 
-  return { entry, newUrl, replaced, note }
+  return { entry, newUrl, replaced, note, outfitStoryUpdated, outfitStoryError }
 }
 
 spindle.onFrontendMessage(async (payload, userId) => {
@@ -15238,6 +15374,15 @@ spindle.onFrontendMessage(async (payload, userId) => {
       // not: a hand-edited prompt never recompiles, so it teaches the record
       // nothing, and the profile default sits BELOW memory in the precedence chain.
       // Confidence without a correction is just a louder mistake.
+      case 'image_wardrobe': {
+        const context = await imageWardrobeContext(userId, String(payload.imageUrl || ''))
+        reply = ok(payload, requestId, {
+          rows: imageWardrobeRows(context.source, context.profiles),
+          canUpdateStory: !!(context.source.origin || {}).chatId,
+        })
+        break
+      }
+
       case 'wardrobe': {
         const settings = await getSettings()
         const presets = await getPresets()
@@ -15596,7 +15741,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const imageUrl = String(payload.imageUrl || '').trim()
         if (!imageUrl) throw new Error('Rebuilding needs to know which message to work from.')
 
-        const parse = await reparseSourceMessage(userId, imageUrl, payload)
+        // Each sibling reapplies its own saved corrections below. Never spread
+        // the initially clicked image's corrections across all sibling scenes.
+        const parse = await reparseSourceMessage(userId, imageUrl, { ...payload, outfitCorrections: {} })
         if (parse.parseError) throw new Error(parse.settings.mode === 'direct' || parse.settings.directMode === true
           ? `Direct parser returned no usable prompt: ${parse.parseError}`
           : `Parser returned invalid structured data: ${parse.parseError}`)
@@ -15785,6 +15932,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           newUrl: outcome.newUrl,
           replaced: outcome.replaced,
           note: outcome.note,
+          outfitStoryUpdated: outcome.outfitStoryUpdated,
+          outfitStoryError: outcome.outfitStoryError,
         })
         break
       }

@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.33'
+const EXTENSION_VERSION = '1.3.34'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -368,6 +368,7 @@ function realSetup(ctx) {
       if (['generated', 'done'].includes(String(state.status || ''))) {
         const chatId = String(state.chatId || activeChatIdFromCtx() || '')
         if (chatId) refreshImagePlacements(chatId).catch((error) => console.log('[LumiDraw] image refresh after completed scan failed:', error.message))
+        if (chatId) refreshTrackedWardrobe(chatId)
       }
       return
     }
@@ -378,6 +379,7 @@ function realSetup(ctx) {
       if (liveScanStatus && liveScanStatus.stage === 'done') {
         const chatId = activeChatIdFromCtx()
         if (chatId) refreshImagePlacements(chatId).catch((error) => console.log('[LumiDraw] image refresh after manual scan failed:', error.message))
+        if (chatId) refreshTrackedWardrobe(chatId)
       }
       return
     }
@@ -1313,6 +1315,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <span class="ld-lightbox-reparse-info" style="font-size:11px;opacity:.7"></span>
           </div>
           <div class="ld-lightbox-reparse-picker" style="display:none;margin-bottom:7px"></div>
+          <div class="ld-lightbox-outfits" style="margin:8px 0;padding:10px;border:1px solid var(--ld-border);border-radius:8px">
+            <span class="ld-label">Outfits for this image</span>
+            <div class="ld-help">Edit an outfit to correct this image only. Corrections apply when you re-run the parser or regenerate, and stay with this image—not future story messages. Include hidden layers and shoes.</div>
+            <div class="ld-lightbox-outfit-rows"></div>
+            <label style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" class="ld-lightbox-outfit-story" /><span>Also correct current story wardrobe</span></label>
+            <div class="ld-help">Optional. Updates only the checked characters after successful generation, even if this is an older image. Reparsing only previews. Later story clothing changes can still update the record.</div>
+          </div>
           <span class="ld-label">Prompt</span>
           <textarea class="ld-lightbox-regen-prompt" spellcheck="false" style="min-height:104px"></textarea>
           <span class="ld-label" style="margin-top:6px">Negative prompt</span>
@@ -1679,12 +1688,15 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (controls.castStatus) castCard.appendChild(controls.castStatus)
     cast.appendChild(castCard)
 
-    const wardrobeCard = card('Wardrobe of record', 'Keep the complete outfit here, with one garment per comma, including layers and shoes. The image prompt uses visible clothing; a covered shirt can remain saved beneath a hoodie. Save corrects one character, not a permanent lock: normal story scans update clothing from the passage and scene card while retaining unchanged garments. Clear returns that character to the saved default. Refresh only reloads this display. Sync latest passage is an optional extra parser check without generating an image.')
+    const wardrobeCard = card('Automatic clothing tracking', 'Normally you do not need to edit this. The story and scene card update this record automatically. Use “Fix this image…” for image-only outfit corrections. This diagnostic view keeps complete outfits, including hidden layers and shoes. Save is a one-time story correction, not a lock. Refresh reloads the display; Sync is an optional extra parser check.')
     wardrobeCard.appendChild(inline(make('span', 'ld-label', 'Complete current outfit'), controls.wardrobeRefresh, controls.wardrobeSync))
     if (controls.wardrobeRows) wardrobeCard.appendChild(controls.wardrobeRows)
     wardrobeCard.appendChild(field('Add a saved character to this chat', inline(controls.wardrobeAdd, controls.wardrobeAddButton)))
     if (controls.wardrobeStatus) wardrobeCard.appendChild(controls.wardrobeStatus)
-    cast.appendChild(wardrobeCard)
+    const trackedClothing = make('details', 'ld-tracked-clothing')
+    trackedClothing.appendChild(make('summary', 'ld-label', 'Tracked clothing — diagnostics'))
+    trackedClothing.appendChild(wardrobeCard)
+    cast.appendChild(trackedClothing)
 
     const parserBinding = card('Prompt parser')
     parserBinding.classList.add('ld-parser-binding-controls')
@@ -1948,6 +1960,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   let lightboxItems = []
   // The prompt an image was actually made with, kept so a re-parse can be undone.
   let reparseOriginalPrompt = ''
+  let imageOutfitRows = []
+  let originalImageOutfitRows = []
+  let imageOutfitDrafts = {}
+  let imageOutfitEpoch = 0
+  let imageOutfitsLoading = false
+  let selectedImageSceneDebug = null
+  let imageFixBusy = false
   let selectedOutputUrl = null
   let lightboxScale = 1
   let lightboxPanX = 0
@@ -2137,9 +2156,70 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
 
   function closeRegenPanel() {
+    imageOutfitEpoch++
     const box = $('.ld-lightbox-regen')
     if (box) box.style.display = 'none'
     setStatus('.ld-lightbox-regen-status', '')
+  }
+
+  function renderImageOutfitRows(rows) {
+    imageOutfitRows = Array.isArray(rows) ? rows : []
+    const box = $('.ld-lightbox-outfit-rows')
+    box.innerHTML = ''
+    if (!imageOutfitRows.length) {
+      box.textContent = 'No character outfit snapshot was recorded. Re-run parser to identify the characters and load their outfits.'
+      return
+    }
+    for (const row of imageOutfitRows) {
+      const existing = imageOutfitDrafts[row.ref]
+      const draft = existing && existing.enabled ? existing : { tags: row.tags || '', enabled: !!row.corrected }
+      imageOutfitDrafts[row.ref] = draft
+      const label = document.createElement('label')
+      label.style.cssText = 'display:block;margin-top:8px'
+      const check = document.createElement('input')
+      check.type = 'checkbox'
+      check.checked = draft.enabled
+      check.setAttribute('aria-label', `Apply outfit correction for ${row.name} to this image`)
+      const name = document.createElement('span')
+      name.textContent = ' ' + row.name + ' — correct this image'
+      const input = document.createElement('textarea')
+      input.value = draft.tags
+      input.rows = 2
+      input.style.cssText = 'display:block;width:100%;min-height:58px;resize:vertical;margin-top:4px'
+      input.placeholder = row.recorded ? 'Complete outfit, separated by commas' : 'No saved outfit for this image; enter a correction'
+      input.setAttribute('aria-label', `${row.name}'s outfit for this image`)
+      input.addEventListener('input', () => { draft.tags = input.value; draft.enabled = true; check.checked = true })
+      check.addEventListener('change', () => { draft.enabled = check.checked })
+      label.appendChild(check)
+      label.appendChild(name)
+      box.appendChild(label)
+      box.appendChild(input)
+    }
+    decorateTextareas()
+  }
+
+  function imageOutfitPayload() {
+    if (imageOutfitsLoading) throw new Error('The image’s recorded outfits are still loading. Please try again in a moment.')
+    return Object.fromEntries(imageOutfitRows.map((row) => {
+      const draft = imageOutfitDrafts[row.ref] || {}
+      if (draft.enabled && !String(draft.tags || '').trim()) throw new Error(`Enter ${row.name}'s outfit or uncheck the correction.`)
+      return [row.ref, draft.enabled ? String(draft.tags).trim() : null]
+    }))
+  }
+
+  async function loadImageOutfits(imageUrl) {
+    const epoch = ++imageOutfitEpoch
+    imageOutfitsLoading = true
+    $('.ld-lightbox-outfit-rows').textContent = 'Loading this image’s recorded outfits…'
+    try {
+      const result = await call('image_wardrobe', { imageUrl }, 30000)
+      if (epoch !== imageOutfitEpoch) return
+      originalImageOutfitRows = result.rows || []
+      renderImageOutfitRows(originalImageOutfitRows)
+      $('.ld-lightbox-outfit-story').disabled = !result.canUpdateStory
+    } catch (error) {
+      if (epoch === imageOutfitEpoch) $('.ld-lightbox-outfit-rows').textContent = error.message
+    } finally { if (epoch === imageOutfitEpoch) imageOutfitsLoading = false }
   }
 
   function openRegenPanel() {
@@ -2150,6 +2230,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (!box) return
     $('.ld-lightbox-regen-prompt').value = entry.prompt || ''
     reparseOriginalPrompt = ''
+    imageOutfitDrafts = {}
+    imageOutfitRows = []
+    originalImageOutfitRows = []
+    selectedImageSceneDebug = entry.scene ? { scene: entry.scene, trace: entry.trace || [] } : null
+    $('.ld-lightbox-outfit-story').checked = false
+    $('.ld-lightbox-outfit-story').disabled = true
+    loadImageOutfits(item.image.url)
     if ($('.ld-lightbox-reparse-info')) {
       $('.ld-lightbox-reparse-info').textContent = ''
       $('.ld-lightbox-reparse-info').style.color = ''
@@ -4197,10 +4284,14 @@ ${entry.prompt || ''}`.trim()
   $('.ld-lightbox-reparse').addEventListener('click', async () => {
     const item = lightboxItems[lightboxIndex]
     if (!item) return
+    if (imageFixBusy) return
+    imageFixBusy = true
+    $('.ld-lightbox-regen-run').disabled = true
     const button = $('.ld-lightbox-reparse')
     const promptBox = $('.ld-lightbox-regen-prompt')
     const picker = $('.ld-lightbox-reparse-picker')
     const info = $('.ld-lightbox-reparse-info')
+    const epoch = imageOutfitEpoch
     if (!reparseOriginalPrompt) reparseOriginalPrompt = promptBox.value
     button.disabled = true
     const label = button.textContent
@@ -4225,7 +4316,9 @@ ${entry.prompt || ''}`.trim()
         parserConnection: $('.ld-parser-conn') ? $('.ld-parser-conn').value : undefined,
         mode: selectedStoryMode(),
         attempt,
+        outfitCorrections: imageOutfitPayload(),
       }, 300000)
+      if (epoch !== imageOutfitEpoch) return
       const results = Array.isArray(res.results) ? res.results : []
       const usable = results.filter((entry) => entry && entry.ok)
       if (res.storyDebug) {
@@ -4298,6 +4391,8 @@ ${entry.prompt || ''}`.trim()
       const applyResult = (entry, index) => {
         promptBox.value = entry.prompt || ''
         $('.ld-lightbox-regen-negative').value = entry.negativePrompt || ''
+        selectedImageSceneDebug = entry.debug || null
+        renderImageOutfitRows(entry.outfitRows || [])
         syncReparseDebug(entry, index)
       }
       applyResult(usable[0], 0)
@@ -4334,6 +4429,8 @@ ${entry.prompt || ''}`.trim()
           revert.title = 'Put the prompt this image was actually made with back in the box'
           revert.addEventListener('click', () => {
             promptBox.value = reparseOriginalPrompt
+            selectedImageSceneDebug = item.entry.scene ? { scene: item.entry.scene, trace: item.entry.trace || [] } : null
+            renderImageOutfitRows(originalImageOutfitRows)
             syncReparseDebug({ prompt: reparseOriginalPrompt }, null, 'original image prompt')
           })
           row.appendChild(revert)
@@ -4349,6 +4446,8 @@ ${entry.prompt || ''}`.trim()
     } catch (error) {
       setStatus('.ld-lightbox-regen-status', error.message, 'err')
     } finally {
+      imageFixBusy = false
+      $('.ld-lightbox-regen-run').disabled = false
       button.disabled = false
       button.textContent = label
     }
@@ -4741,8 +4840,19 @@ ${entry.prompt || ''}`.trim()
   // These rows edit the complete per-chat outfit, not just its visible layers.
   // A manual correction is current state, not a lock against later story changes.
   let wardrobeLibrary = []
+  let wardrobeReadSequence = 0
+  let wardrobeRefreshTimer = null
+
+  function refreshTrackedWardrobe(chatId) {
+    if (wardrobeRefreshTimer) clearTimeout(wardrobeRefreshTimer)
+    wardrobeRefreshTimer = setTimeout(() => {
+      wardrobeRefreshTimer = null
+      if (String(chatId) === String(activeChatIdFromCtx() || lastSeenChatId || '')) loadWardrobe(true, false, chatId)
+    }, 150)
+  }
 
   function renderWardrobeRows(rows) {
+    wardrobeReadSequence++
     const box = $('.ld-wardrobe-rows')
     if (!box) return
     if (!rows || !rows.length) {
@@ -4761,6 +4871,7 @@ ${entry.prompt || ''}`.trim()
         'scene-card': 'updated from the scene card',
         'story-parser': 'updated by the story parser',
         'story-declaration': 'updated by the story declaration',
+        'image-correction': 'corrected from an image',
         remembered: 'remembered wardrobe',
         default: 'saved character default',
         none: 'no clothing recorded',
@@ -4969,9 +5080,11 @@ ${entry.prompt || ''}`.trim()
   }
 
   async function loadWardrobe(quiet = true, scan = false, explicitChatId = '') {
+    const sequence = ++wardrobeReadSequence
     const requestedChatId = String(explicitChatId || lastSeenChatId || '')
     try {
       const res = await call('wardrobe', { chatId: requestedChatId, scan }, 30000)
+      if (sequence !== wardrobeReadSequence) return res
       // Chat switches can happen while this request is in flight. Keep old data from
       // flashing back into the panel after the new chat is already active.
       if (requestedChatId && lastSeenChatId && requestedChatId !== String(lastSeenChatId)) return res
@@ -4982,6 +5095,7 @@ ${entry.prompt || ''}`.trim()
       // the new entry looks like it does not exist. It did; it was just never
       // sent. Any wardrobe read now refreshes it.
       if (Array.isArray(res.characters)) { characters = res.characters; renderCharacterList() }
+      if (quiet && $('.ld-wardrobe-rows') && $('.ld-wardrobe-rows').contains(document.activeElement)) return res
       renderWardrobeRows(res.rows)
       renderWardrobeAdd(res.rows)
       if (quiet) return
@@ -5207,12 +5321,15 @@ ${entry.prompt || ''}`.trim()
     rebuildButton.addEventListener('click', async () => {
       const item = lightboxItems[lightboxIndex]
       if (!item) return
+      if (imageFixBusy) return
       const org = item.entry.origin || {}
       const total = Number(org.sceneCount || 0)
       if (total > 1 && !window.confirm(
         `Rebuild all ${total} images from this message?\n\nThe parser runs once, then each image is regenerated and replaced in place. ` +
-        `The old images stay in History. This takes about ${total} generations.`)) return
+        `The old images stay in History. This takes about ${total} generations.\n\n` +
+        `Each image keeps its own saved outfit corrections. Edits in this panel are not applied; use Regenerate & replace for those.`)) return
 
+      imageFixBusy = true
       rebuildButton.disabled = true
       const label = rebuildButton.textContent
       setStatus('.ld-lightbox-regen-status', 'Re-parsing once, then rebuilding every image in this message…')
@@ -5238,6 +5355,7 @@ ${entry.prompt || ''}`.trim()
       } catch (error) {
         setStatus('.ld-lightbox-regen-status', error.message, 'err')
       } finally {
+        imageFixBusy = false
         rebuildButton.disabled = false
         rebuildButton.textContent = label
       }
@@ -5250,8 +5368,12 @@ ${entry.prompt || ''}`.trim()
     if (!item) return
     const button = $('.ld-lightbox-regen-run')
     const oldUrl = item.image.url
+    const epoch = imageOutfitEpoch
     const prompt = $('.ld-lightbox-regen-prompt').value.trim()
     if (!prompt) { setStatus('.ld-lightbox-regen-status', 'The prompt cannot be empty.', 'err'); return }
+    if (imageFixBusy) return
+    imageFixBusy = true
+    $('.ld-lightbox-reparse').disabled = true
     button.disabled = true
     const originalLabel = button.textContent
     button.textContent = 'Generating…'
@@ -5264,9 +5386,14 @@ ${entry.prompt || ''}`.trim()
         prompt,
         negativePrompt: $('.ld-lightbox-regen-negative').value,
         reuseSeed: $('.ld-lightbox-regen-seed').checked && !$('.ld-lightbox-regen-seed').disabled,
+        outfitCorrections: imageOutfitPayload(),
+        updateStoryWardrobe: $('.ld-lightbox-outfit-story').checked,
+        sceneDebug: selectedImageSceneDebug,
       }, 600000)
       history = Array.isArray(res.history) ? res.history : history
       renderHistory()
+      if (res.outfitStoryUpdated) refreshTrackedWardrobe(String((item.entry.origin || {}).chatId || ''))
+      if (epoch !== imageOutfitEpoch) return
       // Re-point the viewer at the new image so you can immediately judge it
       // and, if it is still wrong, fix it again.
       lightboxItems = flattenHistoryImages()
@@ -5279,9 +5406,13 @@ ${entry.prompt || ''}`.trim()
         setStatus('.ld-lightbox-regen-status', res.note || 'Regenerated.', 'err')
       }
       setStatus('.ld-gen-status', res.replaced ? 'Replaced an image in the story message.' : (res.note || 'Regenerated.'), res.replaced ? 'good' : 'err')
+      if (res.outfitStoryUpdated) setStatus('.ld-gen-status', 'Image generated; the checked outfits also updated the current story wardrobe.', 'good')
+      if (res.outfitStoryError) setStatus('.ld-gen-status', res.outfitStoryError, 'err')
     } catch (error) {
       setStatus('.ld-lightbox-regen-status', error.message, 'err')
     } finally {
+      imageFixBusy = false
+      $('.ld-lightbox-reparse').disabled = false
       button.disabled = false
       button.textContent = originalLabel || 'Regenerate & replace'
     }
@@ -6469,6 +6600,8 @@ ${entry.prompt || ''}`.trim()
   })()
 
   const cleanup = () => {
+    if (wardrobeRefreshTimer) clearTimeout(wardrobeRefreshTimer)
+    imageOutfitEpoch++
     if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
     window.removeEventListener('keydown', onStoryPickerKeyDown)
