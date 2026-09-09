@@ -3733,7 +3733,7 @@ function profileFromCard(card, ref) {
     'visual_tags', 'visualTags', 'appearance_tags', 'appearanceTags']) {
     if (typeof card[key] === 'string' && card[key].trim()) { tags = card[key].trim(); break }
   }
-  return normalizeProfile({ anchor: name, promptName: name, appearanceTags: tags, named: true }, tags, ref)
+  return { ...normalizeProfile({ anchor: name, promptName: name, appearanceTags: tags, named: true }, tags, ref), hostCharacterId: String(card.id || '') }
 }
 
 async function cardProfile(api, id, ref, userId) {
@@ -3741,7 +3741,10 @@ async function cardProfile(api, id, ref, userId) {
   for (const args of [[id, userId], [{ id, userId }], [id]]) {
     try {
       const card = await api.get(...args)
-      if (card) return profileFromCard(card, ref)
+      if (card) {
+        const profile = profileFromCard(card, ref)
+        if (profile) return profile
+      }
     } catch { /* next shape */ }
   }
   return null
@@ -4540,6 +4543,17 @@ async function castSourceFor(preset, chatId) {
   }
 }
 
+// Only profiles already linked to this chat/cast may supply a host card's
+// appearance. Never search the global library or use a partial first-name match.
+function savedChatLeadProfile(hostProfile, lead, cast) {
+  const name = normalizeIdentityText(hostProfile && hostProfile.anchor)
+  if (!name) return { profile: null, ambiguous: false }
+  const matches = [lead, ...(cast || [])].filter((profile) => profile &&
+    normalizeIdentityText(profile.anchor) === name &&
+    ((profile.appearance || []).length || String(profile.identityTags || '').trim()))
+  return { profile: matches.length === 1 ? matches[0] : null, ambiguous: matches.length > 1 }
+}
+
 // New chats deliberately do not auto-bind to a preset-derived cast.
 // Existing explicit chat→cast bindings are still honored by castSourceFor().
 async function getStoryProfiles(preset, settings, userId, chatId) {
@@ -4644,8 +4658,18 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
     // and calling it a person is not. A card with no tags is not an answer, and
     // keeping the cast's is strictly better than replacing it with nothing.
     const chatCardHasTags = !!(fromChat && (fromChat.appearance || []).length)
-    if (fromChat && chatCardHasTags) {
-      leadCharacter = fromChat
+    const savedLead = savedChatLeadProfile(fromChat, character, cast)
+    if (savedLead.profile) {
+      // Preserve its stable ref: wardrobe, image snapshots and corrections are
+      // keyed by it. Moving roles must not reset clothing or orphan old images.
+      leadCharacter = { ...savedLead.profile, chatRole: 'character', hostCharacterId: occupants.characterId }
+      const index = cast.indexOf(savedLead.profile)
+      if (index >= 0) cast.splice(index, 1)
+      spindle.log.info(`[lumidraw] chat lead bound: ${leadCharacter.anchor} -> saved profile ${leadCharacter.libraryId || leadCharacter.ref} (ref ${leadCharacter.ref} preserved)`)
+    } else if (savedLead.ambiguous) {
+      spindle.log.warn(`[lumidraw] chat lead binding ambiguous for ${fromChat.anchor}: multiple linked profiles have that exact name; no profile was promoted`)
+    } else if (fromChat && chatCardHasTags) {
+      leadCharacter = { ...fromChat, chatRole: 'character' }
       spindle.log.info(`[lumidraw] character comes from the chat: ${fromChat.anchor}`)
     } else if (fromChat) {
       spindle.log.info(`[lumidraw] the chat's card "${fromChat.anchor}" carries no visual tags — ` +
@@ -4697,6 +4721,15 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
     // kind of story this is, so it is asked rather than guessed.
     fantasySetting: !!preset.fantasySetting,
   }
+}
+
+function chatRoleGuidance(profiles) {
+  const character = profiles && profiles.character
+  if (!character || character.chatRole !== 'character') return ''
+  const persona = profiles.persona
+  const partner = persona && persona.anchor && !['persona', 'character'].includes(persona.anchor)
+    ? ` In that narration, second-person you/your normally refers to ${persona.anchor} (ref ${persona.ref}).` : ''
+  return `CHAT ROLE BINDING: ${character.anchor} (ref ${character.ref}) is this chat's character, not an anonymous additional person. In assistant narration from this character's viewpoint, first-person I/me/my refers to this profile.${partner} Explicit viewpoint changes and attributed dialogue override these defaults; I inside another speaker's quotation belongs to that speaker. Use these saved identities when pronouns resolve to them; do not invent replacement profiles. Role binding only identifies people: it is NOT evidence of physical presence and must not force either lead into an image.`
 }
 
 function allKnownProfiles(profiles) {
@@ -10501,6 +10534,7 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
     'CHARACTER SHEETS — paste-exact text, not notes. This is everyone the story knows, NOT everyone in the picture — the present list decides who.',
     'WARDROBE PRECEDENCE: CURRENT PASSAGE change > CURRENT CLOTHING > EARLIER CLOTHING MENTIONS > DEFAULT OUTFIT.',
     'Silence means unchanged, not reset.',
+    chatRoleGuidance(profiles),
     ...blocks,
     clothingHistory.length ? 'EARLIER CLOTHING MENTIONS (fallback only when no CURRENT CLOTHING exists):' : '',
     ...clothingHistory,
@@ -12324,6 +12358,7 @@ function structuredParserSchema(maxImages, profiles, minImages = 0) {
   return `
 
 STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request above.
+${chatRoleGuidance(profiles)}
 Return ONLY one compact JSON object — no markdown, no prose.
 Write every scene in the EXACT field order shown below. The order is a survival order: if your reply is ever cut off, everything already written must still form a usable scene, so the mandatory core (safety, core_action, setting, subjects) comes FIRST and droppable refinements (camera, lighting, style) come LAST:
 {"images":[{"anchor":"5-12 exact consecutive words from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence: the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"other refs only — the name exactly as written, capitals kept","appearance_state":"exact saved state name, or empty","look":"exact saved look name, or empty","partial_features":["saved feature names showing now, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions, not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["from the CAMERA list below only"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
@@ -13942,7 +13977,7 @@ async function scanStoryCore(userId, options = {}) {
       // member counts only when the passage names them, or a big cast would keep
       // the digest firing forever for someone offstage.
       const knownCast = allKnownProfiles(profilesForPrompt).filter((p) => p && p.ref)
-      const inThisScene = (p) => p.ref === 'character' || p.ref === 'persona' ||
+      const inThisScene = (p) => p.ref === (profilesForPrompt.character || {}).ref || p.ref === (profilesForPrompt.persona || {}).ref ||
         (p.anchor && new RegExp('\\b' + escapeRegExp(String(p.anchor).split(/\s+/)[0]) + '\\b', 'i').test(passage))
       const presentCast = knownCast.filter(inThisScene)
       const anyUnknown = !presentCast.length || presentCast.some((p) => !((rememberedState.outfits || {})[p.ref] || []).length)
@@ -14633,7 +14668,7 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
     ? gateDirectProfiles(profiles, directEvidenceFor(messages, targetIndex, settings))
     : profiles
   const reparseCast = allKnownProfiles(profilesForPrompt).filter((p) => p && p.ref)
-  const inThisScene = (p) => p.ref === 'character' || p.ref === 'persona' ||
+  const inThisScene = (p) => p.ref === (profilesForPrompt.character || {}).ref || p.ref === (profilesForPrompt.persona || {}).ref ||
     (p.anchor && new RegExp('\\b' + escapeRegExp(String(p.anchor).split(/\s+/)[0]) + '\\b', 'i').test(passage))
   const presentCast = reparseCast.filter(inThisScene)
   const reparseUnknown = !presentCast.length || presentCast.some((p) => !((rememberedState.outfits || {})[p.ref] || []).length)
@@ -15551,6 +15586,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           rows.push({
             ref: profile.ref,
             name: profile.promptName || profile.anchor || profile.ref,
+            chatRole: profile.chatRole || '',
             tags: recorded.join(', '),
             fallback: fallback.join(', '),
             wardrobeSource: recorded.length ? String(stateMeta.source || 'remembered')

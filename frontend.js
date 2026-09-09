@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.34'
+const EXTENSION_VERSION = '1.3.35'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -4882,7 +4882,7 @@ ${entry.prompt || ''}`.trim()
         : ''
       const evidenceText = String(row.wardrobeEvidence || '').replace(/[<>&]/g, '').trim()
       const evidence = evidenceText ? ` · “${evidenceText.slice(0, 120)}”` : ''
-      const provenance = `<div class="ld-help ld-wardrobe-provenance" style="margin:2px 0 0 2px">Current source: ${source}${when}${evidence}</div>`
+      const provenance = `<div class="ld-help ld-wardrobe-provenance" style="margin:2px 0 0 2px">${row.chatRole === 'character' ? 'Chat lead · ' : ''}Current source: ${source}${when}${evidence}</div>`
       // A story-declared character can be removed; one you wrote by hand is only
       // unlinked from this preset. The mark says which, so the button is never a
       // surprise. "any chat" means it predates chat scoping and cannot be
