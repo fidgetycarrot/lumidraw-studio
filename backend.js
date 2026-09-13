@@ -4396,6 +4396,7 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
     promptName: shortPhrase(source.promptName || '', `${fallbackRef} prompt name`, 6, 64, true, true),
     countTag,
     subject: shortPhrase(source.subject || '', `${fallbackRef} subject phrase`, 8, 72, true),
+    savedCountTag: String(source.countTag || countTag || '').trim(),
     // Direct mode's only rule. normalizeProfile builds a fresh object from named
     // fields, so a field that is not listed here simply does not survive — which
     // is how the lock would have silently locked nothing.
@@ -8993,6 +8994,7 @@ function directGroupPositionPhrase(position) {
 }
 
 function directGroupCountTag(subject, profiles) {
+  if (subject && subject.coreCountTag) return subject.coreCountTag
   const profile = subject && (subject.profileRef
     ? allKnownProfiles(profiles).find((item) => item && item.ref === subject.profileRef)
     : directProfileForPresenceName(subject.name, profiles))
@@ -9791,7 +9793,17 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
   ], banned).map(sceneText).filter(Boolean))
   // Framing tags describe the view. A literal "Camera" heading can also be
   // read as a prop, so do not add that noun to every spatial scene.
-  if (cameraEnvironment.length) lines.push(`${cameraEnvironment.join(', ')}.`)
+  if (image.sceneCore) {
+    const location = image.sceneCore.location || {}
+    const environment = uniqueStrings(applyBannedToList([...(location.setting || []), ...(location.details || [])], banned))
+    const environmentKeys = new Set(environment.map(normalizeIdentityText))
+    const framing = cameraEnvironment.filter((tag) => !environmentKeys.has(normalizeIdentityText(tag)))
+    if (framing.length) lines.push(`${framing.join(', ')}.`)
+    if (environment.length) {
+      lines.push(`Setting: ${environment.join(', ')}.`)
+      if (!/\b(?:close[- ]?up|headshot|bust shot|plain background|black background|silhouette)\b/i.test(frame)) lines.push('Visible surroundings.')
+    }
+  } else if (cameraEnvironment.length) lines.push(`${cameraEnvironment.join(', ')}.`)
 
   for (const subject of subjects) {
     const label = directGroupSubjectIntroduction(subject, profiles)
@@ -9826,6 +9838,16 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
       return true
     })
     details = tightenDirectGroupExpressionDetails(details, subject, image, profiles, trace)
+    if (image.sceneCore && image.sceneCore.sceneAction.primary) {
+      const primary = image.sceneCore.sceneAction.primary
+      if (primary.faceContact && directGroupSubjectKey(subject) === primary.targetKey) {
+        details = details.filter((detail) => {
+          if (!/^(?:rubbing|stroking|touching) (?:cheek|cheekbone|face)$/i.test(detail)) return true
+          image.sceneCore.sceneAction.omittedDetails.push({ name: subject.name, detail, reason: 'unbound contact cue on the receiving character' })
+          return false
+        })
+      }
+    }
     if (!image.sceneCore) details = details.slice(0, 18)
     const description = uniqueStrings([...stable, ...details.map(sceneText).filter(Boolean)])
     if (image.sceneCore) {
@@ -9842,7 +9864,10 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
     .filter(Boolean)
   for (const line of interactionLines) lines.push(line)
   const relationLines = (image.groupRelations || [])
-    .map((relation) => directGroupRelationSentence(relation, image, profiles))
+    .map((relation, index) => {
+      const action = image.sceneCore && image.sceneCore.sceneAction
+      return action && (action.omittedRelationIndices || []).includes(index) ? '' : directGroupRelationSentence(relation, image, profiles)
+    })
     .filter(Boolean)
   for (const line of relationLines) {
     // Only exact duplicates of the opening action are omitted. Related but
@@ -9855,13 +9880,14 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
     shared = ''
     if (trace) trace('shared interaction', 'applied', 'sexual act removed from free text; carried by structured interactions')
   }
-  if (relationLines.length && shared) {
+  const hasOpeningRelation = !!(image.sceneCore && image.sceneCore.sceneAction.primary)
+  if ((relationLines.length || hasOpeningRelation) && shared) {
     shared = ''
     if (trace) trace('shared interaction', 'applied', 'ordinary contact removed from legacy free text; carried by structured relations')
   }
   if (shared) lines.push(`Shared interaction: ${shared.replace(/[.]+$/g, '')}.`)
   let spatialRelation = sceneText(image.spatial_relation || '')
-  if (relationLines.length && DIRECT_NONSPATIAL_RELATION_RE.test(spatialRelation)) {
+  if ((relationLines.length || hasOpeningRelation) && DIRECT_NONSPATIAL_RELATION_RE.test(spatialRelation)) {
     spatialRelation = ''
     if (trace) trace('spatial relation', 'applied', 'action-like text removed; spatial_relation is placement only')
   }
@@ -9926,6 +9952,19 @@ function coreIdentityFor(profile, subject, banned = '') {
   const conflicts = [introduction, ...tags].filter((tag) => !allowed.has(normalizeIdentityText(tag)))
   if (conflicts.length) throw new Error(`Saved identity for ${(profile && profile.anchor) || subject.name} conflicts with banned tags: ${conflicts.join(', ')}. Resolve that conflict in the character sheet or Story prompting settings; no image was generated.`)
   return { introduction, tags }
+}
+
+function coreSavedCount(profile) {
+  const saved = String(profile && (profile.savedCountTag !== undefined ? profile.savedCountTag : profile.countTag) || '').trim()
+  const match = DIRECT_COUNT_FULL_RE.exec(saved)
+  const kind = match && directCountBase(match[2])
+  const category = ['boy', 'man', 'male'].includes(kind) ? 'boy'
+    : ['girl', 'woman', 'female'].includes(kind) ? 'girl' : kind === 'other' ? 'other' : ''
+  if (!match || Number(match[1]) !== 1 || !category) {
+    throw new Error(`Cannot read a valid single-person count tag for ${(profile && profile.anchor) || 'this saved character'} (saved: ${saved || 'empty'}). Check the linked character sheet's Count tag. LumiDraw will not substitute 1other. No image was generated.`)
+  }
+  return { saved, resolved: '1' + category, source: 'saved character sheet',
+    ref: profile.ref, libraryId: profile.libraryId || '' }
 }
 
 // One patch changes only the stated garment slots. Silence never removes a
@@ -10152,22 +10191,30 @@ function coreLocation(image, memory = {}, passage = '', content = '') {
   const blocks = [...String(content).matchAll(/<scenecard\b[^>]*>[\s\S]*?<\/scenecard>/gi)]
   const card = blocks.length ? sceneCardField(blocks[blocks.length - 1][0], 'location') : ''
   const frame = coreTags(String(image.prompt || '').split(/\bBREAK\b/)[0])
-  const isPlace = (tag) => placeWordsIn(tag).length || /\b(?:truck|vehicle|laundry room|police cruiser|outdoors|indoors|interior)\b/i.test(tag)
+  const fantasyPlaces = /\b(?:thicket|glade|grove|cavern|grotto|marsh|swamp|bog|clearing|meadow|tundra|wasteland|catacombs|crypt|sanctum|courtyard|greenhouse|workshop|tavern|airship|starship|truck|vehicle|laundry|cruiser)\b/gi
+  const placeKeys = (tag) => coreTags([...placeWordsIn(tag), ...(String(tag).match(fantasyPlaces) || [])])
+  const isPlace = (tag) => placeKeys(tag).length || /\b(?:outdoors|indoors|interior)\b/i.test(tag)
   const places = coreTags([...(image.setting || []), ...frame.filter(isPlace)])
   // Quote-bound exact location words, not a loose substring such as "car" in
   // "careful". This is a conservative source check, not semantic proof.
   const supported = places.filter((tag) => {
-    const words = coreTags([...(placeWordsIn(tag)), ...(String(tag).match(/\b(?:truck|laundry|cruiser)\b/gi) || [])])
+    const words = placeKeys(tag)
     return words.length ? words.every((word) => new RegExp('\\b' + escapeRegExp(word) + '\\b', 'i').test(passage))
       : normalizeIdentityText(passage).includes(normalizeIdentityText(tag))
   })
   const setting = supported.length ? supported : card ? coreTags(card) : coreTags(memory.setting)
   const source = supported.length ? 'current passage + parser' : card ? 'scene card' : setting.length ? 'remembered location' : 'unknown'
-  const acceptedWords = coreTags(setting.flatMap((tag) => [...placeWordsIn(tag), ...(tag.match(/\b(?:truck|laundry|cruiser)\b/gi) || [])]))
+  const acceptedWords = coreTags(setting.flatMap(placeKeys))
   const other = frame.filter((tag) => !DIRECT_COUNT_TAG_RE.test(tag) && !DIRECT_COUNT_FULL_RE.test(tag) && !places.includes(tag))
   const safeOther = other.filter((tag) => !isPlace(tag) || acceptedWords.some((word) =>
     new RegExp('\\b' + escapeRegExp(word) + '\\b', 'i').test(tag)))
-  return { setting, source, offered: places, discarded: places.filter((tag) => !setting.includes(tag)),
+  const detailNouns = /\b(?:mushrooms?|fungi|spores?|moss|ferns?|roots?|trees?|foliage|canopy|vines?|rocks?|boulders?|windows?|cabinets?|shelves|bookshelves|countertops?|curtains?|arches|pillars?|lanterns?|torches|stalactites|stalagmites)\b/gi
+  const details = coreTags([...(image.setting || []), ...frame]).filter((tag) => {
+    const nouns = String(tag).match(detailNouns) || []
+    if (!nouns.length || places.includes(tag) || tag.split(/\s+/).length > 8 || /\b(?:standing|sitting|leaning|holding|gripping|looking|wearing)\b/i.test(tag)) return false
+    return nouns.every((noun) => new RegExp('\\b' + escapeRegExp(noun) + '\\b', 'i').test(passage))
+  }).slice(0, 5)
+  return { setting, details, source, offered: places, discarded: places.filter((tag) => !setting.includes(tag)),
     frame: coreTags([...safeOther, ...setting, ...(image.lighting || [])]) }
 }
 
@@ -10187,12 +10234,51 @@ function coreRestoreSubjectDetails(image, profiles) {
   return image.groupSubjects || []
 }
 
+function corePrimarySceneAction(image, profiles) {
+  // Select from already-bound ordinary relations, not a grammatical guess from
+  // narrative text. Existing specialized interaction serialization is untouched.
+  if ((image.groupInteractions || []).length) return null
+  const relations = image.groupRelations || []
+  const candidates = relations.map((relation, index) => {
+    const actor = directRelationLabel(relation, 'actor', image, profiles)
+    const target = directRelationLabel(relation, 'target', image, profiles)
+    const targetPart = directRelationBodyPart(relation.targetPart)
+    const actorPart = directRelationBodyPart(relation.actorPart)
+    const action = directRelationAssembledAction(relation, actorPart, targetPart)
+    const manual = /^(?:strokes?|rubs?|pats?|cups?|touch(?:es)?|brush(?:es)?|taps?)$/i.test(action)
+    const faceContact = manual && /^(?:cheek|cheekbone|face|forehead)$/i.test(targetPart) && /^(?:hand|hands|fingers)?$/i.test(actorPart)
+    const concrete = /^(?:lifts?|supports?|stead(?:y|ies)|push(?:es)?|pulls?|hands?|passes?|gives?|offers?|shows?|holds?|grips?|squeezes?)\b/i.test(action)
+    const score = faceContact ? 100 : concrete ? (targetPart ? 40 : relation.object ? 30 : 20) : 0
+    let sentence = directGroupRelationSentence(relation, image, profiles)
+    if (faceContact) {
+      const verb = /^strok/i.test(action) ? 'strokes' : /^rub/i.test(action) ? 'rubs' : /^pat/i.test(action) ? 'pats'
+        : /^cup/i.test(action) ? 'cups' : /^touch/i.test(action) ? 'touches' : /^brush/i.test(action) ? 'brushes' : 'taps'
+      sentence = `${upperFirst(actor)} ${verb} ${directPossessiveLabel(target)} ${targetPart}.`
+    }
+    return { index, sentence, score, faceContact, actorKey: relation.actorKey, targetKey: relation.targetKey,
+      reason: faceContact ? 'specific hand-to-face contact takes priority over a reciprocal reaction' : 'concrete actor/action/target relation' }
+  }).filter((item) => item.score && item.sentence && item.actorKey && item.targetKey)
+  candidates.sort((a, b) => b.score - a.score || a.index - b.index)
+  const primary = candidates[0]
+  if (!primary) return null
+  const omittedRelationIndices = [primary.index]
+  if (primary.faceContact) relations.forEach((relation, index) => {
+    if (index === primary.index || relation.actorKey !== primary.targetKey || relation.targetKey !== primary.actorKey) return
+    const actorPart = directRelationBodyPart(relation.actorPart), targetPart = directRelationBodyPart(relation.targetPart)
+    const reciprocal = /^rubs?\s+against$/i.test(directRelationAssembledAction(relation, actorPart, targetPart)) &&
+      ((!actorPart && !targetPart) || (/^(?:cheek|cheekbone|face)$/.test(actorPart) && /^(?:hand|palm|fingers)$/.test(targetPart)))
+    if (reciprocal) omittedRelationIndices.push(index)
+  })
+  return { ...primary, omittedRelationIndices }
+}
+
 function coreEarlySceneSentence(image, profiles) {
   // Use the existing action record, not the parser's short mood/context title.
   // This adapter changes presentation only; it invents no verbs or participants.
   const relation = directGroupRelationSummary(image, profiles)
-  const raw = image.scene_summary || relation || image.group_scene || ''
-  const source = image.scene_summary ? 'scene_summary' : relation ? 'structured relations' : 'group_scene fallback'
+  const primary = corePrimarySceneAction(image, profiles)
+  const raw = (primary && primary.sentence) || image.scene_summary || relation || image.group_scene || ''
+  const source = primary ? 'primary structured action' : image.scene_summary ? 'scene_summary' : relation ? 'structured relations' : 'group_scene fallback'
   const subjects = image.groupSubjects || []
   const named = directGroupReplaceNames(raw, subjects, profiles).replace(/[.]+$/g, '')
   const bindings = subjects.map((subject) => ({
@@ -10213,7 +10299,8 @@ function coreEarlySceneSentence(image, profiles) {
     return lead + byName.get(key).introduction
   }) : named
   const rendered = upperFirst(expanded)
-  image.sceneCore.sceneAction = { source, raw, named, rendered }
+  image.sceneCore.sceneAction = { source, raw, named, rendered, originalSummary: image.scene_summary || '',
+    primary, omittedRelationIndices: primary ? primary.omittedRelationIndices : [], omittedDetails: [] }
   return rendered
 }
 
@@ -10244,6 +10331,9 @@ function prepareResolvedSceneCore(image, ctx) {
     if (seen.has(key)) throw new Error(`Experimental scene core found a duplicate subject: ${subject.name}. No image was generated.`)
     seen.add(key)
     const identity = coreIdentityFor(profile, subject, preset.bannedTags)
+    const count = coreSavedCount(profile)
+    subject.coreCountTag = count.resolved
+    subject.coreCountDecision = count
     const proposedName = directSentenceName(profile)
     const uniqueName = proposedName && proposedNames.filter((name) => normalizeIdentityText(name) === normalizeIdentityText(proposedName)).length === 1
     if (proposedName && !uniqueName) throw new Error(`Two characters share the image-prompt name "${proposedName}". Give them distinct prompt names in their character sheets; no image was generated.`)
@@ -10260,7 +10350,7 @@ function prepareResolvedSceneCore(image, ctx) {
   image.setting = location.setting.slice()
   image.lighting = [] // already included in the resolved frame, once
   image.sceneCore = {
-    version: 2, baseline: '1.3.35', parserFormat: 'unchanged', naming: 'named-action-first',
+    version: 3, baseline: '1.3.35', parserFormat: 'unchanged', naming: 'named-action-first',
     input: JSON.parse(JSON.stringify(input)),
     source: { messageId: String(ctx.messageId || ''), momentEvidence: image.moment_evidence || '' },
     location,
@@ -10269,6 +10359,7 @@ function prepareResolvedSceneCore(image, ctx) {
       const ref = (profile && profile.ref) || subject.name
       return { ref, name: subject.name, introduction: subject.coreIntroduction,
         referenceName: subject.coreReferenceName, subjectPhrase: subject.coreSubjectPhrase,
+        count: subject.coreCountDecision,
         identity: subject.coreIdentity.slice(), position: subject.position,
         clothing: visibleWardrobeFor(wardrobe[ref] || [], { profiles, profile, frame: image.prompt }),
         details: (subject.details || []).filter((tag) => !directWardrobeTag(tag)) }
@@ -10423,11 +10514,58 @@ function injectDirectSceneMood(prompt, image, trace = null) {
 // do between "the model has spoken" and "send it" is gone: no scene graph, no
 // defences, no substitutions. Quality tags in front, the author's negative
 // behind, the identity lock in the middle, send.
+function directProfileAudit(profiles) {
+  return allKnownProfiles(profiles).map((profile) => ({
+    ref: profile.ref, name: profile.anchor, libraryId: profile.libraryId || '',
+    countTag: profile.countTag || '', savedCountTag: profile.savedCountTag ?? profile.countTag ?? '',
+    subject: profile.subject || '',
+  }))
+}
+
+async function recordDirectFailure(base, error, userId) {
+  const current = await getStoryDebug()
+  const sameRun = current && current.runStartedAt === base.runStartedAt && current.sourceMessageId === base.sourceMessageId
+  return saveStoryDebug({ ...base, ...(sameRun ? current : {}),
+    error: error.message || String(error),
+    debugSource: sameRun && current.debugSource === 'failed-grounding' ? 'failed-grounding' : 'failed-direct-processing',
+  }, userId)
+}
+
 async function runDirectImages(initialImages, ctx) {
+  const { target, parserInput = {}, profiles, scan, userId, chatId } = ctx
+  const runStartedAt = Number((scan && scan.startedAt) || ctx.runStartedAt || Date.now())
+  const base = {
+    mode: 'direct', parserEngine: 'direct', debugSource: 'parser returned · before compilation',
+    sourceMessageId: String((target && target.id) || ''), sourceChatId: String(chatId || ''), runStartedAt,
+    sourceSwipeId: target && Number.isInteger(target.swipeId) ? target.swipeId : null,
+    sourceSwipeCount: Number((target && target.swipeCount) || 0), sourceContentSource: String((target && target.contentSource) || ''),
+    rawReply: ctx.rawReply || '', error: null, entries: [], selectedEntryIndex: null, lastCompiledPrompt: '',
+    profileAudit: directProfileAudit(profiles),
+    parserImages: JSON.parse(JSON.stringify(initialImages)),
+    contextPreview: parserInput.contextPreview || '',
+  }
+  await saveStoryDebug(base, userId)
+  try { return await runDirectImagesImpl(initialImages, { ...ctx, runStartedAt }) }
+  catch (error) {
+    try { await recordDirectFailure(base, error, userId) }
+    catch (debugError) { spindle.log.warn('[lumidraw] could not record Direct failure: ' + debugError.message) }
+    throw error
+  }
+}
+
+async function runDirectImagesImpl(initialImages, ctx) {
   const { preset, profiles, userId, chatId, scan, parserInput, target, instruction, settings } = ctx
   const reconciled = await reconcileDirectGrounding(initialImages, ctx)
   let images = reconciled.images
   const rawReply = reconciled.rawReply
+  const pendingDebug = await getStoryDebug()
+  if (pendingDebug && pendingDebug.runStartedAt === ctx.runStartedAt &&
+      pendingDebug.sourceMessageId === String((target && target.id) || '')) {
+    await saveStoryDebug({ ...pendingDebug, rawReply,
+      initialRawReply: ctx.rawReply || '', parserImages: JSON.parse(JSON.stringify(images)),
+      debugSource: 'grounding checked · before compilation',
+    }, userId)
+  }
   await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
   const origin = {
     messageId: String((target && target.id) || ''),
@@ -10480,7 +10618,8 @@ async function runDirectImages(initialImages, ctx) {
     sourceContentSource: String((target && target.contentSource) || ''),
     rawReply,
     error: '',
-    runStartedAt: Number((scan && scan.startedAt) || Date.now()),
+    runStartedAt: Number((scan && scan.startedAt) || ctx.runStartedAt || Date.now()),
+    profileAudit: directProfileAudit(profiles),
     contextPreview: parserInput.contextPreview,
     ledgerPreview: parserInput.ledgerPreview,
     contextMessageCount: parserInput.contextMessageCount,
@@ -15172,7 +15311,17 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   let parsed = []
   let parseError = ''
   const results = []
+  const reparseDebug = {
+    mode: 'direct', parserEngine: 'direct', debugSource: 'image reparse · before compilation',
+    sourceMessageId: String(target.id || ''), sourceChatId: String(chatId || ''), runStartedAt: startedAt,
+    sourceSwipeId: Number.isInteger(target.swipeId) ? target.swipeId : null,
+    sourceSwipeCount: Number(target.swipeCount || 0), sourceContentSource: String(target.contentSource || ''),
+    rawReply: raw, error: null, entries: [], selectedEntryIndex: null, lastCompiledPrompt: '',
+    profileAudit: directProfileAudit(profiles), parserMs,
+  }
   if (directMode) {
+    await saveStoryDebug(reparseDebug, userId)
+    try {
     const direct = parseDirectImages(raw, settings.maxImages || 2, profiles, passage, settings.maxSubjects || 2)
     if (!direct.images.length) {
       parseError = direct.error || 'Direct mode returned no usable prompt.'
@@ -15182,6 +15331,9 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
         instruction, settings, target, runStartedAt: startedAt,
       })
       raw = reconciled.rawReply
+      reparseDebug.rawReply = raw
+      reparseDebug.parserImages = JSON.parse(JSON.stringify(reconciled.images))
+      await saveStoryDebug(reparseDebug, userId)
       const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
       await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
       let reparseWardrobe = effectiveWardrobeForProfiles(rememberedState, profiles)
@@ -15218,6 +15370,12 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
           trace: traceLines,
         })
       }
+    }
+    if (parseError) await recordDirectFailure(reparseDebug, new Error(parseError), userId)
+    } catch (error) {
+      try { await recordDirectFailure(reparseDebug, error, userId) }
+      catch (debugError) { spindle.log.warn('[lumidraw] could not record reparse failure: ' + debugError.message) }
+      throw error
     }
   } else {
     try {

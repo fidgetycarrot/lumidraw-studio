@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.4.0-beta.3'
+const EXTENSION_VERSION = '1.4.0-beta.5'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -3273,9 +3273,12 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (coreCard) coreCard.style.display = core ? '' : 'none'
     if (coreSummary) coreSummary.value = core ? [
       'Opening scene: ' + ((core.sceneAction || {}).rendered || 'not recorded by this version'),
+      'Opening source: ' + ((core.sceneAction || {}).source || 'not recorded'),
       'Location: ' + ((core.location || {}).setting || []).join(', ') + ' [' + ((core.location || {}).source || 'unknown') + ']',
+      'Background details: ' + (((core.location || {}).details || []).join(', ') || 'none recorded'),
       ...(core.subjects || []).flatMap((subject) => [
         '', subject.name + ' — ' + subject.introduction,
+        'Count: ' + (subject.count ? subject.count.saved + ' → ' + subject.count.resolved + ' [' + subject.count.source + ']' : 'not recorded by this version'),
         'Saved identity: ' + (subject.identity || []).join(', '),
         'Complete outfit: ' + (((subject.clothing || {}).worn || []).join(', ') || 'unknown'),
         'Visible clothing: ' + (((subject.clothing || {}).visible || []).join(', ') || 'none recorded in this crop'),
@@ -3324,6 +3327,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       provider: debug.provider || null,
       parserMs: debug.parserMs || null,
       rawReply: debug.rawReply || null,
+      profileAudit: debug.profileAudit || [],
+      parserImages: debug.parserImages || [],
       contextMessageCount: debug.contextMessageCount || 0,
       ledgerFound: !!debug.ledgerFound,
       contextPreview: debug.contextPreview || '',
