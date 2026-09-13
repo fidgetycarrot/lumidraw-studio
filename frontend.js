@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.4.0-beta.1'
+const EXTENSION_VERSION = '1.4.0-beta.2'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -1737,7 +1737,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     parser.appendChild(parserBinding)
 
     const coreCard = card('Experimental scene core · based on 1.3.35',
-      'Direct mode only. Uses your existing parser and its unchanged format. Resolves saved identity, clothing layers, and location before formatting the image prompt. No extra model calls.')
+      'Direct mode only. Uses your existing parser and its unchanged format. Opens with the action and named identities, then describes each character, clothing layers, and location. No extra model calls.')
     const coreToggle = document.createElement('input')
     coreToggle.type = 'checkbox'
     coreToggle.className = 'ld-experimental-scene-core'
@@ -3272,6 +3272,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const coreCard = $('.ld-core-summary-card')
     if (coreCard) coreCard.style.display = core ? '' : 'none'
     if (coreSummary) coreSummary.value = core ? [
+      'Opening scene: ' + ((core.sceneAction || {}).rendered || 'not recorded by this version'),
       'Location: ' + ((core.location || {}).setting || []).join(', ') + ' [' + ((core.location || {}).source || 'unknown') + ']',
       ...(core.subjects || []).flatMap((subject) => [
         '', subject.name + ' — ' + subject.introduction,

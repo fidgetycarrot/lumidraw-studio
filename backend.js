@@ -9053,6 +9053,7 @@ function directGroupAdultAge(profile) {
 }
 
 function directGroupSubjectLabel(subject, profiles) {
+  if (subject && subject.coreReferenceName) return subject.coreReferenceName
   return `the ${directGroupSubjectNoun(subject, profiles)} ${directGroupPositionPhrase(subject && subject.position)}`
 }
 
@@ -9769,7 +9770,7 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
   // back to scene_summary would state them twice and weaken subject binding.
   const hasStructuredRelationship = (image.groupInteractions || []).length || (image.groupRelations || []).length
   const groupSceneSource = image.group_scene || (hasStructuredRelationship ? '' : image.scene_summary) || ''
-  const groupScene = sceneText(groupSceneSource)
+  const groupScene = image.sceneCore ? coreEarlySceneSentence(image, profiles) : sceneText(groupSceneSource)
   if (groupScene) lines.push(`Scene: ${groupScene.replace(/[.]+$/g, '')}.`)
   const mood = directSceneMoodDecision(image)
   if (mood.applied) {
@@ -9840,7 +9841,12 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
   const relationLines = (image.groupRelations || [])
     .map((relation) => directGroupRelationSentence(relation, image, profiles))
     .filter(Boolean)
-  for (const line of relationLines) lines.push(line)
+  for (const line of relationLines) {
+    // Only exact duplicates of the opening action are omitted. Related but
+    // different actions remain intact; do not infer semantic equivalence.
+    if (image.sceneCore && normalizeIdentityText(line) === normalizeIdentityText(image.sceneCore.sceneAction.named)) continue
+    lines.push(line)
+  }
   let shared = sceneText(image.shared_interaction || '')
   if (interactionLines.length && (ANATOMY_ACT_RE.test(shared) || /\bmasturbat\w*\b/i.test(shared))) {
     shared = ''
@@ -10060,6 +10066,34 @@ function coreRestoreSubjectDetails(image, profiles) {
   return image.groupSubjects || []
 }
 
+function coreEarlySceneSentence(image, profiles) {
+  // Use the existing action record, not the parser's short mood/context title.
+  // This adapter changes presentation only; it invents no verbs or participants.
+  const relation = directGroupRelationSummary(image, profiles)
+  const raw = image.scene_summary || relation || image.group_scene || ''
+  const source = image.scene_summary ? 'scene_summary' : relation ? 'structured relations' : 'group_scene fallback'
+  const subjects = image.groupSubjects || []
+  const named = directGroupReplaceNames(raw, subjects, profiles).replace(/[.]+$/g, '')
+  const bindings = subjects.map((subject) => ({
+    reference: directGroupSubjectLabel(subject, profiles),
+    introduction: subject.coreReferenceName
+      ? `the ${subject.coreSubjectPhrase} ${subject.coreReferenceName}`
+      : `the ${subject.coreSubjectPhrase} ${directGroupPositionPhrase(subject.position)}`,
+  })).filter((entry) => entry.reference).sort((a, b) => b.reference.length - a.reference.length)
+  const byName = new Map(bindings.map((entry) => [entry.reference.toLowerCase(), entry]))
+  const seen = new Set()
+  const pattern = bindings.length ? new RegExp(`(^|[^a-z0-9])(${bindings.map((entry) => escapeRegExp(entry.reference)).join('|')})(?=$|[^a-z0-9])`, 'gi') : null
+  const expanded = pattern ? named.replace(pattern, (whole, lead, name) => {
+    const key = name.toLowerCase()
+    if (seen.has(key)) return whole
+    seen.add(key)
+    return lead + byName.get(key).introduction
+  }) : named
+  const rendered = upperFirst(expanded)
+  image.sceneCore.sceneAction = { source, raw, named, rendered }
+  return rendered
+}
+
 function prepareResolvedSceneCore(image, ctx) {
   const { profiles, preset, wardrobe = {}, memory = {}, passage = '', content = '' } = ctx
   if (image.sceneCore) return
@@ -10079,6 +10113,7 @@ function prepareResolvedSceneCore(image, ctx) {
     })
   }
   if (!subjects.length) throw new Error('Experimental scene core found no bound subjects. No image was generated.')
+  const proposedNames = subjects.map((subject) => directSentenceName(directGroupProfileFor(subject, profiles)))
   const seen = new Set()
   for (const subject of subjects) {
     const profile = directGroupProfileFor(subject, profiles)
@@ -10086,7 +10121,14 @@ function prepareResolvedSceneCore(image, ctx) {
     if (seen.has(key)) throw new Error(`Experimental scene core found a duplicate subject: ${subject.name}. No image was generated.`)
     seen.add(key)
     const identity = coreIdentityFor(profile, subject, preset.bannedTags)
-    subject.coreIntroduction = `the ${identity.introduction} ${directGroupPositionPhrase(subject.position)}`
+    const proposedName = directSentenceName(profile)
+    const uniqueName = proposedName && proposedNames.filter((name) => normalizeIdentityText(name) === normalizeIdentityText(proposedName)).length === 1
+    if (proposedName && !uniqueName) throw new Error(`Two characters share the image-prompt name "${proposedName}". Give them distinct prompt names in their character sheets; no image was generated.`)
+    subject.coreReferenceName = uniqueName ? proposedName : ''
+    subject.coreSubjectPhrase = identity.introduction
+    subject.coreIntroduction = subject.coreReferenceName
+      ? `${subject.coreReferenceName}, ${articleFor(identity.introduction)} ${identity.introduction}, ${directGroupPositionPhrase(subject.position)}`
+      : `the ${identity.introduction} ${directGroupPositionPhrase(subject.position)}`
     subject.coreIdentity = identity.tags
   }
   image.groupSubjects = subjects
@@ -10095,7 +10137,7 @@ function prepareResolvedSceneCore(image, ctx) {
   image.setting = location.setting.slice()
   image.lighting = [] // already included in the resolved frame, once
   image.sceneCore = {
-    version: 1, baseline: '1.3.35', parserFormat: 'unchanged',
+    version: 2, baseline: '1.3.35', parserFormat: 'unchanged', naming: 'named-action-first',
     input: JSON.parse(JSON.stringify(input)),
     source: { messageId: String(ctx.messageId || ''), momentEvidence: image.moment_evidence || '' },
     location,
@@ -10103,12 +10145,14 @@ function prepareResolvedSceneCore(image, ctx) {
       const profile = directGroupProfileFor(subject, profiles)
       const ref = (profile && profile.ref) || subject.name
       return { ref, name: subject.name, introduction: subject.coreIntroduction,
+        referenceName: subject.coreReferenceName, subjectPhrase: subject.coreSubjectPhrase,
         identity: subject.coreIdentity.slice(), position: subject.position,
         clothing: visibleWardrobeFor(wardrobe[ref] || [], { profiles, profile, frame: image.prompt }),
         details: (subject.details || []).filter((tag) => !directWardrobeTag(tag)) }
     }),
     wardrobeDecisions: image.coreWardrobeDecisions || [],
-    warnings: [...(image.wardrobeDecisions || []), ...(location.source === 'unknown' ? ['Location unknown; no setting invented'] : [])],
+    warnings: [...(image.wardrobeDecisions || []), ...(location.source === 'unknown' ? ['Location unknown; no setting invented'] : []),
+      ...subjects.filter((subject) => !subject.coreReferenceName).map((subject) => `${subject.name}: using descriptive references because no non-conflicting prompt name is available`)],
   }
   if (ctx.trace) ctx.trace('resolved scene core', 'experimental',
     `${subjects.length} bound subject(s); identity from saved sheets; location from ${location.source}`)
