@@ -5992,6 +5992,12 @@ const BOORU_VOCAB = new Set([
   'fellatio', 'cunnilingus', 'handjob', 'masturbation', 'male masturbation',
   'vaginal', 'anal', 'sex', 'straddling', 'cowgirl position', 'doggystyle',
   'missionary', 'deepthroat', 'licking penis', 'penis grab', 'tongue out',
+  // Composition tags — the body arrangement, which is what tells the model where
+  // limbs go. missionary/doggystyle/cowgirl position were already here; the rest
+  // were the same kind of hole as the joggers gap: real Danbooru tags the parser
+  // could name and the vocabulary would not recognise.
+  'reverse cowgirl position', 'mating press', 'spooning', 'standing sex',
+  'girl on top', 'sitting on lap',
   'saliva', 'cum', 'ejaculation', 'blush', 'sweat',
   // orientation — which way the bodies face each other. Verified on Danbooru:
   // eye contact carries 67,846 posts and implicates looking at another.
@@ -10296,7 +10302,8 @@ PROMPT SHAPE — for ONE person, exactly this order inside "prompt":
 1. Count tags for everyone in frame. These are real Danbooru tags — 1girl,
    2girls, 1boy — pluralized, never "2girl". The frame's total must equal the
    character runs that follow.
-2. Camera, setting, lighting as short tags. LumiDraw inserts scene_summary
+2. Camera, setting, lighting as short tags, AND the composition tag when one
+   applies — see COMPOSITION below. LumiDraw inserts scene_summary
    between the leading count tags and these tags. Use trained framing words only:
    portrait, upper body, cowboy shot, full body, wide shot; from above, from
    below, from side, from behind, from front; dutch angle, pov. Choose a frame
@@ -10312,7 +10319,7 @@ PROMPT SHAPE — for ONE person, exactly this order inside "prompt":
 SPATIAL MULTI-SUBJECT SHAPE — for TWO, THREE, OR FOUR people:
 - Do not write BREAK and do not put people, names, count tags, appearance,
   clothing, actions, expressions, or relations inside "prompt". For a group,
-  "prompt" contains camera, setting, and lighting tags only.
+  "prompt" contains camera, setting, lighting, and composition tags only.
 - Return one "group_subjects" entry for every person in "present", in visual
   order. Use distinct, concrete positions such as left/center/right or
   foreground/midground/background. "name" is the exact sheet name and is only
@@ -10348,8 +10355,22 @@ INTERACTIONS — visible sexual acts in a two-to-four-person image go in
   is in NO interaction entry. Watching or merely standing nearby is not an
   interaction.
 - "act" must be exactly one of: fellatio, cunnilingus, handjob, vaginal, anal,
-  masturbation. Do not invent another term. Vaginal includes cowgirl,
-  missionary, doggystyle, and mating press; anal means anal penetration.
+  masturbation. Do not invent another term. "act" records WHAT is happening and
+  binds actor to recipient; it does not record how the bodies are arranged —
+  that is the composition tag, and it goes in "prompt".
+
+COMPOSITION
+- The composition tag is the single Danbooru tag for the body arrangement, and it
+  is the one tag that tells the image model where limbs go. Put it in "prompt"
+  with the camera tags, early, not in a character run and not in "details".
+- Use one only, and only a real tag: missionary, doggystyle, cowgirl position,
+  reverse cowgirl position, mating press, spooning, standing sex, girl on top,
+  straddling, sitting on lap, princess carry, hug, holding hands.
+- Choose the one the passage actually supports. If the arrangement is not clear
+  from the passage, write none — a wrong arrangement is worse than an unstated
+  one, because the model will commit to it.
+- It is not a repeat of "act" and does not violate the no-repeat rule: "vaginal"
+  says what is happening, "missionary" says how the bodies lie. Both can appear.
 - Masturbation is self-directed: use the same exact name for actor and recipient.
 - Sexual acts live in group_interactions exactly once. scene_summary may state
   the supported pictured moment, but group_scene, group_relations, and

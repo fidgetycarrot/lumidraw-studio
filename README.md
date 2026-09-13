@@ -1,78 +1,80 @@
-# LumiDraw Studio 1.3.0 — your 1.1.2, with my 1.2.0 merged in
+# LumiDraw Studio 1.3.36 — composition tags
 
-**Your files are the base.** Not mine. Everything in your 1.1.2 is intact, and I
-re-applied my work on top of it rather than the other way round.
+Instruction-only, as agreed. No schema change, no serializer change. Your
+`frontend.js` is byte-identical to your upload.
 
-## What I verified, not assumed
+## What was wrong
 
-A diff of your `backend.js` against the merged one shows exactly **two** lines of
-yours missing — both are calls I deliberately replaced with versions that do
-strictly more (`applyIdentityLock` now runs after name-stripping;
-`repairDirectPrompt` now feeds the BREAK-splitter). Your `frontend.js` differs by
-**one hunk**, described below.
+One line of the parser instruction:
 
-Your whole `applyUiResetV11()` — all 496 lines — is untouched.
+> `"act" must be exactly one of: fellatio, cunnilingus, handjob, vaginal, anal,
+> masturbation. Do not invent another term. **Vaginal includes cowgirl,
+> missionary, doggystyle, and mating press**`
 
-## Your work, which is better than what it replaced
+Four different body arrangements — four compositions, four camera relationships —
+collapsed into one token before the prompt was ever built. And
+`normalizeGroupAct` drops anything outside that set, so a parser that *did* say
+`missionary` lost the entire interaction to `unrecognized act`.
 
-- **`LUMIDRAW_PRESET_SEMANTICS_V1_1`.** Presets are generation recipes; story
-  prompting moved to settings; people live in casts. That's the separation you
-  proposed days ago, done properly, with a one-time migration that copies and
-  leaves the preset fields intact.
-- **Direct promoted to a first-class mode**, with `parser + directMode` installs
-  auto-promoted. `directMode` is now *derived* from the mode, so the two can no
-  longer disagree with each other.
-- **The wardrobe precedence ladder** — passage change > current wardrobe > earlier
-  mentions > default, and *silence means unchanged*. This is better than my "THE
-  PASSAGE ALWAYS WINS". Mine couldn't express "the passage says nothing", which
-  made silence look like a reason to reset to defaults.
-- **Per-character anatomy containment** — futanari/penis/bulge must stay inside
-  that character's block. That directly addresses traits landing on the wrong
-  person.
-- **Resolve contradictions before output** — which is the `couch` vs `lying on
-  bed` problem solved at the source.
-- **Stable futanari in Permanent appearance is promoted to the identity lock.**
-  I'd deleted a noun-inference fallback because it found nothing for Fanny; you
-  fixed the actual case instead of generalising. Narrow, from a named list.
-- Parser temperature control.
+The category error underneath: Danbooru treats **act** and **position** as
+independent axes. Act is what is happening; position is how the bodies are
+arranged. One field was doing both jobs, and the collision was resolved by
+discarding position — the half that actually tells the model where limbs go.
+`vaginal` constrains almost nothing about composition, which is why Anima was
+guessing and why you were spending tokens describing around it.
 
-## One regression I found in the merge
+## What changed
 
-`openStoryPicker` accepts `parser` **and** `direct`, but the gate on the button
-that opens it still said `parser` only — left behind when Direct stopped being a
-checkbox. So in Direct mode "illustrate an old message" was greyed out while the
-thing behind it worked perfectly. That's the single frontend hunk I changed.
+**A COMPOSITION section in the instruction.** The tag goes in `prompt` with the
+camera tags, early — one tag only, a real one, and *none* if the passage doesn't
+support one, because a wrong arrangement is worse than an unstated one.
 
-## My 1.2.0, re-applied
+**The group frame now permits it.** It previously said `"prompt" contains camera,
+setting, and lighting tags only` — which excluded composition outright.
 
-The fused-block splitter and name-stripper from this morning's positioning bug.
-They're now enforcement backstops for rules **you** wrote — your `NEVER` line
-already forbids names as tags and self-corrections left in place.
+**`act` keeps its enum.** It still binds actor to recipient, which is what makes
+that field reliable. It just no longer swallows the geometry. The instruction now
+states the two are compatible, so the no-repeat rule won't suppress one.
 
-## The test suite
+**Six vocabulary additions.** `reverse cowgirl position`, `mating press`,
+`spooning`, `standing sex`, `girl on top`, `sitting on lap` — real Danbooru tags
+the parser could name and the vocabulary would have rejected. Same hole as the
+joggers gap. All thirteen composition tags the instruction offers now resolve
+`exact`, and there's a test that walks the instruction's own list to prove it —
+so a dead suggestion can't be added later.
 
-**62 suites · 2,971 assertions · all green** against your architecture.
+## The plumbing already worked
 
-29 assertions failed on the merge and I went through them one at a time. Every
-one was my test pinning wording or a control you deliberately changed — none was
-a lost behaviour. Each is rewritten to assert the property against your source,
-with a comment saying what changed and why. Three were brittle in ways worth
-fixing regardless:
+Worth knowing, because it's why this was cheap: a composition tag placed in the
+frame `prompt` already survived verbatim into the shared frame, right after the
+count tags. I verified that before changing anything. Nothing downstream needed
+touching.
 
-- one pinned the *exact end* of a selector list, so any addition broke it — it
-  checks membership now
-- one counted raw occurrences of an attribute instead of distinct sections
-- one asserted "init never writes", which your declared one-time migration
-  legitimately violates — it now asserts the write is declared, once, and
-  **idempotent**, and there's a new test proving a second init changes nothing
+## Verification
 
-The settings-tab test came out better than either version: it now ties the
-switcher's accepted list to the tabs that survive your UI reset, so a dead tab or
-an unreachable section fails.
+**`composition.mjs` — 36 assertions.** It checks the tag reaches the frame, lands
+*early* (before the first subject), appears exactly once, and never leaks into a
+character run — which is how a composition becomes one person's pose while the
+other stops participating in it.
 
-## Going forward
+Mutations caught: the act line swallowing arrangement again, and the instruction
+offering a tag the vocabulary doesn't know.
 
-This is on me to prevent, not you. Your changes now live in the source I build
-from, so they carry forward automatically. If you edit your install directly
-again, send me the file the same way and I'll rebase rather than overwrite — and
-I'll say plainly in every release which files are being replaced wholesale.
+**One mutation did NOT bite**, and I've left that visible. Reverting the group
+frame's permission line broke nothing, because every test injects the tag into
+the parser reply directly and so can't check whether the parser was ever *told*
+to produce one. Two text assertions now cover those lines. They're weak, and
+they're labelled as weak — but the alternative is an instruction line that can be
+deleted with no test noticing.
+
+The capture gate is unaffected: **regression.mjs 21/21**.
+
+## Still outstanding
+
+The 13 suites that don't match 1.3.35 yet. Unchanged by this release.
+
+## What to do
+
+Run a scene at a fixed seed, then re-run it with the composition tag removed from
+the frame by hand. That's the comparison worth having, and the seed makes it a
+real one.
