@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.4.0-beta.2'
+const EXTENSION_VERSION = '1.4.0-beta.3'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -5214,7 +5214,25 @@ ${entry.prompt || ''}`.trim()
           setStatus('.ld-wardrobe-status', `Synced ${names} from the latest passage. No image was generated.${suffix}`, 'good')
         } else {
           const suffix = ignored.length ? ` ${ignored[0]}` : ''
-          setStatus('.ld-wardrobe-status', `The latest passage established no usable clothing change, so nothing was changed.${suffix}`, ignored.length ? 'err' : 'good')
+          const status = res.syncDiagnostics && res.syncDiagnostics.status
+          const message = status === 'unchanged' ? 'The proposed outfit matches the saved record; nothing needed updating.'
+            : status === 'no-proposals' ? 'The parser returned no clothing updates, and no direct dressing statement was recovered.'
+            : ignored.length ? 'Clothing updates could not be applied.'
+            : 'No clothing update was applied.'
+          setStatus('.ld-wardrobe-status', message + suffix, ignored.length ? 'err' : 'good')
+        }
+        if (res.syncDiagnostics) {
+          const statusEl = $('.ld-wardrobe-status')
+          const details = document.createElement('details')
+          const summary = document.createElement('summary')
+          summary.textContent = 'Clothing sync details'
+          const report = document.createElement('pre')
+          report.style.whiteSpace = 'pre-wrap'
+          report.style.maxHeight = '24rem'
+          report.style.overflow = 'auto'
+          report.textContent = JSON.stringify({ messageId: res.syncMessageId, ...res.syncDiagnostics }, null, 2)
+          details.append(summary, report)
+          if (statusEl) statusEl.append(details)
         }
       } catch (e) {
         setStatus('.ld-wardrobe-status', e.message, 'err')
