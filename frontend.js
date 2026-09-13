@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.3.37'
+const EXTENSION_VERSION = '1.4.0-beta.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -1736,6 +1736,15 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     parserBinding.appendChild(parserAdvanced.el)
     parser.appendChild(parserBinding)
 
+    const coreCard = card('Experimental scene core · based on 1.3.35',
+      'Direct mode only. Uses your existing parser and its unchanged format. Resolves saved identity, clothing layers, and location before formatting the image prompt. No extra model calls.')
+    const coreToggle = document.createElement('input')
+    coreToggle.type = 'checkbox'
+    coreToggle.className = 'ld-experimental-scene-core'
+    coreCard.appendChild(checkbox(coreToggle, 'Try the new scene core'))
+    addHelp(coreCard, 'Off by default. Turn off to use the 1.3.35 formatter again. Story wardrobe updates remain in memory; switching off does not rewind them. Unknown clothing is flagged in Debug, not filled in with guessed garments.')
+    parser.appendChild(coreCard)
+
     const storyQuality = document.createElement('textarea')
     storyQuality.className = 'ld-story-quality'
     storyQuality.rows = 2
@@ -1802,6 +1811,16 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (controls.parsedScene) parsedDetails.body.appendChild(controls.parsedScene)
     debugCard.appendChild(parsedDetails.el)
     debug.appendChild(debugCard)
+    const coreSummaryCard = card('Resolved scene snapshot · experimental',
+      'What this exact candidate used. Full details remain in the parser/debug report.')
+    coreSummaryCard.className += ' ld-core-summary-card'
+    coreSummaryCard.style.display = 'none'
+    const coreSummary = document.createElement('textarea')
+    coreSummary.className = 'ld-core-summary'
+    coreSummary.rows = 12
+    coreSummary.readOnly = true
+    coreSummaryCard.appendChild(coreSummary)
+    debug.appendChild(coreSummaryCard)
     const dtCompat = details('Draw Things API compatibility', 'If Draw Things rejects a generation setting, LumiDraw remembers it here and omits it on later requests.')
     dtCompat.body.appendChild(field('Rejected settings', inline(controls.rejectedKeys, controls.clearRejectedKeys)))
     debug.appendChild(dtCompat.el)
@@ -3247,6 +3266,22 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const meta = $('.ld-story-debug-meta')
     if (!prompt || !parsed) return
     const debug = storyDebug || null
+    const selected = debug && (debug.entries || [])[(Number(debug.selectedEntryIndex) || 1) - 1]
+    const core = selected && selected.sceneCore
+    const coreSummary = $('.ld-core-summary')
+    const coreCard = $('.ld-core-summary-card')
+    if (coreCard) coreCard.style.display = core ? '' : 'none'
+    if (coreSummary) coreSummary.value = core ? [
+      'Location: ' + ((core.location || {}).setting || []).join(', ') + ' [' + ((core.location || {}).source || 'unknown') + ']',
+      ...(core.subjects || []).flatMap((subject) => [
+        '', subject.name + ' — ' + subject.introduction,
+        'Saved identity: ' + (subject.identity || []).join(', '),
+        'Complete outfit: ' + (((subject.clothing || {}).worn || []).join(', ') || 'unknown'),
+        'Visible clothing: ' + (((subject.clothing || {}).visible || []).join(', ') || 'none recorded in this crop'),
+        'Kept but hidden: ' + (((subject.clothing || {}).hidden || []).map((item) => item.item + ' (' + item.coveredBy + ')').join('; ') || 'none'),
+      ]),
+      '', ...(core.warnings || []).map((warning) => 'Note: ' + warning),
+    ].join('\n') : ''
     prompt.value = debug && debug.lastCompiledPrompt ? debug.lastCompiledPrompt : ''
     if (meta) {
       if (!debug) {
@@ -4370,6 +4405,7 @@ ${entry.prompt || ''}`.trim()
             groupRelations: candidate.groupRelations || [],
             wardrobeSnapshot: ((candidate.debug || {}).scene || {}).wardrobeSnapshot || {},
             wardrobeDecisions: ((candidate.debug || {}).scene || {}).wardrobeDecisions || [],
+            sceneCore: ((candidate.debug || {}).scene || {}).sceneCore || null,
           })),
           at: Date.now(),
         }
@@ -4869,6 +4905,7 @@ ${entry.prompt || ''}`.trim()
         manual: 'manually set',
         'latest-passage': 'synced from latest passage',
         'scene-card': 'updated from the scene card',
+        'scene-core': 'updated by the experimental scene core',
         'story-parser': 'updated by the story parser',
         'story-declaration': 'updated by the story declaration',
         'image-correction': 'corrected from an image',
@@ -5953,6 +5990,7 @@ ${entry.prompt || ''}`.trim()
       cloudModel: $('.ld-cloud-model').value,
       cloudFallback: $('.ld-cloud-fallback').checked,
       mode: storyMode,
+      experimentalSceneCore: $('.ld-experimental-scene-core') ? $('.ld-experimental-scene-core').checked : false,
       autoScan: storyAutoScan,
       parserEngine: $('.ld-parser-engine').value,
       parserConnection: $('.ld-parser-conn').value,
@@ -6122,7 +6160,7 @@ ${entry.prompt || ''}`.trim()
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-maximg', '.ld-minimg', '.ld-maxsubjects', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break']) {
+  for (const sel of ['.ld-mode', '.ld-maximg', '.ld-minimg', '.ld-maxsubjects', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break', '.ld-experimental-scene-core']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-mode') {
@@ -6503,6 +6541,7 @@ ${entry.prompt || ''}`.trim()
       } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
+      if ($('.ld-experimental-scene-core')) $('.ld-experimental-scene-core').checked = !!settings.experimentalSceneCore
       if ($('.ld-parser-temperature')) $('.ld-parser-temperature').value = Number.isFinite(Number(settings.parserTemperature)) ? Number(settings.parserTemperature) : 0.2
       if ($('.ld-parser-overrides')) $('.ld-parser-overrides').value = settings.parserRequestOverrides || ''
       if ($('.ld-parser-maxtokens')) $('.ld-parser-maxtokens').value = settings.parserMaxTokens || 12000
