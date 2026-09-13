@@ -11102,7 +11102,9 @@ function directEvidenceInsideDialogue(passage, evidence) {
     // paragraph. If its first visible quote is immediately followed by space
     // or a closing tag, it is an orphaned closer, not a new opening quote.
     const firstStraight = localBefore.indexOf('"')
-    if (firstStraight >= 0 && !/[a-z0-9]/i.test(localBefore[firstStraight + 1] || '')) {
+    // Read beyond localBefore when evidence starts immediately after the
+    // opening quote; that boundary must not turn dialogue into narration.
+    if (firstStraight >= 0 && !/[a-z0-9]/i.test(searchable[paragraphStart + firstStraight + 1] || '')) {
       straightQuotes = Math.max(0, straightQuotes - 1)
     }
     const insideStraight = straightQuotes % 2 === 1
@@ -11133,13 +11135,19 @@ function directMomentEvidenceContext(passage, evidence) {
 }
 
 function assessDirectMomentEvidence(value, passage) {
-  const evidence = String(value || '').replace(/\s+/g, ' ').trim().slice(0, 360)
+  // 3-20 words remains the parser's requested format, not a grounding rule.
+  // Allow a bounded overshoot, but inspect the WHOLE quote: truncating could
+  // hide a mismatched ending or a non-current qualifier.
+  const evidence = String(value || '').replace(/\s+/g, ' ').trim()
   const evidenceNorm = normalizeIdentityText(evidence)
   const passageNorm = normalizeIdentityText(passage)
   const words = evidenceNorm ? evidenceNorm.split(/\s+/).filter(Boolean).length : 0
   if (!evidenceNorm) return { valid: false, reason: 'moment_evidence was missing', evidence, words }
-  if (words < 3 || words > 20) {
-    return { valid: false, reason: `moment_evidence had ${words} words; expected 3-20`, evidence, words }
+  if (words < 3 || words > 32) {
+    return { valid: false, reason: `moment_evidence had ${words} words; expected 3-20 (up to 32 tolerated)`, evidence, words }
+  }
+  if (evidence.length > 720) {
+    return { valid: false, reason: 'moment_evidence exceeded the 720-character safety limit; quote was not truncated', evidence, words }
   }
   if (!passageNorm.includes(evidenceNorm)) {
     return { valid: false, reason: 'moment_evidence was not an exact quote from the current passage', evidence, words }
@@ -11157,7 +11165,9 @@ function assessDirectMomentEvidence(value, passage) {
       words,
     }
   }
-  return { valid: true, reason: '', evidence, words }
+  return { valid: true, reason: '', evidence, words,
+    warning: words > 20 ? `moment_evidence had ${words} words; accepted within the 32-word tolerance after all grounding checks passed` : '',
+  }
 }
 
 function directMomentContradiction(image) {
@@ -11254,7 +11264,7 @@ function parseDirectGroupRelations(item, present, presenceFieldDeclared, spatial
     const actorName = String((entry && entry.actor) || '').trim()
     const targetName = String((entry && (entry.target || entry.recipient)) || '').trim()
     const action = directRelationAction(entry && entry.action)
-    const evidence = String((entry && entry.evidence) || '').replace(/\s+/g, ' ').trim().slice(0, 360)
+    const evidence = String((entry && entry.evidence) || '').replace(/\s+/g, ' ').trim()
     if (!actorName || !targetName || !action) {
       notes.push('dropped a general relation — actor, action, and target are all required')
       continue
@@ -11554,8 +11564,12 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
       }
     }
     const sceneSummary = normalizeDirectSceneSummary(item.scene_summary, summaryWordLimit)
-    const momentEvidence = String(item.moment_evidence || '').replace(/\s+/g, ' ').trim().slice(0, 360)
+    const momentEvidence = String(item.moment_evidence || '').replace(/\s+/g, ' ').trim()
     const momentEvidenceAssessment = assessDirectMomentEvidence(momentEvidence, passage)
+    if (momentEvidenceAssessment.warning) {
+      notes.push(momentEvidenceAssessment.warning)
+      spindle.log.info('[lumidraw] direct · evidence format warning · ' + momentEvidenceAssessment.warning)
+    }
     if (!momentEvidenceAssessment.valid) {
       spindle.log.warn('[lumidraw] direct · proposed moment is not grounded · ' + momentEvidenceAssessment.reason +
         (momentEvidence ? ` · "${momentEvidence.slice(0, 100)}"` : ''))
