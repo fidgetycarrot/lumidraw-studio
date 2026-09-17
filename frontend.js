@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.4.0-beta.5'
+const EXTENSION_VERSION = '1.4.0-jev.1'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -1278,6 +1278,23 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <button class="ld-btn" data-act="test-cloud" style="margin-top:7px">Test cloud relay</button>
             <div class="ld-status ld-cloud-status" style="margin-top:6px"></div>
             <div class="ld-help" style="margin-top:5px">Needs <code>lumidraw-cloud-relay.mjs</code> running on this Mac. Your API key lives in that process and is never sent here. Free tier is 20 generations a month, Draw Things+ is 200.</div>
+          </div>
+          <div data-settings-section="advanced" class="ld-card">
+            <div class="ld-subtitle">Jev comparison lab — separate test build</div>
+            <div class="ld-help">Optional second opinion on clothing and character presence after Direct parses and image reparses. Your normal parser, prompts, identity tags, and wardrobe records remain unchanged. No automatic retries. A comparison can add up to 8 seconds.</div>
+            <label class="ld-check"><input type="checkbox" class="ld-jev-enabled" /> <span>Send Direct scene comparisons to TypeSafe (paid API)</span></label>
+            <div class="ld-hint">When enabled, the current passage, earlier parser context, character names, and prior/proposed outfits leave this Mac for TypeSafe. Inputs are bounded; oversized passages are skipped, not cut short. No images or full character sheets are sent. Jev does not run for a plain image reroll or clothing Sync.</div>
+            <label class="ld-label">TypeSafe API key (blank keeps saved key)<input class="ld-jev-key" type="password" autocomplete="new-password" spellcheck="false" /></label>
+            <label class="ld-label">Model<input class="ld-jev-model" value="jev-latest" autocomplete="off" spellcheck="false" /></label>
+            <div class="ld-section-actions">
+              <button class="ld-btn" data-act="jev-load">Load settings / latest report</button>
+              <button class="ld-btn" data-act="jev-save" disabled>Save Jev settings</button>
+              <button class="ld-btn" data-act="jev-test" disabled>Test saved connection</button>
+              <button class="ld-btn" data-act="jev-clear" disabled>Remove key and disable</button>
+            </div>
+            <div class="ld-status ld-jev-status">Load settings before editing. The key is kept in Spindle's encrypted enclave, never exported in debug.</div>
+            <label class="ld-label">Latest comparison (all chats; check message and candidate below)</label>
+            <textarea class="ld-jev-report" readonly style="min-height:300px;resize:vertical;font-family:monospace"></textarea>
           </div>
           <div data-settings-section="advanced" class="ld-card">
             <div class="ld-subtitle">Diagnostics</div>
@@ -3267,6 +3284,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (!prompt || !parsed) return
     const debug = storyDebug || null
     const selected = debug && (debug.entries || [])[(Number(debug.selectedEntryIndex) || 1) - 1]
+    if (selected && selected.jevReview) renderJevReport(selected.jevReview)
     const core = selected && selected.sceneCore
     const coreSummary = $('.ld-core-summary')
     const coreCard = $('.ld-core-summary-card')
@@ -4412,6 +4430,7 @@ ${entry.prompt || ''}`.trim()
             wardrobeSnapshot: ((candidate.debug || {}).scene || {}).wardrobeSnapshot || {},
             wardrobeDecisions: ((candidate.debug || {}).scene || {}).wardrobeDecisions || [],
             sceneCore: ((candidate.debug || {}).scene || {}).sceneCore || null,
+            jevReview: ((candidate.debug || {}).scene || {}).jevReview || null,
           })),
           at: Date.now(),
         }
@@ -5998,6 +6017,60 @@ ${entry.prompt || ''}`.trim()
       setStatus('.ld-gen-status', 'Last generation used a random seed Draw Things picked — no seed to reuse.', 'err')
     }
   })
+
+  function renderJevReport(report) {
+    const box = $('.ld-jev-report')
+    if (!box) return
+    if (!report) { box.value = 'No Jev comparison recorded. Enable it, then generate a new Direct scene or re-run the image parser.'; return }
+    box.value = [
+      'Jev: ' + report.status + ' — comparison only; no changes applied',
+      'Source: ' + report.source + ' | ' + new Date(report.startedAt).toLocaleString(),
+      'Chat: ' + report.sourceChatId + ' | Message: ' + report.sourceMessageId + ' | Swipe: ' + (Number.isInteger(report.sourceSwipeId) ? report.sourceSwipeId + 1 : 'unknown'),
+      report.message || '',
+      ...(report.decisions || []).flatMap((d) => [
+        '', 'Candidate ' + d.candidate + ' · ' + d.name + ' · ' + d.kind,
+        'Jev: ' + d.choice + ' | confidence ' + Math.round(d.confidence * 100) + '%' + (d.uncertain ? ' (uncertain)' : '') + (d.disagreement ? ' — disagrees with current result' : ''),
+        ...(d.kind === 'outfit' ? ['Previous: ' + (d.previous.join(', ') || 'unknown'), 'Proposed: ' + (d.proposed.join(', ') || 'unknown')] : ['Parser included: ' + (d.parserIncluded ? 'yes' : 'no')]),
+      ]),
+      '', 'Confidence is a model estimate, not a guarantee. "Neither" means a different outfit is needed; Jev cannot write that outfit.',
+      '', 'Full report:', JSON.stringify(report, null, 2),
+    ].join('\n')
+  }
+
+  function renderJevSettings(data) {
+    $('.ld-jev-enabled').checked = !!data.enabled
+    $('.ld-jev-model').value = data.model || 'jev-latest'
+    $('.ld-jev-key').value = ''
+    for (const action of ['jev-save', 'jev-test', 'jev-clear']) $('[data-act="' + action + '"]').disabled = !data.available
+    $('.ld-jev-enabled').disabled = !data.available
+    $('.ld-jev-model').disabled = !data.available
+    $('.ld-jev-key').disabled = !data.available
+    setStatus('.ld-jev-status', !data.available ? 'Required Spindle APIs unavailable. Update Lumiverse before using Jev.'
+      : (data.hasKey ? 'Key saved securely. ' : 'No saved key. ') + (data.enabled ? 'Comparisons enabled.' : 'Comparisons off.'), data.available ? 'ok' : 'err')
+    renderJevReport(data.report)
+  }
+
+  let jevUiBusy = false
+  for (const action of ['jev-load', 'jev-save', 'jev-test', 'jev-clear']) {
+    $('[data-act="' + action + '"]').addEventListener('click', async () => {
+      if (jevUiBusy) return
+      jevUiBusy = true
+      setStatus('.ld-jev-status', action === 'jev-test' ? 'Testing saved connection with a short non-story request…' : 'Working…')
+      try {
+        if (action === 'jev-test') {
+          const result = await call('jev_test', {}, 15000)
+          setStatus('.ld-jev-status', result.message, 'ok')
+        } else {
+          const result = action === 'jev-load' ? await call('jev_status', {}, 15000)
+            : await call('jev_save', { enabled: $('.ld-jev-enabled').checked,
+              model: $('.ld-jev-model').value, apiKey: action === 'jev-clear' ? '' : $('.ld-jev-key').value,
+              clearKey: action === 'jev-clear' }, 15000)
+          renderJevSettings(result)
+        }
+      } catch (error) { setStatus('.ld-jev-status', error.message, 'err') }
+      finally { $('.ld-jev-key').value = ''; jevUiBusy = false }
+    })
+  }
 
   async function pushSettings(statusMsg) {
     const storyMode = selectedStoryMode()
