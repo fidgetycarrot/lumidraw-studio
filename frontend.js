@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.4.0-jev.2'
+const EXTENSION_VERSION = '1.4.0-jev.3'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -1281,10 +1281,10 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           </div>
           <div data-settings-section="advanced" class="ld-card">
             <div class="ld-subtitle">Jev continuity assistant — separate test build</div>
-            <div class="ld-help">Active mode reviews individual garments and locations before compilation. Saved outfits persist on silence; changes require a confident decision AND a selected evidence excerpt. Image-only corrections win. Identity/count tags and the parser format stay untouched. Presence disagreements are reported, not automatically applied.</div>
+            <div class="ld-help">Active mode reviews garments, their current wearer, and the complete setting before compilation. Ownership is recorded separately; borrowed clothing keeps its established fit without guessing size from its owner. Saved outfits persist on silence. Changes require a confident decision AND a selected evidence excerpt. Image-only corrections win. Identity/count tags and the parser format stay untouched. Presence disagreements are reported, not automatically applied.</div>
             <label class="ld-check"><input type="checkbox" class="ld-jev-enabled" /> <span>Enable Jev reviews (TypeSafe paid API)</span></label>
             <label class="ld-label">Decision mode<select class="ld-jev-mode" disabled><option value="comparison">Comparison only — show decisions, change nothing</option><option value="active">Active — apply clothing and location decisions</option></select></label>
-            <div class="ld-hint">Active application requires Direct mode and Scene Core enabled. Runs on new Direct parses, image reparses and clothing Sync, not plain rerolls. One bounded batch per run; no automatic retries. An error or uncertain answer keeps established clothing/location. A review can add up to 8 seconds.</div>
+            <div class="ld-hint">Active application requires Direct mode and Scene Core enabled. Runs on new Direct parses, image reparses and clothing Sync, not plain rerolls. One decision call, plus an evidence call only for proposed changes; at most two calls, no automatic retries, with an 8-second review deadline. An error or uncertain answer keeps established clothing and setting. Place, surroundings and lighting are tracked separately.</div>
             <div class="ld-hint">The current passage, scene-card attire, earlier parser context, character names and clothing/location candidates are sent to TypeSafe. No images, API keys in reports, or full character sheets. Oversized reviews are skipped, never partially applied.</div>
             <label class="ld-label" style="display:block;margin:12px 0;padding:12px;border:1px solid #8588aa;border-radius:8px">TypeSafe API key — paste here (blank keeps saved key)<input class="ld-jev-key" type="password" autocomplete="new-password" spellcheck="false" /></label>
             <label class="ld-label">Model<input class="ld-jev-model" value="jev-latest" autocomplete="off" spellcheck="false" /></label>
@@ -6033,17 +6033,22 @@ ${entry.prompt || ''}`.trim()
       'Chat: ' + report.sourceChatId + ' | Message: ' + report.sourceMessageId + ' | Swipe: ' + (Number.isInteger(report.sourceSwipeId) ? report.sourceSwipeId + 1 : 'unknown'),
       report.message || '',
       report.application || '',
+      ...(report.requestCount ? ['Review calls: ' + report.requestCount + ' | Evidence checks: ' + (report.evidenceQuestionCount || 0)] : []),
       ...(report.decisions || []).flatMap((d) => [
         '', 'Candidate ' + d.candidate + ' · ' + d.name + ' · ' + d.kind,
         'Jev: ' + d.choice + ' | confidence ' + Math.round(d.confidence * 100) + '%' + (d.uncertain ? ' (uncertain)' : '') + (d.disagreement ? ' — disagrees with current result' : ''),
         ...(d.kind === 'garment' ? ['Item: ' + d.garment + (d.established ? ' (established)' : ' (new candidate)')]
           : d.kind === 'location' ? ['Previous location: ' + (d.previous || []).join(', '), 'Candidates: ' + (d.candidates || []).join(' | ')]
           : d.kind === 'outfit' ? ['Previous: ' + (d.previous || []).join(', '), 'Proposed: ' + (d.proposed || []).join(', ')]
-          : ['Parser included: ' + (d.parserIncluded ? 'yes' : 'no')]),
+          : d.kind === 'garment-binding' ? ['Item: ' + d.garment, ...(d.resolvedBinding ? ['Wearer: ' + d.resolvedBinding.wearerName, 'Owner: ' + (d.resolvedBinding.ownerName || 'unknown'), 'Wearing state: ' + d.resolvedBinding.wearingState, 'Fit: ' + d.resolvedBinding.fit] : ['No item binding applied.'])]
+          : d.kind === 'garment-owner' || d.kind === 'garment-state' ? ['Item: ' + d.garment]
+          : d.kind === 'environment' || d.kind === 'environment-role' ? ['Setting detail: ' + d.fact, 'Field: ' + (d.resolvedField || d.field || (d.kind === 'environment-role' ? d.choice : 'unknown'))]
+          : d.kind === 'environment-move' ? ['Previous setting: ' + Object.values(d.previous || {}).flat().join(', ')]
+          : d.kind === 'presence' ? ['Parser included: ' + (d.parserIncluded ? 'yes' : 'no')] : []),
         ...(d.reason ? [(d.applied ? 'Applied: ' : d.wouldApply ? 'Would apply: ' : 'Held: ') + d.reason] : []),
         ...(d.evidence ? ['Selected evidence: ' + d.evidence + (d.evidenceAccepted ? '' : ' (insufficient confidence)')] : []),
       ]),
-      '', 'Confidence and selected evidence are model judgments, not guarantees. Changes require at least 85% confidence and winning probability for both decisions. Jev selects existing clothing/location candidates; it does not write new ones.',
+      '', 'Confidence and selected evidence are model judgments, not guarantees. Clothing and setting changes require at least 85% confidence and winning probability for both decision and evidence. Existing setting facts can be classified without claiming a change. Jev selects supplied candidates; it does not invent garments or backgrounds.',
       '', 'Full report:', JSON.stringify(report, null, 2),
     ].join('\n')
   }
