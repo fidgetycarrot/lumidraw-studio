@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.4.0-jev.1'
+const EXTENSION_VERSION = '1.4.0-jev.2'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -1280,11 +1280,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-help" style="margin-top:5px">Needs <code>lumidraw-cloud-relay.mjs</code> running on this Mac. Your API key lives in that process and is never sent here. Free tier is 20 generations a month, Draw Things+ is 200.</div>
           </div>
           <div data-settings-section="advanced" class="ld-card">
-            <div class="ld-subtitle">Jev comparison lab — separate test build</div>
-            <div class="ld-help">Optional second opinion on clothing and character presence after Direct parses and image reparses. Your normal parser, prompts, identity tags, and wardrobe records remain unchanged. No automatic retries. A comparison can add up to 8 seconds.</div>
-            <label class="ld-check"><input type="checkbox" class="ld-jev-enabled" /> <span>Send Direct scene comparisons to TypeSafe (paid API)</span></label>
-            <div class="ld-hint">When enabled, the current passage, earlier parser context, character names, and prior/proposed outfits leave this Mac for TypeSafe. Inputs are bounded; oversized passages are skipped, not cut short. No images or full character sheets are sent. Jev does not run for a plain image reroll or clothing Sync.</div>
-            <label class="ld-label">TypeSafe API key (blank keeps saved key)<input class="ld-jev-key" type="password" autocomplete="new-password" spellcheck="false" /></label>
+            <div class="ld-subtitle">Jev continuity assistant — separate test build</div>
+            <div class="ld-help">Active mode reviews individual garments and locations before compilation. Saved outfits persist on silence; changes require a confident decision AND a selected evidence excerpt. Image-only corrections win. Identity/count tags and the parser format stay untouched. Presence disagreements are reported, not automatically applied.</div>
+            <label class="ld-check"><input type="checkbox" class="ld-jev-enabled" /> <span>Enable Jev reviews (TypeSafe paid API)</span></label>
+            <label class="ld-label">Decision mode<select class="ld-jev-mode" disabled><option value="comparison">Comparison only — show decisions, change nothing</option><option value="active">Active — apply clothing and location decisions</option></select></label>
+            <div class="ld-hint">Active application requires Direct mode and Scene Core enabled. Runs on new Direct parses, image reparses and clothing Sync, not plain rerolls. One bounded batch per run; no automatic retries. An error or uncertain answer keeps established clothing/location. A review can add up to 8 seconds.</div>
+            <div class="ld-hint">The current passage, scene-card attire, earlier parser context, character names and clothing/location candidates are sent to TypeSafe. No images, API keys in reports, or full character sheets. Oversized reviews are skipped, never partially applied.</div>
+            <label class="ld-label" style="display:block;margin:12px 0;padding:12px;border:1px solid #8588aa;border-radius:8px">TypeSafe API key — paste here (blank keeps saved key)<input class="ld-jev-key" type="password" autocomplete="new-password" spellcheck="false" /></label>
             <label class="ld-label">Model<input class="ld-jev-model" value="jev-latest" autocomplete="off" spellcheck="false" /></label>
             <div class="ld-section-actions">
               <button class="ld-btn" data-act="jev-load">Load settings / latest report</button>
@@ -1293,7 +1295,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
               <button class="ld-btn" data-act="jev-clear" disabled>Remove key and disable</button>
             </div>
             <div class="ld-status ld-jev-status">Load settings before editing. The key is kept in Spindle's encrypted enclave, never exported in debug.</div>
-            <label class="ld-label">Latest comparison (all chats; check message and candidate below)</label>
+            <label class="ld-label">Latest review (all chats; check message and candidate below)</label>
             <textarea class="ld-jev-report" readonly style="min-height:300px;resize:vertical;font-family:monospace"></textarea>
           </div>
           <div data-settings-section="advanced" class="ld-card">
@@ -5232,6 +5234,8 @@ ${entry.prompt || ''}`.trim()
         loadCasts({ chatId: lastSeenChatId }).catch(() => {})
         const updates = res.synced || []
         const ignored = res.syncRejected || []
+        const jev = res.syncDiagnostics && res.syncDiagnostics.jevReview
+        if (jev) renderJevReport(jev)
         if (updates.length) {
           const names = updates.map((item) => item.name).join(', ')
           const suffix = ignored.length ? ` ${ignored.length} unsupported proposal${ignored.length === 1 ? ' was' : 's were'} ignored.` : ''
@@ -5239,7 +5243,8 @@ ${entry.prompt || ''}`.trim()
         } else {
           const suffix = ignored.length ? ` ${ignored[0]}` : ''
           const status = res.syncDiagnostics && res.syncDiagnostics.status
-          const message = status === 'unchanged' ? 'The proposed outfit matches the saved record; nothing needed updating.'
+          const message = jev && jev.mode === 'active' ? (jev.status === 'ok' ? 'Jev retained the established wardrobe: no sufficiently supported change. See the item decisions below.' : jev.message)
+            : status === 'unchanged' ? 'The proposed outfit matches the saved record; nothing needed updating.'
             : status === 'no-proposals' ? 'The parser returned no clothing updates, and no direct dressing statement was recovered.'
             : ignored.length ? 'Clothing updates could not be applied.'
             : 'No clothing update was applied.'
@@ -6021,24 +6026,32 @@ ${entry.prompt || ''}`.trim()
   function renderJevReport(report) {
     const box = $('.ld-jev-report')
     if (!box) return
-    if (!report) { box.value = 'No Jev comparison recorded. Enable it, then generate a new Direct scene or re-run the image parser.'; return }
+    if (!report) { box.value = 'No Jev review recorded. Enable it, then generate a Direct scene, re-run the image parser, or Sync latest passage.'; return }
     box.value = [
-      'Jev: ' + report.status + ' — comparison only; no changes applied',
+      'Jev: ' + report.status + ' — ' + report.mode + (report.changesApplied ? '; candidate changes applied' : '; no candidate changes applied'),
       'Source: ' + report.source + ' | ' + new Date(report.startedAt).toLocaleString(),
       'Chat: ' + report.sourceChatId + ' | Message: ' + report.sourceMessageId + ' | Swipe: ' + (Number.isInteger(report.sourceSwipeId) ? report.sourceSwipeId + 1 : 'unknown'),
       report.message || '',
+      report.application || '',
       ...(report.decisions || []).flatMap((d) => [
         '', 'Candidate ' + d.candidate + ' · ' + d.name + ' · ' + d.kind,
         'Jev: ' + d.choice + ' | confidence ' + Math.round(d.confidence * 100) + '%' + (d.uncertain ? ' (uncertain)' : '') + (d.disagreement ? ' — disagrees with current result' : ''),
-        ...(d.kind === 'outfit' ? ['Previous: ' + (d.previous.join(', ') || 'unknown'), 'Proposed: ' + (d.proposed.join(', ') || 'unknown')] : ['Parser included: ' + (d.parserIncluded ? 'yes' : 'no')]),
+        ...(d.kind === 'garment' ? ['Item: ' + d.garment + (d.established ? ' (established)' : ' (new candidate)')]
+          : d.kind === 'location' ? ['Previous location: ' + (d.previous || []).join(', '), 'Candidates: ' + (d.candidates || []).join(' | ')]
+          : d.kind === 'outfit' ? ['Previous: ' + (d.previous || []).join(', '), 'Proposed: ' + (d.proposed || []).join(', ')]
+          : ['Parser included: ' + (d.parserIncluded ? 'yes' : 'no')]),
+        ...(d.reason ? [(d.applied ? 'Applied: ' : d.wouldApply ? 'Would apply: ' : 'Held: ') + d.reason] : []),
+        ...(d.evidence ? ['Selected evidence: ' + d.evidence + (d.evidenceAccepted ? '' : ' (insufficient confidence)')] : []),
       ]),
-      '', 'Confidence is a model estimate, not a guarantee. "Neither" means a different outfit is needed; Jev cannot write that outfit.',
+      '', 'Confidence and selected evidence are model judgments, not guarantees. Changes require at least 85% confidence and winning probability for both decisions. Jev selects existing clothing/location candidates; it does not write new ones.',
       '', 'Full report:', JSON.stringify(report, null, 2),
     ].join('\n')
   }
 
   function renderJevSettings(data) {
     $('.ld-jev-enabled').checked = !!data.enabled
+    $('.ld-jev-mode').value = data.mode === 'active' ? 'active' : 'comparison'
+    $('.ld-jev-mode').disabled = !data.available
     $('.ld-jev-model').value = data.model || 'jev-latest'
     $('.ld-jev-key').value = ''
     for (const action of ['jev-save', 'jev-test', 'jev-clear']) $('[data-act="' + action + '"]').disabled = !data.available
@@ -6046,7 +6059,7 @@ ${entry.prompt || ''}`.trim()
     $('.ld-jev-model').disabled = !data.available
     $('.ld-jev-key').disabled = !data.available
     setStatus('.ld-jev-status', !data.available ? 'Required Spindle APIs unavailable. Update Lumiverse before using Jev.'
-      : (data.hasKey ? 'Key saved securely. ' : 'No saved key. ') + (data.enabled ? 'Comparisons enabled.' : 'Comparisons off.'), data.available ? 'ok' : 'err')
+      : (data.hasKey ? 'Key saved securely. ' : 'No saved key. ') + (data.enabled ? 'Jev enabled: ' + (data.mode === 'active' ? 'active decisions.' : 'comparison only.') : 'Jev off.'), data.available ? 'ok' : 'err')
     renderJevReport(data.report)
   }
 
@@ -6063,6 +6076,7 @@ ${entry.prompt || ''}`.trim()
         } else {
           const result = action === 'jev-load' ? await call('jev_status', {}, 15000)
             : await call('jev_save', { enabled: $('.ld-jev-enabled').checked,
+              mode: $('.ld-jev-mode').value,
               model: $('.ld-jev-model').value, apiKey: action === 'jev-clear' ? '' : $('.ld-jev-key').value,
               clearKey: action === 'jev-clear' }, 15000)
           renderJevSettings(result)
