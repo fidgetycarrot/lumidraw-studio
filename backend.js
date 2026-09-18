@@ -4199,6 +4199,11 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
   }
   const settings = await getSettings()
   const merged = dims ? { ...config, ...dims } : config
+  if (debug && debug.troubleshooting) {
+    debug = { ...debug, troubleshooting: { ...troubleshootingClean(debug.troubleshooting),
+      promptEditedAfterParse: !(debug.troubleshooting.parserDebug && (debug.troubleshooting.parserDebug.entries || [])
+        .some(entry => (entry.prompt || entry.compiledPrompt) === prompt)) } }
+  }
   const payloadOut = buildPayload({ prompt, negativePrompt, seed, config: merged, extra })
   // A blank model is deliberate, not an error: with no `model` key in the
   // request, Draw Things uses whatever is selected in its own UI. That is the
@@ -4237,11 +4242,13 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     // where it came from: the owning message, and the exact recipe used.
     ...(origin && typeof origin === 'object' ? { origin } : {}),
     recipe: { config: merged || null, extra: extra || null },
+    generationRequest: troubleshootingClean(payloadOut),
     // The compile trace and the parsed scene, kept with the image they produced.
     // Every diagnosis this project has got wrong was made by reading the code and
     // guessing what the app did; the trace says what it actually did, and it used
     // to exist only until the next image overwrote LAST_DIAGNOSTIC.
     ...(debug ? { trace: debug.trace || [], scene: debug.scene || null } : {}),
+    ...(debug && debug.troubleshooting ? { troubleshooting: troubleshootingClean(debug.troubleshooting) } : {}),
   }
   assertStoryScanActive(scan)
   const history = await pushHistory(entry, userId)
@@ -11390,8 +11397,10 @@ async function runDirectImagesImpl(initialImages, ctx) {
       config: preset.config,
       extra: preset.extra,
       dims,
-      origin: { ...origin, mode: 'direct', alt: markdownAltText(finalPrompt) },
-      debug: { trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, momentEvidence: image.moment_evidence || '', sceneSummary: image.scene_summary || '', sceneMood: image.sceneMood || '', present: image.present || [], spatialGroup: directGroupIsSpatial(image), groupScene: image.group_scene || '', sharedInteraction: image.shared_interaction || '', spatialRelation: image.spatial_relation || '', ...groupMechanics } },
+      origin: { ...origin, mode: 'direct', alt: markdownAltText(finalPrompt), swipeId: target && target.swipeId },
+      debug: { troubleshooting: { passage: target && target.content || '', profiles, settings: troubleshootingSettings(settings),
+        parserDebug: { ...debugBase, entries: [debugEntries[index]], selectedEntryIndex: 1 } },
+        trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, momentEvidence: image.moment_evidence || '', sceneSummary: image.scene_summary || '', sceneMood: image.sceneMood || '', present: image.present || [], spatialGroup: directGroupIsSpatial(image), groupScene: image.group_scene || '', sharedInteraction: image.shared_interaction || '', spatialRelation: image.spatial_relation || '', ...groupMechanics } },
     }, userId, scan)
     results.push({
       ok: true,
@@ -16169,6 +16178,12 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
 
   for (const result of results) {
     if (result.ok && result.debug && result.debug.scene) {
+      result.debug.troubleshooting = troubleshootingClean({ passage: target.content, profiles,
+        settings: troubleshootingSettings(settings), parserDebug: {
+          sourceChatId: chatId, sourceMessageId: messageId, sourceSwipeId: target.swipeId,
+          rawReply: raw, model: report.model || settings.parserModel, provider: report.provider,
+          parserMs, runStartedAt: startedAt, debugSource: 'image reparse', entries: [{ prompt: result.prompt, scene: result.debug.scene }],
+        } })
       result.debug.scene.outfitCorrectionPrompt = result.prompt
       result.outfitRows = imageWardrobeRows({ prompt: result.prompt, scene: result.debug.scene }, profiles)
     }
@@ -16196,6 +16211,11 @@ async function replaceOneImage(userId, payload) {
       const source = history.find((item) => (item.images || []).some((image) => image && image.url === imageUrl))
       const origin = (source && source.origin) || {}
       let sceneDebug = payload.sceneDebug || wardrobeDebugForReplacement(source, prompt, await getStoryDebug())
+      if (source && source.troubleshooting && !(sceneDebug && sceneDebug.troubleshooting) &&
+          !payload.sceneDebug) {
+        sceneDebug = { ...(sceneDebug || {}), troubleshooting: { ...source.troubleshooting,
+          regenerationNote: 'Retained source parser snapshot. Replacement prompt may have been manually edited; imageRecord.prompt is the generated prompt.' } }
+      }
       let outfitContext = null
       let outfitCorrections = {}
       if (payload.outfitCorrections !== undefined || Object.keys(((source || {}).scene || {}).imageOutfitCorrections || {}).length) {
@@ -16317,6 +16337,93 @@ async function replaceOneImage(userId, payload) {
       }
 
   return { entry, newUrl, replaced, note, outfitStoryUpdated, outfitStoryError }
+}
+
+
+// Local read-only diagnostics: no credentials, model calls, or generation.
+function troubleshootingClean(value, depth = 0) {
+  if (depth > 24) return '[depth limit]'
+  if (typeof value === 'string') return value
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED]')
+    .replace(/\bsk-[a-zA-Z0-9_-]{12,}/g, '[REDACTED]')
+    .replace(/https?:\/\/[^\s"'<>]+/g, '[URL omitted]')
+  if (Array.isArray(value)) return value.map(v => troubleshootingClean(v, depth + 1))
+  if (value && typeof value === 'object') {
+    const out = {}
+    for (const [key, item] of Object.entries(value)) {
+      if (/api.?key|secret|password|authorization|credential|cookie|headers|access.?token|refresh.?token|endpoint|host|base.?url/i.test(key)) continue
+      out[key] = troubleshootingClean(item, depth + 1)
+    }
+    return out
+  }
+  return value
+}
+
+function troubleshootingSettings(settings) {
+  const out = {}
+  for (const key of ['mode', 'directMode', 'parserEngine', 'parserModel', 'experimentalSceneCore',
+    'activePreset', 'parserContextMessages', 'maxImages', 'autoGenerate', 'parserInstruction']) {
+    if (settings[key] !== undefined) out[key] = settings[key]
+  }
+  return troubleshootingClean(out)
+}
+
+async function buildTroubleshootingReport(userId, payload) {
+  const imageUrl = String(payload.imageUrl || '')
+  const warnings = []
+  const history = imageUrl ? await getHistory() : []
+  const source = history.find(entry => (entry.images || []).some(image => image.url === imageUrl))
+  if (imageUrl && !source) throw new Error('This image is no longer in History. Open a saved image or export the latest attempt from Settings.')
+  const saved = source && source.troubleshooting
+  // Never substitute a later parse for the selected image's original run.
+  const debug = source ? (saved && saved.parserDebug || null) : await getStoryDebug()
+  if (source && !debug) warnings.push('Original parser reply was not captured for this image. No latest-run reply has been substituted.')
+  const origin = source ? source.origin || {} : {
+    chatId: debug && debug.sourceChatId, messageId: debug && debug.sourceMessageId,
+  }
+  const settings = await getSettings()
+  const report = {
+    format: 'lumidraw-troubleshooting-v1', version: spindle.manifest && spindle.manifest.version || '',
+    exportedAt: new Date().toISOString(), scope: source ? 'selected image' : 'latest parser attempt',
+    privacy: 'Private prompts and character data included. Credentials and network addresses omitted. Review before sharing.',
+    source: origin, warnings,
+    imageRecord: source ? { at: source.at, durationMs: source.durationMs, model: source.model, seed: source.seed,
+      prompt: source.prompt, negativePrompt: source.negativePrompt, recipe: source.recipe,
+      backend: source.backend, scene: source.scene, trace: source.trace,
+      generationRequest: source.generationRequest || null } : null,
+    parserDebug: debug || null,
+    generationProfiles: saved && saved.profiles || null,
+    generationSettings: saved && saved.settings || null,
+    regenerationNote: saved && saved.regenerationNote || '',
+    promptEditedAfterParse: saved ? !!saved.promptEditedAfterParse : null,
+    currentSettings: troubleshootingSettings(settings),
+    sourcePassage: null,
+  }
+  if (source && !saved) warnings.push('Generation-time profiles/settings were not saved. Current settings are not historical.')
+  if (!source && !debug) warnings.push('No parser attempt has been recorded yet.')
+  if (payload.includePassage === true) {
+    if (saved && typeof saved.passage === 'string') {
+      report.sourcePassage = { status: 'captured at generation', text: saved.passage }
+    } else if (origin.chatId && origin.messageId) {
+      try {
+        const { messages } = await fetchMessages(userId, String(origin.chatId))
+        const message = messages.find(m => String(m.id || m.messageId || '') === String(origin.messageId))
+        if (!message) throw new Error('Source message no longer available.')
+        const target = messageBits(message)
+        report.sourcePassage = { status: 'current message, NOT a generation-time snapshot; may have been edited or swiped',
+          swipeId: target.swipeId, text: target.content }
+        warnings.push('Compare current passage/swipe with the image; historical passage could not be recovered.')
+      } catch (_) { warnings.push('Source message could not be read; report remains usable without it.') }
+    }
+  } else {
+    report.privacy += ' Full source passage excluded; prompts and diagnostics may still quote the story.'
+    if (report.parserDebug) {
+      report.parserDebug = { ...report.parserDebug }
+      delete report.parserDebug.contextPreview
+      delete report.parserDebug.ledgerPreview
+    }
+  }
+  return troubleshootingClean(report)
 }
 
 spindle.onFrontendMessage(async (payload, userId) => {
@@ -17372,6 +17479,11 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const characters = (await getCharacters()).filter((item) => item && item.id !== id)
         await saveCharacters(characters)
         reply = ok(payload, requestId, { characters })
+        break
+      }
+
+      case 'troubleshooting_report': {
+        reply = ok(payload, requestId, { report: await buildTroubleshootingReport(userId, payload) })
         break
       }
 

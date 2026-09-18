@@ -2,9 +2,21 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.4.0-jev.4'
+const EXTENSION_VERSION = '1.4.0-jev.5'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
+
+
+function lumidrawTroubleshootingHtml(report, imageData = '') {
+  const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+  const image = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(imageData)
+    ? '<img alt="Selected generated image" src="' + imageData + '">' : ''
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">' +
+    '<title>LumiDraw troubleshooting report</title><style>body{font:16px system-ui;margin:24px;max-width:1100px}img{max-width:100%;max-height:900px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}</style></head><body>' +
+    '<h1>LumiDraw troubleshooting report</h1><p>Private report. Contains prompts and may include story text. Nothing was uploaded automatically.</p>' +
+    image + '<h2>Diagnostic data</h2><pre>' + escape(JSON.stringify(report, null, 2)) + '</pre></body></html>'
+}
 
 function makeId() {
   if (window.crypto && typeof crypto.randomUUID === 'function') {
@@ -669,7 +681,7 @@ function realSetup(ctx) {
     .ld-lightbox-zoom-tools .ld-btn { min-width:36px; height:34px; padding:0 9px; }
     .ld-lightbox-zoom-level { min-width:60px !important; font-variant-numeric:tabular-nums; }
     .ld-lightbox-meta { flex:1; min-width:0; font-size:11px; line-height:1.35; color:var(--lumiverse-text-muted, #a2a5b4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .ld-lightbox-actions { display:flex; gap:7px; flex:0 0 auto; }
+    .ld-lightbox-actions { display:flex; flex-wrap:wrap; gap:7px; flex:0 0 auto; }
     .ld-lightbox-regen { flex:0 0 auto; max-height:46%; overflow-y:auto; padding:10px 12px; border-top:1px solid var(--lumiverse-border, #3d4050); background:#15161c; }
     .ld-lightbox-regen textarea { width:100%; box-sizing:border-box; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; line-height:1.4; }
     .ld-dt-field { display:flex; flex-direction:column; gap:3px; margin-top:7px; }
@@ -1304,7 +1316,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-help">Reattach existing LumiDraw images to this chat. No generation, parser or Jev call.</div>
             <div class="ld-status ld-image-restore-status"></div>
             <button class="ld-btn" data-act="diagnose">Run diagnostics 🔍</button>
-            <button class="ld-btn" data-act="safe-report" style="margin-top:7px">Copy report for Claude (no story text)</button>
+            <button class="ld-btn" data-act="troubleshooting" style="margin-top:7px">Troubleshooting report…</button>
+            <button class="ld-btn" data-act="safe-report" style="margin-top:7px">Copy compact report (no story text)</button>
             <div class="ld-help">Structure only — subject counts, anatomy family, which rules fired, the negative prompt, and the trace. No passage, no scene statement, no caption, no prompt. Safe to paste when the scene is not.</div>
             <textarea class="ld-safe-report" readonly style="min-height:150px;display:none;margin-top:7px;font-family:monospace;font-size:11px"></textarea>
             <textarea class="ld-diag" readonly style="min-height:150px;display:none;margin-top:7px;font-family:monospace;font-size:11px"></textarea>
@@ -1362,6 +1375,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         <div class="ld-lightbox-foot">
           <div class="ld-lightbox-meta"></div>
           <div class="ld-lightbox-actions">
+            <button class="ld-btn ld-lightbox-report">Troubleshooting…</button>
             <button class="ld-btn ld-lightbox-fix">Fix this image…</button>
             <button class="ld-btn ld-lightbox-insert" title="Adds a SECOND copy of this image at the top of the latest story message. Not needed after a regeneration — that already replaced the image in place.">Add copy to chat</button>
             <button class="ld-btn ld-primary ld-lightbox-done">Done</button>
@@ -2274,7 +2288,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     imageOutfitDrafts = {}
     imageOutfitRows = []
     originalImageOutfitRows = []
-    selectedImageSceneDebug = entry.scene ? { scene: entry.scene, trace: entry.trace || [] } : null
+    selectedImageSceneDebug = entry.scene ? { scene: entry.scene, trace: entry.trace || [], troubleshooting: entry.troubleshooting || null } : null
     $('.ld-lightbox-outfit-story').checked = false
     $('.ld-lightbox-outfit-story').disabled = true
     loadImageOutfits(item.image.url)
@@ -4495,7 +4509,7 @@ ${entry.prompt || ''}`.trim()
           revert.title = 'Put the prompt this image was actually made with back in the box'
           revert.addEventListener('click', () => {
             promptBox.value = reparseOriginalPrompt
-            selectedImageSceneDebug = item.entry.scene ? { scene: item.entry.scene, trace: item.entry.trace || [] } : null
+            selectedImageSceneDebug = item.entry.scene ? { scene: item.entry.scene, trace: item.entry.trace || [], troubleshooting: item.entry.troubleshooting || null } : null
             renderImageOutfitRows(originalImageOutfitRows)
             syncReparseDebug({ prompt: reparseOriginalPrompt }, null, 'original image prompt')
           })
@@ -5784,6 +5798,141 @@ ${entry.prompt || ''}`.trim()
     }
   })
 
+
+  let troubleshootingDialog = null
+  function openTroubleshooting(imageUrl = '') {
+    if (troubleshootingDialog) troubleshootingDialog.remove()
+    const overlay = document.createElement('div')
+    troubleshootingDialog = overlay
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483005;background:#000b;display:flex;align-items:center;justify-content:center;padding:12px'
+    const box = document.createElement('section')
+    box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true')
+    box.setAttribute('aria-label', 'Troubleshooting report')
+    box.style.cssText = 'background:#202129;color:#eee;border:1px solid #666;border-radius:12px;padding:18px;max-width:680px;width:100%;max-height:90vh;max-height:90dvh;overflow:auto;box-sizing:border-box'
+    box.innerHTML = '<h2 style="margin-top:0">Troubleshooting report</h2>' +
+      '<p>Collects this ' + (imageUrl ? 'image’s saved prompt, recipe, scene and available parser/Jev data' : 'latest parser attempt, including failures') +
+      '. No generation, paid calls, or automatic upload.</p>' +
+      '<p><strong>Private:</strong> prompts and character details are included. Review before sharing. API keys and connection addresses are excluded.</p>' +
+      '<label style="display:block;margin:12px 0"><input class="ld-report-passage" type="checkbox" checked> Include source story passage (recommended for diagnosis)</label>' +
+      '<label style="display:block;margin:12px 0"><input class="ld-report-image" type="checkbox" ' + (imageUrl ? 'checked' : 'disabled') + '> Include image in the downloadable report</label>' +
+      '<label>What went wrong? (optional)<textarea class="ld-report-note" style="display:block;width:100%;box-sizing:border-box;min-height:65px" placeholder="For example: the wrong character is holding the hammer."></textarea></label>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:14px 0"><button class="ld-btn ld-report-prepare">Prepare report</button>' +
+      '<button class="ld-btn ld-report-download" disabled>Download file</button><button class="ld-btn ld-report-share" disabled>Share file</button>' +
+      '<button class="ld-btn ld-report-copy" disabled>Copy text</button><button class="ld-btn ld-report-close">Close</button></div>' +
+      '<p class="ld-report-status" role="status" aria-live="polite"></p>' +
+      '<textarea class="ld-report-preview" readonly aria-label="Report preview (text only)" style="display:none;width:100%;box-sizing:border-box;min-height:180px"></textarea>'
+    for (const button of box.querySelectorAll('button')) button.style.minHeight = '44px'
+    overlay.appendChild(box)
+    const before = document.activeElement
+    document.body.appendChild(overlay)
+    const q = selector => box.querySelector(selector)
+    const status = text => { q('.ld-report-status').textContent = text }
+    const close = () => { overlay.remove(); if (troubleshootingDialog === overlay) troubleshootingDialog = null; if (before && before.isConnected) before.focus() }
+    q('.ld-report-close').onclick = close
+    overlay.addEventListener('keydown', event => {
+      event.stopPropagation()
+      if (event.key === 'Escape') { event.preventDefault(); close() }
+      if (event.key === 'Tab') {
+        const nodes = [...box.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled)')].filter(n => n.style.display !== 'none')
+        if (event.shiftKey && document.activeElement === nodes[0]) { event.preventDefault(); nodes[nodes.length - 1].focus() }
+        else if (!event.shiftKey && document.activeElement === nodes[nodes.length - 1]) { event.preventDefault(); nodes[0].focus() }
+      }
+    })
+    let file = null, text = '', busy = false
+    const invalidate = () => {
+      file = null; text = ''
+      for (const selector of ['.ld-report-download', '.ld-report-share', '.ld-report-copy']) q(selector).disabled = true
+      q('.ld-report-preview').value = ''; q('.ld-report-preview').style.display = 'none'
+    }
+    for (const selector of ['.ld-report-passage', '.ld-report-image', '.ld-report-note']) q(selector).addEventListener('input', invalidate)
+    q('.ld-report-prepare').onclick = async () => {
+      if (busy) return
+      busy = true; invalidate()
+      const passage = q('.ld-report-passage').checked, includeImage = q('.ld-report-image').checked
+      const note = q('.ld-report-note').value.slice(0, 4000)
+      for (const selector of ['.ld-report-prepare', '.ld-report-passage', '.ld-report-image', '.ld-report-note']) q(selector).disabled = true
+      status('Collecting saved diagnostics…')
+      try {
+        const res = await call('troubleshooting_report', { imageUrl, includePassage: passage }, 30000)
+        const report = res.report
+        report.userNote = note
+        report.frontend = { version: EXTENSION_VERSION, viewport: { width: window.innerWidth, height: window.innerHeight }, online: navigator.onLine }
+        let imageData = ''
+        if (includeImage && imageUrl) {
+          const controller = new AbortController()
+          const timer = setTimeout(() => controller.abort(), 15000)
+          try {
+            const url = new URL(imageUrl, location.href)
+            if (url.origin !== location.origin || !/^\/api\/v1\/images\/[^/]+/.test(url.pathname)) throw Error('Image is not a local Lumiverse image.')
+            const response = await fetch(url.href, { credentials: 'same-origin', signal: controller.signal, redirect: 'error' })
+            if (!response.ok) throw Error('Image could not be loaded (' + response.status + ').')
+            const mime = (response.headers.get('content-type') || '').split(';')[0].trim()
+            if (!/^image\/(png|jpeg|webp|gif)$/.test(mime)) throw Error('Unsupported image format.')
+            if (Number(response.headers.get('content-length')) > 20 * 1024 * 1024) throw Error('Image exceeds 20 MB.')
+            const blob = await response.blob()
+            if (blob.size > 20 * 1024 * 1024) throw Error('Image exceeds 20 MB.')
+            imageData = await new Promise((resolve, reject) => {
+              const reader = new FileReader()
+              reader.onload = () => resolve(reader.result)
+              reader.onerror = () => reject(Error('Could not read image.'))
+              reader.readAsDataURL(blob)
+            })
+          } catch (error) { report.warnings.push('Image not embedded: ' + error.message) }
+          finally { clearTimeout(timer) }
+        }
+        report.imageIncluded = !!imageData
+        text = JSON.stringify(report, null, 2)
+        const name = 'lumidraw-report-' + new Date().toISOString().replace(/[:.]/g, '-') + '.html'
+        file = new File([lumidrawTroubleshootingHtml(report, imageData)], name, { type: 'text/html' })
+        if (!overlay.isConnected) return
+        q('.ld-report-preview').value = text; q('.ld-report-preview').style.display = 'block'
+        q('.ld-report-download').disabled = false
+        q('.ld-report-copy').disabled = false
+        let canShare = false
+        try { canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) } catch {}
+        q('.ld-report-share').disabled = !canShare
+        status((imageData ? 'Ready: image and diagnostics in one file.' : 'Ready: text diagnostics; no embedded image.') +
+          ' Download and attach the HTML file here. Copy text excludes the photo.' + (!canShare ? ' File sharing is unavailable in this browser; use Download.' : '') +
+          (report.warnings.length ? ' See warnings in the preview.' : ''))
+      } catch (error) { status('Could not prepare report: ' + error.message) }
+      finally {
+        busy = false
+        for (const selector of ['.ld-report-prepare', '.ld-report-passage', '.ld-report-note']) q(selector).disabled = false
+        q('.ld-report-image').disabled = !imageUrl
+      }
+    }
+    q('.ld-report-download').onclick = () => {
+      if (!file) return
+      const url = URL.createObjectURL(file), link = document.createElement('a')
+      link.href = url; link.download = file.name; document.body.appendChild(link); link.click(); link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      status('Download requested. Attach that HTML file in our chat; it includes the photo if enabled and available.')
+    }
+    q('.ld-report-share').onclick = async () => {
+      if (!file) return
+      try { await navigator.share({ files: [file], title: 'LumiDraw troubleshooting report' }); status('Report shared.') }
+      catch (error) { status(error.name === 'AbortError' ? 'Sharing cancelled. The report is still ready.' : 'Sharing failed. Use Download file instead.') }
+    }
+    q('.ld-report-copy').onclick = async () => {
+      try {
+        if (!navigator.clipboard || !navigator.clipboard.writeText) throw Error('Clipboard unavailable')
+        await navigator.clipboard.writeText(text); status('Copied text diagnostics (without the photo).')
+      } catch (_) {
+        q('.ld-report-preview').focus(); q('.ld-report-preview').select()
+        let copied = false
+        try { copied = document.execCommand('copy') } catch {}
+        status(copied ? 'Copied text diagnostics (without the photo).' : 'Text selected. Use your device’s Copy command, or download the file.')
+      }
+    }
+    q('.ld-report-prepare').focus()
+  }
+
+  $('.ld-lightbox-report').addEventListener('click', () => {
+    const item = lightboxItems[lightboxIndex]
+    if (item && item.image) openTroubleshooting(item.image.url)
+  })
+  $('[data-act="troubleshooting"]').addEventListener('click', () => openTroubleshooting())
+
   $('[data-act="safe-report"]').addEventListener('click', async () => {
     try {
       const res = await call('diagnostic_report', {})
@@ -6826,6 +6975,7 @@ ${entry.prompt || ''}`.trim()
   })()
 
   const cleanup = () => {
+    if (troubleshootingDialog) { troubleshootingDialog.remove(); troubleshootingDialog = null }
     imageRestoreDisposed = true
     imagePlacementRefreshSeq++
     if (imageRestoreTimer !== null) clearTimeout(imageRestoreTimer)
