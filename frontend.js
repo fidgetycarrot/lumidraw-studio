@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.4.0-jev.5'
+const EXTENSION_VERSION = '1.4.0-jev.6'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -6266,7 +6266,10 @@ ${entry.prompt || ''}`.trim()
           : d.kind === 'environment-move' ? ['Previous setting: ' + Object.values(d.previous || {}).flat().join(', ')]
           : d.kind === 'presence' ? ['Parser included: ' + (d.parserIncluded ? 'yes' : 'no')] : []),
         ...(d.reason ? [(d.applied ? 'Applied: ' : d.wouldApply ? 'Would apply: ' : 'Held: ') + d.reason] : []),
-        ...(d.evidence ? ['Selected evidence: ' + d.evidence + (d.evidenceAccepted ? '' : ' (insufficient confidence)')] : []),
+        ...(d.evidence ? ['Selected evidence: ' + d.evidence + (d.evidenceAccepted ? '' : ' (insufficient confidence)'),
+          'Evidence source: ' + (d.evidenceSource && d.evidenceSource.scope === 'earlier'
+            ? 'earlier message ' + d.evidenceSource.messageId + ' · swipe ' + (Number(d.evidenceSource.swipeId || 0) + 1)
+            : 'current passage/card')] : []),
       ]),
       '', 'Confidence and selected evidence are model judgments, not guarantees. Clothing and setting changes require at least 85% confidence and winning probability for both decision and evidence. Existing setting facts can be classified without claiming a change. Jev selects supplied candidates; it does not invent garments or backgrounds.',
       '', 'Full report:', JSON.stringify(report, null, 2),
