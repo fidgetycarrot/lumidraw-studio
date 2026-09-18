@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.4.0-jev.3'
+const EXTENSION_VERSION = '1.4.0-jev.4'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -1096,7 +1096,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <div class="ld-help">A <b>look</b> is clothing, not a body — use appearance states for transformations. One per line: <code>name = outfit tags | aliases: cues | no: negative tags</code>. A look is applied when the passage names it or an alias appears, then ordinary outfit tracking takes over.</div>
             <div><span class="ld-label">Partial features</span><textarea class="ld-persona-ed-features" style="min-height:48px" placeholder="wolf eyes = yellow eyes, slit pupils"></textarea></div>
             <div class="ld-help">Optional, one per line: <code>name = tags</code>. A feature is one piece of a transformation that can show on its own — <code>wolf eyes = yellow eyes, slit pupils</code>. The parser turns these on for a partial change ("only his eyes shifted") instead of switching the whole appearance state, which would transform the entire character.</div>
-            <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-persona-ed-aliases" style="min-height:48px" placeholder="Named weapon = visual description"></textarea></div>
+            <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-persona-ed-aliases" style="min-height:48px" placeholder="Mercy = oversized two-handed warhammer, long dark haft, short rear spike"></textarea><div class="ld-help">One Name = description per line. Up to 8 props; each description allows 32 words / 256 characters. Used in Direct mode when the prop is visible, not automatically equipped.</div></div>
             <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-persona-ed-anatomy" style="min-height:48px"></textarea></div>
             <div><span class="ld-label">Conditional anatomy rule</span><select class="ld-persona-ed-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Include in every NSFW/explicit scene</option><option value="manual">Never include automatically</option></select></div>
             <div class="ld-row" style="margin-top:10px"><button class="ld-btn ld-primary ld-lib-ed-save" data-act="persona-save">Save persona</button><button class="ld-btn" data-act="persona-cancel">Cancel</button></div>
@@ -1155,7 +1155,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 claws = claws, elongated nails
 fangs = fangs, sharp teeth"></textarea></div>
                 <div class="ld-help">Optional, one per line: <code>name = tags</code>. A feature is one piece of a transformation that can show on its own — <code>wolf eyes = yellow eyes, slit pupils</code>. The parser turns these on for a partial change ("only his eyes shifted") instead of switching the whole appearance state, which would transform the entire character.</div>
-                <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-ed-char-aliases" style="min-height:48px" placeholder="Aegis-fang = single massive warhammer"></textarea></div>
+                <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-ed-char-aliases" style="min-height:48px" placeholder="Mercy = oversized two-handed warhammer, long dark haft, short rear spike"></textarea><div class="ld-help">One Name = description per line. Up to 8 props; each description allows 32 words / 256 characters. Used in Direct mode when the prop is visible, not automatically equipped.</div></div>
                 <div class="ld-help">Optional, one per line: <code>proper name = visual description</code>. The description is injected only when that prop appears in this character's parsed scene.</div>
                 <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-ed-char-anatomy" style="min-height:48px" placeholder="penis"></textarea></div>
                 <div><span class="ld-label">Conditional anatomy rule</span><select class="ld-ed-char-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Include in every NSFW/explicit scene</option><option value="manual">Never include automatically</option></select></div>
@@ -1183,7 +1183,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
                 <div class="ld-help">Optional, one per line: <code>Name [count=...; outfit=inherit|omit; subject=...] | recognition phrases =&gt; appearance tags</code>.</div>
                 <div><span class="ld-label">Partial features</span><textarea class="ld-ed-persona-features" style="min-height:48px" placeholder="wolf eyes = yellow eyes, slit pupils"></textarea></div>
                 <div class="ld-help">Optional, one per line: <code>name = tags</code>. A feature is one piece of a transformation that can show on its own — <code>wolf eyes = yellow eyes, slit pupils</code>. The parser turns these on for a partial change ("only his eyes shifted") instead of switching the whole appearance state, which would transform the entire character.</div>
-                <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-ed-persona-aliases" style="min-height:48px" placeholder="Named weapon = visual description"></textarea></div>
+                <div><span class="ld-label">Named props / visual aliases</span><textarea class="ld-ed-persona-aliases" style="min-height:48px" placeholder="Mercy = oversized two-handed warhammer, long dark haft, short rear spike"></textarea><div class="ld-help">One Name = description per line. Up to 8 props; each description allows 32 words / 256 characters. Used in Direct mode when the prop is visible, not automatically equipped.</div></div>
                 <div class="ld-help">Optional, one per line: <code>proper name = visual description</code>. The description is injected only when that prop appears in this persona's parsed scene.</div>
                 <div><span class="ld-label">Conditional visible anatomy</span><textarea class="ld-ed-persona-anatomy" style="min-height:48px"></textarea></div>
                 <div><span class="ld-label">Conditional anatomy rule</span><select class="ld-ed-persona-anatomy-mode"><option value="relevant">Only when explicitly named and visible in story</option><option value="always">Include in every NSFW/explicit scene</option><option value="manual">Never include automatically</option></select></div>
@@ -1300,6 +1300,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           </div>
           <div data-settings-section="advanced" class="ld-card">
             <div class="ld-subtitle">Diagnostics</div>
+            <button class="ld-btn" data-act="restore-chat-images">Restore chat images</button>
+            <div class="ld-help">Reattach existing LumiDraw images to this chat. No generation, parser or Jev call.</div>
+            <div class="ld-status ld-image-restore-status"></div>
             <button class="ld-btn" data-act="diagnose">Run diagnostics 🔍</button>
             <button class="ld-btn" data-act="safe-report" style="margin-top:7px">Copy report for Claude (no story text)</button>
             <div class="ld-help">Structure only — subject counts, anatomy family, which rules fired, the negative prompt, and the trace. No passage, no scene statement, no caption, no prompt. Safe to paste when the scene is not.</div>
@@ -4771,7 +4774,7 @@ ${entry.prompt || ''}`.trim()
       for (const item of items) {
         const placementId = String(item.placementId || '')
         const mount = imagePlacementMounts.get(placementId)
-        if (!mount || !mount.isConnected || imagePlacementRenderKeys.get(placementId) !== placementRenderKey(item)) {
+        if (!mount || !mount.isConnected || !messageNode.contains(mount) || imagePlacementRenderKeys.get(placementId) !== placementRenderKey(item)) {
           rebuild = true
           break
         }
@@ -4848,7 +4851,9 @@ ${entry.prompt || ''}`.trim()
     const seq = ++imagePlacementRefreshSeq
     const wantedChat = String(chatId || activeChatIdFromCtx() || '')
     const res = await call('get_image_mounts', { chatId: wantedChat }, 15000)
-    if (seq !== imagePlacementRefreshSeq) return
+    if (imageRestoreDisposed || seq !== imagePlacementRefreshSeq) return
+    const currentChat = activeChatIdFromCtx()
+    if (wantedChat && currentChat && wantedChat !== currentChat) return
     const nextChatId = String(res.chatId || wantedChat || '')
     if (imagePlacementChatId && nextChatId && imagePlacementChatId !== nextChatId) {
       for (const placementId of [...imagePlacementMounts.keys()]) clearImagePlacementMount(placementId)
@@ -4862,7 +4867,70 @@ ${entry.prompt || ''}`.trim()
     }
     const messageIds = new Set(imagePlacements.map((item) => String(item && item.messageId || '')).filter(Boolean))
     for (const id of messageIds) scheduleImageAttach(id)
+    return { count: imagePlacements.length, chatId: nextChatId }
   }
+
+  // Chat rows can mount long after the initial placement fetch, without the
+  // legacy CHARACTER_MESSAGE_RENDERED event. Observe DOM changes, coalesce
+  // work, and touch only saved placements whose message rows are mounted.
+  let imageRestoreDisposed = false
+  let imageRestoreTimer = null
+  let imageRestoreRequest = null
+  let imageRestoreLastFetch = 0
+  function reconcileVisibleImages() {
+    if (imageRestoreDisposed || document.hidden) return
+    const active = activeChatIdFromCtx()
+    if (!active || active !== imagePlacementChatId) return
+    const ids = new Set(imagePlacements.map(p => String(p.messageId || '')).filter(Boolean))
+    const mounted = ctx.dom && typeof ctx.dom.listMessageElements === 'function'
+      ? ctx.dom.listMessageElements()
+      : [...document.querySelectorAll('[data-message-id]')].map(element => ({ messageId: element.getAttribute('data-message-id'), element }))
+    for (const row of mounted) if (ids.has(String(row.messageId))) renderImagesIntoMessage(String(row.messageId))
+  }
+  function queueVisibleImageRestore() {
+    if (imageRestoreDisposed || imageRestoreTimer !== null || !imagePlacements.length) return
+    imageRestoreTimer = setTimeout(() => {
+      imageRestoreTimer = null
+      reconcileVisibleImages()
+    }, 100)
+  }
+  async function restoreChatImages(manual = false) {
+    if (imageRestoreDisposed) return
+    if (imageRestoreRequest) return imageRestoreRequest
+    if (!manual && Date.now() - imageRestoreLastFetch < 1500) { queueVisibleImageRestore(); return }
+    const chatId = activeChatIdFromCtx()
+    if (!chatId) {
+      if (manual) setStatus('.ld-image-restore-status', 'Open a chat first.', 'err')
+      return
+    }
+    imageRestoreLastFetch = Date.now()
+    const request = (async () => {
+      try {
+        if (manual) setStatus('.ld-image-restore-status', 'Restoring saved images…')
+        const result = await refreshImagePlacements(chatId)
+        if (imageRestoreDisposed || chatId !== activeChatIdFromCtx() || !result) return
+        reconcileVisibleImages()
+        if (manual) setStatus('.ld-image-restore-status', result.count
+          ? `${result.count} saved image placement(s) loaded. Older images will reappear as you scroll to their messages.`
+          : 'No saved image placements for this chat. Studio-only images are not automatically added.', 'ok')
+      } catch (error) {
+        if (!imageRestoreDisposed && manual) setStatus('.ld-image-restore-status', 'Could not restore images: ' + error.message, 'err')
+      }
+    })()
+    imageRestoreRequest = request
+    try { await request } finally { if (imageRestoreRequest === request) imageRestoreRequest = null }
+  }
+  const imageRestoreObserver = typeof MutationObserver === 'function' ? new MutationObserver(records => {
+    if (records.some(r => r.type === 'childList' && (r.addedNodes.length || r.removedNodes.length))) queueVisibleImageRestore()
+  }) : null
+  if (imageRestoreObserver) imageRestoreObserver.observe(document.body, { childList: true, subtree: true })
+  const onImageRestoreWake = () => { if (!document.hidden) restoreChatImages(false) }
+  document.addEventListener('visibilitychange', onImageRestoreWake)
+  window.addEventListener('focus', onImageRestoreWake)
+  window.addEventListener('pageshow', onImageRestoreWake)
+  window.addEventListener('online', onImageRestoreWake)
+  const restoreImageButton = $('[data-act="restore-chat-images"]')
+  if (restoreImageButton) restoreImageButton.addEventListener('click', () => restoreChatImages(true))
 
   // Pre-1.3.3 images remain canonical message content owned by Lumiverse's
   // inline-image renderer. LumiDraw deliberately leaves them alone.
@@ -6033,6 +6101,9 @@ ${entry.prompt || ''}`.trim()
       'Chat: ' + report.sourceChatId + ' | Message: ' + report.sourceMessageId + ' | Swipe: ' + (Number.isInteger(report.sourceSwipeId) ? report.sourceSwipeId + 1 : 'unknown'),
       report.message || '',
       report.application || '',
+      ...(report.changeSummary ? ['Outfit: ' + (report.changeSummary.wardrobeChanged ? 'changed' : 'retained') +
+        ' | Setting: ' + (report.changeSummary.settingChanged ? 'changed' : report.changeSummary.settingReclassified ? 'reclassified; same facts retained' : 'retained') +
+        ' | Garment ownership/state: ' + (report.changeSummary.garmentMetadataChanged ? 'updated' : 'unchanged')] : []),
       ...(report.requestCount ? ['Review calls: ' + report.requestCount + ' | Evidence checks: ' + (report.evidenceQuestionCount || 0)] : []),
       ...(report.decisions || []).flatMap((d) => [
         '', 'Candidate ' + d.candidate + ' · ' + d.name + ' · ' + d.kind,
@@ -6755,6 +6826,12 @@ ${entry.prompt || ''}`.trim()
   })()
 
   const cleanup = () => {
+    imageRestoreDisposed = true
+    imagePlacementRefreshSeq++
+    if (imageRestoreTimer !== null) clearTimeout(imageRestoreTimer)
+    if (imageRestoreObserver) imageRestoreObserver.disconnect()
+    document.removeEventListener('visibilitychange', onImageRestoreWake)
+    for (const event of ['focus', 'pageshow', 'online']) window.removeEventListener(event, onImageRestoreWake)
     if (wardrobeRefreshTimer) clearTimeout(wardrobeRefreshTimer)
     imageOutfitEpoch++
     if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()

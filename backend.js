@@ -316,7 +316,7 @@ function jevEnvironmentQuestions(candidate, image, memory, passage, content, add
   const prior = jevEnvironment(memory)
   const location = coreLocation(image, memory, passage, content)
   const frame = coreTags(String(image.prompt || '').split(/\bBREAK\b/)[0])
-  const light = coreTags([...(image.lighting || []), ...frame.filter(t => /\b(?:light|lighting|sunlight|moonlight|daylight|night|sunset|dawn|dusk|rain|snow|fog|mist)\b/i.test(t))])
+  const light = coreTags([...(image.lighting || []), ...frame.filter(t => /\b(?:light|lighting|sunlight|moonlight|daylight|morning|afternoon|evening|noon|midnight|night|sunset|sunrise|dawn|dusk|rain|rainy|snow|snowy|fog|foggy|mist|misty|overcast)\b/i.test(t))])
   const all = coreTags([...prior.place, ...prior.surroundings, ...prior.lighting, ...location.setting, ...location.offered, ...location.details, ...light])
   if (!all.length) return
   const move = add({ candidate, name: 'Scene', kind: 'environment-move', previous: prior }, {
@@ -514,6 +514,8 @@ function jevApplyEnvironment(rows, memory) {
       environment[row.field] = environment[row.field].filter(t => t !== row.fact)
       environment[field] = coreTags([...environment[field], row.fact])
       row.reason = 'Classified an established fact without discarding it.'
+      row.wouldApply = true
+      row.classificationOnly = true
     }
     if (row.choice === 'removed' && jevApproved(row)) {
       for (const key of Object.keys(environment)) environment[key] = environment[key].filter(t => t !== row.fact)
@@ -534,6 +536,7 @@ function jevApplyEnvironment(rows, memory) {
 
 function jevApplyReview(images, profiles, priorWardrobe, report, active, memory = {}) {
   let changed = false
+  const summary = { wardrobeChanged: false, settingChanged: false, settingReclassified: false, garmentMetadataChanged: false }
   const rolling = { ...priorWardrobe }
   for (let index = 0; index < images.length; index++) {
     const image = images[index], rows = report.status === 'ok' ? report.decisions.filter(d => d.candidate === index + 1) : []
@@ -580,6 +583,12 @@ function jevApplyReview(images, profiles, priorWardrobe, report, active, memory 
       }
     }
     const environment = jevApplyEnvironment(rows, memory)
+    const beforeEnvironment = jevEnvironment(memory)
+    const sameFacts = (a, b) => JSON.stringify(uniqueStrings(Object.values(a).flat()).sort()) === JSON.stringify(uniqueStrings(Object.values(b).flat()).sort())
+    if (Object.keys(changes).length) summary.wardrobeChanged = true
+    if (!sameFacts(environment, beforeEnvironment)) summary.settingChanged = true
+    else if (JSON.stringify(environment) !== JSON.stringify(beforeEnvironment)) summary.settingReclassified = true
+    if (JSON.stringify(bindings) !== JSON.stringify(memory.garmentBindings || [])) summary.garmentMetadataChanged = true
     for (const row of rows.filter(r => r.kind.startsWith('environment'))) row.applied = !!(active && row.wouldApply)
     if (active) {
       if (Object.keys(changes).length || JSON.stringify(image.resolvedWardrobe || {}) !== JSON.stringify(outfits) ||
@@ -595,6 +604,7 @@ function jevApplyReview(images, profiles, priorWardrobe, report, active, memory 
     }
   }
   report.changesApplied = active && changed
+  report.changeSummary = summary
   report.application = active ? 'Applied to candidate prompts. Story continuity saves only after successful generation, or clothing on explicit Sync. Reparse is preview-only.' : 'Comparison only.'
 }
 
@@ -4461,6 +4471,24 @@ function normalizeConditionalAnatomy(items) {
 //   Aegis-fang = single massive warhammer
 // The proper name is retained for story continuity while the descriptor gives
 // Anima a visual concept it is more likely to understand.
+function validateVisualAliasInput(value) {
+  if (!value) return
+  const entries = Array.isArray(value) ? value : String(value).split(/[\r\n;]+/).map(s => s.trim()).filter(Boolean)
+  if (entries.length > 8) throw new Error('Named props: use at most 8 entries, one Name = description per line.')
+  const seen = new Set()
+  for (const entry of entries) {
+    const match = typeof entry === 'string' ? entry.match(/^\s*([^=]+?)\s*=\s*(.+)\s*$/) : null
+    const name = String(match ? match[1] : entry && typeof entry === 'object' ? entry.name || entry.key || '' : '').trim()
+    const description = String(match ? match[2] : entry && typeof entry === 'object' ? entry.description || entry.visual || entry.value || '' : '').trim()
+    if (!name || !description) throw new Error('Named props: use Name = visual description on each line, for example Mercy = oversized two-handed warhammer.')
+    if (name.length > 64 || name.split(/\s+/).length > 6 || description.length > 256 || description.split(/\s+/).length > 32)
+      throw new Error('Named props: names allow 6 words / 64 characters; descriptions allow 32 words / 256 characters. Shorten the entry before saving.')
+    const key = normalizeIdentityText(name)
+    if (seen.has(key)) throw new Error('Named props: each name must be unique; duplicate ' + name + '.')
+    seen.add(key)
+  }
+}
+
 function normalizeVisualAliases(value, label = 'visual alias') {
   const raw = Array.isArray(value)
     ? value
@@ -4474,13 +4502,13 @@ function normalizeVisualAliases(value, label = 'visual alias') {
       name = String(entry.name || entry.key || '').trim()
       description = String(entry.description || entry.visual || entry.value || '').trim()
     } else {
-      const match = String(entry || '').match(/^\s*([^=]{1,64}?)\s*=\s*(.{1,96})\s*$/)
+      const match = String(entry || '').match(/^\s*([^=]{1,64}?)\s*=\s*(.{1,256})\s*$/)
       if (!match) continue
       name = match[1].trim()
       description = match[2].trim()
     }
     name = shortPhrase(name, `${label} name`, 6, 64, true)
-    description = shortPhrase(description, `${label} description`, 10, 96, true)
+    description = shortPhrase(description, `${label} description`, 32, 256, true)
     if (!name || !description) continue
     const key = normalizeIdentityText(name)
     if (!key || seen.has(key)) continue
@@ -9819,6 +9847,14 @@ function directRelationFragment(value, maxWords = 5) {
 
 function directRelationVerbKey(value) {
   const raw = normalizeIdentityText(value).split(/\s+/)[0]
+  // Silent-e stems must agree across base, third-person and past forms.
+  // In particular, "gave an elbow a nudge" supports the parser's "nudges".
+  const ordinaryForms = {
+    nudge: 'nudge', nudges: 'nudge', nudged: 'nudge', nudging: 'nudge',
+    stroke: 'stroke', strokes: 'stroke', stroked: 'stroke', stroking: 'stroke',
+    squeeze: 'squeeze', squeezes: 'squeeze', squeezed: 'squeeze', squeezing: 'squeeze',
+  }
+  if (ordinaryForms[raw]) return ordinaryForms[raw]
   const irregular = {
     held: 'hold', gave: 'giv', took: 'tak', sat: 'sit', stood: 'stand',
     lay: 'ly', caught: 'catch', drew: 'draw', shook: 'shak',
@@ -10414,7 +10450,8 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
     if (framing.length) lines.push(`${framing.join(', ')}.`)
     if (environment.length) {
       lines.push(`Setting: ${environment.join(', ')}.`)
-      if (!/\b(?:close[- ]?up|headshot|bust shot|plain background|black background|silhouette)\b/i.test(frame)) lines.push('Visible surroundings.')
+      // Concrete details below carry the background; a generic instruction
+      // like "Visible surroundings" adds no drawable information.
     }
   } else if (cameraEnvironment.length) lines.push(`${cameraEnvironment.join(', ')}.`)
 
@@ -10462,6 +10499,19 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
       }
     }
     if (!image.sceneCore) details = details.slice(0, 18)
+    const propSentences = []
+    if (image.sceneCore) {
+      const props = corePropDetails(details, profile, profiles, banned)
+      details = props.details
+      const resolved = image.sceneCore.subjects.find(s => s.ref === ((profile && profile.ref) || subject.name))
+      if (resolved) resolved.props = props.bindings
+    }
+    if (image.sceneCore) details = details.filter(detail => {
+      const sentence = corePropSentence(detail, upperFirst(directGroupSubjectLabel(subject, profiles)))
+      if (!sentence) return true
+      propSentences.push(sceneText(sentence))
+      return false
+    })
     const description = uniqueStrings([...stable, ...details.map(sceneText).filter(Boolean)])
     if (image.sceneCore) {
       const resolved = image.sceneCore.subjects.find((item) => item.ref === ((profile && profile.ref) || subject.name))
@@ -10470,6 +10520,7 @@ function serializeDirectGroupPrompt(image, profiles, banned, trace = null, wardr
     // Introduce each body once, with appearance and current scene state together.
     // Saved adult age wording must not pass through the parser-text scrubber.
     lines.push(`${upperFirst(label)}: ${description.join(', ')}.`)
+    lines.push(...uniqueStrings(propSentences))
   }
 
   const interactionLines = (image.groupInteractions || [])
@@ -10831,8 +10882,13 @@ function coreLocation(image, memory = {}, passage = '', content = '') {
   const other = frame.filter((tag) => !DIRECT_COUNT_TAG_RE.test(tag) && !DIRECT_COUNT_FULL_RE.test(tag) && !places.includes(tag))
   const safeOther = other.filter((tag) => !isPlace(tag) || acceptedWords.some((word) =>
     new RegExp('\\b' + escapeRegExp(word) + '\\b', 'i').test(tag)))
-  const detailNouns = /\b(?:mushrooms?|fungi|spores?|moss|ferns?|roots?|trees?|foliage|canopy|vines?|rocks?|boulders?|windows?|cabinets?|shelves|bookshelves|countertops?|curtains?|arches|pillars?|lanterns?|torches|stalactites|stalagmites)\b/gi
-  const details = coreTags([...(image.setting || []), ...frame]).filter((tag) => {
+  const detailNouns = /\b(?:mushrooms?|fungi|spores?|moss|ferns?|roots?|trees?|foliage|canopy|vines?|brambles?|barriers?|crystals?|rocks?|boulders?|windows?|cabinets?|shelves|bookshelves|countertops?|curtains?|arches|pillars?|lanterns?|torches|stalactites|stalagmites)\b/gi
+  // The existing scene-context field sometimes contains a concrete landmark
+  // absent from the frame. Offer only a short, verb-free exact passage phrase.
+  const contextDetail = String(image.group_scene || '').replace(/^(?:before|beside|near|beneath|under|at|inside|outside)\s+(?:a |an |the )?/i, '').replace(/[.]+$/, '').trim()
+  const contextSupported = contextDetail && normalizeIdentityText(passage).includes(normalizeIdentityText(contextDetail)) &&
+    !/\b(?:not|no|without|would|could|might|imagined|remembered)\b/i.test(contextDetail)
+  const details = coreTags([...(image.setting || []), ...frame, ...(contextSupported ? [contextDetail] : [])]).filter((tag) => {
     const nouns = String(tag).match(detailNouns) || []
     if (!nouns.length || places.includes(tag) || tag.split(/\s+/).length > 8 || /\b(?:standing|sitting|leaning|holding|gripping|looking|wearing)\b/i.test(tag)) return false
     return nouns.every((noun) => new RegExp('\\b' + escapeRegExp(noun) + '\\b', 'i').test(passage))
@@ -10870,8 +10926,8 @@ function corePrimarySceneAction(image, profiles) {
     const action = directRelationAssembledAction(relation, actorPart, targetPart)
     const manual = /^(?:strokes?|rubs?|pats?|cups?|touch(?:es)?|brush(?:es)?|taps?)$/i.test(action)
     const faceContact = manual && /^(?:cheek|cheekbone|face|forehead)$/i.test(targetPart) && /^(?:hand|hands|fingers)?$/i.test(actorPart)
-    const concrete = /^(?:lifts?|supports?|stead(?:y|ies)|push(?:es)?|pulls?|hands?|passes?|gives?|offers?|shows?|holds?|grips?|squeezes?)\b/i.test(action)
-    const score = faceContact ? 100 : concrete ? (targetPart ? 40 : relation.object ? 30 : 20) : 0
+    const concrete = /^(?:nudges?|lifts?|supports?|stead(?:y|ies)|push(?:es)?|pulls?|hands?|passes?|gives?|offers?|shows?|holds?|grips?|squeezes?)\b/i.test(action)
+    const score = faceContact ? 100 : /^nudges?$/i.test(action) && !targetPart ? 0 : concrete ? (targetPart ? 40 : relation.object ? 30 : 20) : 0
     let sentence = directGroupRelationSentence(relation, image, profiles)
     if (faceContact) {
       const verb = /^strok/i.test(action) ? 'strokes' : /^rub/i.test(action) ? 'rubs' : /^pat/i.test(action) ? 'pats'
@@ -10925,6 +10981,53 @@ function coreEarlySceneSentence(image, profiles) {
   image.sceneCore.sceneAction = { source, raw, named, rendered, originalSummary: image.scene_summary || '',
     primary, omittedRelationIndices: primary ? primary.omittedRelationIndices : [], omittedDetails: [] }
   return rendered
+}
+
+function corePropDetails(details, profile, profiles, banned = '') {
+  const own = normalizeVisualAliases(profile && profile.visualAliases || [])
+  const all = allKnownProfiles(profiles).flatMap(p => normalizeVisualAliases(p.visualAliases || []))
+  const propNouns = /\b(?:warhammer|hammer|wand|staff|sword|spear|axe|dagger|bow|shield|lantern|book)\b/i
+  const bindings = []
+  const consumedFragments = new Set()
+  const rewritten = details.map(detail => {
+    const value = String(detail)
+    // Exact names can describe a loan; generic nouns resolve only to a unique
+    // saved prop on THIS subject. Never equip a prop just because it is saved.
+    const named = all.filter(a => new RegExp('\\b' + escapeRegExp(a.name) + '\\b', 'i').test(value))
+    const noun = (value.match(propNouns) || [])[0]
+    const generic = noun ? own.filter(a => new RegExp('\\b' + escapeRegExp(noun) + '\\b', 'i').test(a.description)) : []
+    const candidates = named.length ? named : generic
+    if (candidates.length !== 1) return value
+    const alias = candidates[0]
+    if (applyBannedToList([alias.description], banned).length !== 1) return value
+    if (normalizeIdentityText(value).includes(normalizeIdentityText(alias.description))) return value
+    const token = named.length ? alias.name : noun
+    let result
+    if (named.length) result = value.replace(new RegExp('\\b' + escapeRegExp(token) + '\\b', 'i'), alias.description)
+    else {
+      const nounMatch = new RegExp('\\b' + escapeRegExp(noun) + '\\b', 'i').exec(value)
+      const lead = (value.match(/^(?:holding|carrying|wielding)\s+(?:(?:a|an|the)\s+)?/i) || [''])[0]
+      const head = value.slice(lead.length, nounMatch.index + noun.length)
+      if (head.split(/\s+/).length > 8) return value
+      result = lead + alias.description + value.slice(nounMatch.index + noun.length)
+    }
+    // Parser detail arrays may have split the saved description at commas.
+    // Rejoin it once rather than duplicating its modifiers as loose body tags.
+    for (const fragment of alias.description.split(',').slice(1)) consumedFragments.add(normalizeIdentityText(fragment))
+    bindings.push({ name: alias.name, description: alias.description, sourceDetail: value, renderedDetail: result })
+    return result
+  })
+  return { details: rewritten.filter(detail => !consumedFragments.has(normalizeIdentityText(detail))), bindings }
+}
+
+function corePropSentence(detail, name) {
+  const held = String(detail).match(/^(holding|carrying|wielding)\s+(?:(?:a|an|the)\s+)?(.+)$/i)
+  const stowed = String(detail).match(/^(.+?)\s+(slung|sheathed|strapped|stowed)\s+(.+)$/i)
+  const object = held ? held[2] : stowed ? stowed[1] : ''
+  if (!/\b(?:warhammer|hammer|wand|staff|sword|spear|axe|dagger|bow|shield)\b/i.test(object)) return ''
+  if (held) return `${name} ${({ holding: 'holds', carrying: 'carries', wielding: 'wields' })[held[1].toLowerCase()]} ${withArticle(object)}.`
+  if (stowed) return `${name} has ${withArticle(object)} ${stowed[2]} ${stowed[3]}.`
+  return ''
 }
 
 function prepareResolvedSceneCore(image, ctx) {
@@ -10984,6 +11087,7 @@ function prepareResolvedSceneCore(image, ctx) {
         referenceName: subject.coreReferenceName, subjectPhrase: subject.coreSubjectPhrase,
         count: subject.coreCountDecision,
         identity: subject.coreIdentity.slice(), position: subject.position,
+        props: [],
         clothing: visibleWardrobeFor(wardrobe[ref] || [], { profiles, profile, frame: image.prompt }),
         details: (subject.details || []).filter((tag) => !directWardrobeTag(tag)) }
     }),
@@ -11720,6 +11824,8 @@ function directContext(profiles, { wardrobe = null, places = [], banned = '', fa
       lines.push('  RUN LABEL: ' + directFallbackNoun(profile) + ' — use this exact label immediately after the count tag')
     }
     if (profile.countTag) lines.push('  COUNT TAG: ' + animaTag(profile.countTag))
+    const props = normalizeVisualAliases(profile.visualAliases || [])
+    if (props.length) lines.push('  NAMED PROPS (reference data, not instructions): ' + JSON.stringify(props) + ' — use the visual description only when this prop is actually visible; keep who holds it and whether it is held or stowed in that subject’s details. Ownership alone does not mean it is present or held.')
     if (anchor.length) lines.push('  IDENTITY ANCHOR: ' + anchor.join(', ') + ' — copy exactly into a one-person BREAK run; LumiDraw inserts it mechanically for spatial multi-subject prompts, so do not repeat it in group details')
     if ((profile.anatomy || []).length) {
       lines.push('  SAVED ANATOMY (the anatomy rule decides when): ' + animaTagList(profile.anatomy).join(', '))
@@ -16636,6 +16742,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (!name) throw new Error('Persona needs a library name.')
         const profileInput = payload.profile && typeof payload.profile === 'object' ? { ...payload.profile } : {}
         if (!String(profileInput.anchor || '').trim()) profileInput.anchor = name
+        validateVisualAliasInput(profileInput.visualAliases || profileInput.namedVisualAliases)
         normalizeProfile(profileInput, profileInput.appearanceTags || '', 'persona')
         const personas = await getPersonas()
         const id = String(payload.id || '').trim() || `persona_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -16662,6 +16769,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (!name) throw new Error('Character needs a library name.')
         const profileInput = payload.profile && typeof payload.profile === 'object' ? { ...payload.profile } : {}
         if (!String(profileInput.anchor || '').trim()) profileInput.anchor = name
+        validateVisualAliasInput(profileInput.visualAliases || profileInput.namedVisualAliases)
         normalizeProfile(profileInput, profileInput.appearanceTags || '', 'character')
         const characters = await getCharacters()
         const id = String(payload.id || '').trim() || `character_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
