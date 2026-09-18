@@ -1,0 +1,29 @@
+{
+  "version": "1.4.0-jev.3",
+  "name": "LumiDraw Studio",
+  "identifier": "lumidraw_studio",
+  "author": "fidgetycarrot",
+  "github": "https://github.com/fidgetycarrot/lumidraw-studio",
+  "homepage": "https://github.com/fidgetycarrot/lumidraw-studio",
+  "description": "An Anima-optimized Draw Things Studio with reusable personas, appearance states, context continuity, and compact hybrid prompts.",
+  "permissions": [
+    "images",
+    "image_gen",
+    "cors_proxy",
+    "chats",
+    "chat_mutation",
+    "interceptor",
+    "generation",
+    "generation_parameters",
+    "characters",
+    "personas",
+    "app_manipulation",
+    "event_tracking"
+  ],
+  "requested_capabilities": [
+    "base64_decode"
+  ],
+  "entry_backend": "backend.js",
+  "entry_frontend": "frontend.js",
+  "minimum_lumiverse_version": "1.0.1"
+}
