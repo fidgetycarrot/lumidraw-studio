@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.4.0-jev.6'
+const EXTENSION_VERSION = '1.5.0-jev.2'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -16,6 +16,17 @@ function lumidrawTroubleshootingHtml(report, imageData = '') {
     '<title>LumiDraw troubleshooting report</title><style>body{font:16px system-ui;margin:24px;max-width:1100px}img{max-width:100%;max-height:900px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}</style></head><body>' +
     '<h1>LumiDraw troubleshooting report</h1><p>Private report. Contains prompts and may include story text. Nothing was uploaded automatically.</p>' +
     image + '<h2>Diagnostic data</h2><pre>' + escape(JSON.stringify(report, null, 2)) + '</pre></body></html>'
+}
+
+function lumidrawContinuityStatus(continuity) {
+  if (!continuity) return { tone: '', text: 'Story memory: waiting for this chat’s continuity status. Active Jev planning tracks outfits and locations automatically; no routine Sync is needed.' }
+  const state = String(continuity.status || 'pending')
+  if (state === 'manual-corrected') return { tone: 'good', text: 'Manual story correction saved — later story messages can update it normally.' }
+  if (['ok', 'updated', 'complete'].includes(state)) return { tone: 'good', text: 'Story memory updated — outfits and location follow the whole message, independently of its images.' }
+  const diagnostics = continuity.diagnostics || {}
+  const detail = diagnostics.reason || (diagnostics.issues || [])[0] || ''
+  if (state === 'partial') return { tone: 'err', text: 'Story memory partially updated — some facts remain uncertain. Established details are retained; unresolved changes remain visible in Debug.' + (detail ? ' ' + detail : '') }
+  return { tone: 'err', text: 'Story memory pending — established details are retained; it is not confirmed up to date yet.' + (detail ? ' ' + detail : '') }
 }
 
 function makeId() {
@@ -255,6 +266,7 @@ function realSetup(ctx) {
   let editorCastIds = []        // additional cast member ids in the open preset editor
   let history = []
   let storyDebug = null
+  const storyContinuityByChat = new Map()
   let autoStatus = null
   let liveScanStatus = null
   let liveScanStatusAt = 0
@@ -371,6 +383,12 @@ function realSetup(ctx) {
         storyDebug = incoming
         renderStoryDebug()
       }
+      return
+    }
+    if (payload.type === 'story_continuity_updated') {
+      receiveStoryContinuity(payload.chatId, payload.continuity)
+      const chatId = String(payload.chatId || '')
+      if (chatId && chatId === String(activeChatIdFromCtx() || lastSeenChatId || '')) refreshTrackedWardrobe(chatId)
       return
     }
     if (payload.type === 'auto_status') {
@@ -1292,12 +1310,12 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-help" style="margin-top:5px">Needs <code>lumidraw-cloud-relay.mjs</code> running on this Mac. Your API key lives in that process and is never sent here. Free tier is 20 generations a month, Draw Things+ is 200.</div>
           </div>
           <div data-settings-section="advanced" class="ld-card">
-            <div class="ld-subtitle">Jev continuity assistant — separate test build</div>
-            <div class="ld-help">Active mode reviews garments, their current wearer, and the complete setting before compilation. Ownership is recorded separately; borrowed clothing keeps its established fit without guessing size from its owner. Saved outfits persist on silence. Changes require a confident decision AND a selected evidence excerpt. Image-only corrections win. Identity/count tags and the parser format stay untouched. Presence disagreements are reported, not automatically applied.</div>
+            <div class="ld-subtitle">Jev scene planner — experimental 1.5</div>
+            <div class="ld-help">The coordinated planner resolves clothing and one setting, then chooses expressions and framing for that scene. It can select a clearer supported moment from parser alternatives. Saved identities/count tags, full wardrobe memory and image-only corrections stay authoritative. The image prompt includes selected visible detail; omissions are explained in Debug.</div>
             <label class="ld-check"><input type="checkbox" class="ld-jev-enabled" /> <span>Enable Jev reviews (TypeSafe paid API)</span></label>
-            <label class="ld-label">Decision mode<select class="ld-jev-mode" disabled><option value="comparison">Comparison only — show decisions, change nothing</option><option value="active">Active — apply clothing and location decisions</option></select></label>
-            <div class="ld-hint">Active application requires Direct mode and Scene Core enabled. Runs on new Direct parses, image reparses and clothing Sync, not plain rerolls. One decision call, plus an evidence call only for proposed changes; at most two calls, no automatic retries, with an 8-second review deadline. An error or uncertain answer keeps established clothing and setting. Place, surroundings and lighting are tracked separately.</div>
-            <div class="ld-hint">The current passage, scene-card attire, earlier parser context, character names and clothing/location candidates are sent to TypeSafe. No images, API keys in reports, or full character sheets. Oversized reviews are skipped, never partially applied.</div>
+            <label class="ld-label">Decision mode<select class="ld-jev-mode" disabled><option value="comparison">Comparison only — show decisions, change nothing</option><option value="active">Active — apply scene-planning decisions</option></select></label>
+            <div class="ld-hint">Requires Direct mode and Scene Core. Enable Coordinated Jev planner in Story → Parser. Story memory now runs automatically when messages change, even in Direct manual-image mode: one additional story-reading parser call and one Jev verification call per processed revision. Initial setup or catch-up can process up to three recent messages, so each may incur those calls. New image parses and reparses separately use up to three staged Jev requests with a shared 12-second deadline; plain rerolls make no planner call. Sync is recovery, not a routine step. Optional image checks are skipped first when the budget is tight. Unresolved locations are shown as unknown instead of mixing old and new scenery.</div>
+            <div class="ld-hint">Relevant story text, bounded earlier context, candidate scenes, character names, clothing and location facts are sent to TypeSafe. No images or API keys are exported in reports. Each request is limited to 64 questions and 64,000 serialized characters; usage and skipped checks are reported.</div>
             <label class="ld-label" style="display:block;margin:12px 0;padding:12px;border:1px solid #8588aa;border-radius:8px">TypeSafe API key — paste here (blank keeps saved key)<input class="ld-jev-key" type="password" autocomplete="new-password" spellcheck="false" /></label>
             <label class="ld-label">Model<input class="ld-jev-model" value="jev-latest" autocomplete="off" spellcheck="false" /></label>
             <div class="ld-section-actions">
@@ -1724,7 +1742,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (controls.castStatus) castCard.appendChild(controls.castStatus)
     cast.appendChild(castCard)
 
-    const wardrobeCard = card('Automatic clothing tracking', 'Normally you do not need to edit this. The story and scene card update this record automatically. Use “Fix this image…” for image-only outfit corrections. This diagnostic view keeps complete outfits, including hidden layers and shoes. Save is a one-time story correction, not a lock. Refresh reloads the display; Sync is an optional extra parser check.')
+    const wardrobeCard = card('Automatic clothing tracking', 'With the active Jev planner, the whole message updates story clothing automatically, even if the pictured moment is earlier or image generation fails. Hidden layers and shoes stay remembered. Use “Fix this image…” for image-only corrections. Save is a one-time story correction, not a lock. Refresh reloads the display; Sync is recovery only, not a routine step.')
     wardrobeCard.appendChild(inline(make('span', 'ld-label', 'Complete current outfit'), controls.wardrobeRefresh, controls.wardrobeSync))
     if (controls.wardrobeRows) wardrobeCard.appendChild(controls.wardrobeRows)
     wardrobeCard.appendChild(field('Add a saved character to this chat', inline(controls.wardrobeAdd, controls.wardrobeAddButton)))
@@ -1773,12 +1791,22 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     parser.appendChild(parserBinding)
 
     const coreCard = card('Experimental scene core · based on 1.3.35',
-      'Direct mode only. Uses your existing parser and its unchanged format. Opens with the action and named identities, then describes each character, clothing layers, and location. No extra model calls.')
+      'Direct mode only. Keeps your existing parser format. Opens with the action and named identities, then describes each character, clothing layers, and location. The optional coordinated planner below adds bounded Jev checks.')
     const coreToggle = document.createElement('input')
     coreToggle.type = 'checkbox'
     coreToggle.className = 'ld-experimental-scene-core'
     coreCard.appendChild(checkbox(coreToggle, 'Try the new scene core'))
     addHelp(coreCard, 'Off by default. Turn off to use the 1.3.35 formatter again. Story wardrobe updates remain in memory; switching off does not rewind them. Unknown clothing is flagged in Debug, not filled in with guessed garments.')
+    const plannerToggle = document.createElement('input')
+    plannerToggle.type = 'checkbox'
+    plannerToggle.className = 'ld-experimental-jev-planner'
+    coreCard.appendChild(checkbox(plannerToggle, 'Coordinated Jev planner · experimental 1.5'))
+    const knownCastToggle = document.createElement('input')
+    knownCastToggle.type = 'checkbox'
+    knownCastToggle.className = 'ld-prefer-known-cast-moments'
+    coreCard.appendChild(checkbox(knownCastToggle, 'Prefer moments without ungendered incidental characters'))
+    addHelp(coreCard, 'Planner is enabled in this experimental build, but applies changes only with Jev enabled in Active mode and Scene Core on. Disable this planner to return to jev.6 processing. Saved characters using 1other are never excluded by the incidental-character preference. Earlier releases remain separate fallbacks; switching modes does not undo saved continuity.')
+    addHelp(coreCard, 'Automatic story memory is separate from images. It reads the complete message, so later outfit/location changes are remembered without changing an earlier illustration. It also runs in Direct manual-image mode. Cost: one extra story-reading parser call plus one Jev verification per processed message revision; unchanged revisions are reused. Initial setup or catch-up can process up to three recent messages, each with those calls. Off mode disables this path. Sync is only a recovery tool.')
     parser.appendChild(coreCard)
 
     const storyQuality = document.createElement('textarea')
@@ -1861,7 +1889,19 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     dtCompat.body.appendChild(field('Rejected settings', inline(controls.rejectedKeys, controls.clearRejectedKeys)))
     debug.appendChild(dtCompat.el)
 
-    storyForm.replaceChildren(storyRail, setup, cast, parser, prompting, debug)
+    const continuityStatus = make('div', 'ld-status ld-reset-status ld-story-continuity')
+    continuityStatus.setAttribute('role', 'status')
+    continuityStatus.setAttribute('aria-live', 'polite')
+    continuityStatus.textContent = lumidrawContinuityStatus(null).text
+    const continuityDetails = details('Story memory — automatic continuity diagnostics', 'Separate from the pictured moment. No generated image can silently replace the current story outfit.')
+    const continuityReport = document.createElement('textarea')
+    continuityReport.className = 'ld-story-continuity-report'
+    continuityReport.readOnly = true
+    continuityReport.rows = 12
+    continuityReport.setAttribute('aria-label', 'Automatic story continuity report')
+    continuityDetails.body.appendChild(continuityReport)
+    debug.appendChild(continuityDetails.el)
+    storyForm.replaceChildren(continuityStatus, storyRail, setup, cast, parser, prompting, debug)
 
     let savedStoryTab = 'setup'
     try { savedStoryTab = localStorage.getItem('lumidraw.storySection.v2') || 'setup' } catch { /* best effort */ }
@@ -3283,6 +3323,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
 
   function renderStoryStatus() {
+    renderStoryContinuity()
     const el = $('.ld-story-last-status')
     if (!el) return
     if (!autoStatus || !autoStatus.at) {
@@ -3296,6 +3337,31 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     el.textContent = `Last auto illustration • ${mode} • ${status} • ${when}${note ? ' — ' + note : ''}`
   }
 
+  function receiveStoryContinuity(chatId, continuity) {
+    const key = String(chatId || '')
+    if (!key || !continuity) return
+    if (continuity.previewOnly || (continuity.diagnostics || {}).previewOnly ||
+        ['historical', 'historical-unavailable'].includes(String(continuity.status || ''))) return
+    storyContinuityByChat.set(key, continuity)
+    if (storyContinuityByChat.size > 32) storyContinuityByChat.delete(storyContinuityByChat.keys().next().value)
+    renderStoryContinuity()
+  }
+
+  function renderStoryContinuity(explicitChatId = '') {
+    const key = String(explicitChatId || activeChatIdFromCtx() || lastSeenChatId || '')
+    const continuity = storyContinuityByChat.get(key) || null
+    const view = lumidrawContinuityStatus(continuity)
+    const status = $('.ld-story-continuity')
+    if (status) {
+      status.textContent = view.text
+      status.classList.toggle('ld-good', view.tone === 'good')
+      status.classList.toggle('ld-err', view.tone === 'err')
+      status.style.color = view.tone === 'err' ? 'var(--ld-warn, #d9a441)' : ''
+    }
+    const report = $('.ld-story-continuity-report')
+    if (report) report.value = continuity ? JSON.stringify({ chatId: key, ...continuity }, null, 2) : 'No continuity status received for this chat yet.'
+  }
+
   function renderStoryDebug() {
     const prompt = $('.ld-story-final-prompt')
     const parsed = $('.ld-story-parsed')
@@ -3303,6 +3369,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (!prompt || !parsed) return
     const debug = storyDebug || null
     const selected = debug && (debug.entries || [])[(Number(debug.selectedEntryIndex) || 1) - 1]
+    // An old-image reparse can be the newest debug run without being current
+    // story state. Never repaint the live memory banner from parser history.
     if (selected && selected.jevReview) renderJevReport(selected.jevReview)
     const core = selected && selected.sceneCore
     const coreSummary = $('.ld-core-summary')
@@ -3313,14 +3381,20 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       'Opening source: ' + ((core.sceneAction || {}).source || 'not recorded'),
       'Location: ' + ((core.location || {}).setting || []).join(', ') + ' [' + ((core.location || {}).source || 'unknown') + ']',
       'Background details: ' + (((core.location || {}).details || []).join(', ') || 'none recorded'),
+      ...(core.compilation ? ['Compiled by: ' + core.compilation.source + ' · ' + core.compilation.wordCount + ' words',
+        'Framing: ' + (core.compilation.framing || []).join(', '),
+        'Preflight: ' + ((core.preflight || {}).status || 'not recorded')] : []),
       ...(core.subjects || []).flatMap((subject) => [
         '', subject.name + ' — ' + subject.introduction,
         'Count: ' + (subject.count ? subject.count.saved + ' → ' + subject.count.resolved + ' [' + subject.count.source + ']' : 'not recorded by this version'),
         'Saved identity: ' + (subject.identity || []).join(', '),
+        ...(subject.renderedIdentity ? ['Identity sent to image model: ' + subject.renderedIdentity.join(', '),
+          'Optional identity detail omitted: ' + ((subject.omittedIdentity || []).map(item => (item.tag || item.detail || item.item || '') + ' (' + item.reason + ')').join('; ') || 'none')] : []),
         'Complete outfit: ' + (((subject.clothing || {}).worn || []).join(', ') || 'unknown'),
         'Visible clothing: ' + (((subject.clothing || {}).visible || []).join(', ') || 'none recorded in this crop'),
         'Kept but hidden: ' + (((subject.clothing || {}).hidden || []).map((item) => item.item + ' (' + item.coveredBy + ')').join('; ') || 'none'),
       ]),
+      ...(core.compilation ? ['', ...(core.compilation.omissions || []).map(item => 'Omitted: ' + item.detail + ' — ' + item.reason)] : []),
       '', ...(core.warnings || []).map((warning) => 'Note: ' + warning),
     ].join('\n') : ''
     prompt.value = debug && debug.lastCompiledPrompt ? debug.lastCompiledPrompt : ''
@@ -3365,6 +3439,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       parserMs: debug.parserMs || null,
       rawReply: debug.rawReply || null,
       profileAudit: debug.profileAudit || [],
+      storyContinuity: debug.storyContinuity || null,
       parserImages: debug.parserImages || [],
       contextMessageCount: debug.contextMessageCount || 0,
       ledgerFound: !!debug.ledgerFound,
@@ -5235,6 +5310,7 @@ ${entry.prompt || ''}`.trim()
       // flashing back into the panel after the new chat is already active.
       if (requestedChatId && lastSeenChatId && requestedChatId !== String(lastSeenChatId)) return res
       wardrobeLibrary = res.library || []
+      if (res.storyContinuity) receiveStoryContinuity(res.chatId || requestedChatId, res.storyContinuity)
       // The Characters tab was loaded once, at init. A story that invents
       // somebody mid-chat writes a real, editable character the panel never
       // hears about — so the tab keeps showing the list from when it opened and
@@ -6254,6 +6330,18 @@ ${entry.prompt || ''}`.trim()
         ' | Setting: ' + (report.changeSummary.settingChanged ? 'changed' : report.changeSummary.settingReclassified ? 'reclassified; same facts retained' : 'retained') +
         ' | Garment ownership/state: ' + (report.changeSummary.garmentMetadataChanged ? 'updated' : 'unchanged')] : []),
       ...(report.requestCount ? ['Review calls: ' + report.requestCount + ' | Evidence checks: ' + (report.evidenceQuestionCount || 0)] : []),
+      ...(report.budget ? ['Questions sent: ' + report.budget.questions + ' · maximum ' + report.budget.maximumQuestionsPerRequest + ' per request',
+        'Planning budget: ' + report.budget.maximumRequests + ' requests / ' + (report.budget.deadlineMs / 1000) + ' seconds; no automatic retry',
+        'Usage: ' + (report.usage && report.usage.inputTokens != null ? report.usage.inputTokens : 'unknown') + ' input / ' +
+          (report.usage && report.usage.outputTokens != null ? report.usage.outputTokens : 'unknown') + ' output tokens'] : []),
+      ...(report.stages || []).map(stage => 'Stage: ' + stage.name + ' — ' + stage.status + ' · ' + stage.questions + ' questions · ' + stage.elapsedMs + 'ms' + (stage.reason ? ' · ' + stage.reason : '')),
+      ...(report.selection ? ['Selected candidates: ' + report.selection.selectedCandidates.join(', ') + ' of ' + report.selection.offered +
+        ' offered; requested maximum ' + report.selection.requested, 'Selection: ' + report.selection.preference + '; scores are advisory.'] : []),
+      ...(report.scenePlans || []).flatMap(plan => ['', 'Candidate ' + plan.candidate + ' · ' + (plan.selected ? 'selected' : 'not selected'),
+        plan.selectionReason || '', 'Venue: ' + (plan.environmentStatus || 'unknown') + ' · ' + Object.values(plan.environment || {}).flat().join(', '),
+        ...(plan.subjects || []).map(subject => subject.name + ': face ' + (subject.face || subject.faceStatus || 'unchanged') + '; gaze ' + (subject.gaze || subject.gazeStatus || 'unchanged')),
+        ...(plan.issues || []).map(issue => 'Note: ' + issue)]),
+      ...((report.budget || {}).skipped || []).map(skip => 'Skipped check: ' + skip.stage + (skip.kind ? ' / ' + skip.kind : '') + ' — ' + skip.reason),
       ...(report.decisions || []).flatMap((d) => [
         '', 'Candidate ' + d.candidate + ' · ' + d.name + ' · ' + d.kind,
         'Jev: ' + d.choice + ' | confidence ' + Math.round(d.confidence * 100) + '%' + (d.uncertain ? ' (uncertain)' : '') + (d.disagreement ? ' — disagrees with current result' : ''),
@@ -6264,14 +6352,18 @@ ${entry.prompt || ''}`.trim()
           : d.kind === 'garment-owner' || d.kind === 'garment-state' ? ['Item: ' + d.garment]
           : d.kind === 'environment' || d.kind === 'environment-role' ? ['Setting detail: ' + d.fact, 'Field: ' + (d.resolvedField || d.field || (d.kind === 'environment-role' ? d.choice : 'unknown'))]
           : d.kind === 'environment-move' ? ['Previous setting: ' + Object.values(d.previous || {}).flat().join(', ')]
+          : d.kind === 'venue-support' ? ['Setting proposition: ' + d.fact, 'Field: ' + d.field]
+          : d.kind === 'prop-holder' ? ['Object: ' + d.object, 'Parser holder: ' + d.sourceName]
           : d.kind === 'presence' ? ['Parser included: ' + (d.parserIncluded ? 'yes' : 'no')] : []),
         ...(d.reason ? [(d.applied ? 'Applied: ' : d.wouldApply ? 'Would apply: ' : 'Held: ') + d.reason] : []),
-        ...(d.evidence ? ['Selected evidence: ' + d.evidence + (d.evidenceAccepted ? '' : ' (insufficient confidence)'),
+        ...(d.evidence ? [(d.evidenceSource && d.evidenceSource.method === 'grouped proposition support' ? 'Related passage excerpt (support was checked against the passage as a whole): ' : 'Selected evidence: ') + d.evidence + (d.evidenceAccepted ? '' : ' (insufficient confidence)'),
           'Evidence source: ' + (d.evidenceSource && d.evidenceSource.scope === 'earlier'
             ? 'earlier message ' + d.evidenceSource.messageId + ' · swipe ' + (Number(d.evidenceSource.swipeId || 0) + 1)
             : 'current passage/card')] : []),
       ]),
-      '', 'Confidence and selected evidence are model judgments, not guarantees. Clothing and setting changes require at least 85% confidence and winning probability for both decision and evidence. Existing setting facts can be classified without claiming a change. Jev selects supplied candidates; it does not invent garments or backgrounds.',
+      '', report.plannerVersion
+        ? 'Confidence is a model judgment, not proof. Clothing retains its guarded evidence rules. Venue and prop changes require confident selection and a separate passage-support check; the excerpt is diagnostic, not an exact-quote confidence vote. Optional expression/framing choices use confident selections. Saved identity/count tags never belong to Jev. Skipped checks do not trigger another paid request.'
+        : 'Confidence and selected evidence are model judgments, not guarantees. Clothing and setting changes require at least 85% confidence and winning probability for both decision and evidence. Existing setting facts can be classified without claiming a change. Jev selects supplied candidates; it does not invent garments or backgrounds.',
       '', 'Full report:', JSON.stringify(report, null, 2),
     ].join('\n')
   }
@@ -6330,6 +6422,8 @@ ${entry.prompt || ''}`.trim()
       cloudFallback: $('.ld-cloud-fallback').checked,
       mode: storyMode,
       experimentalSceneCore: $('.ld-experimental-scene-core') ? $('.ld-experimental-scene-core').checked : false,
+      experimentalJevPlanner: $('.ld-experimental-jev-planner') ? $('.ld-experimental-jev-planner').checked : true,
+      preferKnownCastMoments: $('.ld-prefer-known-cast-moments') ? $('.ld-prefer-known-cast-moments').checked : true,
       autoScan: storyAutoScan,
       parserEngine: $('.ld-parser-engine').value,
       parserConnection: $('.ld-parser-conn').value,
@@ -6499,7 +6593,7 @@ ${entry.prompt || ''}`.trim()
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-maximg', '.ld-minimg', '.ld-maxsubjects', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break', '.ld-experimental-scene-core']) {
+  for (const sel of ['.ld-mode', '.ld-maximg', '.ld-minimg', '.ld-maxsubjects', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break', '.ld-experimental-scene-core', '.ld-experimental-jev-planner', '.ld-prefer-known-cast-moments']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-mode') {
@@ -6764,6 +6858,7 @@ ${entry.prompt || ''}`.trim()
           const context = readImageEventContext(payload)
           const eventChatId = String(context.chatId || (payload && (payload.chatId || payload.id || (payload.chat && payload.chat.id))) || '')
           lastSeenChatId = eventChatId
+          renderStoryContinuity(eventChatId)
           for (const placementId of [...imagePlacementMounts.keys()]) clearImagePlacementMount(placementId)
           for (const timer of imageAttachRetryTimers.values()) clearTimeout(timer)
           imageAttachRetryTimers.clear()
@@ -6785,6 +6880,7 @@ ${entry.prompt || ''}`.trim()
             const id = String(chatId || '')
             if (!id) return
             lastSeenChatId = id
+            renderStoryContinuity(id)
             refreshImagePlacements(id).catch((error) => console.log('[LumiDraw] image refresh after chat switch failed:', error.message))
             loadCasts({ chatId: id }).catch(() => {})
             loadWardrobe(true, false, id).catch(() => {})
@@ -6843,6 +6939,7 @@ ${entry.prompt || ''}`.trim()
     try {
       const res = await call('init', {}, 8000)
       settings = res.settings; presets = res.presets; personas = res.personas || []; characters = res.characters || []; places = res.places || []; history = res.history; storyDebug = res.storyDebug || null; autoStatus = res.lastAutoStatus || null
+      if (res.storyContinuity) receiveStoryContinuity(res.chatId || activeChatIdFromCtx(), res.storyContinuity)
       defaults = res.defaults || defaults
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
@@ -6881,6 +6978,8 @@ ${entry.prompt || ''}`.trim()
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
       if ($('.ld-experimental-scene-core')) $('.ld-experimental-scene-core').checked = !!settings.experimentalSceneCore
+      if ($('.ld-experimental-jev-planner')) $('.ld-experimental-jev-planner').checked = settings.experimentalJevPlanner !== false
+      if ($('.ld-prefer-known-cast-moments')) $('.ld-prefer-known-cast-moments').checked = settings.preferKnownCastMoments !== false
       if ($('.ld-parser-temperature')) $('.ld-parser-temperature').value = Number.isFinite(Number(settings.parserTemperature)) ? Number(settings.parserTemperature) : 0.2
       if ($('.ld-parser-overrides')) $('.ld-parser-overrides').value = settings.parserRequestOverrides || ''
       if ($('.ld-parser-maxtokens')) $('.ld-parser-maxtokens').value = settings.parserMaxTokens || 12000
