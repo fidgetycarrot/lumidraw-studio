@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.5.0-jev.5'
+const EXTENSION_VERSION = '1.5.0-jev.6'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -841,6 +841,7 @@ function realSetup(ctx) {
         <div class="ld-state-pill"><span class="ld-dot ld-header-bridge-dot"></span><span class="ld-state-key">Bridge</span><span class="ld-state-value ld-header-bridge">Checking…</span></div>
       </div>
       <div class="ld-global-status"><div class="ld-status ld-gen-status"></div></div>
+      <div class="ld-status ld-boot-status" role="status" style="padding:0 14px">Loading saved LumiDraw data…</div>
 
       <section class="ld-view ld-active" data-view="studio">
         <div class="ld-studio-shell">
@@ -5776,6 +5777,7 @@ ${entry.prompt || ''}`.trim()
     setStatus('.ld-catalog-status', refresh ? 'Rescanning Bridge catalog…' : 'Loading catalog…')
     try {
       const res = await call('list_models', { refresh }, refresh ? 40000 : 20000)
+      if (bootDisposed) return res
       catalog = {
         models: res.models || [],
         samplers: res.samplers || [],
@@ -5797,6 +5799,7 @@ ${entry.prompt || ''}`.trim()
       renderCatalogStatus()
       return res
     } catch (e) {
+      if (bootDisposed) throw e
       catalog.bridge = { connected: false, error: e.message }
       renderCatalogStatus()
       console.log('[LumiDraw] catalog load failed:', e.message)
@@ -6583,6 +6586,7 @@ ${entry.prompt || ''}`.trim()
     const previousModelValue = modelInput ? modelInput.value : ''
     const previousOptionModel = sel && sel.selectedOptions && sel.selectedOptions[0] ? (sel.selectedOptions[0].dataset.model || '') : ''
     const cres = await call('list_connections', {}, 10000)
+    if (bootDisposed) return []
     const connections = Array.isArray(cres.connections) ? cres.connections : []
     if (sel) {
       sel.innerHTML = '<option value="">— default connection —</option>' +
@@ -6985,11 +6989,39 @@ ${entry.prompt || ''}`.trim()
 
   // ------------------------------------------------------------------ boot
   let initialized = false
-  async function tryInit() {
-    if (initialized) return true
+  let bootDisposed = false
+  let initInFlight = null
+  let catalogInFlight = null
+  let catalogReady = false
+  function loadBootCatalog() {
+    if (bootDisposed || catalogReady) return Promise.resolve()
+    if (catalogInFlight) return catalogInFlight
+    catalogInFlight = loadCatalog().then(() => {
+      if (bootDisposed) return
+      catalogReady = true
+      setStatus('.ld-boot-status', '')
+    }).catch((error) => {
+      if (!bootDisposed) setStatus('.ld-boot-status', 'Saved data is loaded. The model catalog is unavailable; it will retry when you return to LumiDraw. ' + error.message, 'err')
+    }).finally(() => { catalogInFlight = null })
+    return catalogInFlight
+  }
+  function tryInit() {
+    if (initialized || bootDisposed) return Promise.resolve(initialized)
+    if (!initInFlight) initInFlight = hydrateInit().finally(() => { initInFlight = null })
+    return initInFlight
+  }
+  async function hydrateInit() {
     try {
       const res = await call('init', {}, 8000)
+      if (bootDisposed) return false
+      if (!res.settings || !Array.isArray(res.characters) || !Array.isArray(res.presets) || !Array.isArray(res.history)) {
+        throw new Error('Saved library response was incomplete; existing data was not replaced.')
+      }
       settings = res.settings; presets = res.presets; personas = res.personas || []; characters = res.characters || []; places = res.places || []; history = res.history; storyDebug = res.storyDebug || null; autoStatus = res.lastAutoStatus || null
+      // Saved libraries must not depend on Draw Things, model enumeration,
+      // authentication of parser providers, or catalog availability.
+      renderCharacterList(); renderPersonaList(); renderPlaces(); renderPresetSelect(); renderPresetList(); renderHistory()
+      setStatus('.ld-boot-status', 'Saved data loaded. Connecting services…')
       if (res.storyContinuity) receiveStoryContinuity(res.chatId || activeChatIdFromCtx(), res.storyContinuity)
       defaults = res.defaults || defaults
       $('.ld-host').value = settings.host
@@ -7026,6 +7058,7 @@ ${entry.prompt || ''}`.trim()
       try {
         await reloadParserSources(false)
       } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }
+      if (bootDisposed) return false
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
       if ($('.ld-experimental-scene-core')) $('.ld-experimental-scene-core').checked = !!settings.experimentalSceneCore
@@ -7044,7 +7077,6 @@ ${entry.prompt || ''}`.trim()
       if ($('.ld-story-banned')) $('.ld-story-banned').value = settings.storyBannedTags || ''
       if ($('.ld-story-scene-anchor')) $('.ld-story-scene-anchor').value = settings.storySceneAnchor || ''
       if ($('.ld-story-break')) $('.ld-story-break').checked = settings.storyUseBreakSeparators === true
-      await loadCatalog()
       if (settings.activePreset) { activePreset = settings.activePreset }
       if (activePreset) {
         const p = presets.find((x) => x.name === activePreset)
@@ -7086,6 +7118,7 @@ ${entry.prompt || ''}`.trim()
       loadWardrobe(true, false, bootChatId ? String(bootChatId) : '').catch(() => {})
       updateScanLabel()
       initialized = true
+      void loadBootCatalog()
       // The header shows the version the BACKEND reports, which comes from the
       // installed spindle.json manifest. It used to be a literal in the markup, so
       // it read v0.42.3 through six releases while the manifest said otherwise —
@@ -7114,20 +7147,32 @@ ${entry.prompt || ''}`.trim()
       return true
     } catch (e) {
       console.log('[LumiDraw] backend not ready yet:', e.message)
+      if (!bootDisposed) setStatus('.ld-boot-status', 'LumiDraw could not finish loading. This does not mean your saved data was deleted. Retrying automatically. ' + e.message, 'err')
       return false
     }
   }
   ;(async () => {
-    // Silent boot: the backend restarts alongside the extension on every
-    // update, so early failures are expected — retry quietly, never show
-    // an error the user didn't cause.
-    for (let i = 0; i < 6 && !initialized; i++) {
+    // The backend restarts alongside updates. Retry transient startup failures
+    // without clearing libraries; the status banner distinguishes loading from
+    // an actually empty saved library.
+    for (let i = 0; i < 6 && !initialized && !bootDisposed; i++) {
       if (await tryInit()) return
       await new Promise((r) => setTimeout(r, 4000))
     }
   })()
 
+  const onBootWake = () => {
+    if (bootDisposed || document.visibilityState === 'hidden') return
+    if (!initialized) void tryInit()
+    else if (!catalogReady) void loadBootCatalog()
+  }
+  document.addEventListener('visibilitychange', onBootWake)
+  for (const event of ['focus', 'pageshow', 'online']) window.addEventListener(event, onBootWake)
+
   const cleanup = () => {
+    bootDisposed = true
+    document.removeEventListener('visibilitychange', onBootWake)
+    for (const event of ['focus', 'pageshow', 'online']) window.removeEventListener(event, onBootWake)
     if (troubleshootingDialog) { troubleshootingDialog.remove(); troubleshootingDialog = null }
     imageRestoreDisposed = true
     imagePlacementRefreshSeq++

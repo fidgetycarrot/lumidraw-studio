@@ -10151,17 +10151,29 @@ function directRelationGrounding(entry, actor, target, candidates, profiles, pas
   const verbWords = sentence.split(/\s+/)
   let verbAt = verbWords.findIndex(word => directRelationVerbKey(word) === (clampGrip ? 'clamp' : actionKey))
   if (verbAt < 0) return { valid: false, reason: 'its action could not be located in the source sentence' }
+  // A quote can include a speech attribution outside the quotation marks.
+  // Validate the action itself, not just that larger mixed evidence span.
+  if (directEvidenceInsideDialogue(scope.sentence, verbWords[verbAt])) {
+    return { valid: false, reason: 'the action is spoken dialogue rather than narrated contact' }
+  }
   // "HILDA gave Ash a nudge" is the same bounded action as "HILDA
   // nudges Ash". Its grammatical actor precedes "gave", not the noun nudge.
-  if (actionKey === 'nudge') {
-    const gaveAt = verbWords.findIndex(word => /^(?:gave|gives?)$/.test(word))
-    if (gaveAt >= 0 && gaveAt < verbAt && /\b(?:a|an) (?:\w+ ){0,3}nudge$/.test(verbWords.slice(gaveAt + 1, verbAt + 1).join(' '))) verbAt = gaveAt
+  if (['nudge', 'pinch', 'squeeze', 'pat', 'tap', 'tug', 'push', 'pull'].includes(actionKey)) {
+    const gaveAt = verbWords.findIndex(word => /^(?:gave|gives?|giving)$/.test(word))
+    // "giving the leather over your hip a pinch": your hip is the recipient,
+    // not the grammatical actor preceding the action noun.
+    if (gaveAt >= 0 && gaveAt < verbAt && new RegExp('\\b(?:a|an) (?:\\w+ ){0,3}' + escapeRegExp(verbWords[verbAt]) + '$')
+      .test(verbWords.slice(gaveAt + 1, verbAt + 1).join(' '))) verbAt = gaveAt
   }
   const lead = verbWords.slice(0, verbAt).join(' '), tail = verbWords.slice(verbAt + 1).join(' ')
   if (/\b(?:not|never|no longer|without)\b/.test(lead) || /\b(?:would|could|might|will|shall)\b/.test(lead)) {
     return { valid: false, reason: 'the source sentence negates or only proposes this action' }
   }
   let sourceActor = directRelationMentionOwner(lead, candidates, profiles, true)
+  // A passing-by clause may name the recipient before the actor's hand.
+  // Limit actor attribution to the hand subject, not "past your flank".
+  const handSubject = /(?:^| )((?:his|her|their) (?:[\w]+ ){0,4}(?:fingers|hand|hands) (?:reached|reach|reaches|moved|move|moves)\b.*)$/.exec(lead)
+  if (handSubject) sourceActor = directRelationMentionOwner(handSubject[1], candidates, profiles, true)
   if (!sourceActor && /\b(?:he|she|his|her|they|their)\b/.test(lead)) {
     // The previous sentence's object must not become the next "he" merely
     // because it is the closest name. Ambiguous antecedents stay unresolved.
@@ -10539,6 +10551,7 @@ function directGroupIsSpatial(image) {
 }
 
 function directWardrobeTag(value) {
+  if (/^(?:(?:new|old|worn|dark|black|brown|reinforced)\s+)*leathers$/i.test(String(value || '').trim())) return true
   const tag = animaTag(value)
   return !!tag && (BARE_STATE_RE.test(tag) ||
     (!isNotClothing(tag) && !/\b(?:removed|taken off|not worn)\b/i.test(tag) && (!!garmentZone(tag) || GARMENT_RE.test(tag))))
@@ -10944,6 +10957,35 @@ function coreIdentityFor(profile, subject, banned = '') {
   return { introduction, tags }
 }
 
+// Keep the parser's subject key stable; bind a name only through its own
+// presence quote plus an adjacent matching role/species. Never a scene-wide
+// closest-name guess, and never a new saved character/profile.
+function coreIncidentalNarrativeBinding(subject, passage = '', profiles = {}) {
+  const text = cleanParserMessageText(passage)
+  const role = /\b(dwarf|elf|android|werewolf|orc|goblin|clerk|officer|guard|artisan|smith|merchant)\b/i.exec(subject.name || '')
+  const quote = String(subject.identityEvidence || subject.presenceEvidence || '')
+  const range = quote && scxQuoteRange(text, quote)
+  if (!role || !range || !range.unique || directEvidenceInsideDialogue(passage, range.text)) return null
+  const names = [...range.text.matchAll(/\b(?:Master|Mistress|Captain|Commander|Doctor|Sir|Lady|Lord)\s+([A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?)/g)]
+  if (names.length !== 1) return null
+  const name = names[0][1]
+  if (allKnownProfiles(profiles).some(p => [p.anchor,p.promptName].filter(Boolean).some(n => scxSame(n,name)))) return null
+  const next = text.slice(range.start, range.end + 600).match(/^[\s\S]*?[.!?](?:\s+[^.!?]*[.!?])?/)
+  const context = next ? next[0] : text.slice(range.start, range.end)
+  const roleWord = escapeRegExp(role[1])
+  // A newly introduced object ("Torben greets a dwarf") is not Torben.
+  // Only a definite, adjacent anaphor can supply this name's role here.
+  const firstSentence = (context.match(/^[^.!?]*[.!?]/) || [''])[0]
+  if (!new RegExp('[.!?]\\s+the\\s+' + roleWord + "(?:['’]s|\\b)", 'i').test(context) ||
+    new RegExp('\\b' + roleWord + '\\b', 'i').test(firstSentence) ||
+    new RegExp('\\b(?:a|an|another|other|second|third|two|several|both)\\s+(?:[\\w-]+\\s+){0,2}' + roleWord + 's?\\b', 'i').test(context) ||
+    new RegExp('\\b(?:another|second|third|two|several|both)\\s+(?:[\\w-]+\\s+){0,2}' + roleWord + 's?\\b', 'i').test(text)) return null
+  // Two newly named people in the same introduction cannot share the alias.
+  if ([...context.matchAll(/\b(?:Master|Mistress|Captain|Commander|Doctor|Sir|Lady|Lord)\s+([A-Z][a-z]+)/g)]
+    .some(m => m[1] !== name)) return null
+  return { name, role: role[1].toLowerCase(), evidence: context }
+}
+
 function coreIncidentalCountEvidence(subject, passage = '', profiles = {}) {
   const name = String(subject.name || 'person').replace(/^(?:a|an|the)\s+/i, '').trim()
   const base = { saved: null, resolved: '1other', source: 'incidental NPC; gender not established', ref: null, evidence: '' }
@@ -10958,7 +11000,8 @@ function coreIncidentalCountEvidence(subject, passage = '', profiles = {}) {
   // call the unique participant "bald clerk" while narration says "the clerk
   // flinched, his shoulders...". The job itself never supplies the gender.
   const text = cleanParserMessageText(passage)
-  const labels = [name]
+  const binding = coreIncidentalNarrativeBinding(subject, passage, profiles)
+  const labels = uniqueStrings([name, ...(binding ? [binding.name, binding.role] : [])])
   const role = /^(?:(?:bald|balding|sour-faced|stern-faced|guild|intake)\s+)+(clerk|officer|guard)$/i.exec(name)
   if (role && !new RegExp('\\b(?:another|other|second|third|two|several|both)\\s+(?:[\\w-]+\\s+){0,2}' + role[1] + 's?\\b', 'i').test(text)) {
     const introductions = [...text.matchAll(new RegExp('\\b(?:a|an|the)\\s+((?:[\\w-]+\\s+){0,3}' + role[1] + ')\\b', 'gi'))]
@@ -10968,8 +11011,14 @@ function coreIncidentalCountEvidence(subject, passage = '', profiles = {}) {
   const prefix = new RegExp('(?:^|[,;—])\\s*(?:(?:the|a|an)\\s+)?' + label + '\\s+(?:raised?|lowered?|bowed?|tilted?|shook|nodded?|folded?|crossed?|rubbed?|clenched?|opened?|closed?|tightened?)\\s+(his|her)\\s+', 'i')
   const bodily = new RegExp('(?:^|[,;—])\\s*(?:(?:the|a|an)\\s+)?' + label + '\\s+(?:(?:visibly|slightly|suddenly)\\s+)?(?:flinched|winced|trembled|shivered|recoiled|stiffened),\\s*(his|her)\\s+(?:(?:thin|broad|small|large|bald|pale|trembling)\\s+){0,2}(?:shoulders?|ears?|hands?|head|face|lips?|arms?|chin)\\b', 'i')
   const claims = []
+  // Named actors + self-directed action: "Torben grunted, turning on his
+  // heel". Restrict the lead so another person's possessions cannot count.
+  const selfAction = new RegExp('^(?:(?:the|a|an|Master|Mistress|Captain|Sir|Lady)\\s+)?' + label +
+    '\\s+(?:grunted|said|muttered|replied|turned|stalked|walked|stepped|nodded|shook|raised|lowered|crossed|folded)' +
+    '(?:,?\\s+(?:turning|on|to|with|crossing|folding|raising|lowering|shaking|nodding|thick|heavy|own|left|right)){0,7}\\s+(his|her)\\s+(?:[\\w-]+\\s+){0,2}(?:heel|head|hand|hands|arms|chin|shoulder|shoulders)\\b', 'i')
+  const possessive = binding && new RegExp('^(?:the\\s+)?' + label + "['’]s\\s+(?:[\\w-]+\\s+){0,3}(?:beard|eyes|face|head|hands?|shoulders?)[^,.;!?]{0,100},\\s*(his|her)\\s+(?:[\\w-]+\\s+){0,3}(?:eyes|hands?|shoulders?|head|face)\\b", 'i')
   for (const sentence of text.match(/[^.!?\n]+[.!?]?/g) || []) {
-    const match = prefix.exec(sentence.trim()) || bodily.exec(sentence.trim())
+    const match = prefix.exec(sentence.trim()) || bodily.exec(sentence.trim()) || selfAction.exec(sentence.trim()) || possessive && possessive.exec(sentence.trim())
     if (!match || directEvidenceInsideDialogue(passage, match[0])) continue
     if (/\b(?:if|unless|imagine|imagined|remembered|recalled|hypothetical|would|could|might|will|tomorrow|yesterday)\b/i.test(sentence.slice(0, match.index + match[0].length))) continue
     claims.push({ count: match[1].toLowerCase() === 'his' ? '1boy' : '1girl', evidence: sentence.trim() })
@@ -10985,10 +11034,16 @@ function coreIncidentalIdentity(subject, passage = '', profiles = {}) {
   const name = String(subject.name || 'person').replace(/[<>\r\n:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 96)
   const local = coreIncidentalCountEvidence(subject, passage, profiles)
   const reviewed = subject.incidentalCountDecision
-  const count = reviewed && reviewed.passageFingerprint === scFingerprint(cleanParserMessageText(passage)) &&
+  let count = reviewed && reviewed.passageFingerprint === scFingerprint(cleanParserMessageText(passage)) &&
     ['1boy', '1girl'].includes(reviewed.resolved) && reviewed.source === 'Jev: attributed story pronouns' &&
     reviewed.confidence >= JEV_CHANGE_THRESHOLD ? reviewed : local
-  return { introduction: name.replace(/^(?:a|an|the)\s+/i, ''), tags: [],
+  if (count.resolved === '1other' && !/\b(?:monster|creature|beast|slime|ooze|dragon|animal|wolf|dog|cat|horse|tentacle)\b/i.test(name)) {
+    // Unknown gender is not a nonhuman category. Keep a neutral single-person
+    // count rather than guessing; known male/female humanoids never take this.
+    count = { ...count, resolved: '1person', source: 'incidental person; gender unresolved' }
+  }
+  const binding = coreIncidentalNarrativeBinding(subject, passage, profiles)
+  return { introduction: name.replace(/^(?:a|an|the)\s+/i, ''), tags: [], referenceName: binding && binding.name || '', binding,
     count }
 }
 
@@ -11475,7 +11530,10 @@ function prepareResolvedSceneCore(image, ctx) {
     })
   }
   if (!subjects.length) throw new Error('Experimental scene core found no bound subjects. No image was generated.')
-  const proposedNames = subjects.map((subject) => directSentenceName(directGroupProfileFor(subject, profiles)))
+  const proposedNames = subjects.map((subject) => {
+    const profile = directGroupProfileFor(subject, profiles)
+    return profile ? directSentenceName(profile) : (coreIncidentalNarrativeBinding(subject, passage, profiles) || {}).name || ''
+  })
   const seen = new Set()
   for (const subject of subjects) {
     const profile = directGroupProfileFor(subject, profiles)
@@ -11486,7 +11544,7 @@ function prepareResolvedSceneCore(image, ctx) {
     const count = profile ? coreSavedCount(profile) : identity.count
     subject.coreCountTag = count.resolved
     subject.coreCountDecision = count
-    const proposedName = directSentenceName(profile)
+    const proposedName = profile ? directSentenceName(profile) : identity.referenceName
     const uniqueName = proposedName && proposedNames.filter((name) => normalizeIdentityText(name) === normalizeIdentityText(proposedName)).length === 1
     if (proposedName && !uniqueName) throw new Error(`Two characters share the image-prompt name "${proposedName}". Give them distinct prompt names in their character sheets; no image was generated.`)
     subject.coreReferenceName = uniqueName ? proposedName : ''
@@ -11583,7 +11641,7 @@ function finalizeDirectImagePrompt(image, ctx) {
   }
   const header = headerParts.join(', ')
   const prompt = joinPromptParts([header, image.rating || '', ...defences.positive, body])
-  const negativePrompt = negativeWith(preset.negativePrompt || '',
+  const negativePrompt = negativeWith(directRosterNegative(preset.negativePrompt),
     uniqueStrings([...defences.negatives, ...countDefences.negatives, ...directGroupAdultDefences(image)]))
   // The experimental formatter preserves the saved identity, including terms
   // that the legacy word-stripper could silently erase. Banned conflicts are
@@ -13137,6 +13195,7 @@ function parseDirectGroupFields(item, prompt, present, presenceFieldDeclared, pr
     subjects.push({
       name: entry.name,
       profileRef: profile && profile.ref,
+      presenceEvidence: String(((present || []).find(p => normalizeIdentityText(p.name) === nameKey) || {}).evidence || ''),
       countTag: String((profile && profile.countTag) || entry.countTag || '1other'),
       position: entry.position,
       includeSavedAnatomy: !!entry.includeSavedAnatomy,
@@ -13431,33 +13490,19 @@ function applyIdentityLock(prompt, profiles, trace = null) {
   return { prompt: text, restored }
 }
 
-// Three- and four-person prompts are where an otherwise correct roster most
-// often grows one invented body. Two-person prompts now share the spatial
-// serializer but keep their proven count behavior unchanged. For a larger
-// group, negate only the next count in each trained gender family: a
-// 1girl/2boys frame gets 2girls and 3boys as overshoot guards. This does not
-// suppress either requested count and remains independent of scene content.
+// Never manufacture negative count tags. The positive roster is authoritative.
 function directGroupCountDefences(prompt) {
-  const out = { negatives: [], notes: [] }
-  const tags = String(prompt || '').split(/\bBREAK\b/)[0]
-    .split(',').map((tag) => tag.trim()).filter(Boolean)
-  let female = 0
-  let male = 0
-  let total = 0
-  for (const tag of tags) {
-    const match = DIRECT_COUNT_FULL_RE.exec(normalizeDirectCountTag(tag))
-    if (!match) break
-    const n = Number(match[1])
-    const kind = directCountBase(match[2])
-    total += n
-    if (['girl', 'woman', 'female'].includes(kind)) female += n
-    if (['boy', 'man', 'male'].includes(kind)) male += n
-  }
-  if (total < 3 || (!female && !male)) return out
-  out.negatives.push(female ? `${female + 1}girls` : '1girl')
-  out.negatives.push(male ? `${male + 1}boys` : '1boy')
-  out.notes.push(`exact ${total}-person group guarded against a one-person gender-count overshoot`)
-  return out
+  // Roster counts belong in the positive prompt, not automatic negatives.
+  return { negatives: [], notes: [] }
+}
+
+function directRosterNegative(value) {
+  // Remove stale count guards pasted into old presets at rendering time only.
+  // No preset/library rewrite. Other negatives remain unchanged.
+  return String(value || '').split(',').map(tag => tag.trim()).filter(tag => {
+    const bare = tag.replace(/^\((.*?)(?::[\d.]+)?\)$/, '$1')
+    return !DIRECT_COUNT_FULL_RE.test(bare)
+  }).filter(Boolean).join(', ')
 }
 
 // The compiler's two anatomy defences, rebuilt for a prompt LumiDraw did not
@@ -17282,9 +17327,14 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
       case 'list_models': {
         const presets = await getPresets()
-        for (const p of presets) { try { await rememberModels(p.config || {}) } catch { /* ok */ } }
         const history = await getHistory()
-        for (const h of history) { try { await rememberModels({ model: h.model }) } catch { /* ok */ } }
+        // One catalog merge, not one disk read/write per preset/history row.
+        const configs = [...presets.map(p => p.config || {}), ...history.map(h => ({ model: h.model }))]
+        try {
+          await rememberCatalog({ models: configs.flatMap(c => [c.model, c.refiner_model]).filter(Boolean),
+            samplers: configs.map(c => c.sampler).filter(Boolean),
+            loras: configs.flatMap(c => (c.loras || []).map(l => l.file || l.name || l)).filter(Boolean) })
+        } catch (_) { /* catalog enumeration still works without remembered hints */ }
         const settings = await getSettings()
         const catalog = await buildCatalog(settings, { refresh: !!payload.refresh })
         reply = ok(payload, requestId, catalog)
@@ -18549,6 +18599,13 @@ function jpSceneSubjects(image, profiles) {
 }
 function jpPrepareIncidentalCounts(images, profiles, passage) {
   const decisions = []
+  const incidentals = images.flatMap(image => image.groupSubjects || []).filter(s => !s.profileRef && !directGroupProfileFor(s, profiles))
+  for (const subject of incidentals) {
+    const related = incidentals.filter(s => normalizeIdentityText(s.name) === normalizeIdentityText(subject.name))
+      .map(s => ({ binding: coreIncidentalNarrativeBinding(s, passage, profiles), quote: s.presenceEvidence }))
+      .filter(row => row.binding)
+    if (related.length && new Set(related.map(row => row.binding.name)).size === 1) subject.identityEvidence = related[0].quote
+  }
   for (let i = 0; i < images.length; i++) for (const subject of images[i].groupSubjects || []) {
     if (directGroupProfileFor(subject, profiles) || subject.profileRef) continue
     delete subject.incidentalCountDecision
@@ -19767,7 +19824,7 @@ function finalizePlannedImagePrompt(image, ctx) {
   const header = reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), image.rating).split(/\bBREAK\b/)
     .map(part => part.replace(/^[\s,.]+|[\s,.]+$/g, '')).filter(Boolean).join(', ')
   const prompt = plannedCompilerGrammar(joinPromptParts([header, image.rating || '', ...defences.positive, body]))
-  const negativePrompt = negativeWith(preset.negativePrompt || '', uniqueStrings([...defences.negatives, ...countDefences.negatives, ...directGroupAdultDefences(image)]))
+  const negativePrompt = negativeWith(directRosterNegative(preset.negativePrompt), uniqueStrings([...defences.negatives, ...countDefences.negatives, ...directGroupAdultDefences(image)]))
   core.preflight = plannedPreflight(image, counts, descriptions)
   core.compilation = { source: 'unified scene plan', originalPrompt, framing, omissions, appliedDecisions: decisions.applied,
     identityPolicy: 'complete saved record; visibility-aware rendering without a numeric trait cap',
@@ -19860,9 +19917,8 @@ function scxOccurrence(text, quote, occurrence) {
   }
   return at
 }
-// Ignore paired presentation-only emphasis while retaining source offsets.
-// No punctuation, words, negation, strike-through or arbitrary fuzzy matching
-// is removed. A model may quote "clink" where the story wrote "*clink*".
+// Normalize presentation only, retaining an offset for every source character.
+// Curly/straight quotes are equivalent, but commas, negation and words are not.
 function scxEvidenceView(value) {
   const source = String(value || '')
   const omitted = new Set()
@@ -19874,7 +19930,10 @@ function scxEvidenceView(value) {
   }
   let text = ''
   const offsets = []
-  for (let i = 0; i < source.length; i++) if (!omitted.has(i)) { text += source[i]; offsets.push(i) }
+  for (let i = 0; i < source.length; i++) if (!omitted.has(i)) {
+    text += source[i].replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+    offsets.push(i)
+  }
   return { text, offsets }
 }
 function scxQuoteRange(source, quote, occurrence = 1) {
@@ -19902,14 +19961,15 @@ function scxEvent(raw, index, profiles, source) {
   if (words < (raw.source === 'scene-card' ? 1 : 3) || words > 80 || !Number.isInteger(occurrence) || occurrence < 1 || occurrence > 64) return { error: 'Evidence needs a bounded exact source excerpt and a valid occurrence.' }
   const text = raw.source === 'narrative' ? source.passage : source.card
   const range = scxQuoteRange(text, evidence, occurrence)
-  if (!range) return { error: 'Evidence is not an exact excerpt of the stated source (ignoring paired emphasis only).' }
+  if (!range) return { error: 'Evidence is not an exact excerpt of the stated source (ignoring paired emphasis and typographic quote variants only).' }
   const at = raw.at === undefined ? evidence : scxText(raw.at)
   const temporal = scxQuoteRange(range.text, at)
   if (!temporal || !temporal.unique) return { error: 'Temporal action excerpt is not uniquely within its evidence.' }
   const event = { id: 'e' + index, kind: raw.kind, operation: raw.operation, source: raw.source,
     evidence: range.text, at: temporal.text, occurrence, evidenceStart: range.start, evidenceEnd: range.end,
     start: range.start + temporal.start, end: range.start + temporal.end, sourceIndex: index,
-    ...(range.text !== evidence ? { evidenceRaw: evidence, evidenceNormalization: 'paired-markdown-emphasis' } : {}) }
+    ...(range.text !== evidence ? { evidenceRaw: evidence, evidenceNormalization:
+      /[‘’“”]/.test(range.text + evidence) ? 'typographic-quotes-and-paired-emphasis' : 'paired-markdown-emphasis' } : {}) }
   if (raw.kind === 'wardrobe') {
     const profile = scxProfile(raw.name, profiles)
     const items = scxTags(raw.items)
@@ -19937,9 +19997,33 @@ function scxAffectedSlots(event) {
 }
 function scxRemoveItems(worn, items) {
   return worn.filter(old => !items.some(item => scxSame(old, item) ||
+    /^(?:(?:all|his|her|their|the)\s+)*(?:armor|armour)$/i.test(item) && scxArmorItem(old) ||
     // A generic removal identifies its garment family, not every layer in its
     // body zone. Removing a coat must preserve shirt and bra underneath.
     scxSame(item, garmentFamily(item)) && garmentFamily(old) === garmentFamily(item)))
+}
+
+function scxArmorItem(item) {
+  return /\b(?:armor|armour|leathers|breastplate|cuirass|gorget|pauldron|gauntlet|tasset|greave|sabaton|vambrace)s?\b/i.test(item)
+}
+
+function scxReplacedArmor(worn, event) {
+  if (event.source !== 'narrative' || !['wear', 'observe'].includes(event.operation)) return []
+  const ensemble = (event.items || []).find(item => /\b(?:armor|armour|leathers)$/i.test(item))
+  if (!ensemble) return []
+  // A whole-set change, not an added glove or a carried replacement set.
+  // Only verified story events reach this reducer. No model prompt is memory.
+  const evidence = event.evidence || ''
+  // The change cue must describe the ensemble, not another transaction or
+  // garment elsewhere in the sentence ("traded keys while wearing armor").
+  const ensembleWords = '(?:[a-z-]+\\s+){0,4}(?:armor|armour|leathers)\\b'
+  const changedEnsemble = new RegExp('\\b(?:newly donned|freshly donned|changed into|changes into|now wearing)\\s+' + ensembleWords, 'i')
+  const exchangedEnsemble = new RegExp('\\b(?:swapped|replaced|traded)\\s+' + ensembleWords + '\\s+(?:for|with)\\s+' + ensembleWords, 'i')
+  if (!changedEnsemble.test(evidence) && !exchangedEnsemble.test(evidence)) return []
+  if (/\b(?:not|never|without|if|would|could|might|will|tomorrow)\b|n['’]t\b/i.test(evidence)) return []
+  const leather = /\bleather(?:s)?\b/i.test(ensemble)
+  return worn.filter(old => scxArmorItem(old) && !scxSame(old, ensemble) &&
+    !(leather && /\bleather\b/i.test(old) && !/\b(?:metal|iron|steel|plate)\b/i.test(old)))
 }
 function scxApplyItems(worn, items) {
   let result = [...worn]
@@ -20004,7 +20088,8 @@ function reduceStoryContinuityEvents(before, events, profiles = null) {
   for (const event of scxSort(events)) {
     if (event.kind === 'wardrobe') {
       const touched = narratedSlots.get(event.ref) || new Set()
-      const affects = scxAffectedSlots(event)
+      const affects = uniqueStrings([...scxAffectedSlots(event),
+        ...scxReplacedArmor(coreWardrobeTags(after.outfits[event.ref] || []), event).map(wardrobeSlot)])
       let items = event.items
       if (event.source === 'scene-card') items = items.filter(item => {
         const slots = coreAbsentSlots(item).length ? coreAbsentSlots(item) : [wardrobeSlot(item)]
@@ -20020,11 +20105,14 @@ function reduceStoryContinuityEvents(before, events, profiles = null) {
       const replayDefaults = (event.displacedProfileDefaults || []).filter(tag => defaultItems.some(old => scxSame(tag, old)))
       const displacedDefaults = uniqueStrings([...replayDefaults,
         ...scxDisplacedProfileDefaults(after, event, profiles)])
-      const worn = coreWardrobeTags(after.outfits[event.ref] || []).filter(tag => !displacedDefaults.some(old => scxSame(tag, old)))
+      const priorWorn = coreWardrobeTags(after.outfits[event.ref] || [])
+      const replacedArmor = scxReplacedArmor(priorWorn, { ...event, items })
+      const worn = priorWorn.filter(tag => ![...displacedDefaults, ...replacedArmor].some(old => scxSame(tag, old)))
       const next = event.operation === 'remove' ? scxRemoveItems(worn, items) : scxApplyItems(worn, items)
       after.outfits[event.ref] = next
       after.outfitMeta[event.ref] = { source: 'scene-core', evidence: event.evidence,
         messageId: event.messageId || '', swipeId: event.swipeId, storyEvent: event.id, scope: 'end-of-message',
+        ...(replacedArmor.length ? { replacedArmor } : {}),
         profileDefaultItems: defaultItems.filter(tag => next.some(worn => scxSame(worn, tag)) &&
           !items.some(item => scxSame(item, tag) || garmentFamily(item) === garmentFamily(tag) && wardrobeSlot(item) === wardrobeSlot(tag))) }
     } else if (event.kind === 'environment') {
@@ -20242,7 +20330,7 @@ async function extractStoryContinuity({ userId, settings, profiles, before, targ
 // candidates, rendered prompts, or generation results as story state.
 const STORY_CONTINUITY_FILE = 'story_continuity_v1.json'
 const STORY_CONTINUITY_VERSION = 1
-const STORY_CONTINUITY_RECOVERY_POLICY = 2
+const STORY_CONTINUITY_RECOVERY_POLICY = 3
 const storyContinuityChats = new Map()
 const storyContinuityWrites = new Map()
 const storyContinuityEvaluations = new Map()
