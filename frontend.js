@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.5.0-jev.4'
+const EXTENSION_VERSION = '1.5.0-jev.5'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -18,6 +18,18 @@ function lumidrawTroubleshootingHtml(report, imageData = '') {
     '<title>LumiDraw troubleshooting report</title><style>body{font:16px system-ui;margin:24px;max-width:1100px}img{max-width:100%;max-height:900px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}</style></head><body>' +
     '<h1>LumiDraw troubleshooting report</h1><p>Private report. Contains prompts and may include story text. Nothing was uploaded automatically.</p>' +
     image + summary + '<h2>Diagnostic data</h2><pre>' + escape(JSON.stringify(report, null, 2)) + '</pre></body></html>'
+}
+
+function lumidrawClaritySummary(review) {
+  if (!review) return []
+  return [
+    'Final wording review: ' + (review.status || 'not recorded') + ' · ' + (review.mode || 'unknown mode'),
+    'Wording: ' + (review.changesApplied ? 'applied ' + (review.selectedVariant || 'a supported alternative') : 'outgoing prompt retained'),
+    ...(review.protectedTagsUnchanged === true ? ['Protected: rendered tags, counts, per-character clothing and props, negative prompt unchanged.'] : []),
+    ...(review.elapsedMs != null ? ['Review time: ' + review.elapsedMs + ' ms · ' + Number(review.requestCount || 0) +
+      ' request(s)' + (review.sharedBatch ? ' shared across this image batch' : '') + (review.cacheHit ? ' · cached result' : '')] : []),
+    ...(review.issues || []).map(issue => 'Wording note: ' + (typeof issue === 'string' ? issue : issue.reason || issue.detail || issue.kind || JSON.stringify(issue))),
+  ]
 }
 
 function lumidrawContinuityStatus(continuity) {
@@ -3405,10 +3417,15 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       'Opening source: ' + ((core.sceneAction || {}).source || 'not recorded'),
       'Location: ' + ((core.location || {}).setting || []).join(', ') + ' [' + ((core.location || {}).source || 'unknown') + ']',
       'Background details: ' + (((core.location || {}).details || []).join(', ') || 'none recorded'),
+      ...(core.promptDocument ? [
+        'Rendered setting: ' + ((core.renderedNatural || {}).setting || core.promptDocument.natural.setting || 'none'),
+        'Prompt sections: model tags and character-owned blocks are protected; Jev reviews visual wording only.',
+      ] : []),
       ...((((selected || {}).storyContinuity || {}).snapshot || {}).notes || []).map(note => 'Clothing timeline: ' + note),
       ...(core.compilation ? ['Compiled by: ' + core.compilation.source + ' · ' + core.compilation.wordCount + ' words',
         'Framing: ' + (core.compilation.framing || []).join(', '),
         'Preflight: ' + ((core.preflight || {}).status || 'not recorded')] : []),
+      ...lumidrawClaritySummary((selected && selected.finalClarityReview) || core.finalClarityReview),
       ...(core.subjects || []).flatMap((subject) => [
         '', subject.name + ' — ' + subject.introduction,
         'Count: ' + (subject.count ? subject.count.saved + ' → ' + subject.count.resolved + ' [' + subject.count.source + ']' : 'not recorded by this version'),
