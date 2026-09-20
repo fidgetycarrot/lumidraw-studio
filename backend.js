@@ -1359,7 +1359,7 @@ async function recordImagePlacement(userId, input = {}) {
     messageId,
     imageId: String(input.imageId || (previous && previous.imageId) || ''),
     url,
-    alt: markdownAltText(input.alt || (previous && previous.alt) || 'Generated image', 220),
+    alt: storyImageAltText(input.alt || (previous && previous.alt) || 'Generated image'),
     width: placementNumber(input.width || (previous && previous.width)),
     height: placementNumber(input.height || (previous && previous.height)),
     anchor: String(input.anchor || (previous && previous.anchor) || '').trim().slice(0, 500),
@@ -4070,6 +4070,14 @@ function markdownAltText(value, maxChars = 100) {
     .trim()
 }
 
+// Describe the image's action instead of repeating the preset's quality header.
+// This is accessibility text only; stable IDs/URLs identify an image, not its alt.
+function storyImageAltText(value, maxChars = 220) {
+  const text = String(value || '')
+  const scene = /\bScene:\s*([^\r\n]*?)(?=\s+(?:Mood and energy|Setting|Camera and environment):|$)/i.exec(text)
+  return markdownAltText(scene ? scene[1] : text, maxChars)
+}
+
 // Current Lumiverse virtualizes messages and lazy-loads images. Markdown images
 // have no intrinsic dimensions until their file is decoded, so a row can be measured
 // as text-only and then jump by hundreds of pixels when the image loads. Supplying
@@ -4086,7 +4094,7 @@ function storyImageMarkup(imageUrl, alt, dimensions = null) {
   const width = Math.max(0, Math.round(Number(dimensions && dimensions.width) || 0))
   const height = Math.max(0, Math.round(Number(dimensions && dimensions.height) || 0))
   const size = width > 0 && height > 0 ? ` width="${width}" height="${height}"` : ''
-  return `<img data-lumidraw-image="1" src="${htmlAttr(imageUrl)}" alt="${htmlAttr(markdownAltText(alt, 120))}"${size} loading="lazy" decoding="async">`
+  return `<img data-lumidraw-image="1" src="${htmlAttr(imageUrl)}" alt="${htmlAttr(markdownAltText(alt, 220))}"${size} loading="lazy" decoding="async">`
 }
 
 function removeImageMarkupFromContent(content, imageUrl) {
@@ -7690,7 +7698,7 @@ function isPovStagingCue(value) {
 
 // Clothing is a garment. A body part is not clothing, and neither is an
 // action. "wearing a bare hand" is a phantom limb waiting to happen.
-const GARMENT_RE = /\b(?:shirt|blouse|dress|skirt|trousers|pants|jeans|shorts|coat|jacket|cloak|cape|capelet|robe|gown|tunic|sweater|hoodie|vest|corset|bodice|apron|uniform|armou?r|helmet|hood|hat|cap|scarf|tie|belt|glove|gloves|mitten|sock|socks|stocking|stockings|pantyhose|tights|shoe|shoes|boot|boots|sandal|sandals|heels|lingerie|bra|panties|underwear|briefs|thong|swimsuit|bikini|kimono|yukata|haori|sash|obi|collar|choker|necklace|earring|earrings|bracelet|ring|glasses|goggles|mask|veil|crown|tiara|headband|ribbon|bow|jewelry|clothes|clothing|outfit|garment|leotard|bodysuit|overalls|jumpsuit|nightgown|pyjamas|pajamas|towel|blanket|harness|strap|straps)\b/i
+const GARMENT_RE = /\b(?:shirt|blouse|dress|skirt|trousers|pants|jeans|shorts|coat|jacket|cloak|cape|capelet|robe|gown|tunic|sweater|hoodie|vest|corset|bodice|apron|uniform|armou?r|gauntlets?|pauldrons?|gorgets?|tassets?|greaves?|sabatons?|vambraces?|cuirass|breastplates?|helmet|hood|hat|cap|scarf|tie|belt|glove|gloves|mitten|sock|socks|stocking|stockings|pantyhose|tights|shoe|shoes|boot|boots|sandal|sandals|heels|lingerie|bra|panties|underwear|briefs|thong|swimsuit|bikini|kimono|yukata|haori|sash|obi|collar|choker|necklace|earring|earrings|bracelet|ring|glasses|goggles|mask|veil|crown|tiara|headband|ribbon|bow|jewelry|clothes|clothing|outfit|garment|leotard|bodysuit|overalls|jumpsuit|nightgown|pyjamas|pajamas|towel|blanket|harness|strap|straps)\b/i
 
 // Bare-state words are legitimate outfit values even though no garment is named.
 const BARE_STATE_RE = /^(?:nude|naked|topless|bottomless|shirtless|barefoot|bare feet|bare legs|bare thighs|bare shoulders|no shoes|no pants|no bottoms|no shirt|no top|no underwear|no panties|no bra|undressed|dressed|clothed|fully clothed|partially clothed|disheveled clothes|torn clothes|open shirt|wet clothes|bloody clothes)$/i
@@ -7760,6 +7768,8 @@ function garmentFamily(tag) {
   const text = normalizeIdentityText(tag)
   if (!text) return ''
   for (const [re, canonical] of FAMILY_ALIASES) if (re.test(text)) return canonical
+  const armor = text.match(/\b(gauntlet|pauldron|gorget|tasset|greave|sabaton|vambrace|breastplate)s?\b/)
+  if (armor) return armor[1]
   const noun = text.match(/\b(?:sweatshirt|hoodie|pullover|sweater|cardigan|jacket|coat|blazer|vest|shirt|blouse|camisole|bra|dress|gown|robe|jumpsuit|overalls|shorts|pants|trousers|jeans|skirt|leggings|sweatpants|sneakers|shoes|boots|sandals|heels|socks|stockings|gloves|scarf|belt|hat)\b/)
   return noun ? noun[0] : text.split(/\s+/).pop()
 }
@@ -10035,6 +10045,8 @@ function directRelationVerbKey(value) {
     nudge: 'nudge', nudges: 'nudge', nudged: 'nudge', nudging: 'nudge',
     stroke: 'stroke', strokes: 'stroke', stroked: 'stroke', stroking: 'stroke',
     squeeze: 'squeeze', squeezes: 'squeeze', squeezed: 'squeeze', squeezing: 'squeeze',
+    grip: 'grip', grips: 'grip', gripped: 'grip', gripping: 'grip',
+    clamp: 'clamp', clamps: 'clamp', clamped: 'clamp', clamping: 'clamp',
   }
   if (ordinaryForms[raw]) return ordinaryForms[raw]
   const irregular = {
@@ -10049,6 +10061,105 @@ function directRelationVerbKey(value) {
     .replace(/es$/i, '')
     .replace(/s$/i, '')
     .replace(/([b-df-hj-np-tv-z])\1$/i, '$1')
+}
+
+function directRelationEvidenceScope(passage, evidence) {
+  const raw = String(passage || '')
+  const words = normalizeIdentityText(evidence).split(/\s+/).filter(Boolean)
+  if (!words.length) return null
+  const pattern = new RegExp(words.map(escapeRegExp).join('[^a-z0-9]+'), 'ig')
+  const matches = [...raw.matchAll(pattern)]
+  // An abbreviated quote that occurs twice cannot identify an arrangement.
+  if (matches.length !== 1) return null
+  const at = matches[0].index, quoteEnd = at + matches[0][0].length
+  const before = raw.slice(0, at)
+  const paragraphBoundary = before.lastIndexOf('\n\n')
+  const paragraphStart = paragraphBoundary < 0 ? 0 : paragraphBoundary + 2
+  const boundary = Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'), before.lastIndexOf('?'), paragraphStart - 1)
+  const start = Math.max(0, boundary + 1)
+  const tail = raw.slice(quoteEnd)
+  const stop = tail.search(/[.!?\n]/)
+  const end = stop < 0 ? raw.length : quoteEnd + stop
+  return { sentence: raw.slice(start, end).trim(), before: raw.slice(Math.max(0, paragraphStart), start), start, end }
+}
+
+function directRelationMentionOwner(text, candidates, profiles, last = false, unambiguous = false) {
+  const normalized = normalizeIdentityText(text)
+  const aliases = []
+  for (const subject of candidates || []) {
+    const profile = directGroupProfileFor(subject, profiles)
+    const names = uniqueStrings([subject.name, profile && profile.anchor, profile && profile.promptName]
+      .filter(Boolean).map(normalizeIdentityText))
+    for (const name of names) aliases.push({ name, key: directGroupSubjectKey(subject) })
+    // Only an unambiguous saved species/role noun can resolve a local pronoun;
+    // "man" alone cannot distinguish two male characters.
+    const phrase = normalizeIdentityText(profile && profile.subject || '')
+    for (const noun of ['elf', 'android', 'werewolf', 'woman', 'man']) {
+      if (new RegExp('\\b' + noun + '\\b').test(phrase)) aliases.push({ name: noun, key: directGroupSubjectKey(subject) })
+    }
+    if (profile && profiles.persona && profile.ref === profiles.persona.ref) aliases.push({ name: 'your', key: directGroupSubjectKey(subject) })
+  }
+  const hits = []
+  for (const alias of aliases) {
+    if (new Set(aliases.filter(item => item.name === alias.name).map(item => item.key)).size !== 1) continue
+    const re = new RegExp('(?:^| )' + escapeRegExp(alias.name) + '(?= |$)', 'g')
+    for (const match of normalized.matchAll(re)) hits.push({ key: alias.key, at: match.index, length: alias.name.length })
+  }
+  hits.sort((a, b) => a.at - b.at || b.length - a.length)
+  if (unambiguous && new Set(hits.map(hit => hit.key)).size !== 1) return ''
+  return hits.length ? hits[last ? hits.length - 1 : 0].key : ''
+}
+
+function directRelationGrounding(entry, actor, target, candidates, profiles, passage, evidence, action) {
+  const scope = directRelationEvidenceScope(passage, evidence)
+  if (!scope) return { valid: false, reason: 'the relation quote did not locate one unique source sentence' }
+  const sentence = normalizeIdentityText(scope.sentence)
+  if (DIRECT_NONCURRENT_MOMENT_RE.test(scope.sentence) || /\b(?:yesterday|previously|earlier|used to|had (?:gripped|clamped|held|leaned))\b/i.test(scope.sentence)) {
+    return { valid: false, reason: 'the source sentence describes recalled, earlier, or hypothetical contact' }
+  }
+  const actionKey = directRelationVerbKey(action)
+  const evidenceWords = normalizeIdentityText(evidence).split(/\s+/)
+  const exactVerb = evidenceWords.some(word => directRelationVerbKey(word) === actionKey)
+  // This is a bounded hand-contact equivalence, not a scene-wide synonym
+  // search. It requires a hand/knuckle subject and an explicitly owned target.
+  const clampGrip = actionKey === 'grip' && evidenceWords.some(word => directRelationVerbKey(word) === 'clamp')
+  if (!exactVerb && !clampGrip) return { valid: false, reason: 'its action verb was not supported by the evidence quote' }
+  const verbWords = sentence.split(/\s+/)
+  let verbAt = verbWords.findIndex(word => directRelationVerbKey(word) === (clampGrip ? 'clamp' : actionKey))
+  if (verbAt < 0) return { valid: false, reason: 'its action could not be located in the source sentence' }
+  // "HILDA gave Ash a nudge" is the same bounded action as "HILDA
+  // nudges Ash". Its grammatical actor precedes "gave", not the noun nudge.
+  if (actionKey === 'nudge') {
+    const gaveAt = verbWords.findIndex(word => /^(?:gave|gives?)$/.test(word))
+    if (gaveAt >= 0 && gaveAt < verbAt && /\b(?:a|an) (?:\w+ ){0,3}nudge$/.test(verbWords.slice(gaveAt + 1, verbAt + 1).join(' '))) verbAt = gaveAt
+  }
+  const lead = verbWords.slice(0, verbAt).join(' '), tail = verbWords.slice(verbAt + 1).join(' ')
+  if (/\b(?:not|never|no longer|without)\b/.test(lead) || /\b(?:would|could|might|will|shall)\b/.test(lead)) {
+    return { valid: false, reason: 'the source sentence negates or only proposes this action' }
+  }
+  let sourceActor = directRelationMentionOwner(lead, candidates, profiles, true)
+  if (!sourceActor && /\b(?:he|she|his|her|they|their)\b/.test(lead)) {
+    // The previous sentence's object must not become the next "he" merely
+    // because it is the closest name. Ambiguous antecedents stay unresolved.
+    sourceActor = directRelationMentionOwner(scope.before, candidates, profiles, false, true)
+  }
+  const sourceTarget = directRelationMentionOwner(tail, candidates, profiles)
+  if (sourceActor && sourceActor !== directGroupSubjectKey(actor)) return { valid: false, reason: 'the source action belongs to a different actor' }
+  if (sourceTarget && sourceTarget !== directGroupSubjectKey(target)) return { valid: false, reason: 'the source action has a different target' }
+  if (!clampGrip) return { valid: true, reason: 'exact source verb; no contradictory participant binding' }
+  if (/\b(?:was|were|been)\b/.test(lead) || /^by\b/.test(tail)) return { valid: false, reason: 'passive clamping does not establish this actor gripping' }
+  if (!sourceActor || !sourceTarget || !/\b(?:fingers|knuckles|hand|hands)\b/.test(lead) || !/\baround\b/.test(tail)) {
+    return { valid: false, reason: 'clamp-to-grip equivalence needs source-bound hand contact and target ownership' }
+  }
+  const ownedTarget = /\b(?:your|[a-z]+ s)\s+(?:[a-z]+\s+){0,3}?(gauntlet cuff|cuff|wrist|hand|forearm|sleeve)\b/.exec(tail)
+  if (!ownedTarget) return { valid: false, reason: 'clamp-to-grip target surface was not explicit in the source sentence' }
+  const actorPart = directRelationBodyPart(entry.actor_part || entry.actorPart)
+  if (actorPart && !/^(?:finger|fingers|knuckle|knuckles|hand|hands)$/.test(actorPart)) {
+    return { valid: false, reason: 'the proposed gripping body part conflicts with the source hand contact' }
+  }
+  return { valid: true, reason: 'source-bound hand clamping rendered as gripping; contact surface preserved',
+    action: actorPart && directRelationPartIsPlural(actorPart) ? 'grip' : 'grips',
+    targetPart: ownedTarget[1], evidenceContext: scope.sentence, repaired: true }
 }
 
 function directRelationProfileFor(relation, role, profiles) {
@@ -10196,7 +10307,7 @@ function directGroupRelationSummary(image, profiles) {
 // the serializer can collapse near-duplicate cues without touching clothing,
 // pose, or action tags.
 const DIRECT_EXPRESSION_FACE_RE = /\b(?:faint smile|soft smile|smil\w*|grin\w*|smirk\w*|closed mouth|parted lips|pressed lips|furrowed brow|raised eyebrow|narrowed eyes|half-closed eyes|wide-eyed|wide eyed|closed eyes|softened eyes|tense jaw|clenched teeth|biting lip|flushed cheeks|tear\w*|downturned mouth|open mouth|frown\w*|scowl\w*|expression)\b/i
-const DIRECT_EXPRESSION_GAZE_RE = /\b(?:looking at|looking away|looking to the side|looking down|looking up|looking back|averting eyes|eye contact|gaze lowered|watching from the corner)\b/i
+const DIRECT_EXPRESSION_GAZE_RE = /\b(?:(?:look(?:s|ed|ing)?|gaz(?:e|es|ed|ing)|star(?:e|es|ed|ing)|glanc(?:e|es|ed|ing))\s+(?:at|across|towards?|through|around|past|into|over|away|to the side|down|up|back)|averting eyes|eye contact|gaze lowered|watch(?:es|ed|ing)?\s+(?:from the corner|[a-z][a-z'-]*))\b/i
 
 function directExpressionKind(value) {
   const text = String(value || '')
@@ -10271,7 +10382,7 @@ function directGroupGazeResolvable(cue, image, profiles) {
   const normalized = normalizeIdentityText(directGroupReplaceNames(
     cue, (image && image.groupSubjects) || [], profiles))
   if (!normalized) return true
-  if (/\blooking at viewer\b/.test(normalized)) {
+  if (/\b(?:at|towards?|into) (?:the )?(?:viewer|camera)\b/.test(normalized)) {
     const grounding = normalizeIdentityText([
       image && image.moment_evidence,
       image && image.scene_summary,
@@ -10315,6 +10426,7 @@ function directGroupMechanicsDebug(image, profiles, banned = '') {
     rating: String((image && image.rating) || ''),
     wardrobeSnapshot: (image && image.wardrobeSnapshot) || {},
     wardrobeDecisions: (image && image.wardrobeDecisions) || [],
+    relationDecisions: (image && image.relationDecisions) || [],
     aspect: String((image && image.aspect) || ''),
     groupSource: String((image && image.groupSource) || ''),
     sceneMoodRequested: mood.requested,
@@ -10816,14 +10928,24 @@ function coreIncidentalCountEvidence(subject, passage = '', profiles = {}) {
   const ambiguousLabel = /['’]|\b(?:man|woman|boy|girl|male|female)-|\b(?:or|like)\b/i.test(name) || female === male
   const gender = ambiguousLabel ? '' : female ? '1girl' : male ? '1boy' : ''
   if (gender) return { ...base, resolved: gender, source: 'explicit incidental subject label', evidence: name }
-  // Only simple, same-subject possessives are resolved locally. Aliases and
-  // discourse pronouns go to the bounded Jev question, not a nearest-his rule.
+  // Only syntactically bound possessives are resolved locally. A parser may
+  // call the unique participant "bald clerk" while narration says "the clerk
+  // flinched, his shoulders...". The job itself never supplies the gender.
   const text = cleanParserMessageText(passage)
-  const prefix = new RegExp('^(?:(?:the|a|an)\\s+)?' + escapeRegExp(name) + '\\s+(?:raised?|lowered?|bowed?|tilted?|shook|nodded?|folded?|crossed?|rubbed?|clenched?|opened?|closed?|tightened?)\\s+(his|her)\\s+', 'i')
+  const labels = [name]
+  const role = /^(?:(?:bald|balding|sour-faced|stern-faced|guild|intake)\s+)+(clerk|officer|guard)$/i.exec(name)
+  if (role && !new RegExp('\\b(?:another|other|second|third|two|several|both)\\s+(?:[\\w-]+\\s+){0,2}' + role[1] + 's?\\b', 'i').test(text)) {
+    const introductions = [...text.matchAll(new RegExp('\\b(?:a|an|the)\\s+((?:[\\w-]+\\s+){0,3}' + role[1] + ')\\b', 'gi'))]
+    if (introductions.every(m => [normalizeIdentityText(name), normalizeIdentityText(role[1])].includes(normalizeIdentityText(m[1]).replace(/^(?:guild|intake)\s+/, '')))) labels.push(role[1])
+  }
+  const label = '(?:' + labels.map(escapeRegExp).join('|') + ')'
+  const prefix = new RegExp('(?:^|[,;—])\\s*(?:(?:the|a|an)\\s+)?' + label + '\\s+(?:raised?|lowered?|bowed?|tilted?|shook|nodded?|folded?|crossed?|rubbed?|clenched?|opened?|closed?|tightened?)\\s+(his|her)\\s+', 'i')
+  const bodily = new RegExp('(?:^|[,;—])\\s*(?:(?:the|a|an)\\s+)?' + label + '\\s+(?:(?:visibly|slightly|suddenly)\\s+)?(?:flinched|winced|trembled|shivered|recoiled|stiffened),\\s*(his|her)\\s+(?:(?:thin|broad|small|large|bald|pale|trembling)\\s+){0,2}(?:shoulders?|ears?|hands?|head|face|lips?|arms?|chin)\\b', 'i')
   const claims = []
   for (const sentence of text.match(/[^.!?\n]+[.!?]?/g) || []) {
-    const match = prefix.exec(sentence.trim())
+    const match = prefix.exec(sentence.trim()) || bodily.exec(sentence.trim())
     if (!match || directEvidenceInsideDialogue(passage, match[0])) continue
+    if (/\b(?:if|unless|imagine|imagined|remembered|recalled|hypothetical|would|could|might|will|tomorrow|yesterday)\b/i.test(sentence.slice(0, match.index + match[0].length))) continue
     claims.push({ count: match[1].toLowerCase() === 'his' ? '1boy' : '1girl', evidence: sentence.trim() })
   }
   if (claims.length && new Set(claims.map(c => c.count)).size === 1) {
@@ -11636,7 +11758,7 @@ async function runDirectImagesImpl(initialImages, ctx) {
       config: preset.config,
       extra: preset.extra,
       dims,
-      origin: { ...origin, mode: 'direct', alt: markdownAltText(finalPrompt), swipeId: target && target.swipeId },
+      origin: { ...origin, mode: 'direct', alt: storyImageAltText(finalPrompt), swipeId: target && target.swipeId },
       debug: { troubleshooting: { passage: target && target.content || '', profiles, settings: troubleshootingSettings(settings),
         parserDebug: { ...debugBase, entries: [debugEntries[index]], selectedEntryIndex: 1 } },
         trace: traceLines.slice(), scene: { direct: true, anchor: image.anchor, momentEvidence: image.moment_evidence || '', sceneSummary: image.scene_summary || '', sceneMood: image.sceneMood || '', present: image.present || [], spatialGroup: directGroupIsSpatial(image), groupScene: image.group_scene || '', sharedInteraction: image.shared_interaction || '', spatialRelation: image.spatial_relation || '', ...groupMechanics } },
@@ -12762,11 +12884,16 @@ function parseDirectGroupInteractions(item, subjects, profiles, notes) {
   return out
 }
 
-function parseDirectGroupRelations(item, present, presenceFieldDeclared, spatialSubjects, profiles, passage, notes) {
+function parseDirectGroupRelations(item, present, presenceFieldDeclared, spatialSubjects, profiles, passage, notes, decisions = []) {
   const raw = Array.isArray(item && item.group_relations) ? item.group_relations : []
+  const record = (entry, status, reason, result = null) => {
+    decisions.push({ status, reason, proposed: JSON.parse(JSON.stringify(entry || {})),
+      ...(result ? { accepted: JSON.parse(JSON.stringify(result)) } : {}) })
+    if (status === 'rejected') notes.push(`dropped general relation "${(entry && entry.actor) || '?'} · ${(entry && entry.action) || '?'} · ${(entry && (entry.target || entry.recipient)) || '?'}" — ${reason}`)
+  }
   if (!raw.length) return []
   if (!presenceFieldDeclared || (present || []).length < 2) {
-    notes.push('dropped general relations — fewer than two people had a validated present roster')
+    raw.forEach(entry => record(entry, 'rejected', 'fewer than two people had a validated present roster'))
     return []
   }
   const candidates = (spatialSubjects || []).length
@@ -12792,43 +12919,39 @@ function parseDirectGroupRelations(item, present, presenceFieldDeclared, spatial
   for (const entry of raw.slice(0, 8)) {
     const actorName = String((entry && entry.actor) || '').trim()
     const targetName = String((entry && (entry.target || entry.recipient)) || '').trim()
-    const action = directRelationAction(entry && entry.action)
+    let action = directRelationAction(entry && entry.action)
     const evidence = String((entry && entry.evidence) || '').replace(/\s+/g, ' ').trim().slice(0, 360)
     if (!actorName || !targetName || !action) {
-      notes.push('dropped a general relation — actor, action, and target are all required')
+      record(entry, 'rejected', 'actor, action, and target are all required')
       continue
     }
     const evidenceAssessment = assessDirectMomentEvidence(evidence, passage)
     if (!evidenceAssessment.valid) {
-      notes.push(`dropped general relation "${actorName} · ${action} · ${targetName}" — ${evidenceAssessment.reason}`)
-      continue
-    }
-    const actionKey = directRelationVerbKey(action)
-    const evidenceSupportsAction = normalizeIdentityText(evidence).split(/\s+/)
-      .some((word) => directRelationVerbKey(word) === actionKey)
-    if (!actionKey || !evidenceSupportsAction) {
-      notes.push(`dropped general relation "${actorName} · ${action} · ${targetName}" — its action verb was not supported by the evidence quote`)
+      record(entry, 'rejected', evidenceAssessment.reason)
       continue
     }
     if (normalizeGroupAct(action) || ANATOMY_ACT_RE.test(action) || /\bmasturbat\w*\b/i.test(action)) {
-      notes.push(`dropped general relation "${actorName} · ${action} · ${targetName}" — sexual acts belong in group_interactions`)
+      record(entry, 'rejected', 'sexual acts belong in group_interactions')
       continue
     }
     const actor = findSubject(actorName)
     const target = findSubject(targetName)
     if (!actor || !target) {
-      notes.push(`dropped general relation "${actorName} → ${targetName}" — one name is not in the validated present roster`)
+      record(entry, 'rejected', 'one name is not in the validated present roster')
       continue
     }
     const actorKey = directGroupSubjectKey(actor)
     const targetKey = directGroupSubjectKey(target)
     if (!actorKey || !targetKey || actorKey === targetKey) {
-      notes.push(`dropped self-directed general relation for "${actorName}" — keep one-person actions in that subject's details`)
+      record(entry, 'rejected', 'self-directed relation; keep one-person actions in that subject\'s details')
       continue
     }
+    const grounding = directRelationGrounding(entry, actor, target, candidates, profiles, passage, evidence, action)
+    if (!grounding.valid) { record(entry, 'rejected', grounding.reason); continue }
+    action = grounding.action || action
     const actorPart = directRelationFragment(entry && (entry.actor_part || entry.actorPart), 3)
       .replace(/^(?:his|her|their)\s+/i, '')
-    const targetPart = directRelationFragment(entry && (entry.target_part || entry.targetPart), 3)
+    const targetPart = directRelationFragment(grounding.targetPart || entry && (entry.target_part || entry.targetPart), 3)
       .replace(/^(?:his|her|their)\s+/i, '')
     const object = directRelationFragment(entry && entry.object, 4)
     const ownedText = [action, actorPart, targetPart, object].join(' ')
@@ -12838,7 +12961,7 @@ function parseDirectGroupRelations(item, present, presenceFieldDeclared, spatial
       return name && new RegExp(`(?:^| )${escapeRegExp(name)}(?: |$)`).test(ownedNorm)
     })
     if (leakedName || /\b(?:he|she|him|her|his|they|them|their)\b/i.test(action)) {
-      notes.push(`dropped general relation "${actorName} · ${action} · ${targetName}" — action fields must contain no names or pronouns`)
+      record(entry, 'rejected', 'action fields must contain no names or pronouns')
       continue
     }
     const relation = {
@@ -12851,14 +12974,18 @@ function parseDirectGroupRelations(item, present, presenceFieldDeclared, spatial
       actorPart,
       targetPart,
       object,
+      ...(grounding.repaired ? { sourceRepair: { reason: grounding.reason, evidenceContext: grounding.evidenceContext,
+        originalAction: entry.action, originalTargetPart: entry.target_part || entry.targetPart || '' } } : {}),
     }
     const key = [actorKey, normalizeIdentityText(action), targetKey,
       normalizeIdentityText(relation.actorPart), normalizeIdentityText(relation.targetPart),
       normalizeIdentityText(relation.object)].join('|')
-    if (seen.has(key)) continue
+    if (seen.has(key)) { record(entry, 'omitted', 'duplicate bound action', relation); continue }
     seen.add(key)
     out.push(relation)
+    record(entry, grounding.repaired ? 'replaced' : 'kept', grounding.reason, relation)
   }
+  raw.slice(8).forEach(entry => record(entry, 'omitted', 'bounded eight-relation limit'))
   return out
 }
 
@@ -13103,8 +13230,9 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
     }
     const group = parseDirectGroupFields(
       item, prompt, present, presenceFieldDeclared, profiles, subjectMaximum, notes)
+    const relationDecisions = []
     const groupRelations = parseDirectGroupRelations(
-      item, present, presenceFieldDeclared, group.subjects, profiles, passage, notes)
+      item, present, presenceFieldDeclared, group.subjects, profiles, passage, notes, relationDecisions)
     const sceneMood = normalizeDirectSceneMood(item.scene_mood || item.sceneMood || '')
     const moodDecision = directSceneMoodDecision({ sceneMood, groupSubjects: group.subjects })
     if (moodDecision.requested && !moodDecision.applied) {
@@ -13143,6 +13271,7 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
       groupSubjects: group.subjects,
       groupInteractions: group.interactions,
       groupRelations,
+      relationDecisions,
       groupSource: group.source,
       shared_interaction: String(item.shared_interaction || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 420),
       spatial_relation: String(item.spatial_relation || '').replace(/\bBREAK\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 320),
@@ -16599,6 +16728,8 @@ function troubleshootingClean(value, depth = 0) {
   if (typeof value === 'string') return value
     .replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED]')
     .replace(/\bsk-[a-zA-Z0-9_-]{12,}/g, '[REDACTED]')
+    .replace(/\bjev_[a-zA-Z0-9_-]{12,}/gi, '[REDACTED]')
+    .replace(/(\b(?:api[ _-]?key|access[ _-]?token|refresh[ _-]?token)\b["']?\s*(?:[:=]\s*|is\s+)?["']?)[a-zA-Z0-9_\-.]{12,}/gi, '$1[REDACTED]')
     .replace(/https?:\/\/[^\s"'<>]+/g, '[URL omitted]')
   if (Array.isArray(value)) return value.map(v => troubleshootingClean(v, depth + 1))
   if (value && typeof value === 'object') {
@@ -16619,6 +16750,41 @@ function troubleshootingSettings(settings) {
     if (settings[key] !== undefined) out[key] = settings[key]
   }
   return troubleshootingClean(out)
+}
+
+function troubleshootingSummary(report) {
+  const debug = report.parserDebug || {}
+  const entry = (debug.entries || [])[(Number(debug.selectedEntryIndex) || 1) - 1] || {}
+  const scene = report.imageRecord && report.imageRecord.scene || entry
+  const core = scene.sceneCore || {}
+  const planner = scene.jevReview || entry.jevReview || {}
+  const continuity = debug.storyContinuity || {}
+  const diagnostics = continuity.diagnostics || {}
+  const timeline = scene.storyContinuity && scene.storyContinuity.snapshot || null
+  const relations = scene.relationDecisions || entry.relationDecisions || core.relationDecisions || []
+  const omissions = core.compilation && core.compilation.omissions || []
+  const highlights = []
+  if (planner.plannerEffect) highlights.push('Jev: ' + (typeof planner.plannerEffect === 'string' ? planner.plannerEffect :
+    ['kept', 'rejected', 'replaced', 'uncertain', 'unchanged'].map(key => Number(planner.plannerEffect[key] || 0) + ' ' + key).join('; ') +
+      '. ' + (planner.plannerEffect.mode || '') + '; story memory unchanged.'))
+  if (continuity.status) highlights.push('Story memory: ' + continuity.status + '; ' + Number(diagnostics.accepted || 0) +
+    ' accepted events; ' + (diagnostics.rejected || []).length + ' unresolved or rejected events. Images cannot rewrite this memory.')
+  if (timeline) highlights.push('Image wardrobe: story state at its selected moment (' + timeline.status + '). Later clothing changes are not automatically backdated.')
+  for (const row of diagnostics.rejected || []) {
+    const items = row.items || row.candidate && row.candidate.items || []
+    highlights.push('Story fact held: ' + (row.ref || row.candidate && row.candidate.name || 'setting') +
+      (items.length ? ' — ' + items.join(', ') : '') + ' — ' + row.reason)
+  }
+  for (const row of relations) if (row.status !== 'accepted' || row.reason) {
+    highlights.push('Action ' + (row.status || 'reviewed') + ': ' + (row.reason || row.action || 'see relation details'))
+  }
+  for (const row of omissions) highlights.push('Prompt detail omitted: ' + row.detail + ' — ' + row.reason)
+  for (const warning of core.warnings || []) highlights.push('Scene note: ' + warning)
+  for (const note of timeline && timeline.notes || []) highlights.push('Timeline: ' + note)
+  for (const warning of timeline && timeline.warnings || []) highlights.push('Timeline note: ' + warning)
+  return { highlights: [...new Set(highlights)], plannerEffect: planner.plannerEffect || null,
+    relationDecisions: relations, promptOmissions: omissions, timeline,
+    meaning: 'Rejected, uncertain, and intentionally omitted are different outcomes. End-of-passage memory can legitimately differ from an earlier image snapshot.' }
 }
 
 async function buildTroubleshootingReport(userId, payload) {
@@ -16676,6 +16842,7 @@ async function buildTroubleshootingReport(userId, payload) {
       delete report.parserDebug.ledgerPreview
     }
   }
+  report.diagnosticSummary = troubleshootingSummary(report)
   return troubleshootingClean(report)
 }
 
@@ -18269,13 +18436,20 @@ function jpSceneSubjects(image, profiles) {
     saved: !!directGroupProfileFor(s, profiles), countTag: s.countTag || '', details: coreTags(s.details || []) }))
 }
 function jpPrepareIncidentalCounts(images, profiles, passage) {
-  for (const image of images) for (const subject of image.groupSubjects || []) {
+  const decisions = []
+  for (let i = 0; i < images.length; i++) for (const subject of images[i].groupSubjects || []) {
     if (directGroupProfileFor(subject, profiles) || subject.profileRef) continue
     delete subject.incidentalCountDecision
     delete subject.coreCountTag
     const local = coreIncidentalCountEvidence(subject, passage, profiles)
+    if (local.resolved !== '1other') decisions.push({ candidate: i + 1, name: subject.name, ref: jpProfileRef(subject, profiles),
+      kind: 'incidental-count-local', role: 'source-bound incidental identity', choice: local.resolved,
+      evidence: local.evidence, evidenceAccepted: true, evidenceSource: { scope: 'current', method: local.source },
+      uncertain: false, wouldApply: local.resolved !== subject.countTag, applied: false,
+      effect: local.resolved !== subject.countTag ? 'replaced' : 'kept', effectReason: 'Explicit subject-bound narration establishes this unsaved participant; saved count tags are untouched.' })
     subject.countTag = local.resolved
   }
+  return decisions
 }
 function jpIncidentalCountQuestions(pack, images, profiles) {
   const seen = new Set()
@@ -18311,17 +18485,81 @@ function jpApplyIncidentalCounts(images, profiles, passage, rows, active) {
     }
   }
 }
-function jpEnvironmentProposal(image, memory, content) {
+function jpMomentWindow(passage, moment) {
+  const text = cleanParserMessageText(passage).replace(/<[^>]*>/g, ' ')
+  const words = normalizeIdentityText(moment).split(/\s+/).filter(Boolean)
+  if (!words.length) return null
+  const pattern = new RegExp('\\b' + words.map(escapeRegExp).join('[^a-z0-9]+') + '\\b', 'ig')
+  const matches = [...text.matchAll(pattern)]
+  if (matches.length !== 1 || directEvidenceInsideDialogue(passage, matches[0][0])) return null
+  const start = matches[0].index, end = start + matches[0][0].length
+  const tail = text.slice(end).search(/[.!?\n]/)
+  return { text, start, end, sentenceEnd: tail < 0 ? text.length : end + tail }
+}
+function jpNarrativeOnly(text) {
+  return String(text || '').replace(/"[^"\n]*"|“[^”\n]*”/g, match => ' '.repeat(match.length))
+}
+function jpEnvironmentBoundary(text) {
+  const narrative = jpNarrativeOnly(text)
+  // Fallback evidence stops at a possible new scene or retrospective reveal.
+  // Semantic support can still validate a fact; lexical fallback cannot decide
+  // that two places are the same or silently ignore a time/location transition.
+  return /\b(?:that|this|it|the scene)\s+(?:was|is|had been)\s+(?:only\s+|just\s+)?(?:a\s+)?(?:memory|dream|recollection|flashback|vision)\b/i.test(narrative) ||
+    /\b(?:teleport(?:s|ed|ing)?|transport(?:s|ed|ing)?|materializ(?:es|ed|ing)|arriv(?:e|es|ed|ing)|depart(?:s|ed|ing)?|awoke|awakens?|woke|wakes?)\b[^.!?\n]{0,65}\b(?:to|in|at|on|inside|outside|within|beneath|aboard|up|down)\b/i.test(narrative) ||
+    /\b(?:drove|drive|drives|sailed|sails|rode|rides|flew|flies|traveled|travelled|journeyed)\b[^.!?\n]{0,45}\b(?:to|into|toward|towards|away|home|aboard)\b/i.test(narrative) ||
+    /\b(?:follow|follows|followed|lead|leads|led|go|goes|went|walk|walks|walked|step|steps|stepped|move|moves|moved|head|heads|headed|climb|climbs|climbed)\b[^.!?\n]{0,50}\b(?:outside|upstairs|downstairs|outdoors|indoors|elsewhere|next room|another room|other room|out|away)\b/i.test(narrative) ||
+    /\b(?:enter|enters|entered|entering|exit|exits|exited|exiting|leave|leaves|leaving|left|arrived|arrives|arrive|returned|returns|return|walked|walks|walk|stepped|steps|step)\b[^.!?\n]{0,70}\b(?:room|hall|guildhall|kitchen|bedroom|interior|courtyard|forest|road|bridge|tavern|inn|shop|street|alley|cavern|cave|temple|castle|office|garden|house|library|ship|swamp|clearing|docks?|beach)\b/i.test(narrative)
+}
+function jpNarratedVenueClaims(text) {
+  const narrative = jpNarrativeOnly(text)
+  const places = 'guildhall|hall|room|kitchen|bedroom|laundry|courtyard|forest|thicket|grove|glade|road|highway|bridge|tavern|inn|shop|market|street|alley|beach|cavern|cave|temple|palace|castle|workshop|truck|car|cruiser|clearing|gatehouse|office|station|garden|house|apartment|hut|tent|library|ship|swamp|marsh|meadow|desert|mountain|ridge|docks?'
+  const pattern = new RegExp('\\b(?:is|are|was|were|stands?|stood|sits?|sat|waits?|waited)\\s+(?:now\\s+)?(?:in|inside|within|at|on)\\s+(?:(?:a|an|the)\\s+)?((?:[a-z-]+\\s+){0,3}(?:' + places + '))\\b', 'gi')
+  return [...narrative.matchAll(pattern)].filter(match => !/\b(?:not|never|remembered|imagined|if|would|could|might|will)\b|n['’]t\b/i.test(narrative.slice(0, match.index).split(/[.!?\n]/).pop() || '')).map(match => match[1])
+}
+function jpNarrativeEnvironmentCandidates(passage, moment, subjectNames = []) {
+  const window = jpMomentWindow(passage, moment)
+  if (!window) return []
+  const before = window.text.slice(0, window.sentenceEnd)
+  // These are exact source phrases offered for verification, not automatically
+  // accepted scenery. The sidecar still judges current venue and chronology.
+  const heads = 'hall|guildhall|rafters?|beams?|tables?|counters?|countertops?|desks?|crystals?|lamps?|lanterns?|torches|canopy|roots?|trees?|brambles?|barriers?|walls?|windows?|shelves|arches|pillars?|foliage|mushrooms?|spores?|timber|floorboards?|floor|ceiling|doors?|oak|smoke|light|lighting'
+  const pattern = new RegExp('\\b(?:the|a|an|of|beneath|through|against|along|across|within|inside|under|over)\\s+((?:[a-z][a-z-]*\\s+){0,3}(?:' + heads + '))(?![a-z-])\\b', 'gi')
+  const actors = ['you', 'we', 'they', ...subjectNames.filter(Boolean)].map(escapeRegExp).join('|')
+  const departure = new RegExp('\\b(?:' + actors + ')\\s+(?:[a-z-]+\\s+){0,2}(?:enter(?:s|ed)?|exit(?:s|ed)?|leaves?|left|arrive(?:s|d)?|return(?:s|ed)?|walk(?:s|ed)?|step(?:s|ped)?)\\b[^.!?\\n]{0,70}\\b(?:outside|upstairs|downstairs|elsewhere|another room|next room|kitchen|bedroom|courtyard|forest|street|tavern)\\b', 'i')
+  const found = []
+  for (const match of before.matchAll(pattern)) {
+    const fact = match[1].trim().replace(/^(?:the|a|an)\s+/i, ''), at = match.index + match[0].lastIndexOf(fact)
+    if (fact.split(/\s+/).length < 2 || directEvidenceInsideDialogue(passage, fact)) continue
+    const localBefore = before.slice(0, at).split(/[.!?;\n]/).pop() || ''
+    const localAfter = before.slice(at + fact.length).split(/[.!?;\n]/)[0] || ''
+    const clause = localBefore + fact + localAfter
+    if (/\b(?:no|not|never|without|imagined|imagine|remembered|recalled|dreamed|hypothetical|if|would|could|might|will|tomorrow|yesterday|formerly|previously|map|painting|drawing|portrait|picture|photograph|book|screen|mural|tapestry)\b|n['’]t\b/i.test(clause)) continue
+    if (/\b(?:on the way to|headed for|toward|towards|leading to|away from|beyond|distant|faraway)\s+(?:(?:the|a|an)\s*)?$/i.test(localBefore)) continue
+    // Reject phrases in already-departed scenes before asking Jev; other
+    // attribution questions remain its job. Do not harvest later lighting.
+    const between = before.slice(at + fact.length, window.start)
+    if (departure.test(between) || jpEnvironmentBoundary(between)) continue
+    found.push({ fact, evidence: clause.trim().slice(0, 1200), source: 'current narrative phrase', start: at })
+  }
+  return found.filter((row, i) => found.findIndex(other => normalizeIdentityText(other.fact) === normalizeIdentityText(row.fact)) === i).slice(0, 8)
+}
+function jpEnvironmentProposal(image, memory, content, passage = '') {
   const prior = jevEnvironment(memory)
   const frame = coreTags(String(image.prompt || '').split(/\bBREAK\b/)[0])
   const venue = /\b(?:guildhall|hall|guild|room|kitchen|bedroom|laundry|interior|courtyard|forest|thicket|grove|glade|road|highway|bridge|tavern|inn|shop|market|street|alley|beach|cavern|cave|temple|palace|castle|workshop|truck|car|vehicle|cruiser|outdoors|indoors|clearing|gatehouse|courthouse|office|station|garden|house|apartment|hut|tent|library|ship|starship|airship|swamp|marsh|meadow|desert|mountain|pass|ridge)\b/i
   const light = /\b(?:lighting|light|glow|sunlight|moonlight|daylight|morning|afternoon|evening|night|sunset|sunrise|dawn|dusk|rain|snow|fog|mist|overcast)\b/i
-  const surround = /\b(?:rafters?|beams?|tables?|counters?|countertops?|crystals?|lamps?|lanterns?|torches|canopy|roots?|trees?|brambles?|barriers?|walls?|windows?|shelves|arches|pillars?|foliage|mushrooms?|spores?|timber|floorboards?|floor|ceiling|wood|stone|vegetation|furniture)\b/i
+  const surround = /\b(?:rafters?|beams?|tables?|counters?|countertops?|crystals?|lamps?|lanterns?|torches|canopy|roots?|trees?|brambles?|barriers?|walls?|windows?|shelves|arches|pillars?|foliage|mushrooms?|spores?|timber|floorboards?|floor|ceiling|doors?|oak|wood|stone|smoke|vegetation|furniture)\b/i
   const cards = [...String(content || '').matchAll(/<scenecard\b[^>]*>[\s\S]*?<\/scenecard>/gi)]
   const cardLocation = cards.length ? sceneCardField(cards[cards.length - 1][0], 'location') : ''
-  const offered = coreTags([...(image.setting || []), ...(image.lighting || []), ...frame.filter(t => venue.test(t) || light.test(t) || surround.test(t)), ...coreTags(cardLocation)])
-    .filter(t => !DIRECT_COUNT_TAG_RE.test(t) && !DIRECT_COUNT_FULL_RE.test(t) && t.split(/\s+/).length <= 18).slice(0, 14)
-  const places = offered.filter(t => venue.test(t) && !/\b(?:table|counter|lamp|light|rafters?|beam|canopy)\b/i.test(t))
+  const narrativeCandidates = jpNarrativeEnvironmentCandidates(passage, image.moment_evidence || image.anchor, (image.groupSubjects || image.present || []).map(s => s.name))
+    .filter(row => !/^\s*(?:main|surrounding)\s+(?:guildhall|hall)\s*$/i.test(row.fact) || ![...(image.setting || []), ...frame].some(value => /\bguildhall\b/i.test(value)))
+  const offered = coreTags([...(image.setting || []), ...narrativeCandidates.map(row => row.fact), ...(image.lighting || []), ...frame.filter(t => venue.test(t) || light.test(t) || surround.test(t)), ...coreTags(cardLocation)])
+    .filter(t => !DIRECT_COUNT_TAG_RE.test(t) && !DIRECT_COUNT_FULL_RE.test(t) && t.split(/\s+/).length <= 18).slice(0, 16)
+  const placeCandidate = t => venue.test(t) && !/\b(?:table|counter|lamp|light|rafters?|beam|canopy)\b/i.test(t)
+  const parserPlaces = coreTags([...(image.setting || []), ...frame, ...coreTags(cardLocation)]).filter(placeCandidate)
+  // A sourced "vaulted hall" is a useful architectural detail, not a second
+  // competing venue when the parser already supplied "guildhall interior".
+  const places = parserPlaces.length ? offered.filter(t => parserPlaces.includes(t)) : offered.filter(placeCandidate)
   const proposed = { place: places.slice(0, 2), surroundings: [], lighting: [] }
   for (const fact of offered) {
     if (proposed.place.includes(fact)) continue
@@ -18332,7 +18570,18 @@ function jpEnvironmentProposal(image, memory, content) {
   }
   const differing = proposed.place.length && prior.place.length &&
     !proposed.place.some(a => prior.place.some(b => normalizeIdentityText(a) === normalizeIdentityText(b)))
-  return { prior, proposed, offered, differing: !!differing, cardLocation }
+  // Only genuine story continuity may survive silence. Parser proposals are
+  // not memory, and a visibly different current venue must still be resolved.
+  const window = jpMomentWindow(passage, image.moment_evidence || image.anchor)
+  const current = window ? window.text.slice(0, window.sentenceEnd) : ''
+  const narrative = jpNarrativeOnly(current)
+  const uncertainMove = jpEnvironmentBoundary(narrative)
+  const lightChange = /\b(?:snuff(?:s|ed|ing)?|extinguish(?:es|ed|ing)?|darkness|went dark|flickered out)\b|\b(?:lights?|lamps?|lanterns?)\b.{0,25}\b(?:off|out|faded)\b/i.test(narrative)
+  const currentPrior = prior.place.some(fact => jpLiteralEnvironmentSupport(fact, passage, image.moment_evidence || image.anchor))
+  const venueClaims = jpNarratedVenueClaims(narrative)
+  const silentContinuation = !!(window && prior.place.length && !uncertainMove && !lightChange &&
+    (currentPrior || !venueClaims.length && !narrativeCandidates.length && !cardLocation && !/📍/.test(narrative)))
+  return { prior, proposed, offered, differing: !!differing, cardLocation, narrativeCandidates, silentContinuation }
 }
 function jpVenueCriteria(proposal) {
   const hasPrior = proposal.prior.place.length > 0
@@ -18377,14 +18626,19 @@ function jpLiteralEnvironmentSupport(fact, passage, moment) {
   const header = /\[[^\]\n]*📍\s*([^|\]\n]+)/.exec(line)
   const locationHeader = header && normalize(header[1]).includes(key)
   const physicalDescription = /^(?:the|a|an)?$/i.test(localBefore) &&
-    /^(?:fills?|filled|rises?|rose|stretches?|stretched|spans?|spanned|stands?|stood|surrounds?|surrounded|opens?|opened|casts?|cast|illuminates?|illuminated|gleams?|gleamed|glows?|glowed|shines?|shone|hangs?|hung|arches?|arched)\b/i.test(localAfter)
+    /^(?:fills?|filled|rises?|rose|stretches?|stretched|spans?|spanned|stands?|stood|surrounds?|surrounded|opens?|opened|casts?|cast|illuminates?|illuminated|gleams?|gleamed|glows?|glowed|shines?|shone|hangs?|hung|arches?|arched|slams?|slammed|slamming|closes?|closed|closing)\b/i.test(localAfter)
   const directPlacement = /\b(?:stands?|standing|stood|sits?|sitting|sat|waits?|waiting|waited|walks?|walking|walked|enters?|entering|entered|arrives?|arriving|arrived|is|are|was|were)\s+(?:(?:here|now)\s+)?(?:in|inside|within|through|into|beneath|under|at)\s+(?:(?:the|a|an)\s*)?$/i.test(localBefore)
   const acoustics = /\b(?:voice|voices|footsteps?|laughter|sound)\b[^.!?;]{0,70}\b(?:rings?|ringing|rang|echoes?|echoing|echoed|resounds?|resounding)\s+(?:in|through|across)\s+(?:(?:the|a|an)\s*)?$/i.test(localBefore)
+    || /\b(?:clattered|clatters|rattled|rattles|reverberated|reverberates)\s+(?:in|through|across)\s+(?:(?:the|a|an)\s*)?$/i.test(localBefore)
+  const physicalContact = /\b(?:came|comes|come)\s+down\s+(?:flat\s+)?on\s+(?:(?:the|a|an)\s*)?$/i.test(localBefore) ||
+    /\b(?:bolted|bolts|passed|passes|stepped|steps)\s+through\s+(?:(?:the|a|an)\s*)?$/i.test(localBefore)
   const illumination = /\b(?:caught|catches|catching|reflected|reflects|reflecting|glinted|glints|glinting|gleamed|gleams|gleaming)\s+(?:(?:in|with|under|beneath)\s+)?(?:(?:the|a|an)\s*)?$/i.test(localBefore) ||
     /\b(?:lit|illuminated|bathed)\s+(?:by|in|with)\s+(?:(?:suspended|hanging)\s+)?(?:(?:clusters?|rows?|banks?)\s+of\s*)?(?:(?:the|a|an)\s*)?$/i.test(localBefore)
-  if (!locationHeader && !physicalDescription && !directPlacement && !acoustics && !illumination) return null
+  if (!locationHeader && !physicalDescription && !directPlacement && !acoustics && !illumination && !physicalContact) return null
   if (/\b(?:no|not|never|without|unlit|extinguished|imagined|imagine|remembered|recalled|dreamed|hypothetical|if|would|could|might|will|tomorrow|yesterday|previously|formerly|beyond|distant|faraway)\b|\b(?:used to|out of|away from|left behind|on the way to|headed for)\b|n['’]t\b/i.test(clause)) return null
   const intervening = text.slice(at + key.length, momentAt)
+  const window = jpMomentWindow(passage, moment)
+  if (!window || jpEnvironmentBoundary(raw.slice(match.index + match[0].length, window.start))) return null
   if (/\b(?:outside|upstairs|downstairs|outdoors|indoors|elsewhere|next room|another room|other room)\b/i.test(intervening)) return null
   if (/\b(?:follow|follows|followed|lead|leads|led|go|goes|went|walk|walks|walked|step|steps|stepped|move|moves|moved|head|heads|headed|climb|climbs|climbed)\b.{0,50}\b(?:out|away|up|down)\b/i.test(intervening)) return null
   if (/\b(?:enter|enters|entered|entering|exit|exits|exited|exiting|leave|leaves|leaving|left|departed|arrived|arrives|arrive|returned|returns|return|walked|walks|walk|stepped|steps|step)\b.{0,70}\b(?:room|hall|guildhall|kitchen|bedroom|interior|courtyard|forest|road|bridge|tavern|inn|shop|street|alley|cavern|cave|temple|castle|office|garden|house|library|ship|swamp|clearing)\b/i.test(intervening)) return null
@@ -18411,9 +18665,63 @@ function jpEvidenceExcerpt(passage, fact, moment) {
   }
   return excerpt || grouped.selectedMoment || '[Current passage reviewed as a group.]'
 }
+function jpAcceptance(row, answer) {
+  const role = ['framing', 'view-angle'].includes(row.kind) ? 'optional presentation'
+    : row.kind === 'drawability' ? 'advisory moment ranking'
+      : ['venue-support', 'prop-support'].includes(row.kind) ? 'image fact verification'
+        : ['expression', 'gaze'].includes(row.kind) ? 'moment-bound expression'
+          : row.kind === 'incidental-count' ? 'incidental identity attribution' : 'continuity or binding decision'
+  // These are conservative product heuristics, not measured calibration. A
+  // harmless view angle need not clear the wardrobe/identity double threshold.
+  // Transient expressions stay strict: the full passage can contain later cues.
+  const probabilityThreshold = role === 'optional presentation' ? 0.65 : role === 'advisory moment ranking' ? 0.70 : 0.85
+  const marginThreshold = role === 'optional presentation' ? 0.20 : 0.30
+  const probability = answer && answer.probabilities && answer.probabilities[answer.choice]
+  const runnerUp = answer && answer.probabilities ? Math.max(0, ...Object.entries(answer.probabilities).filter(([key]) => key !== answer.choice).map(([, value]) => value)) : 1
+  const strict = !['optional presentation', 'advisory moment ranking'].includes(role)
+  const accepted = !!(answer && !['unclear', 'unknown'].includes(answer.choice) && probability >= probabilityThreshold &&
+    probability - runnerUp >= marginThreshold && (!strict || jevConfident(answer)))
+  return { role, accepted, policy: strict ? 'strict attribution; probability and model confidence' : 'selected probability and separation; confidence is diagnostic',
+    probabilityThreshold, marginThreshold, selectedProbability: probability == null ? null : probability,
+    margin: probability == null ? null : probability - runnerUp }
+}
 function jpDecision(row, answer) {
-  return { ...row, ...answer, uncertain: !answer || answer.choice === 'unclear' || answer.choice === 'unknown' || !jevConfident(answer),
+  const acceptance = jpAcceptance(row, answer)
+  return { ...row, ...answer, role: acceptance.role, acceptance, uncertain: !acceptance.accepted,
     evidence: '', evidenceAccepted: false, applied: false }
+}
+function jpAnnotateEffects(report, plans, proposals, active) {
+  for (const row of report.decisions) {
+    const plan = plans[row.candidate - 1], proposal = proposals[row.candidate - 1]
+    row.role = row.role || (row.kind === 'incidental-count-local' ? 'source-bound incidental identity' : 'current narrative evidence')
+    if (row.effect) continue
+    if (row.uncertain) {
+      row.effect = 'uncertain'; row.effectReason = 'No affirmative decision: not permission to invent, override identity, or erase established story memory.'
+    } else if (['venue-support', 'venue-literal-support'].includes(row.kind)) {
+      const field = row.field === 'previous' ? 'place' : row.field
+      const kept = plan && (plan.environment[field] || []).some(f => normalizeIdentityText(f) === normalizeIdentityText(row.fact))
+      row.effect = kept ? 'kept' : row.choice === 'unsupported' ? 'rejected' : 'unchanged'
+      row.effectReason = kept ? 'Included in this candidate background; does not write story memory.' : row.choice === 'unsupported' ? 'Not supported at the selected moment; excluded from this candidate.' : 'No final background change from this answer.'
+      row.wouldApply = !!kept; row.applied = active && !!kept
+    } else if (row.kind === 'scene-venue') {
+      row.effect = plan && plan.environment.place.length ? 'kept' : 'unchanged'
+      row.effectReason = 'Venue comparison is advisory until independent source support resolves the background.'
+    } else if (row.kind === 'drawability') {
+      row.effect = 'unchanged'; row.effectReason = 'Advisory ranking of existing candidates only; dialogue is not automatically excluded.'
+    } else if (row.kind === 'prop-holder' && row.wouldApply) {
+      row.effect = row.options[row.choice].ref === row.sourceRef ? 'kept' : 'replaced'
+      row.effectReason = row.effect === 'kept' ? 'Verified the parser holder; no holder reassignment.' : 'Reassigned this offered object to its independently verified holder.'
+    } else if (row.wouldApply || row.applied) {
+      row.effect = row.effect || 'replaced'; row.effectReason = row.effectReason || 'Resolved an image-only candidate decision; saved sheets are not changed.'
+    } else {
+      row.effect = ['unsupported', 'not_held', 'not_worn'].includes(row.choice) ? 'rejected' : 'unchanged'
+      row.effectReason = row.effect === 'rejected' ? 'Rejected under the stated evidence rules.' : 'No candidate change resulted from this decision.'
+    }
+    if (!active) row.applied = false
+  }
+  const counts = Object.fromEntries(['kept', 'rejected', 'replaced', 'uncertain', 'unchanged'].map(effect => [effect, report.decisions.filter(r => r.effect === effect).length]))
+  report.plannerEffect = { ...counts, mode: active ? 'image candidates only' : 'comparison only',
+    memoryChanged: false, explanation: 'Kept means verified or preserved, not necessarily changed. Rejected and uncertain decisions are visible even when applied is false.' }
 }
 function jpAddQuestion(pack, row, question, priority = 10) {
   const id = 'p' + pack.serial++
@@ -18503,6 +18811,16 @@ function jpEnvironmentResolved(image, proposal, rows, proofs) {
   const approved = proofs.filter(r => ['venue-support', 'venue-literal-support'].includes(r.kind) && !r.uncertain && r.choice === 'supported')
   const issues = []
   let environment = jpEmptyEnvironment(), status = 'unknown', evidence = []
+  if (proposal.silentContinuation) {
+    environment = jpClone(proposal.prior); status = 'continued-silence'
+    evidence.push('Established story environment; no narrated scene change or replacement was found before this moment.')
+    // Silence preserves memory, but a supported contradiction removes the
+    // specific old fact from this image. Unknown never means "delete".
+    for (const rejected of proofs.filter(r => r.kind === 'venue-support' && !r.uncertain && r.choice === 'unsupported')) {
+      const field = rejected.field === 'previous' ? 'place' : rejected.field
+      if (Array.isArray(environment[field])) environment[field] = environment[field].filter(f => normalizeIdentityText(f) !== normalizeIdentityText(rejected.fact))
+    }
+  }
   if (decision && !decision.uncertain && decision.choice === 'previous') {
     const support = approved.find(r => r.field === 'previous')
     if (support) {
@@ -18514,6 +18832,9 @@ function jpEnvironmentResolved(image, proposal, rows, proofs) {
     // uncertain. Its uncertainty is not evidence against a narrated fact.
     const venue = approved.filter(r => r.field === 'place')
     if (venue.length) {
+      const continues = decision && !decision.uncertain && decision.choice === 'same_place' ||
+        venue.some(row => proposal.prior.place.some(fact => normalizeIdentityText(fact) === normalizeIdentityText(row.fact)))
+      if (!continues) { environment.surroundings = []; environment.lighting = [] }
       environment.place = coreTags(venue.map(r => r.fact))
       status = decision && !decision.uncertain && decision.choice === 'same_place' ? 'refined' : 'current'
       // Same-place continuity is not an exemption from checking a lighting or
@@ -18569,11 +18890,11 @@ async function planJevScene(images, scope, prefs) {
   const task = (async () => {
     const clockStart = Date.now(), working = jpClone(images)
     const memory = scope.memory || {}, priorWardrobe = scope.priorWardrobe || {}, profiles = scope.profiles
-    jpPrepareIncidentalCounts(working, profiles, scope.passage || '')
+    const localCounts = jpPrepareIncidentalCounts(working, profiles, scope.passage || '')
     const sync = scope.source === 'clothing sync' || working.every(i => i.jevEndOfPassage)
     const report = { mode: active ? 'active' : 'comparison-only', plannerVersion: JEV_SCENE_PLAN_VERSION, model: prefs.model,
       source: scope.source || 'story scan', sourceChatId: scope.chatId || '', sourceMessageId: scope.messageId || '', sourceSwipeId: scope.swipeId,
-      startedAt: scope.startedAt || clockStart, at: clockStart, status: 'ok', decisions: [], changesApplied: false,
+      startedAt: scope.startedAt || clockStart, at: clockStart, status: 'ok', decisions: localCounts.map(row => ({ ...row, applied: active && row.wouldApply })), changesApplied: false,
       usage: { inputTokens: 0, outputTokens: 0 }, requestCount: 0, evidenceQuestionCount: 0, stages: [], issues: [],
       budget: { maximumRequests: 3, maximumQuestionsPerRequest: 64, maximumPayloadBytes: 64000, deadlineMs: 12000, questions: 0, skipped: [] } }
     const ctx = { scope, prefs, report, clockStart, stopped: false }
@@ -18586,7 +18907,7 @@ async function planJevScene(images, scope, prefs) {
         framing: { shot: null, angle: null, status: 'skipped' }, propBindings: [], detailDecisions: [], issues: [], drawability: 'unclear', selected: true,
         ungenderedIncidental: subjects.some(s => !s.saved && (!s.countTag || s.countTag === '1other')) }
     })
-    const proposals = working.map(image => jpEnvironmentProposal(image, image.storyMomentState || memory, scope.storyMemoryIndependent ? '' : scope.content))
+    const proposals = working.map(image => jpEnvironmentProposal(image, image.storyMomentState || memory, scope.storyMemoryIndependent ? '' : scope.content, scope.passage || ''))
     try {
       if (garment.skip) {
         // A crowded garment quote pool must not veto an independent, small
@@ -18642,9 +18963,9 @@ async function planJevScene(images, scope, prefs) {
       }
       if (!sync) proposals.forEach((proposal, i) => {
         const decision = initial.find(r => r.candidate === i + 1 && r.kind === 'scene-venue')
-        const continuePrior = decision && !decision.uncertain && ['previous', 'same_place'].includes(decision.choice)
+        const continuePrior = proposal.silentContinuation || decision && !decision.uncertain && ['previous', 'same_place'].includes(decision.choice)
         const facts = Object.entries(proposal.proposed).flatMap(([field, values]) => values.map(fact => ({ field, fact })))
-        if (continuePrior && decision.choice === 'previous') facts.push({ field: 'previous', fact: proposal.prior.place.join(', ') })
+        if (continuePrior && (proposal.silentContinuation || decision && decision.choice === 'previous')) facts.push({ field: 'previous', fact: proposal.prior.place.join(', ') })
         if (continuePrior) for (const field of ['surroundings', 'lighting']) {
           for (const fact of proposal.prior[field]) if (!facts.some(item => item.field === field && item.fact === fact)) facts.push({ field, fact })
         }
@@ -18654,7 +18975,8 @@ async function planJevScene(images, scope, prefs) {
             (fact.field === 'previous' || continuePrior && (proposal.prior[fact.field] || []).includes(fact.fact)
               ? 'Established continuity may persist on silence, but must be unsupported after narrated departure, a superseding detail, or arrival elsewhere. '
               : 'New facts need current narrated support, or a current scene-card fact uncontradicted by narration. ') +
-            'Earlier scenery in a passage after a move, dialogue-only destinations, instructions, memories and hypothetical details do not support this proposition. Objects such as counters/crystals may be surrounding details of this venue; verify each belongs HERE.',
+            'Earlier scenery in a passage after a move, dialogue-only destinations, instructions, memories and hypothetical details do not support this proposition. Objects such as counters/crystals may be surrounding details of this venue; verify each belongs HERE. ' +
+            (proposal.narrativeCandidates.some(row => row.fact === fact.fact) ? 'Exact source excerpt offered for attribution, not automatic proof: ' + JSON.stringify(proposal.narrativeCandidates.find(row => row.fact === fact.fact).evidence) : ''),
           criteria: { supported: 'The proposition holds at this selected moment under these evidence rules.', unsupported: 'The proposition is contradicted, elsewhere, merely discussed, or not evidenced.', unclear: 'Evidence is insufficient or ambiguous.' } }, fact.field === 'place' || fact.field === 'previous' ? 0 : 5)
       })
       for (const row of initial.filter(r => r.kind === 'prop-holder' && !r.uncertain && r.options[r.choice])) {
@@ -18754,12 +19076,15 @@ async function planJevScene(images, scope, prefs) {
         if (!plan.selected) return
         for (const subject of plan.subjects) {
           jpAddQuestion(third, { candidate: i + 1, kind: 'expression', name: subject.name, ref: subject.ref, options: faces }, { type: 'choice',
-            instructions: 'At candidate ' + (i + 1) + ' selected narrated moment, choose one visible facial cue for ' + subject.name + ' only. Use current behaviour and expression evidence, not identity stereotypes, broad story mood or another character. Shy/ashamed is not amused/laughing. Choose unclear when no defensible visible cue is established.',
+            instructions: 'At candidate ' + (i + 1) + ' selected narrated moment, choose one visible facial cue for ' + subject.name + ' only. Use current behaviour and expression evidence, not identity stereotypes, broad story mood or another character. A later onset (for example a smirk broke across the face AFTER the selected action) must NOT be backdated into this frame. Shy/ashamed is not amused/laughing. Choose unclear when no defensible visible cue is established.',
             criteria: { unclear: 'No sufficiently supported expression.', ...Object.fromEntries(Object.entries(faces).map(([key, value]) => [key, value])) } }, 2)
           const targets = Object.fromEntries(plan.subjects.filter(s => s.ref !== subject.ref).map((s, n) => ['target' + n, 'looking at ' + s.name]))
-          const gaze = { down: 'looking down', away: 'looking away', up: 'looking up', ahead: 'looking ahead', ...targets }
+          const original = (jpSceneSubjects(working[i], profiles).find(s => s.ref === subject.ref) || {}).details || []
+          const contextual = original.filter(detail => directExpressionKind(detail) === 'gaze').slice(0, 2)
+          const gaze = { down: 'looking down', away: 'looking away', up: 'looking up', ahead: 'looking ahead', ...targets,
+            ...Object.fromEntries(contextual.filter(detail => !Object.values(targets).includes(detail)).map((detail, n) => ['context' + n, detail])) }
           jpAddQuestion(third, { candidate: i + 1, kind: 'gaze', name: subject.name, ref: subject.ref, options: gaze }, { type: 'choice',
-            instructions: 'Current gaze of ' + subject.name + ' in candidate ' + (i + 1) + '. Do not infer eye contact simply from conversation. Choose a named target only if this character looks at that person. If the gaze is at an object not offered, choose unclear; never substitute a person.',
+            instructions: 'Current gaze of ' + subject.name + ' in candidate ' + (i + 1) + ' AT ITS SELECTED MOMENT. Do not backdate a later gaze shift. Do not infer eye contact simply from conversation. Choose a named target only if this character looks at that person. Context options are parser proposals, NOT facts; select them only when this same subject and direction/target are supported in the selected beat. If the gaze is at an object not offered, choose unclear; never substitute a person.',
             criteria: { unclear: 'No offered gaze is clearly established.', ...gaze } }, 3)
         }
         jpAddQuestion(third, { candidate: i + 1, kind: 'framing', name: 'Framing', options: { portrait: 'portrait', waist: 'waist-up shot', cowboy: 'cowboy shot', full: 'full body', wide: 'wide shot' } }, { type: 'choice',
@@ -18790,6 +19115,14 @@ async function planJevScene(images, scope, prefs) {
           } else if (plan.framing.status === 'skipped') plan.framing.status = 'unclear'
         }
         row.wouldApply = !row.uncertain && !!row.options[row.choice]; row.applied = active && row.wouldApply
+        if (row.wouldApply) {
+          const existing = ['expression', 'gaze'].includes(row.kind)
+            ? ((jpSceneSubjects(working[row.candidate - 1], profiles).find(s => s.ref === row.ref) || {}).details || [])
+            : coreTags(String(working[row.candidate - 1].prompt || '').split(/\bBREAK\b/)[0])
+          row.effect = existing.some(value => normalizeIdentityText(value) === normalizeIdentityText(row.options[row.choice])) ? 'kept' : 'replaced'
+          row.effectReason = row.effect === 'kept' ? 'Confirmed the existing candidate cue; no replacement needed.' : 'Selected an image-only presentation cue under the stated policy.'
+          row.applied = active && row.effect === 'replaced'
+        }
       }
       if (ctx.stopped) report.status = 'partial'
     } catch (error) {
@@ -18797,7 +19130,9 @@ async function planJevScene(images, scope, prefs) {
       // Saved outfits and explicit image corrections are retained on failure.
       if (!scope.storyMemoryIndependent) jevApplyReview(working, profiles, priorWardrobe, { status: 'error', decisions: [] }, true, memory)
       for (let i = 0; i < working.length; i++) {
-        working[i].jevResolvedEnvironment = jpEmptyEnvironment()
+        working[i].jevResolvedEnvironment = proposals[i].silentContinuation ? jpClone(proposals[i].prior) : jpEmptyEnvironment()
+        plans[i].environment = working[i].jevResolvedEnvironment
+        plans[i].environmentStatus = proposals[i].silentContinuation ? 'continued-silence' : 'unknown'
         working[i].jevEnvironmentCandidates = coreTags([...proposals[i].offered, ...Object.values(proposals[i].prior).flat()])
         plans[i].environmentCandidates = working[i].jevEnvironmentCandidates
         plans[i].issues.push('Planner unavailable; unresolved setting withheld, established clothing and image corrections preserved.')
@@ -18806,6 +19141,7 @@ async function planJevScene(images, scope, prefs) {
     }
     if (!sync) working.forEach((image, i) => { image.scenePlan = plans[i] })
     report.scenePlans = plans
+    jpAnnotateEffects(report, plans, proposals, active)
     if (report.status === 'ok' && report.budget.skipped.length) report.status = 'partial'
     report.decisions.forEach(row => { if (!active) row.applied = false })
     report.changesApplied = active && JSON.stringify(working) !== JSON.stringify(images)
@@ -19226,6 +19562,32 @@ function scxOccurrence(text, quote, occurrence) {
   }
   return at
 }
+// Ignore paired presentation-only emphasis while retaining source offsets.
+// No punctuation, words, negation, strike-through or arbitrary fuzzy matching
+// is removed. A model may quote "clink" where the story wrote "*clink*".
+function scxEvidenceView(value) {
+  const source = String(value || '')
+  const omitted = new Set()
+  const emphasis = /(^|[^\w])(\*{1,3}|_{1,3})(?=\S)([\s\S]*?\S)\2(?=$|[^\w])/g
+  for (const match of source.matchAll(emphasis)) {
+    const open = match.index + match[1].length
+    const close = open + match[2].length + match[3].length
+    for (let i = 0; i < match[2].length; i++) { omitted.add(open + i); omitted.add(close + i) }
+  }
+  let text = ''
+  const offsets = []
+  for (let i = 0; i < source.length; i++) if (!omitted.has(i)) { text += source[i]; offsets.push(i) }
+  return { text, offsets }
+}
+function scxQuoteRange(source, quote, occurrence = 1) {
+  const view = scxEvidenceView(source), needle = scxEvidenceView(quote).text
+  if (!needle) return null
+  const at = scxOccurrence(view.text, needle, occurrence)
+  if (at < 0) return null
+  const start = view.offsets[at], end = view.offsets[at + needle.length - 1] + 1
+  return { start, end, text: String(source).slice(start, end),
+    unique: view.text.indexOf(needle) === at && view.text.indexOf(needle, at + 1) < 0 }
+}
 function scxProfile(name, profiles) {
   return allKnownProfiles(profiles).find(p => p && p.ref && [p.anchor, p.promptName, p.ref].some(n => n && scxSame(n, name))) || null
 }
@@ -19241,14 +19603,15 @@ function scxEvent(raw, index, profiles, source) {
   const occurrence = raw.occurrence === undefined ? 1 : raw.occurrence
   if (words < (raw.source === 'scene-card' ? 1 : 3) || words > 80 || !Number.isInteger(occurrence) || occurrence < 1 || occurrence > 64) return { error: 'Evidence needs a bounded exact source excerpt and a valid occurrence.' }
   const text = raw.source === 'narrative' ? source.passage : source.card
-  const start = scxOccurrence(text, evidence, occurrence)
-  if (start < 0) return { error: 'Evidence is not an exact excerpt of the stated source.' }
+  const range = scxQuoteRange(text, evidence, occurrence)
+  if (!range) return { error: 'Evidence is not an exact excerpt of the stated source (ignoring paired emphasis only).' }
   const at = raw.at === undefined ? evidence : scxText(raw.at)
-  const inside = evidence.indexOf(at)
-  if (!at || inside < 0 || evidence.indexOf(at, inside + 1) >= 0) return { error: 'Temporal action excerpt is not uniquely within its evidence.' }
+  const temporal = scxQuoteRange(range.text, at)
+  if (!temporal || !temporal.unique) return { error: 'Temporal action excerpt is not uniquely within its evidence.' }
   const event = { id: 'e' + index, kind: raw.kind, operation: raw.operation, source: raw.source,
-    evidence, at, occurrence, evidenceStart: start, evidenceEnd: start + evidence.length,
-    start: start + inside, end: start + inside + at.length, sourceIndex: index }
+    evidence: range.text, at: temporal.text, occurrence, evidenceStart: range.start, evidenceEnd: range.end,
+    start: range.start + temporal.start, end: range.start + temporal.end, sourceIndex: index,
+    ...(range.text !== evidence ? { evidenceRaw: evidence, evidenceNormalization: 'paired-markdown-emphasis' } : {}) }
   if (raw.kind === 'wardrobe') {
     const profile = scxProfile(raw.name, profiles)
     const items = scxTags(raw.items)
@@ -19387,6 +19750,59 @@ function reduceStoryContinuityEvents(before, events, profiles = null) {
   return after
 }
 
+function scxNarrativeGuardText(source, from, to, result = null, wearer = null) {
+  // Keep offsets stable. Quoted plans and dialogue are not changes in the
+  // story. Unknown/unbalanced quoting remains conservative and is not erased.
+  const ranges = [...source.matchAll(/"[^"\n]*"|“[^”\n]*”/g)].map(match => [match.index, match.index + match[0].length])
+  if (result && wearer) for (const other of result.events || []) {
+    if (other.kind !== 'wardrobe' || other.source !== 'narrative' || !other.ref || other.ref === wearer.ref ||
+        !other.name || !Number.isInteger(other.evidenceStart) || !Number.isInteger(other.evidenceEnd)) continue
+    const quote = source.slice(other.evidenceStart, other.evidenceEnd)
+    // Only an independently verified, explicitly named different wearer's
+    // self-contained clause can be excluded; ambiguous pronouns remain a veto.
+    if (quote !== other.evidence || !new RegExp('\\b' + escapeRegExp(other.name) + '\\b', 'i').test(quote) ||
+        new RegExp('\\b' + escapeRegExp(wearer.name || wearer.ref) + '\\b', 'i').test(quote)) continue
+    if (quote.split(/[.!?;]/).filter(part => part.trim()).length > 1) continue
+    ranges.push([other.evidenceStart, other.evidenceEnd])
+  }
+  const chars = source.slice(from, to).split('')
+  for (const [start, end] of ranges) for (let at = Math.max(from, start); at < Math.min(to, end); at++) chars[at - from] = ' '
+  return chars.join('')
+}
+
+function scxEarlierObservationCheck(event, result, state, source, momentEnd, windowEnd) {
+  if (event.source !== 'narrative' || event.kind !== 'wardrobe' || event.operation !== 'observe') return 'Only a narrated observation of already-worn clothing can describe an earlier moment.'
+  if (!Number.isInteger(event.start) || !Number.isInteger(event.end) || event.end > windowEnd || event.start - momentEnd > 2000) return 'Observation is outside the bounded current scene window.'
+  const range = scxQuoteRange(source, event.evidence, event.occurrence || 1)
+  if (!range || !range.unique || range.start !== event.evidenceStart || range.end !== event.evidenceEnd ||
+      event.start < range.start || event.end > range.end || source.slice(event.start, event.end) !== event.at) return 'Observation evidence or its temporal location is ambiguous.'
+  const interval = scxNarrativeGuardText(source, momentEnd, event.evidenceEnd)
+  // Reject possible scene/time shifts even when extraction missed the move.
+  // False negatives retain the older state; they do not invent a timeline.
+  if (/\b(?:later|afterwards?|meanwhile|elsewhere|overnight|the next (?:day|morning|evening)|(?:minutes?|hours?|days?|time) (?:passed|elapsed)|after (?:an? |one |two |three |several |many |\d+ )?(?:while|moments?|minutes?|hours?|days?)|by (?:nightfall|morning)|back (?:at|in)|arriv(?:e|es|ed|ing)|enter(?:s|ed|ing)?|leav(?:e|es|ing)|left (?:the|a)|return(?:s|ed|ing)? (?:to|home)|teleport(?:s|ed|ing)?|transport(?:s|ed|ing)?|drive|drives|driving|drove|driven|ride|rides|riding|rode|ridden|travel(?:s|ed|led|ing|ling)?|awoke|woke|cut to|scene (?:changes?|shifts?))\b|(?:\*\s*){3,}|(?:[-—_]\s*){3,}|(?:^|\s)#{1,6}\s|📍|🕰/i.test(interval)) return 'An intervening scene or time transition makes earlier clothing uncertain.'
+  const priorAction = scxNarrativeGuardText(source, momentEnd, event.start, result, event)
+  const slots = new Set(scxAffectedSlots(event))
+  const earlierGarments = [...priorAction.matchAll(new RegExp(GARMENT_RE.source, 'gi'))]
+  if (earlierGarments.some(match => slots.has(wardrobeSlot(match[0])) ||
+      (event.items || []).some(item => garmentFamily(item) === garmentFamily(match[0])))) return 'An earlier mention or action may be a wardrobe change involving this garment; later observation was not backdated.'
+  // Include the observation's own evidence: a mislabelled "puts on" event
+  // must not gain retrospective authority merely by being called observe.
+  const clothingContext = scxNarrativeGuardText(source, Math.min(momentEnd, event.evidenceStart), event.evidenceEnd, result, event)
+  if (OUTFIT_CHANGE_RE.test(clothingContext) || /\b(?:remov(?:e|es|ed|ing)|dress(?:es|ed|ing)?|don(?:s|ned|ning)?|doff(?:s|ed|ing)?|chang(?:e|es|ed|ing)|swap(?:s|ped|ping)?|discard(?:s|ed|ing)?|shed(?:s|ding)?|newly|freshly|now wearing|torn|ripped|splash(?:es|ed|ing)?|stain(?:s|ed|ing)?|soak(?:s|ed|ing)?)\b/i.test(clothingContext.replace(/\b(?:stained|torn|ripped|soaked)\s+(?:\w+\s+){0,3}(?:shirt|blouse|skirt|robe|coat|pants|armor)\b/gi, 'observed garment'))) return 'Possible dressing, removal, or garment-condition change intervenes.'
+  for (const other of result.events || []) {
+    if (other.id === event.id || other.source !== 'narrative' || other.end <= momentEnd || other.start > event.start) continue
+    if (other.kind === 'environment' && (other.operation === 'move' || (other.place || []).length &&
+        !(other.place || []).some(place => jevEnvironment(state).place.some(old => scxSame(old, place))))) return 'An intervening venue change prevents retrospective clothing.'
+    if (other.kind === 'wardrobe' && other.ref === event.ref && other.operation !== 'observe') return 'An intervening wardrobe change prevents retrospective clothing.'
+  }
+  const defaults = event.profileDefaultItems || []
+  const existing = coreWardrobeTags(state.outfits && state.outfits[event.ref] || [])
+    .filter(tag => !defaults.some(item => scxSame(item, tag)))
+  const candidate = scxApplyItems(existing, event.items || [])
+  if (existing.some(tag => !candidate.some(item => scxSame(item, tag)))) return 'The later observation conflicts with clothing established at the image moment.'
+  return ''
+}
+
 function storyStateAtMoment(result, before, momentEvidence, passage = '') {
   const source = result && result.source && result.source.passage || scxText(passage)
   const quote = scxText(momentEvidence)
@@ -19394,12 +19810,12 @@ function storyStateAtMoment(result, before, momentEvidence, passage = '') {
   const windowAt = parserWindow && source.indexOf(parserWindow)
   const scoped = parserWindow && windowAt >= 0 && source.indexOf(parserWindow, windowAt + 1) < 0
   const haystack = scoped ? parserWindow : source
-  const localStart = quote ? haystack.indexOf(quote) : -1
-  const start = localStart < 0 ? -1 : localStart + (scoped ? windowAt : 0)
-  if (start < 0 || haystack.indexOf(quote, localStart + 1) >= 0) return {
+  const moment = scxQuoteRange(haystack, quote)
+  const start = moment ? moment.start + (scoped ? windowAt : 0) : -1
+  if (!moment || !moment.unique) return {
     ...scxClone(before), continuitySnapshot: { status: 'unlocated', reason: 'Moment evidence does not identify one exact source occurrence; pre-message state retained.' },
   }
-  const end = start + quote.length
+  const end = moment.end + (scoped ? windowAt : 0)
   const ambiguous = []
   const events = (result.events || []).filter(event => {
     if (event.source !== 'narrative' || event.start > end) return false
@@ -19407,14 +19823,32 @@ function storyStateAtMoment(result, before, momentEvidence, passage = '') {
     // "Mira enters the courtyard" can be the selected action inside the
     // event "Mira enters the courtyard through the open door". A later action
     // in a compound sentence must never be backdated to the first clause.
-    if (event.start === start && event.at.startsWith(quote) &&
-        !/\b(?:then|before|after|later|subsequently|and|but|while|until|once)\b|[;.!?]/i.test(event.at.slice(quote.length))) return true
+    const eventAt = scxEvidenceView(event.at).text, momentAt = scxEvidenceView(quote).text
+    if (event.start === start && eventAt.startsWith(momentAt) &&
+        !/\b(?:then|before|after|later|subsequently|and|but|while|until|once)\b|[;.!?]/i.test(eventAt.slice(momentAt.length))) return true
     if (event.start < end) ambiguous.push(event.id)
     return false
   })
-  const state = reduceStoryContinuityEvents(before, events)
+  let state = reduceStoryContinuityEvents(before, events)
+  const retrospectiveObservations = []
+  const windowEnd = scoped ? windowAt + parserWindow.length : source.length
+  for (const event of scxSort(result.events || [])) {
+    if (event.source !== 'narrative' || event.kind !== 'wardrobe' || event.operation !== 'observe' || event.start <= end) continue
+    const reason = scxEarlierObservationCheck(event, result, state, source, end, windowEnd)
+    if (reason) { retrospectiveObservations.push({ id: event.id, ref: event.ref, status: 'not-applied', reason }); continue }
+    state = reduceStoryContinuityEvents(state, [event])
+    state.outfitMeta[event.ref] = { ...state.outfitMeta[event.ref], scope: 'image-moment',
+      evidenceSource: { scope: 'same-scene-later-observation', eventId: event.id,
+        observationStart: event.start, observationEnd: event.end, momentStart: start, momentEnd: end } }
+    retrospectiveObservations.push({ id: event.id, ref: event.ref, status: 'applied',
+      reason: 'Later narration describes already-worn clothing in the same scene; no wardrobe change was backdated.',
+      evidence: event.evidence, observationStart: event.start, observationEnd: event.end })
+  }
   state.continuitySnapshot = { status: ambiguous.length ? 'partial' : 'located', momentStart: start, momentEnd: end,
-    appliedEventIds: events.map(event => event.id), ambiguousEventIds: ambiguous }
+    appliedEventIds: events.map(event => event.id), ambiguousEventIds: ambiguous, retrospectiveObservations,
+    notes: retrospectiveObservations.filter(row => row.status === 'applied').length
+      ? ['Image clothing includes a later same-scene observation, not a later clothing change.'] : [],
+    warnings: ambiguous.length ? ['Some wardrobe/environment events overlap the selected moment ambiguously; those events were not applied.'] : [] }
   return state
 }
 

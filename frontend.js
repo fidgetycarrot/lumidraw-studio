@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.5.0-jev.3'
+const EXTENSION_VERSION = '1.5.0-jev.4'
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -11,11 +11,13 @@ function lumidrawTroubleshootingHtml(report, imageData = '') {
   const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
   const image = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(imageData)
     ? '<img alt="Selected generated image" src="' + imageData + '">' : ''
+  const highlights = report.diagnosticSummary && report.diagnosticSummary.highlights || []
+  const summary = highlights.length ? '<h2>What happened</h2><ul>' + highlights.map(line => '<li>' + escape(line) + '</li>').join('') + '</ul>' : ''
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">' +
     '<title>LumiDraw troubleshooting report</title><style>body{font:16px system-ui;margin:24px;max-width:1100px}img{max-width:100%;max-height:900px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}</style></head><body>' +
     '<h1>LumiDraw troubleshooting report</h1><p>Private report. Contains prompts and may include story text. Nothing was uploaded automatically.</p>' +
-    image + '<h2>Diagnostic data</h2><pre>' + escape(JSON.stringify(report, null, 2)) + '</pre></body></html>'
+    image + summary + '<h2>Diagnostic data</h2><pre>' + escape(JSON.stringify(report, null, 2)) + '</pre></body></html>'
 }
 
 function lumidrawContinuityStatus(continuity) {
@@ -2103,22 +2105,27 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
   }
 
-  // The host rebuilds chats and rewrites image URLs to its own canonical form,
-  // so a chat image's src is usually NOT the URL History recorded. The alt
-  // text survives that rewrite, and LumiDraw wrote it from the compiled
-  // prompt — so it identifies the History entry when the URL cannot.
-  function findHistoryImageByAlt(altText) {
+  // Alt text is descriptive, not an ID. Old presets produced identical quality
+  // prefixes. Only a unique, source-scoped match is safe when URLs are rewritten.
+  function uniqueHistoryImageMatch(matches, scope = {}) {
+    const scoped = matches.filter(({ entry }) => {
+      const origin = entry.origin || {}
+      return (!scope.chatId || String(origin.chatId || '') === String(scope.chatId)) &&
+        (!scope.messageId || String(origin.messageId || '') === String(scope.messageId))
+    })
+    const urls = new Set(scoped.map(({ image }) => image && image.url).filter(Boolean))
+    return urls.size === 1 ? scoped.find(({ image }) => image && image.url) : null
+  }
+
+  function findHistoryImageByAlt(altText, scope = {}) {
     const alt = normalizeAltText(altText)
     if (alt.length < 20) return null
     const matches = flattenHistoryImages().filter(({ entry }) => {
       const recorded = normalizeAltText(entry.origin && entry.origin.alt)
-      if (recorded) return recorded === alt
+      if (recorded) return recorded.startsWith(alt)
       return normalizeAltText(entry.prompt).includes(alt)
     })
-    if (!matches.length) return null
-    // Prefer an exact recorded-alt hit; otherwise the newest prompt match.
-    const exact = matches.find(({ entry }) => normalizeAltText(entry.origin && entry.origin.alt) === alt)
-    return exact || matches[0]
+    return uniqueHistoryImageMatch(matches, scope)
   }
 
   // --- the fixable index ------------------------------------------------------
@@ -2146,8 +2153,10 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         fixableByUrl.set(item.image.url, item)
       }
       const recorded = normalizeAltText(item.entry && item.entry.origin && item.entry.origin.alt)
-      if (recorded && !fixableByAlt.has(recorded)) fixableByAlt.set(recorded, item)
-      else if (!recorded) {
+      if (recorded) {
+        if (!fixableByAlt.has(recorded)) fixableByAlt.set(recorded, [])
+        fixableByAlt.get(recorded).push(item)
+      } else {
         const prompt = normalizeAltText(item.entry && item.entry.prompt)
         if (prompt) fixablePrompts.push({ prompt, item })
       }
@@ -2156,6 +2165,11 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   function findHistoryImageForChatImage(img) {
     ensureFixableIndex()
+    const placementId = img.getAttribute('data-lumidraw-placement-id') || ''
+    if (placementId) {
+      const placement = imagePlacements.find(item => item && String(item.placementId || '') === placementId)
+      if (placement && fixableByUrl.has(placement.url)) return fixableByUrl.get(placement.url)
+    }
     const original = img.getAttribute('data-lumidraw-original-url') || (img.dataset && img.dataset.lumidrawOriginalUrl) || ''
     if (original && fixableByUrl.has(original)) return fixableByUrl.get(original)
     const src = img.getAttribute('src') || img.src || ''
@@ -2163,9 +2177,19 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const alt = normalizeAltText(img.getAttribute('alt') || '')
     // The old length guard, kept: a short alt matches far too much.
     if (alt.length < 20) return null
-    if (fixableByAlt.has(alt)) return fixableByAlt.get(alt)
-    const hit = fixablePrompts.find((entry) => entry.prompt.includes(alt))
-    return hit ? hit.item : null
+    const messageNode = img.closest('[data-message-id], [data-lumidraw-message-id]')
+    const scope = {
+      chatId: img.getAttribute('data-lumidraw-chat-id') || activeChatIdFromCtx() || '',
+      messageId: img.getAttribute('data-lumidraw-message-id') || (messageNode &&
+        (messageNode.getAttribute('data-message-id') || messageNode.getAttribute('data-lumidraw-message-id'))) || '',
+    }
+    // Some older markup capped descriptions at 120 characters while History
+    // retained 220. Consider every exact/prefix candidate together: an exact
+    // match must not hide a second image with the same truncated description.
+    const matches = []
+    for (const [recorded, items] of fixableByAlt) if (recorded.startsWith(alt)) matches.push(...items)
+    matches.push(...fixablePrompts.filter(entry => entry.prompt.includes(alt)).map(entry => entry.item))
+    return uniqueHistoryImageMatch(matches, scope)
   }
 
   function currentOutputItem() {
@@ -3381,6 +3405,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       'Opening source: ' + ((core.sceneAction || {}).source || 'not recorded'),
       'Location: ' + ((core.location || {}).setting || []).join(', ') + ' [' + ((core.location || {}).source || 'unknown') + ']',
       'Background details: ' + (((core.location || {}).details || []).join(', ') || 'none recorded'),
+      ...((((selected || {}).storyContinuity || {}).snapshot || {}).notes || []).map(note => 'Clothing timeline: ' + note),
       ...(core.compilation ? ['Compiled by: ' + core.compilation.source + ' · ' + core.compilation.wordCount + ' words',
         'Framing: ' + (core.compilation.framing || []).join(', '),
         'Preflight: ' + ((core.preflight || {}).status || 'not recorded')] : []),
@@ -3395,6 +3420,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         'Kept but hidden: ' + (((subject.clothing || {}).hidden || []).map((item) => item.item + ' (' + item.coveredBy + ')').join('; ') || 'none'),
       ]),
       ...(core.compilation ? ['', ...(core.compilation.omissions || []).map(item => 'Omitted: ' + item.detail + ' — ' + item.reason)] : []),
+      ...((selected && selected.relationDecisions) || core.relationDecisions || []).filter(item => item.status !== 'accepted' || item.reason)
+        .map(item => 'Action ' + (item.status || 'reviewed') + ': ' + (item.reason || 'see full diagnostic data')),
       '', ...(core.warnings || []).map((warning) => 'Note: ' + warning),
     ].join('\n') : ''
     prompt.value = debug && debug.lastCompiledPrompt ? debug.lastCompiledPrompt : ''
@@ -4754,6 +4781,7 @@ ${entry.prompt || ''}`.trim()
     return `<div class="ld-message-image-host" data-lumidraw-placement-host="${id}">
       <div class="ld-chat-image-item" data-lumidraw-placement-id="${id}" data-intrinsic-width="${width}">
         <img class="ld-chat-image" data-lumidraw-image="1" data-lumidraw-placement-id="${id}"
+          data-lumidraw-chat-id="${escapeAttr(item.chatId || '')}" data-lumidraw-message-id="${escapeAttr(item.messageId || '')}"
           data-lumidraw-original-url="${escapeAttr(originalUrl)}" src="${escapeAttr(displayUrl)}" alt="${escapeAttr(item.alt || 'Generated image')}"
           width="${width}" height="${height}" loading="lazy" decoding="async" />
       </div>
@@ -6320,12 +6348,16 @@ ${entry.prompt || ''}`.trim()
     const box = $('.ld-jev-report')
     if (!box) return
     if (!report) { box.value = 'No Jev review recorded. Enable it, then generate a Direct scene, re-run the image parser, or Sync latest passage.'; return }
+    const effectSummary = !report.plannerEffect ? '' : typeof report.plannerEffect === 'string' ? report.plannerEffect :
+      ['kept', 'rejected', 'replaced', 'uncertain', 'unchanged'].map(key => Number(report.plannerEffect[key] || 0) + ' ' + key).join('; ') +
+      '. ' + (report.plannerEffect.mode || '') + '; story memory unchanged.'
     box.value = [
       'Jev: ' + report.status + ' — ' + report.mode + (report.changesApplied ? '; candidate changes applied' : '; no candidate changes applied'),
       'Source: ' + report.source + ' | ' + new Date(report.startedAt).toLocaleString(),
       'Chat: ' + report.sourceChatId + ' | Message: ' + report.sourceMessageId + ' | Swipe: ' + (Number.isInteger(report.sourceSwipeId) ? report.sourceSwipeId + 1 : 'unknown'),
       report.message || '',
       report.application || '',
+      ...(effectSummary ? ['Planner effect: ' + effectSummary] : []),
       ...(report.changeSummary ? ['Outfit: ' + (report.changeSummary.wardrobeChanged ? 'changed' : 'retained') +
         ' | Setting: ' + (report.changeSummary.settingChanged ? 'changed' : report.changeSummary.settingReclassified ? 'reclassified; same facts retained' : 'retained') +
         ' | Garment ownership/state: ' + (report.changeSummary.garmentMetadataChanged ? 'updated' : 'unchanged')] : []),
@@ -6345,6 +6377,8 @@ ${entry.prompt || ''}`.trim()
       ...(report.decisions || []).flatMap((d) => [
         '', 'Candidate ' + d.candidate + ' · ' + d.name + ' · ' + d.kind,
         'Jev: ' + d.choice + ' | confidence ' + Math.round(d.confidence * 100) + '%' + (d.uncertain ? ' (uncertain)' : '') + (d.disagreement ? ' — disagrees with current result' : ''),
+        ...(d.effect ? ['Effect: ' + d.effect + (d.role ? ' [' + d.role + ']' : '') + (d.effectReason ? ' — ' + d.effectReason : '')] : []),
+        ...(d.acceptancePolicy || d.acceptance ? ['Acceptance rule: ' + (typeof d.acceptancePolicy === 'string' ? d.acceptancePolicy : JSON.stringify(d.acceptancePolicy || d.acceptance))] : []),
         ...(d.kind === 'garment' ? ['Item: ' + d.garment + (d.established ? ' (established)' : ' (new candidate)')]
           : d.kind === 'location' ? ['Previous location: ' + (d.previous || []).join(', '), 'Candidates: ' + (d.candidates || []).join(' | ')]
           : d.kind === 'outfit' ? ['Previous: ' + (d.previous || []).join(', '), 'Proposed: ' + (d.proposed || []).join(', ')]
@@ -6362,7 +6396,7 @@ ${entry.prompt || ''}`.trim()
             : 'current passage/card')] : []),
       ]),
       '', report.plannerVersion
-        ? 'Confidence is a model judgment, not proof. Clothing retains its guarded evidence rules. Venue and prop changes require confident selection and a separate passage-support check; the excerpt is diagnostic, not an exact-quote confidence vote. Optional expression/framing choices use confident selections. Saved identity/count tags never belong to Jev. Skipped checks do not trigger another paid request.'
+        ? 'Confidence summarizes the model’s distribution, not measured accuracy. Clothing retains its guarded evidence rules. Venue and prop changes require selection and passage support; the excerpt is diagnostic, not an exact-quote confidence vote. Framing preferences are advisory; unclear is not a positive fact. The acceptance rule and effect are recorded per decision. Saved identity/count tags never belong to Jev. Skipped checks do not trigger another paid request.'
         : 'Confidence and selected evidence are model judgments, not guarantees. Clothing and setting changes require at least 85% confidence and winning probability for both decision and evidence. Existing setting facts can be classified without claiming a change. Jev selects supplied candidates; it does not invent garments or backgrounds.',
       '', 'Full report:', JSON.stringify(report, null, 2),
     ].join('\n')
