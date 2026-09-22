@@ -2,13 +2,13 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.5.0-jev.7'
+const EXTENSION_VERSION = '1.5.0-jev.8'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
   if (!d) return 'SimTracker: no connection diagnostic recorded by this run.'
   const current = (d.records || []).some(row => row.messageId === d.messageId)
-  if (d.status === 'connected') return `SimTracker: connected · ${d.suppliedFields} fields offered for story validation · ${current ? 'current reply + available earlier record' : 'earlier record only; current tracker not ready'}. Saved identities protected.`
+  if (d.status === 'connected') return `SimTracker: connected · ${d.suppliedFields} fields offered for story validation · ${current ? 'current reply + available earlier record' : 'earlier record only; no current tracker output found (pending, rejected, or not run)'}. Saved identities protected.`
   if (d.status === 'connected-no-supported-fields') return 'SimTracker: record found, but its quotes could not be verified in the available story. Normal LumiDraw processing continued.'
   if (d.status === 'source-changed') return 'SimTracker: story changed during the read; tracker reference discarded.'
   return 'SimTracker: no usable matching record · normal LumiDraw processing continued. See the diagnostic report for details.'
