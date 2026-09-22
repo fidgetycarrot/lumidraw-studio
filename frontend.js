@@ -2,7 +2,17 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.5.0-jev.6'
+const EXTENSION_VERSION = '1.5.0-jev.7'
+
+function lumidrawSimTrackerSummary(reference) {
+  const d = reference && reference.diagnostic
+  if (!d) return 'SimTracker: no connection diagnostic recorded by this run.'
+  const current = (d.records || []).some(row => row.messageId === d.messageId)
+  if (d.status === 'connected') return `SimTracker: connected · ${d.suppliedFields} fields offered for story validation · ${current ? 'current reply + available earlier record' : 'earlier record only; current tracker not ready'}. Saved identities protected.`
+  if (d.status === 'connected-no-supported-fields') return 'SimTracker: record found, but its quotes could not be verified in the available story. Normal LumiDraw processing continued.'
+  if (d.status === 'source-changed') return 'SimTracker: story changed during the read; tracker reference discarded.'
+  return 'SimTracker: no usable matching record · normal LumiDraw processing continued. See the diagnostic report for details.'
+}
 
 console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
 
@@ -3414,6 +3424,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const coreCard = $('.ld-core-summary-card')
     if (coreCard) coreCard.style.display = core ? '' : 'none'
     if (coreSummary) coreSummary.value = core ? [
+      lumidrawSimTrackerSummary(debug && debug.simTracker),
       'Opening scene: ' + ((core.sceneAction || {}).rendered || 'not recorded by this version'),
       'Opening source: ' + ((core.sceneAction || {}).source || 'not recorded'),
       'Location: ' + ((core.location || {}).setting || []).join(', ') + ' [' + ((core.location || {}).source || 'unknown') + ']',
@@ -3485,6 +3496,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       rawReply: debug.rawReply || null,
       profileAudit: debug.profileAudit || [],
       storyContinuity: debug.storyContinuity || null,
+      simTracker: debug.simTracker || null,
       parserImages: debug.parserImages || [],
       contextMessageCount: debug.contextMessageCount || 0,
       ledgerFound: !!debug.ledgerFound,
