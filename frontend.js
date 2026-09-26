@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.5.0-jev.8'
+const EXTENSION_VERSION = '1.5.0-jev.9'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -984,8 +984,9 @@ function realSetup(ctx) {
               <option value="direct-manual">Direct — manual scans only</option>
               <option value="direct-auto">Direct — automatic after replies</option>
             </select>
-            <div class="ld-mode-note ld-help">Choose the prompt pipeline and its trigger together. Manual keeps the Scan buttons available without running after every reply; automatic runs the same pipeline after each saved story reply.</div>
+            <div class="ld-mode-note ld-help">Choose the prompt pipeline and its trigger together. Manual uses the Scan buttons; automatic follows your image frequency. Scan latest bypasses the wait.</div>
             <input type="checkbox" class="ld-autoscan" hidden aria-hidden="true" tabindex="-1" />
+            <select class="ld-auto-interval" aria-label="Automatic image frequency"><option value="5">Every 5 story replies</option><option value="1">Every story reply</option></select>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-strip-directives" style="width:auto" /> Hide generated images and image-request directives from the story model</label>
             <div class="ld-help">Some presets teach the model to request pictures by writing markdown such as <code>![tags](/api/v1/images/gen)</code>. Those never render, and each one left in the history teaches the model to write another. This removes them from what the model sees for each generation — your stored messages are never modified. Real images, including LumiDraw's own, are always left alone.</div>
@@ -1645,6 +1646,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       cancelScan: $('[data-act="cancel-scan"]'),
       mode: $('.ld-mode'),
       autoScan: $('.ld-autoscan'),
+      autoInterval: $('.ld-auto-interval'),
       charTags: $('.ld-chartags'),
       strip: $('.ld-strip-directives'),
       sizeImages: $('.ld-size-images'),
@@ -1726,10 +1728,12 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       behavior.appendChild(field('Generation preset', controls.presetSelect, 'Model, sampler, steps, dimensions, LoRAs, and Draw Things settings only.'))
     }
     behavior.appendChild(field('Behavior', controls.mode,
-      'Choose the prompt pipeline and trigger together. Manual options use the Scan buttons only; automatic options run after each saved story reply. Off means no story illustrations.'))
+      'Choose the prompt pipeline and trigger together. Manual uses the Scan buttons; automatic follows your image frequency below. Off means no story illustrations.'))
     // Kept in the DOM only as a compatibility mirror for the backend's saved
     // `autoScan` field. It is no longer a second user-facing control.
     if (controls.autoScan) behavior.appendChild(controls.autoScan)
+    behavior.appendChild(field('Automatic image frequency', controls.autoInterval,
+      'Default: every 5 new assistant story replies. Rerolls do not advance the counter. Story continuity keeps running; Scan latest generates now without waiting.'))
     behavior.appendChild(checkbox(controls.charTags, 'Use chat character image tags as a fallback'))
     behavior.appendChild(checkbox(controls.strip, 'Hide image-request directives from the story model',
       'Keeps dead image-request markup from teaching the story model to repeat it. Stored messages are not changed.'))
@@ -6491,6 +6495,7 @@ ${entry.prompt || ''}`.trim()
       experimentalJevPlanner: $('.ld-experimental-jev-planner') ? $('.ld-experimental-jev-planner').checked : true,
       preferKnownCastMoments: $('.ld-prefer-known-cast-moments') ? $('.ld-prefer-known-cast-moments').checked : true,
       autoScan: storyAutoScan,
+      autoImageEvery: Number($('.ld-auto-interval').value) || 5,
       parserEngine: $('.ld-parser-engine').value,
       parserConnection: $('.ld-parser-conn').value,
       parserModel: $('.ld-parser-model').value,
@@ -6660,7 +6665,7 @@ ${entry.prompt || ''}`.trim()
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-maximg', '.ld-minimg', '.ld-maxsubjects', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break', '.ld-experimental-scene-core', '.ld-experimental-jev-planner', '.ld-prefer-known-cast-moments']) {
+  for (const sel of ['.ld-mode', '.ld-auto-interval', '.ld-maximg', '.ld-minimg', '.ld-maxsubjects', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break', '.ld-experimental-scene-core', '.ld-experimental-jev-planner', '.ld-prefer-known-cast-moments']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-mode') {
@@ -7047,6 +7052,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-cloud-fallback').checked = settings.cloudFallback !== false
       $('.ld-mode').value = storyBehaviorFromSettings(settings.mode || 'off', settings.autoScan)
       $('.ld-autoscan').checked = settings.autoScan !== false
+      $('.ld-auto-interval').value = String(settings.autoImageEvery === 1 ? 1 : 5)
       $('.ld-maximg').value = settings.maxImages || 2
       $('.ld-minimg').value = settings.minImages || 0
       if ($('.ld-maxsubjects')) $('.ld-maxsubjects').value = String(settings.maxSubjects || 2)

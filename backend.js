@@ -66,6 +66,7 @@ const DEFAULT_SETTINGS = {
   port: 7862,
   mode: 'off',            // 'off' | 'inline' | 'parser'
   autoScan: true,         // auto-process after each story message (when events are available)
+  autoImageEvery: 5,      // new assistant story replies; manual scans bypass cadence
   activePreset: '',       // generation preset used for story-driven generations
   storyPromptMigrated: false, // one-time copy of legacy preset prompt fields into Story settings
   storyQualityTags: '',
@@ -13622,16 +13623,58 @@ function directGroundingContradictions(image, profiles) {
   }
 }
 
+// Recover complete array members only. Never close a truncated string/object,
+// extract examples nested in another object, or scan beyond the images array.
+function recoverDirectImageObjects(raw) {
+  const text = sanitizeJsonText(String(raw || '').trim().replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/, ''))
+  const head = /^\s*\{\s*"images"\s*:\s*\[/.exec(text)
+  if (!head) return []
+  const images = []
+  let i = head[0].length
+  while (i < text.length) {
+    while (/\s/.test(text[i] || '') && i < text.length) i++
+    if (text[i] !== '{') break
+    const start = i, stack = []
+    let quoted = false, escaped = false, complete = false
+    for (; i < text.length; i++) {
+      const c = text[i]
+      if (quoted) { if (escaped) escaped = false; else if (c === '\\') escaped = true; else if (c === '"') quoted = false; continue }
+      if (c === '"') { quoted = true; continue }
+      if (c === '{' || c === '[') stack.push(c === '{' ? '}' : ']')
+      else if (c === '}' || c === ']') {
+        if (stack.pop() !== c) return images
+        if (!stack.length) { i++; complete = true; break }
+      }
+    }
+    if (!complete || quoted) break
+    try { images.push(JSON.parse(text.slice(start, i))) } catch { break }
+    while (/\s/.test(text[i] || '') && i < text.length) i++
+    if (text[i] !== ',') break
+    i++
+  }
+  return images
+}
+
 function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', maxSubjects = 2) {
   const subjectMaximum = directSubjectLimit(maxSubjects)
   const summaryWordLimit = directSceneSummaryWordLimit(subjectMaximum)
   let text = extractParserText(raw)
-  const parsed = (() => {
+  let recovery = null
+  let parsed = (() => {
     try { return JSON.parse(sanitizeJsonText(text)) } catch { /* fall through */ }
     const match = /\{[\s\S]*\}/.exec(text)
     if (!match) return null
     try { return JSON.parse(sanitizeJsonText(match[0])) } catch { return null }
   })()
+  if (!parsed) {
+    const recovered = recoverDirectImageObjects(text)
+    if (recovered.length) {
+      parsed = { images: recovered }
+      recovery = { kind: 'complete-image-objects', count: recovered.length,
+        note: 'Recovered complete image candidates from malformed JSON; incomplete candidates were not repaired. Normal grounding checks still apply.' }
+      spindle.log.warn('[lumidraw] direct JSON recovery · ' + recovery.note)
+    }
+  }
   if (!parsed || !Array.isArray(parsed.images)) {
     const prose = String(text || '').trim()
     const looksLikeProse = prose.length > 40 && !prose.includes('{')
@@ -13644,7 +13687,7 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
           'declined this passage. It said: "' + opening + (prose.length > 220 ? '…' : '') + '"',
       }
     }
-    return { images: [], error: 'no images array in the reply' }
+    return { images: [], error: parsed ? 'The parser reply did not contain an images array. No additional parser call was made; try Scan latest to retry.' : 'The parser returned incomplete or invalid JSON, with no complete image candidate to recover. No additional parser call was made; try Scan latest to retry.' }
   }
   const images = []
   for (const item of parsed.images.slice(0, Math.max(1, maxImages))) {
@@ -13697,7 +13740,7 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
     const limited = limitDirectSubjectRuns(declared.prompt, subjectMaximum)
     const deduped = dedupeDirectRuns(limited.prompt, profiles)
     const prompt = deduped.prompt
-    const notes = [...declared.notes, ...limited.notes, ...deduped.notes]
+    const notes = [...declared.notes, ...limited.notes, ...deduped.notes, ...(recovery ? [recovery.note] : [])]
     if (limited.notes.length) {
       spindle.log.warn('[lumidraw] direct · ' + limited.notes.join(' · '))
     }
@@ -13751,6 +13794,7 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
     images.push({
       anchor: String(item.anchor || '').trim(),
       parserRecord: JSON.parse(JSON.stringify(item)),
+      parserRecovery: recovery,
       prompt,
       scene_summary: sceneSummary,
       sceneSummaryWordLimit: summaryWordLimit,
@@ -13778,7 +13822,7 @@ function parseDirectImages(raw, maxImages = 2, profiles = null, passage = '', ma
       outfits,
     })
   }
-  return { images, error: images.length ? '' : 'no usable prompt in the reply' }
+  return { images, recovery, error: images.length ? '' : 'no usable prompt in the reply' }
 }
 
 
@@ -15900,6 +15944,38 @@ async function scanStory(userId, options = {}) {
   }
 }
 
+const autoCadenceLocks = new Map()
+function advanceAutoCadence(previous, messageId, every) {
+  every = Number(every) === 1 ? 1 : 5
+  const state = previous && typeof previous === 'object' ? previous : {}
+  const seen = Array.isArray(state.seen) ? state.seen.filter(id => typeof id === 'string') : []
+  if (seen.includes(messageId)) return { state, due: false, duplicate: true }
+  const validProgress = state.every === every && Number.isInteger(state.progress) && state.progress >= 0 && state.progress < every
+  const progress = (validProgress ? state.progress : 0) + 1
+  return { state: { version: 1, every, progress: progress % every, seen: [...seen, messageId].slice(-512) }, due: progress >= every, duplicate: false }
+}
+async function automaticImageCadence(userId, chatId, target, settings) {
+  const every = Number(settings.autoImageEvery) === 1 ? 1 : 5
+  if (!target.isAssistant || !target.id) return { due: false, note: 'Only new assistant story replies advance the image schedule.' }
+  const key = JSON.stringify([userId, chatId])
+  const prior = autoCadenceLocks.get(key) || Promise.resolve()
+  const task = prior.catch(() => {}).then(async () => {
+    if (!spindle.userStorage || !spindle.userStorage.getJson || !spindle.userStorage.setJson) {
+      if (every === 1) return { due: true }
+      throw new Error('Automatic image schedule cannot access per-user storage. Scan latest remains available.')
+    }
+    const file = 'image_cadence/' + scFingerprint(String(chatId)) + '.json'
+    const saved = await spindle.userStorage.getJson(file, { userId, fallback: null })
+    const result = advanceAutoCadence(saved && saved.chatId === chatId ? saved : null, String(target.id), every)
+    if (!result.duplicate) await spindle.userStorage.setJson(file, { ...result.state, chatId }, { userId })
+    return { ...result, note: result.duplicate ? 'This reply already counted toward the automatic image schedule; rerolls do not count again.'
+      : result.due ? 'Automatic image due after ' + every + ' story replies.'
+        : 'Story reply ' + result.state.progress + '/' + every + ' — next automatic image in ' + (every - result.state.progress) + '. Continuity remains active; Scan latest generates now.' }
+  })
+  autoCadenceLocks.set(key, task)
+  try { return await task } finally { if (autoCadenceLocks.get(key) === task) autoCadenceLocks.delete(key) }
+}
+
 async function scanStoryCore(userId, options = {}) {
   // Keep compatibility with older internal callers that passed a boolean.
   if (typeof options === 'boolean') options = { force: options }
@@ -16037,6 +16113,18 @@ async function scanStoryCore(userId, options = {}) {
     setAutoStatus(userId, { status: 'skipped', note, messageId: String(target.id || ''), mode: settings.mode })
     if (scan) setStoryScanStage(scan, 'done', note)
     return { mode: settings.mode, processed: 0, skipped: true, outOfCharacter: true, note }
+  }
+
+  if (options.auto && ['parser', 'direct'].includes(settings.mode)) {
+    if (/(?:rendered|parser-tag)/i.test(String(options.source || '')) &&
+        !/generation-ended/i.test(String(options.source || '')) && !parserTagMessageIsRecent(target)) {
+      return { mode: settings.mode, processed: 0, skipped: true, note: 'Old rendered reply ignored; image schedule unchanged.' }
+    }
+    const cadence = await automaticImageCadence(userId, chatId, target, settings)
+    if (!cadence.due) {
+      if (scan) setStoryScanStage(scan, 'done', cadence.note)
+      return { mode: settings.mode, processed: 0, skipped: true, cadence: true, note: cadence.note }
+    }
   }
 
   // ------------------------- inline: process <dt-image> tags ---------------
@@ -17418,6 +17506,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.cloudEnabled !== undefined) settings.cloudEnabled = !!payload.cloudEnabled
         if (payload.cloudFallback !== undefined) settings.cloudFallback = !!payload.cloudFallback
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
+        if (payload.autoImageEvery !== undefined) settings.autoImageEvery = Number(payload.autoImageEvery) === 1 ? 1 : 5
         if (payload.experimentalSceneCore !== undefined) settings.experimentalSceneCore = !!payload.experimentalSceneCore
         if (payload.experimentalJevPlanner !== undefined) settings.experimentalJevPlanner = !!payload.experimentalJevPlanner
         if (payload.preferKnownCastMoments !== undefined) settings.preferKnownCastMoments = !!payload.preferKnownCastMoments
@@ -18926,6 +19015,8 @@ IMAGE VIEW GUIDANCE FOR CANDIDATES — use the existing fields, no new schema or
 - For candidate planning only, setting describes the CURRENT VISIBLE ENVIRONMENT for EACH selected moment, even without a move. This replaces the move-only SETTING rule for image candidates, not story memory: an alternate description of the same room is NOT a location change. Use the existing setting array and shared prompt for a plain venue plus a few source-supported visible anchors: architecture, surfaces, furniture or light. A location name or administrative label alone is not a complete visual description. Separate venue from nearby furniture instead of a compound such as "guildhall intake desk". Never invent materials, lighting, weather, furnishings or fantasy scenery to fill space. If details are unstated, keep the supported venue only.
 - Faithful visual paraphrases are allowed; the separate evidence quotes stay exact. Preserve distinctive fantasy nouns and model/trigger tags when their meaning is uncertain. Do not replace a specific setting with an unrelated generic place.
 - A private named prop should include its evidenced object type in visual wording, not its name alone: use the known warhammer/wand/etc only when the saved prop definition or passage establishes that type. Keep it with the actual holder, not automatically its owner. Unknown prop types stay unknown; do not invent a description.
+- A private creature/species name is not a visual description. When a creature participates, describe its source-established body shape and two or three distinctive visible features, attached to that creature in the existing fields. Do not assume a fantasy name is known to the image model, turn a beast into a human, or invent legs, anatomy, colors or size. A creature doing the main action must not disappear from the scene wording. Keep the source name for binding, but explain it visually.
+- Write the opening as a short actor + visible verb + recipient/object instruction, not a literary summary. Keep motives, emotions described only internally, ornamental adverbs and nested while/as clauses out of it. Put appearances, clothing, facial cues and surroundings in their existing dedicated fields. One clear opening action plus the later subject details is enough; do not compress the entire passage into a sentence.
 - Saved identity, count tags, weights and approved clothing are not material to rewrite for prettier prose. Keep each character's details bound to that character. LumiDraw supplies the protected sheet information mechanically.`
 }
 
@@ -19097,7 +19188,7 @@ function jpNarrativeOnly(text) {
   return String(text || '').replace(/"[^"\n]*"|“[^”\n]*”/g, match => ' '.repeat(match.length))
 }
 function jpEnvironmentBoundary(text) {
-  const narrative = jpNarrativeOnly(text)
+  const narrative = jpNarrativeOnly(text).replace(/\b(?:lights?|lamps?|lanterns?|flames?|candles?|torches|fire)\s+(?:went|goes|go|flickered|flickers)\s+out\b/gi, '')
   // Fallback evidence stops at a possible new scene or retrospective reveal.
   // Semantic support can still validate a fact; lexical fallback cannot decide
   // that two places are the same or silently ignore a time/location transition.
@@ -19223,7 +19314,14 @@ function jpEnvironmentProposal(image, memory, content, passage = '') {
   const venueClaims = jpNarratedVenueClaims(narrative)
   const silentContinuation = !!(window && prior.place.length && !uncertainMove && !lightChange &&
     (currentPrior || !venueClaims.length && !narrativeCandidates.length && !cardLocation && !/📍/.test(narrative)))
-  return { prior, proposed, offered, differing: !!differing, cardLocation, narrativeCandidates, silentContinuation }
+  // Story-established scenery does not expire because a paragraph describes
+  // an action instead of repeating the walls. Conflicting venues still need
+  // resolution; do not guess through a possible transition.
+  const compatiblePrior = !!(window && prior.place.length && !uncertainMove &&
+    (!differing || currentPrior) && (!venueClaims.length || currentPrior || venueClaims.every(claim =>
+      prior.place.some(place => scxSame(claim, place)))))
+  return { prior, proposed, offered, differing: !!differing, cardLocation, narrativeCandidates, silentContinuation,
+    compatiblePrior, lightChange, uncertainMove }
 }
 function jpVenueCriteria(proposal) {
   const hasPrior = proposal.prior.place.length > 0
@@ -19455,8 +19553,11 @@ function jpEnvironmentResolved(image, proposal, rows, proofs) {
   const approved = proofs.filter(r => ['venue-support', 'venue-literal-support'].includes(r.kind) && !r.uncertain && r.choice === 'supported')
   const issues = []
   let environment = jpEmptyEnvironment(), status = 'unknown', evidence = []
-  if (proposal.silentContinuation) {
+  const samePlace = decision && !decision.uncertain && ['previous', 'same_place'].includes(decision.choice)
+  const changedPlace = decision && !decision.uncertain && decision.choice === 'proposed'
+  if (proposal.silentContinuation || samePlace || proposal.compatiblePrior && !changedPlace) {
     environment = jpClone(proposal.prior); status = 'continued-silence'
+    if (proposal.lightChange) environment.lighting = []
     evidence.push('Established story environment; no narrated scene change or replacement was found before this moment.')
     // Silence preserves memory, but a supported contradiction removes the
     // specific old fact from this image. Unknown never means "delete".
@@ -19614,21 +19715,25 @@ async function planJevScene(images, scope, prefs) {
       }
       if (!sync) proposals.forEach((proposal, i) => {
         const decision = initial.find(r => r.candidate === i + 1 && r.kind === 'scene-venue')
-        const continuePrior = proposal.silentContinuation || decision && !decision.uncertain && ['previous', 'same_place'].includes(decision.choice)
+        const continuePrior = proposal.silentContinuation || proposal.compatiblePrior && !(decision && !decision.uncertain && decision.choice === 'proposed') || decision && !decision.uncertain && ['previous', 'same_place'].includes(decision.choice)
         const facts = Object.entries(proposal.proposed).flatMap(([field, values]) => values.map(fact => ({ field, fact })))
-        if (continuePrior && (proposal.silentContinuation || decision && decision.choice === 'previous')) facts.push({ field: 'previous', fact: proposal.prior.place.join(', ') })
+        if (continuePrior) facts.push({ field: 'previous', fact: proposal.prior.place.join(', ') })
         if (continuePrior) for (const field of ['surroundings', 'lighting']) {
-          for (const fact of proposal.prior[field]) if (!facts.some(item => item.field === field && item.fact === fact)) facts.push({ field, fact })
+          for (const fact of proposal.prior[field]) if (!(field === 'lighting' && proposal.lightChange) && !facts.some(item => item.field === field && item.fact === fact)) facts.push({ field, fact })
         }
         for (const fact of facts) jpAddQuestion(second, { candidate: i + 1, kind: 'venue-support', name: 'Location evidence', ...fact,
           evidenceSource: { scope: 'current', messageId: scope.messageId || '', swipeId: scope.swipeId } }, { type: 'choice',
           instructions: 'Independently check the proposition "' + fact.fact + '" as ' + fact.field + ' for candidate ' + (i + 1) + ' AT ITS SELECTED MOMENT. Use the GROUP of current-passage narrative evidence, not the confidence of locating one exact sentence. ' +
             (fact.field === 'previous' || continuePrior && (proposal.prior[fact.field] || []).includes(fact.fact)
-              ? 'Established continuity may persist on silence, but must be unsupported after narrated departure, a superseding detail, or arrival elsewhere. '
+              ? 'This is an ESTABLISHED STORY FACT, not a parser guess. Check for supersession: not repeated in this paragraph is supported continuation, NOT unsupported. Reject only a narrated departure, contradiction, or replacement affecting this exact fact. A lighting change alone does not remove the room or walls. '
               : 'New facts need current narrated support, or a current scene-card fact uncontradicted by narration. ') +
             'Earlier scenery in a passage after a move, dialogue-only destinations, instructions, memories and hypothetical details do not support this proposition. Objects such as counters/crystals may be surrounding details of this venue; verify each belongs HERE. ' +
             (proposal.narrativeCandidates.some(row => row.fact === fact.fact) ? 'Exact source excerpt offered for attribution, not automatic proof: ' + JSON.stringify(proposal.narrativeCandidates.find(row => row.fact === fact.fact).evidence) : ''),
-          criteria: { supported: 'The proposition holds at this selected moment under these evidence rules.', unsupported: 'The proposition is contradicted, elsewhere, merely discussed, or not evidenced.', unclear: 'Evidence is insufficient or ambiguous.' } }, fact.field === 'place' || fact.field === 'previous' ? 0 : 5)
+          criteria: { supported: 'The proposition holds at this selected moment, including established story facts that have not been superseded.',
+            unsupported: fact.field === 'previous' || continuePrior && (proposal.prior[fact.field] || []).includes(fact.fact)
+              ? 'Current narration explicitly supersedes this established fact: departure, replacement, or contradiction. Silence is NOT this choice.'
+              : 'This new proposed fact is contradicted, elsewhere, merely discussed, or not evidenced.',
+            unclear: 'Evidence is insufficient or ambiguous; this is not a deletion of established story memory.' } }, fact.field === 'place' || fact.field === 'previous' ? 0 : 5)
       })
       for (const row of initial.filter(r => r.kind === 'prop-holder' && !r.uncertain && r.options[r.choice])) {
         jpAddQuestion(second, { candidate: row.candidate, kind: 'prop-support', verifies: row.id, name: 'Object handling evidence' }, { type: 'choice',
@@ -20070,6 +20175,67 @@ function jvConciseOpening(opening, subjects) {
     reason: 'Each named subject and the exact neutral posture/location remain in their protected character blocks.' }] }
 }
 
+function jvLiteralOpening(opening) {
+  // Offered alternatives, not automatic semantic edits. Jev independently
+  // checks fidelity against the story before one can be selected.
+  let text = String(opening || '').replace(/\b(?:quietly|gently|slowly|deliberately|dramatically|fiercely|defiantly|secretly|tenderly|intently|carefully|firmly)\s+/gi, '')
+  text = text.replace(/(?:,\s*|\s+)(?:savoring|savouring|relishing|hoping|wondering|remembering|imagining|realizing|realising|contemplating|planning)\b.*$/i, '')
+    .replace(/\s+(?:while|as)\s+(?:he|she|they|[A-Z][\w'-]*)\s+(?:secretly\s+|silently\s+)?(?:hopes?|wonders?|remembers?|imagines?|realizes?|realises?|contemplates?|plans?)\b.*$/, '')
+    .replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, '')
+  if (!text || normalizeIdentityText(text) === normalizeIdentityText(opening)) return null
+  return { opening: text, changes: [{ kind: 'literal-visible-action', source: opening,
+    reason: 'Offered removal of ornamental manner words/internal commentary; independent source-fidelity approval is required.' }] }
+}
+
+function jvPrimaryOpening(opening, subjects) {
+  const split = /^(.*?)\s+while\s+(.+)$/i.exec(opening)
+  if (!split || split[1].trim().split(/\s+/).length < 4 || /\b(?:while|because|until|if)\b/i.test(split[1])) return null
+  // Do not lose the only description of an unknown creature/prop by cropping
+  // its clause. Every named secondary participant must have its own block.
+  const known = subjects.flatMap(s => String(s.name || '').split(/\s+/)).map(normalizeIdentityText)
+  const named = split[2].match(/\b[A-Z][a-z]+\b/g) || []
+  if (named.some(name => !known.includes(normalizeIdentityText(name)))) return null
+  return { opening: split[1].trim(), changes: [{ kind: 'primary-visible-action', removed: split[2],
+    reason: 'Candidate focuses the opening on one visible action. Jev must reject if the omitted clause is essential or changes the depicted moment; protected subject details remain intact.' }] }
+}
+
+function jvCreatureOpening(opening, subjects, passage, moment) {
+  const window = jpMomentWindow(passage, moment)
+  if (!window) return null
+  const source = jpNarrativeOnly(window.text.slice(0, window.sentenceEnd))
+  const known = subjects.flatMap(subject => [subject.name, subject.referenceLabel]).filter(Boolean)
+    .flatMap(name => String(name).split(/\s+/).map(normalizeIdentityText))
+  const names = uniqueStrings((String(opening).match(/\b[A-Z][a-z]+(?:[A-Z][a-z]+)*\b/g) || []))
+    .filter(name => !known.includes(normalizeIdentityText(name)) && !/^(?:The|An?|Adult|Young|Scene|While|His|Her|Their|Its|He|She|They)$/.test(name))
+  const clauses = source.split(/[.!?\n]+/).map(text => text.trim()).filter(Boolean)
+  const shape = /\b(?:armored carapaces?|armoured carapaces?|tusked jaws?|crystal[- ](?:crested|covered) skulls?|hooked talons?|scaly skin|fur[- ]covered body|feathered wings|leathery wings|segmented body|serpentine body|quadrupedal body|insectoid body|multiple legs|long claws|horned skulls?)\b/gi
+  let text = opening
+  const changes = []
+  for (const name of names.slice(0, 4)) {
+    const named = new RegExp('\\b' + escapeRegExp(name) + 's?\\b', 'i')
+    const indices = clauses.map((line, index) => named.test(line) ? index : -1).filter(index => index >= 0)
+    // A parser may use the species name where narration calls the same actor
+    // "the boarder". Offer a possible binding, not an accepted identity. Its
+    // source name must still occur in this passage; all offered physical traits
+    // predate this moment. Final Jev fidelity must establish the alias.
+    const aliasCandidate = !indices.length && named.test(jpNarrativeOnly(window.text)) &&
+      /\b(?:bites?|clamps?|lunges?|attacks?|pounces?|mauls?|rakes?)\b/i.test(opening)
+    if (!indices.length && !aliasCandidate) continue
+    const context = clauses.filter((line, index) => (aliasCandidate || indices.some(at => Math.abs(at - index) <= 1)) &&
+      !/\b(?:imagined|dreamed|remembered|painting|statue|portrait|would|could|might|not|never)\b/i.test(line))
+    const traits = uniqueStrings(context.flatMap(line => line.match(shape) || [])).slice(0, 3)
+    if (traits.length < 2 || !/\b(?:beasts?|creatures?|monsters?|carapaces?|tusked|talons?)\b/i.test(context.join(' '))) continue
+    const plural = /s$/.test(name) && new RegExp('\\b' + escapeRegExp(name) + '\\s+(?:swarm|lunge|attack|bite|stand|climb|move|rush|are)\\b').test(opening)
+    const description = (plural ? 'creatures with ' : 'a creature with ') + naturalList(traits)
+    text = text.replace(new RegExp('\\b' + escapeRegExp(name) + '\\b'), name + ', ' + description + ',')
+    changes.push({ kind: 'source-grounded-creature-description', name, description, aliasRequiresVerification: aliasCandidate,
+      evidence: context.filter(line => traits.some(trait => line.includes(trait))),
+      reason: 'Exact nearby story traits offered for this named creature. Jev must verify owner, current visibility and nonhuman interpretation; this never writes a character sheet.' })
+    break // one bounded clarification, not a speculative bestiary
+  }
+  return changes.length ? { opening: text, changes } : null
+}
+
 function jvCreatePromptDocument(image, parts, finalized) {
   const originalEnvironment = JSON.parse(JSON.stringify(parts.environment))
   const document = {
@@ -20089,6 +20255,15 @@ function jvCreatePromptDocument(image, parts, finalized) {
   const baseOpening = { id: 'original', opening: parts.opening, changes: [] }
   const concise = jvConciseOpening(parts.opening, document.protected.subjects)
   const openings = concise ? [baseOpening, { id: 'concise', ...concise }] : [baseOpening]
+  const literal = jvLiteralOpening(parts.opening)
+  if (literal) openings.push({ id: 'literal', ...literal })
+  const primary = jvPrimaryOpening(literal ? literal.opening : parts.opening, document.protected.subjects)
+  if (primary && !openings.some(option => option.opening === primary.opening)) openings.push({ id: 'primary', ...primary,
+    changes: [...(literal ? literal.changes : []), ...primary.changes] })
+  const grounded = jvCreatureOpening(literal ? literal.opening : parts.opening, document.protected.subjects,
+    parts.passage || '', image.moment_evidence || image.anchor || '')
+  if (grounded) openings.push({ id: 'grounded', ...grounded,
+    changes: [...(literal ? literal.changes : []), ...grounded.changes] })
   const offered = typeof plannedVisualEnvironmentOptions === 'function' ? plannedVisualEnvironmentOptions(originalEnvironment) : []
   const visual = offered.find(option => option.id === 'visual')
   const environments = [{ id: 'original', environment: originalEnvironment, changes: [] }, ...(visual ? [visual] : [])]
@@ -20096,7 +20271,7 @@ function jvCreatePromptDocument(image, parts, finalized) {
     const environment = JSON.parse(JSON.stringify(option.environment))
     const tags = uniqueStrings([...(environment.place || []), ...(environment.surroundings || []), ...(environment.lighting || [])])
     const setting = option.id === 'original' ? parts.setting : tags.length ? 'Setting: ' + tags.join(', ') + '.' : ''
-    const id = opening.id === 'original' ? option.id : option.id === 'original' ? 'concise' : 'concise-visual'
+    const id = opening.id === 'original' ? option.id : option.id === 'original' ? opening.id : opening.id + '-visual'
     const prompt = jvRenderPromptDocument(document, opening.opening, setting)
     if (document.variants.some(previous => previous.prompt === prompt)) continue
     document.variants.push({ id, prompt, negativePrompt: finalized.negativePrompt,
@@ -20286,7 +20461,7 @@ function finalizePlannedImagePrompt(image, ctx) {
     tailLines: lines.slice(5 + descriptions.length).filter(Boolean), boundLines,
     environment: Object.fromEntries(['place', 'surroundings', 'lighting'].map(field =>
       [field, applyBannedToList(environment[field] || [], preset.bannedTags)])),
-    openingPropBindings: openingProps.bindings }, { prompt, negativePrompt })
+    openingPropBindings: openingProps.bindings, passage: ctx.passage || '' }, { prompt, negativePrompt })
   core.warnings = uniqueStrings([...(core.warnings || []), ...core.preflight.issues.map(issue => issue.kind + ': ' + issue.ref)])
   trace('planned scene compiler', 'applied', `${subjects.length} bound subjects; one setting source; ${core.compilation.wordCount} words; ${omissions.length} optional/repeated detail omissions`)
   trace('scene preflight', core.preflight.status, core.preflight.checks.join(' · '))
@@ -20333,6 +20508,10 @@ Rules:
   an observe event for an open jacket, not removal. Naked/undressed is bare only
   when actual complete undress is explicit, not bare arms, exposed skin or a
   description of a single body part. A carried coat is not worn clothing.
+- A body part described as bare INSIDE a dressing action is its BEFORE state,
+  not a second bare event after dressing: sliding bare feet into boots ends
+  with boots worn. Do not emit bare for that embedded description. A separate
+  subsequent removal is a real event and must remain in chronological order.
 - Exclude dialogue claims, suggestions, plans, wishes, dreams, memories, quoted
   examples and hypothetical events. Silence preserves the established state.
 - move is an actual venue change; describe adds current-place details without
@@ -20439,8 +20618,25 @@ function scxEvent(raw, index, profiles, source) {
   }
   return { event }
 }
+function scxDressingPreconditions(events) {
+  // Resolve only an embedded before-state inside the SAME source action. This
+  // is not a general preference for clothes over bare states or for wear over
+  // removal. A later independent undressing event stays untouched.
+  return events.filter(bare => bare.kind === 'wardrobe' && bare.operation === 'bare' && bare.source === 'narrative')
+    .flatMap(bare => {
+      const wear = events.find(event => event.kind === 'wardrobe' && event.operation === 'wear' && event.source === bare.source && event.ref === bare.ref &&
+        Number.isFinite(event.start) && Number.isFinite(bare.start) && event.start < bare.start && event.end >= bare.end &&
+        event.evidenceStart === bare.evidenceStart && event.evidenceEnd === bare.evidenceEnd &&
+        /\b(?:slid|slides?|sliding|slipp?ed|slips?|slipping|push(?:ed|es|ing)?|pull(?:ed|s|ing)?)\b/i.test(event.at || '') &&
+        /\b(?:into|inside)\b/i.test(event.at || '') &&
+        !/\b(?:not|never|without|if|would|could|might|will|out of|off)\b|n['’]t\b/i.test(event.at || '') &&
+        !scxAffectedSlots(bare).includes('all') && scxAffectedSlots(bare).some(slot => scxAffectedSlots(event).includes(slot)))
+      return wear ? [{ eventId: bare.id, supersededBy: wear.id, reason: 'Bare description is the before-state embedded inside this dressing action, not a later undress event.' }] : []
+    })
+}
 function scxSort(events) {
-  return [...events].sort((a, b) => (a.source === 'scene-card') - (b.source === 'scene-card') || a.start - b.start || a.sourceIndex - b.sourceIndex)
+  const preconditions = new Set(scxDressingPreconditions(events).map(row => row.eventId))
+  return events.filter(event => !preconditions.has(event.id)).sort((a, b) => (a.source === 'scene-card') - (b.source === 'scene-card') || a.start - b.start || a.sourceIndex - b.sourceIndex)
 }
 function scxAffectedSlots(event) {
   return uniqueStrings((event.items || []).flatMap(item => coreAbsentSlots(item).length ? coreAbsentSlots(item) : [wardrobeSlot(item)]))
@@ -20776,6 +20972,7 @@ async function extractStoryContinuity({ userId, chatId, settings, profiles, befo
   diagnostics.coverage = coverage && jevConfident(coverage) ? coverage.choice : 'unclear'
   diagnostics.accepted = accepted.length
   if (diagnostics.coverage !== 'complete') diagnostics.issues.push('Some end-of-message facts may be missing; automatic continuity needs recovery before it is considered complete.')
+  diagnostics.dressingPreconditions = scxDressingPreconditions(accepted)
   const events = scxSort(accepted)
   const after = reduceStoryContinuityEvents(before, events, profiles)
   return { status: diagnostics.rejected.length || diagnostics.coverage !== 'complete' ? 'partial' : 'ok', after, events, source, diagnostics }
@@ -21427,12 +21624,13 @@ function jvFinalQuestionSet(candidate, serial) {
   const pass = { clear: 'This specific check is clear and usable as written.', concern: 'This specific check has a concrete ambiguity or nonvisual issue.', unclear: 'Insufficient basis to judge this check.' }
   const questions = {
     [prefix + 'visual']: question(shared + subject + 'Does the natural-language opening/setting describe one simple, readable visible moment? A quiet conversation, looking or waiting is a valid image.', pass),
-    [prefix + 'references']: question(shared + subject + 'Are private location/item references understandable FROM THE OUTGOING PROMPT ITSELF? A character name is allowed when introduced with its description. A private prop name such as Mercy without a visible description remains unclear even if the story, library or your knowledge explains it. Do not treat a glossary outside the actual outgoing prompt as a fix.', pass),
+    [prefix + 'references']: question(shared + subject + 'Are private location/item/creature references understandable FROM THE OUTGOING PROMPT ITSELF? A character name is allowed when introduced with its description. An unfamiliar creature name needs its visible physical description, not an assumption of a human attacker. A private prop name such as Mercy without a visible description remains unclear even if the story, library or your knowledge explains it. Do not treat a glossary outside the actual outgoing prompt as a fix.', pass),
     [prefix + 'ownership']: question(shared + subject + 'Are actor/recipient and garment/prop holders clear and attached to the correct described subject? Do not infer a holder from mere ownership or assign props to whoever stands closest.', pass),
     [prefix + 'temporal']: question(shared + subject + 'Is the natural-language scene about the selected present moment, without future travel, past events, metaphorical intent, or internal plans presented as visible action? Do not reject ordinary dialogue or a supported named venue.', pass),
+    [prefix + 'consistency']: question(shared + subject + 'Does the opening agree with protected subject clothing, physical actions, framing and actor/object bindings? Bare feet inside the act of putting boots on are a BEFORE-state, not the later outfit. An action rejected or contradicted by the protected blocks must not survive in a flowery summary. Judge contradictions only; do not rewrite model tags.', pass),
   }
   for (const variant of candidate.variants) questions[prefix + 'fidelity_' + variant.id] = question(shared +
-    'Independently verify variant ' + variant.id + ' for candidate ' + candidate.id + ' against the selected source moment and protected owner-bound blocks. Do not assume the later selection question is correct. Every natural-language change must preserve current actions, participants and prop holders. A literal paraphrase of established room features is allowed; invented destinations, backgrounds, changed actions or ownership are not. Removing future intent is allowed only if the remaining action is actually present. Unknown context means unclear.',
+    'Independently verify variant ' + variant.id + ' for candidate ' + candidate.id + ' against the selected source moment and protected owner-bound blocks. Do not assume the later selection question is correct. Preserve the primary current action, all participants and prop holders. A secondary clause can be omitted only if the remaining prompt still depicts this same moment and preserves necessary body/interaction relationships; shorter is not automatically faithful. Creature traits must describe that exact creature, be visible at this moment, and not come from another creature or human. A literal paraphrase of established room features is allowed; invented destinations, backgrounds, changed actions or ownership are not. Removing future intent is allowed only if the remaining action is actually present. Unknown context means unclear.',
     { faithful: 'Every change is a source-faithful simplification of the same visible moment, with no new or reassigned fact.', unfaithful: 'At least one change invents, changes, or misattributes a visual/source fact.', unclear: 'Fidelity cannot be established from the supplied source.' })
   const choices = { keep: 'Keep the original: it is best, alternatives are not clearly better, or a different wording would change source meaning.',
     unclear: 'Cannot establish a source-faithful clarity improvement; keep original.' }
@@ -21496,7 +21694,7 @@ async function reviewFinalJevPrompts(prepared, scope = {}) {
     const original = Array.isArray(all) && all.find(variant => variant.id === 'original')
     if (!original || !jvClarityVariantValid(entry.image, base, original)) { reject('Original compiler document failed its consistency guard.'); continue }
     const variants = all.filter(variant => variant && variant.id !== 'original' &&
-      /^(?:concise|visual|concise-visual)$/.test(variant.id) && variant.prompt !== base.prompt && jvClarityVariantValid(entry.image, base, variant))
+      /^(?:visual|(?:concise|literal|primary|grounded)(?:-visual)?)$/.test(variant.id) && variant.prompt !== base.prompt && jvClarityVariantValid(entry.image, base, variant))
       .filter((variant, at, list) => list.findIndex(other => other.id === variant.id) === at)
     const moment = String(entry.image.moment_evidence || entry.image.anchor || '')
     const source = jvFinalSource(scope.passage, moment)
@@ -21593,7 +21791,8 @@ async function reviewFinalJevPrompts(prepared, scope = {}) {
       }
     } else if (!outcome.error) {
       const kept = jvFinalAccepted(pick, 'keep')
-      report.status = kept ? (report.issues.length ? 'concerns' : 'ok') : 'uncertain'
+      const checks = report.decisions.filter(row => ['visual', 'references', 'ownership', 'temporal', 'consistency'].includes(row.kind))
+      report.status = report.issues.length ? 'concerns' : kept && checks.length === 5 && checks.every(row => row.accepted && row.choice === 'clear') ? 'ok' : 'uncertain'
       if (!kept) report.issues.push('No independently source-faithful clarity improvement was established; original retained.')
     }
     jvFinalAttach(item.entry, report)
