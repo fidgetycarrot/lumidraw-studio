@@ -1,8 +1,8 @@
 {
   "name": "lumidraw-studio",
-  "version": "1.5.0-jev.9",
+  "version": "1.6.0-swarm.1",
   "private": true,
-  "description": "An Anima-optimized Draw Things Studio with reusable personas, appearance states, context continuity, and compact hybrid prompts.",
+  "description": "Story illustration studio with Draw Things and SwarmUI renderers, character libraries, and visual continuity.",
   "license": "MIT",
   "dependencies": {}
 }

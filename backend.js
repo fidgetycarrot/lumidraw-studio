@@ -64,6 +64,7 @@ const DEFAULT_SETTINGS = {
   preferKnownCastMoments: true,
   host: '127.0.0.1',
   port: 7862,
+  swarmUrl: 'http://localhost:7801',
   mode: 'off',            // 'off' | 'inline' | 'parser'
   autoScan: true,         // auto-process after each story message (when events are available)
   autoImageEvery: 5,      // new assistant story replies; manual scans bypass cadence
@@ -1984,6 +1985,7 @@ function sanitizeDrawThingsPayload(payload) {
 }
 
 function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
+  if (imageRenderer(config) === 'swarmui') return buildSwarmPayload({ prompt, negativePrompt, seed, config })
   const payload = {}
 
   // Every Draw Things setting the workspace holds is sent, not a fixed
@@ -2004,6 +2006,7 @@ function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   const assign = (source) => {
     if (!source || typeof source !== 'object') return
     for (const [key, value] of Object.entries(source)) {
+      if (key === 'renderBackend' || key === 'swarmParams') continue
       if (value === undefined || value === null || value === '') continue
       const canonical = canonicalPayloadKey(key)
       if (RESERVED_CANONICAL.has(canonical)) {
@@ -2426,7 +2429,225 @@ async function cloudGenerate(settings, payload) {
 // and the fallback: an image that arrives slowly beats no image, and a chat
 // that stops illustrating because a relay was not running is a worse failure
 // than a slow one.
-async function generateImages(settings, payload, label = 'generation') {
+// Renderer identity belongs to a preset/recipe, never a global toggle. Historical
+// recipes without the marker remain Draw Things recipes after this upgrade.
+function imageRenderer(config) {
+  const value = config && config.renderBackend
+  if (!value || value === 'drawthings') return 'drawthings'
+  if (value === 'swarmui') return value
+  throw new Error('Unknown image renderer: ' + String(value))
+}
+
+function swarmBaseUrl(settings) {
+  let url
+  try { url = new URL(String(settings.swarmUrl || 'http://localhost:7801')) }
+  catch { throw new Error('Enter a valid SwarmUI address, such as http://localhost:7801.') }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error('SwarmUI address must be HTTP(S), without credentials, query parameters or a fragment.')
+  }
+  return url.href.replace(/\/+$/, '')
+}
+
+async function swarmPost(settings, route, body, timeoutMs = 20000) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(swarmBaseUrl(settings) + '/API/' + route, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: controller.signal, redirect: 'error',
+    })
+    if (!response.ok) throw new Error('SwarmUI returned HTTP ' + response.status + '. This release connects to local SwarmUI without account authentication.')
+    let result
+    try { result = await response.json() } catch { throw new Error('SwarmUI returned a non-JSON response. Check its address and API availability.') }
+    if (!result || typeof result !== 'object') throw new Error('SwarmUI returned an empty API response.')
+    return result
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('SwarmUI request timed out. Check SwarmUI before retrying; a render may still be running. No automatic retry was sent.')
+    throw error
+  } finally { clearTimeout(timer) }
+}
+
+async function swarmSession(settings) {
+  const result = await swarmPost(settings, 'GetNewSession', {})
+  if (typeof result.session_id !== 'string' || !result.session_id) throw new Error('SwarmUI could not open a session. Check that local API access is enabled.')
+  return result
+}
+
+async function swarmApi(settings, route, body = {}, timeoutMs, session = null) {
+  // Isolated session per operation: no account crossover or persisted secrets.
+  let active = session || await swarmSession(settings)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await swarmPost(settings, route, { ...body, session_id: active.session_id }, timeoutMs)
+    if (result.error_id === 'invalid_session_id' && attempt === 0) { active = await swarmSession(settings); continue }
+    if (result.error || result.error_id) throw new Error('SwarmUI: ' + String(result.error || result.error_id).slice(0, 800))
+    return result
+  }
+}
+
+const SWARM_RESERVED = new Set(['prompt', 'negativeprompt', 'seed', 'images', 'batchsize', 'sessionid', 'presets', 'imageformat', 'donotsave', 'model', 'steps', 'cfgscale', 'width', 'height', 'sampler', 'loras', 'loraweights', 'renderbackend', 'swarmparams'])
+function swarmNativeParams(params) {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return {}
+  const out = {}
+  for (const [key, value] of Object.entries(params)) {
+    const id = key.toLowerCase().replace(/[^a-z0-9]/g, '')
+    if (SWARM_RESERVED.has(id) || /token|secret|password|cookie|auth|workflow|initimage|controlnet|video|backendid|backendtype/.test(id)) continue
+    if (value !== null && value !== undefined && value !== '') out[id] = value
+  }
+  return out
+}
+
+function buildSwarmPayload({ prompt, negativePrompt, seed, config }) {
+  if (!config || !String(config.model || '').trim()) throw new Error('Choose a SwarmUI model or load one of your SwarmUI presets before generating.')
+  const out = { ...swarmNativeParams(config.swarmParams), model: String(config.model).trim() }
+  for (const [key, source, min, max, integer] of [
+    ['steps', 'steps', 1, 200, true], ['cfgscale', 'guidance_scale', 0, 100, false],
+    ['width', 'width', 64, 8192, true], ['height', 'height', 64, 8192, true],
+  ]) {
+    if (config[source] === undefined || config[source] === '') continue
+    const value = Number(config[source])
+    if (!Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) throw new Error('Invalid SwarmUI ' + key + '.')
+    out[key] = value
+  }
+  if (config.sampler) out.sampler = String(config.sampler)
+  if (Array.isArray(config.loras) && config.loras.length) {
+    out.loras = config.loras.map(l => String(l.file || l.name || '')).join(',')
+    out.loraweights = config.loras.map(l => {
+      const n = Number(l.weight ?? 1)
+      if (!Number.isFinite(n)) throw new Error('Invalid SwarmUI LoRA weight.')
+      return n
+    }).join(',')
+  }
+  const n = seed === undefined || seed === null || seed === '' ? -1 : Number(seed)
+  if (n >= 0 && !Number.isSafeInteger(n)) throw new Error('Seed must be a safe whole number.')
+  return { ...out, prompt: String(prompt || ''), negativeprompt: String(negativePrompt || ''),
+    seed: n >= 0 ? n : Math.floor(Math.random() * 4294967296), images: 1, batchsize: 1, imageformat: 'PNG' }
+}
+
+function swarmPresetConfig(map) {
+  const config = { renderBackend: 'swarmui', swarmParams: swarmNativeParams(map) }
+  for (const key of ['model', 'sampler']) if (map[key]) config[key] = String(map[key])
+  for (const [from, to] of [['steps', 'steps'], ['cfgscale', 'guidance_scale'], ['width', 'width'], ['height', 'height']]) {
+    if (map[from] !== undefined && map[from] !== '') config[to] = Number(map[from])
+  }
+  const list = value => Array.isArray(value) ? value : String(value || '').split(',').map(x => x.trim()).filter(Boolean)
+  const weights = list(map.loraweights)
+  config.loras = list(map.loras).map((file, i) => ({ file, weight: weights[i] === undefined ? 1 : Number(weights[i]) }))
+  return config
+}
+
+async function swarmCatalog(settings) {
+  const session = await swarmSession(settings)
+  const params = await swarmApi(settings, 'ListT2IParams', {}, 20000, session)
+  let user = {}, warning = ''
+  try { user = await swarmApi(settings, 'GetMyUserData', {}, 20000, session) }
+  catch { warning = 'Models loaded, but SwarmUI saved presets could not be read.' }
+  const names = key => ((params.models || {})[key] || []).map(x => Array.isArray(x) ? x[0] : x).filter(x => typeof x === 'string')
+  const values = id => (params.list || []).find(p => p.id === id)?.values || []
+  return { version: session.version || '', models: names('Stable-Diffusion').map(file => ({ file, name: file })),
+    loras: names('LoRA'), samplers: values('sampler'), schedulers: values('scheduler'), warning,
+    presets: (user.presets || []).map(p => ({ name: String(p.title || ''), config: swarmPresetConfig(p.param_map || {}) })) }
+}
+
+async function swarmImage(settings, location) {
+  if (typeof location !== 'string') throw new Error('SwarmUI returned an invalid image location.')
+  let bytes
+  if (location.startsWith('data:image/png;base64,')) {
+    if (location.length > 48 * 1024 * 1024) throw new Error('SwarmUI image exceeds the transfer limit.')
+    bytes = Buffer.from(location.slice(22), 'base64')
+  } else {
+    const base = swarmBaseUrl(settings) + '/', url = new URL(location, base), root = new URL(base)
+    if (url.origin !== root.origin || !url.pathname.startsWith(root.pathname + 'View/') || url.username || url.password) throw new Error('SwarmUI returned an image outside its own output folder.')
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60000)
+    try {
+      const res = await fetch(url.href, { signal: controller.signal, redirect: 'error' })
+      if (!res.ok) throw new Error('SwarmUI rendered the image, but downloading it failed (HTTP ' + res.status + '). Check SwarmUI history before retrying.')
+      if (Number(res.headers.get('content-length')) > 32 * 1024 * 1024) throw new Error('SwarmUI image exceeds the transfer limit.')
+      const reader = res.body.getReader(), chunks = []; let length = 0
+      try {
+        while (true) {
+          const { done, value } = await reader.read(); if (done) break
+          length += value.length
+          if (length > 32 * 1024 * 1024) { await reader.cancel(); throw new Error('SwarmUI image exceeds the transfer limit.') }
+          chunks.push(Buffer.from(value))
+        }
+      } finally { reader.releaseLock() }
+      bytes = Buffer.concat(chunks)
+    } finally { clearTimeout(timer) }
+  }
+  if (bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new Error('SwarmUI output was not a PNG image. No invalid file was added to your library.')
+  return bytes.toString('base64')
+}
+
+function swarmSocketRequest(settings, payload, session, progress) {
+  return new Promise((resolve, reject) => {
+    const url = swarmBaseUrl(settings).replace(/^http/, 'ws') + '/API/GenerateText2ImageWS'
+    const socket = new WebSocket(url), images = new Map()
+    let settled = false, lastProgress = 0
+    const finish = error => {
+      if (settled) return
+      settled = true; clearTimeout(timer)
+      try { socket.close() } catch { /* connection may already be closed */ }
+      if (error) reject(error)
+      else if (images.size !== 1) reject(new Error('SwarmUI finished without exactly one image. Check its history before retrying.'))
+      else resolve({ images: [...images.values()] })
+    }
+    const timer = setTimeout(() => finish(new Error('SwarmUI render timed out after 10 minutes. Check its history before retrying; no second request was sent.')), 600000)
+    // Do not send application-level heartbeats: this endpoint interprets every
+    // additional message as another generation request.
+    socket.onopen = () => {
+      try { socket.send(JSON.stringify({ ...payload, session_id: session.session_id })) }
+      catch { finish(new Error('Could not send the SwarmUI render request. No automatic retry was sent.')) }
+    }
+    socket.onerror = () => finish(new Error('SwarmUI streaming connection failed. Check SwarmUI before retrying; no automatic retry was sent.'))
+    socket.onmessage = event => {
+      if (settled) return
+      let data
+      try { data = JSON.parse(String(event.data)) } catch { finish(new Error('SwarmUI sent an invalid progress response.')); return }
+      if (!data || typeof data !== 'object' || Array.isArray(data)) { finish(new Error('SwarmUI sent an invalid progress response.')); return }
+      if (data.error || data.error_id) {
+        const error = new Error('SwarmUI: ' + String(data.error || data.error_id).slice(0, 800))
+        if (!images.size && data.error_id === 'invalid_session_id') error.code = 'invalid_session_id'
+        finish(error); return
+      }
+      if (data.image) {
+        const item = typeof data.image === 'string' ? data : data.image
+        images.set(String(item.batch_index ?? 0), item.image)
+      }
+      for (const index of Array.isArray(data.discard_indices) ? data.discard_indices : []) images.delete(String(index))
+      if (progress && (data.gen_progress || data.status) && Date.now() - lastProgress > 3000) {
+        lastProgress = Date.now()
+        const n = Number(data.gen_progress && data.gen_progress.overall_percent)
+        try { progress({ percent: Number.isFinite(n) && data.gen_progress ? Math.max(0, Math.min(100, Math.round(n * 100))) : null }) } catch { /* UI is optional */ }
+      }
+      if (data.socket_intention === 'close') finish()
+    }
+    socket.onclose = event => {
+      if (settled) return
+      if (event.code === 1000 && images.size === 1) finish()
+      else finish(new Error('SwarmUI disconnected before confirming completion. Check its history before retrying; no automatic retry was sent.'))
+    }
+  })
+}
+
+async function generateSwarmImages(settings, payload, progress) {
+  let result
+  if (typeof WebSocket === 'function') {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { result = await swarmSocketRequest(settings, payload, await swarmSession(settings), progress); break }
+      catch (error) { if (error.code !== 'invalid_session_id' || attempt) throw error }
+    }
+  } else {
+    // Compatibility for older hosts only. Never fall back after a socket was
+    // opened: the original request could already be rendering.
+    result = await swarmApi(settings, 'GenerateText2Image', payload, 600000)
+  }
+  if (!Array.isArray(result.images) || result.images.length !== 1) throw new Error('SwarmUI did not return exactly one image. Check its generation history before retrying.')
+  const item = result.images[0]
+  return [await swarmImage(settings, typeof item === 'string' ? item : item && item.image)]
+}
+
+async function generateImages(settings, payload, label = 'generation', renderer = 'drawthings', progress = null) {
+  if (renderer === 'swarmui') return { images: await generateSwarmImages(settings, payload, progress), backend: 'swarmui' }
   if (!cloudEnabled(settings)) return { images: await dtGenerate(settings, payload), backend: 'local' }
   try {
     const images = await cloudGenerate(settings, payload)
@@ -4584,7 +4805,8 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     spindle.log.info('[lumidraw] no model in the payload — Draw Things will use the model selected in its own UI')
   }
   const started = Date.now()
-  const { images, backend, fellBackFrom } = await generateImages(settings, payloadOut, 'story generation')
+  const { images, backend, fellBackFrom } = await generateImages(settings, payloadOut, 'story generation', imageRenderer(merged),
+    progress => notifyFrontend(userId, 'renderer_progress', { renderer: 'SwarmUI', ...progress }))
   assertStoryScanActive(scan)
   const uploads = []
   for (const b64 of images) {
@@ -4601,7 +4823,7 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     durationMs: Date.now() - started,
     model: payloadOut.model,
     prompt: payloadOut.prompt,
-    negativePrompt: payloadOut.negative_prompt || '',
+    negativePrompt: payloadOut.negative_prompt || payloadOut.negativeprompt || '',
     seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
     images: uploads,
     // Which machine drew it. Worth keeping: a cloud image and a local one from
@@ -16567,6 +16789,7 @@ async function scanStoryCore(userId, options = {}) {
 const MODELS_FILE = 'models.json'
 
 async function rememberModels(config) {
+  if (imageRenderer(config) === 'swarmui') return
   const known = await spindle.storage.getJson(MODELS_FILE, { fallback: { models: [], samplers: [], loras: [] } })
   const addTo = (arr, v) => { if (v && !arr.includes(v)) arr.push(v) }
   addTo(known.models, config.model)
@@ -17219,6 +17442,9 @@ async function replaceOneImage(userId, payload) {
         if (!preset) throw new Error('No saved recipe for this image and no matching preset to fall back on.')
         config = preset.config
         extra = preset.extra
+        if (source && source.backend !== 'swarmui' && imageRenderer(config) === 'swarmui') {
+          throw new Error('This older Draw Things image has no stored recipe. Select its original Draw Things preset before regenerating; Lumi Studio will not silently switch it to SwarmUI.')
+        }
       }
 
       const reuseSeed = payload.reuseSeed !== false
@@ -17331,7 +17557,7 @@ function troubleshootingClean(value, depth = 0) {
   if (value && typeof value === 'object') {
     const out = {}
     for (const [key, item] of Object.entries(value)) {
-      if (/api.?key|secret|password|authorization|credential|cookie|headers|access.?token|refresh.?token|endpoint|host|base.?url/i.test(key)) continue
+      if (/api.?key|secret|password|authorization|credential|cookie|headers|access.?token|refresh.?token|session.?id|swarm.?url|endpoint|host|base.?url/i.test(key)) continue
       out[key] = troubleshootingClean(item, depth + 1)
     }
     return out
@@ -17498,6 +17724,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           host: String(payload.host || prev.host || DEFAULT_SETTINGS.host).trim(),
           port: Number(payload.port) || prev.port || DEFAULT_SETTINGS.port,
         }
+        if (payload.swarmUrl !== undefined) settings.swarmUrl = swarmBaseUrl({ swarmUrl: payload.swarmUrl })
         for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserRequestOverrides', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel', 'storyQualityTags', 'storyPromptPrefix', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor']) {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
@@ -17784,7 +18011,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const presets = await getPresets()
         const history = await getHistory()
         // One catalog merge, not one disk read/write per preset/history row.
-        const configs = [...presets.map(p => p.config || {}), ...history.map(h => ({ model: h.model }))]
+        const configs = [...presets.map(p => p.config || {}).filter(c => imageRenderer(c) !== 'swarmui'), ...history.filter(h => h.backend !== 'swarmui').map(h => ({ model: h.model }))]
         try {
           await rememberCatalog({ models: configs.flatMap(c => [c.model, c.refiner_model]).filter(Boolean),
             samplers: configs.map(c => c.sampler).filter(Boolean),
@@ -17816,6 +18043,11 @@ spindle.onFrontendMessage(async (payload, userId) => {
           chatId: payload.chatId,
         })
         reply = ok(payload, requestId, result)
+        break
+      }
+
+      case 'swarm_catalog': {
+        reply = ok(payload, requestId, await swarmCatalog(await getSettings()))
         break
       }
 
@@ -18583,7 +18815,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           spindle.log.info('[lumidraw] Studio generation sent with no model — Draw Things will use the model selected in its own UI')
         }
         const started = Date.now()
-        const { images } = await generateImages(settings, payloadOut, 'Studio generation')
+        const { images, backend, fellBackFrom } = await generateImages(settings, payloadOut, 'Studio generation', imageRenderer(payload.config),
+          progress => notifyFrontend(userId, 'renderer_progress', { renderer: 'SwarmUI', ...progress }))
 
         // Persist to Lumiverse's image library (tagged to this extension).
         // Operator-scoped installs require an explicit userId on user-owned
@@ -18614,9 +18847,13 @@ spindle.onFrontendMessage(async (payload, userId) => {
           durationMs: Date.now() - started,
           model: payloadOut.model,
           prompt: payloadOut.prompt,
-          negativePrompt: payloadOut.negative_prompt || '',
+          negativePrompt: payloadOut.negative_prompt || payloadOut.negativeprompt || '',
           seed: payloadOut.seed !== undefined ? payloadOut.seed : 'random',
           images: uploads,
+          backend,
+          ...(fellBackFrom ? { fellBackFrom } : {}),
+          recipe: { config: payload.config || null, extra: null },
+          generationRequest: troubleshootingClean(payloadOut),
         }
         const history = await pushHistory(entry, userId)
         // Push the completed result independently of the request reply. This

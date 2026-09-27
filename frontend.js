@@ -1,20 +1,20 @@
-// LumiDraw Studio — frontend
+// Lumi Studio — frontend
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.5.0-jev.9'
+const EXTENSION_VERSION = '1.6.0-swarm.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
   if (!d) return 'SimTracker: no connection diagnostic recorded by this run.'
   const current = (d.records || []).some(row => row.messageId === d.messageId)
   if (d.status === 'connected') return `SimTracker: connected · ${d.suppliedFields} fields offered for story validation · ${current ? 'current reply + available earlier record' : 'earlier record only; no current tracker output found (pending, rejected, or not run)'}. Saved identities protected.`
-  if (d.status === 'connected-no-supported-fields') return 'SimTracker: record found, but its quotes could not be verified in the available story. Normal LumiDraw processing continued.'
+  if (d.status === 'connected-no-supported-fields') return 'SimTracker: record found, but its quotes could not be verified in the available story. Normal Lumi Studio processing continued.'
   if (d.status === 'source-changed') return 'SimTracker: story changed during the read; tracker reference discarded.'
-  return 'SimTracker: no usable matching record · normal LumiDraw processing continued. See the diagnostic report for details.'
+  return 'SimTracker: no usable matching record · normal Lumi Studio processing continued. See the diagnostic report for details.'
 }
 
-console.log(`[LumiDraw] frontend module imported v${EXTENSION_VERSION}`)
+console.log(`[Lumi Studio] frontend module imported v${EXTENSION_VERSION}`)
 
 
 function lumidrawTroubleshootingHtml(report, imageData = '') {
@@ -25,8 +25,8 @@ function lumidrawTroubleshootingHtml(report, imageData = '') {
   const summary = highlights.length ? '<h2>What happened</h2><ul>' + highlights.map(line => '<li>' + escape(line) + '</li>').join('') + '</ul>' : ''
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">' +
-    '<title>LumiDraw troubleshooting report</title><style>body{font:16px system-ui;margin:24px;max-width:1100px}img{max-width:100%;max-height:900px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}</style></head><body>' +
-    '<h1>LumiDraw troubleshooting report</h1><p>Private report. Contains prompts and may include story text. Nothing was uploaded automatically.</p>' +
+    '<title>Lumi Studio troubleshooting report</title><style>body{font:16px system-ui;margin:24px;max-width:1100px}img{max-width:100%;max-height:900px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}</style></head><body>' +
+    '<h1>Lumi Studio troubleshooting report</h1><p>Private report. Contains prompts and may include story text. Nothing was uploaded automatically.</p>' +
     image + summary + '<h2>Diagnostic data</h2><pre>' + escape(JSON.stringify(report, null, 2)) + '</pre></body></html>'
 }
 
@@ -63,7 +63,7 @@ function makeId() {
 }
 
 // Lumiverse serves its own cached image tiers from the same canonical image
-// URL. Keep the original URL in LumiDraw's state and alter only display URLs.
+// URL. Keep the original URL in Lumi Studio's state and alter only display URLs.
 function lumidrawImageVariantUrl(value, tier, enabled = true) {
   const raw = String(value || '').trim()
   if (!enabled || (tier !== 'sm' && tier !== 'lg') || !raw) return raw
@@ -84,11 +84,11 @@ function makeBootstrapLauncher() {
   const button = document.createElement('button')
   button.id = id
   button.type = 'button'
-  button.title = `LumiDraw Studio v${EXTENSION_VERSION} — starting…`
-  button.setAttribute('aria-label', `LumiDraw Studio v${EXTENSION_VERSION}`)
+  button.title = `Lumi Studio v${EXTENSION_VERSION} — starting…`
+  button.setAttribute('aria-label', `Lumi Studio v${EXTENSION_VERSION}`)
   button.innerHTML = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="9" cy="9" r="1.8"></circle><path d="M21 15.5l-4.2-4.2a1.6 1.6 0 0 0-2.3 0L6 20"></path></svg>'
   // This is intentionally raw DOM + inline CSS. It exists BEFORE any Spindle DOM
-  // API call, so a permission/API/startup failure can never make LumiDraw wholly
+  // API call, so a permission/API/startup failure can never make Lumi Studio wholly
   // inaccessible again. Once normal setup succeeds it is removed.
   button.style.cssText = [
     'position:fixed','right:16px','bottom:88px','z-index:2147483000',
@@ -105,22 +105,22 @@ function makeBootstrapLauncher() {
       panel.style.display = panel.classList.contains('ld-open') ? 'flex' : ''
       return
     }
-    const detail = startupError || 'The frontend setup function started, but the full LumiDraw panel has not mounted yet.'
-    window.alert(`LumiDraw v${EXTENSION_VERSION} startup diagnostic:
+    const detail = startupError || 'The frontend setup function started, but the full Lumi Studio panel has not mounted yet.'
+    window.alert(`Lumi Studio v${EXTENSION_VERSION} startup diagnostic:
 
 ${detail}`)
   }
   button.addEventListener('click', click)
   const host = document.body || document.documentElement
-  if (!host) throw new Error('document root is unavailable during LumiDraw setup')
+  if (!host) throw new Error('document root is unavailable during Lumi Studio setup')
   host.appendChild(button)
   return {
     button,
     fail(error) {
       startupError = error && error.stack ? String(error.stack) : String(error && error.message ? error.message : error || 'Unknown startup error')
       button.style.background = '#6d2832'
-      button.title = `LumiDraw v${EXTENSION_VERSION} startup failed — click for details`
-      button.setAttribute('aria-label', `LumiDraw v${EXTENSION_VERSION} startup failed — click for details`)
+      button.title = `Lumi Studio v${EXTENSION_VERSION} startup failed — click for details`
+      button.setAttribute('aria-label', `Lumi Studio v${EXTENSION_VERSION} startup failed — click for details`)
     },
     remove() {
       button.removeEventListener('click', click)
@@ -134,17 +134,17 @@ export function setup(ctx) {
   // import/call this frontend at all; that distinguishes loader failures from
   // runtime failures without needing DevTools.
   const bootstrap = makeBootstrapLauncher()
-  console.log('[LumiDraw] setup called. ctx keys:', ctx ? Object.keys(ctx) : ctx)
-  if (ctx && ctx.dom) console.log('[LumiDraw] ctx.dom keys:', Object.keys(ctx.dom))
+  console.log('[Lumi Studio] setup called. ctx keys:', ctx ? Object.keys(ctx) : ctx)
+  if (ctx && ctx.dom) console.log('[Lumi Studio] ctx.dom keys:', Object.keys(ctx.dom))
   try {
     const cleanup = realSetup(ctx)
-    console.log('[LumiDraw] setup finished — launcher should be visible bottom-right')
+    console.log('[Lumi Studio] setup finished — launcher should be visible bottom-right')
     bootstrap.remove()
     return () => {
       try { if (typeof cleanup === 'function') cleanup() } finally { bootstrap.remove() }
     }
   } catch (err) {
-    console.error('[LumiDraw] setup crashed:', err)
+    console.error('[Lumi Studio] setup crashed:', err)
     bootstrap.fail(err)
     return () => bootstrap.remove()
   }
@@ -162,18 +162,18 @@ function realSetup(ctx) {
     const priorPanelLive = !!(priorInstance.panel && priorInstance.panel.isConnected)
     const priorLauncherLive = !!(priorInstance.launcher && priorInstance.launcher.isConnected)
 
-    // Newer LumiDraw instances keep their own teardown handle. When Lumiverse
+    // Newer Lumi Studio instances keep their own teardown handle. When Lumiverse
     // hot-reloads a different version, use it instead of stacking two copies of
     // the app on top of each other. 1.3.7 and earlier did not expose this handle.
     if ((priorPanelLive || priorLauncherLive) && typeof priorInstance.cleanup === 'function' &&
         priorInstance.version && priorInstance.version !== EXTENSION_VERSION) {
-      console.warn(`[LumiDraw] replacing live v${priorInstance.version} with v${EXTENSION_VERSION}`)
+      console.warn(`[Lumi Studio] replacing live v${priorInstance.version} with v${EXTENSION_VERSION}`)
       try { priorInstance.cleanup() } catch (error) {
-        console.warn('[LumiDraw] prior-instance cleanup failed:', error && error.message ? error.message : error)
+        console.warn('[Lumi Studio] prior-instance cleanup failed:', error && error.message ? error.message : error)
       }
       if (window[INSTANCE_KEY] === priorInstance) delete window[INSTANCE_KEY]
     } else if (priorPanelLive && priorLauncherLive) {
-      console.warn('[LumiDraw] duplicate setup ignored; existing UI is still mounted')
+      console.warn('[Lumi Studio] duplicate setup ignored; existing UI is still mounted')
       return () => {}
     } else if (priorPanelLive && !priorLauncherLive) {
       // Lumiverse can replace an extension injection during a hot reload while
@@ -181,11 +181,11 @@ function realSetup(ctx) {
       // panel, so a missing launcher made the entire app inaccessible. Recover an
       // entry point for that still-live panel instead of stranding it. A full page
       // refresh will then load the new version normally.
-      console.warn('[LumiDraw] live panel found without its launcher; restoring launcher')
+      console.warn('[Lumi Studio] live panel found without its launcher; restoring launcher')
       const recovery = document.createElement('button')
       recovery.className = 'ld-launcher ld-launcher-recovery'
-      recovery.title = 'LumiDraw Studio'
-      recovery.setAttribute('aria-label', 'LumiDraw Studio')
+      recovery.title = 'Lumi Studio'
+      recovery.setAttribute('aria-label', 'Lumi Studio')
       recovery.setAttribute('type', 'button')
       recovery.innerHTML = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="9" cy="9" r="1.8"></circle><path d="M21 15.5l-4.2-4.2a1.6 1.6 0 0 0-2.3 0L6 20"></path></svg>'
       // Inline essentials make the rescue button usable even if the old style
@@ -223,8 +223,8 @@ function realSetup(ctx) {
       if (ctx.dom && typeof ctx.dom.addStyle === 'function') {
         try { return ctx.dom.addStyle(css) } catch (e) {
           // Current Lumiverse gates DOM helpers behind app_manipulation. A stale
-          // permission grant must not abort LumiDraw before it can explain itself.
-          console.warn('[LumiDraw] ctx.dom.addStyle failed, using document fallback:', e && e.message ? e.message : e)
+          // permission grant must not abort Lumi Studio before it can explain itself.
+          console.warn('[Lumi Studio] ctx.dom.addStyle failed, using document fallback:', e && e.message ? e.message : e)
         }
       }
       const el = document.createElement('style')
@@ -237,7 +237,7 @@ function realSetup(ctx) {
     inject(target, html, position = 'beforeend') {
       if (ctx.dom && typeof ctx.dom.inject === 'function') {
         try { return ctx.dom.inject(target, html, position) } catch (e) {
-          console.warn('[LumiDraw] ctx.dom.inject failed, using document fallback:', e.message)
+          console.warn('[Lumi Studio] ctx.dom.inject failed, using document fallback:', e.message)
         }
       }
       const root = document.createElement('div')
@@ -314,6 +314,10 @@ function realSetup(ctx) {
   let draftDirty = false
   let draftSourceLabel = ''
   let catalog = { models: [], samplers: [], loras: [], source: 'memory', bridge: null, currentRecipe: null }
+  let swarmCatalogData = { models: [], samplers: [], loras: [], schedulers: [], presets: [] }
+  const rendererDrafts = {}
+  function usesSwarm(config) { return config && config.renderBackend === 'swarmui' }
+  function rendererCatalog(config) { return usesSwarm(config) ? swarmCatalogData : catalog }
   let busy = false
   let defaults = { protocol: '', parserInstruction: '', legacyParserInstruction: '', animaParserInstruction: '' }
   const pending = new Map() // requestId → {resolve, reject}
@@ -363,6 +367,10 @@ function realSetup(ctx) {
 
   const unsub = ctx.onBackendMessage((payload) => {
     if (!payload) return
+    if (payload.type === 'renderer_progress') {
+      setStatus('.ld-gen-status', 'SwarmUI rendering' + (payload.percent == null ? '…' : ' · ' + payload.percent + '%'))
+      return
+    }
     if (payload.type === 'image_placement_upserted') {
       const placement = payload.placement
       if (placement && placement.placementId) {
@@ -421,7 +429,7 @@ function realSetup(ctx) {
       const state = payload.status && typeof payload.status === 'object' ? payload.status : {}
       if (['generated', 'done'].includes(String(state.status || ''))) {
         const chatId = String(state.chatId || activeChatIdFromCtx() || '')
-        if (chatId) refreshImagePlacements(chatId).catch((error) => console.log('[LumiDraw] image refresh after completed scan failed:', error.message))
+        if (chatId) refreshImagePlacements(chatId).catch((error) => console.log('[Lumi Studio] image refresh after completed scan failed:', error.message))
         if (chatId) refreshTrackedWardrobe(chatId)
       }
       return
@@ -432,7 +440,7 @@ function realSetup(ctx) {
       renderLiveScanStatus()
       if (liveScanStatus && liveScanStatus.stage === 'done') {
         const chatId = activeChatIdFromCtx()
-        if (chatId) refreshImagePlacements(chatId).catch((error) => console.log('[LumiDraw] image refresh after manual scan failed:', error.message))
+        if (chatId) refreshImagePlacements(chatId).catch((error) => console.log('[Lumi Studio] image refresh after manual scan failed:', error.message))
         if (chatId) refreshTrackedWardrobe(chatId)
       }
       return
@@ -825,7 +833,7 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="LumiDraw Studio" aria-label="LumiDraw Studio">
+    <button class="ld-launcher" title="Lumi Studio" aria-label="Lumi Studio">
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="3"></rect>
         <circle cx="9" cy="9" r="1.8"></circle>
@@ -834,8 +842,8 @@ function realSetup(ctx) {
     </button>
     <div class="ld-panel">
       <div class="ld-head">
-        <span class="ld-head-title">LumiDraw <small class="ld-version" style="font-weight:400;opacity:.65"></small></span>
-        <nav class="ld-main-nav" aria-label="LumiDraw sections">
+        <span class="ld-head-title">Lumi Studio <small class="ld-version" style="font-weight:400;opacity:.65"></small></span>
+        <nav class="ld-main-nav" aria-label="Lumi Studio sections">
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
           <button class="ld-main-tab" data-tab="presets">Cast &amp; presets</button>
@@ -848,10 +856,10 @@ function realSetup(ctx) {
       <div class="ld-statebar">
         <div class="ld-state-pill"><span class="ld-state-key">Preset</span><span class="ld-state-value ld-header-preset">None</span></div>
         <div class="ld-state-pill"><span class="ld-state-key">Workspace</span><span class="ld-state-value ld-header-workspace">Not loaded</span></div>
-        <div class="ld-state-pill"><span class="ld-dot ld-header-bridge-dot"></span><span class="ld-state-key">Bridge</span><span class="ld-state-value ld-header-bridge">Checking…</span></div>
+        <div class="ld-state-pill"><span class="ld-dot ld-header-bridge-dot"></span><span class="ld-state-key ld-header-service">Bridge</span><span class="ld-state-value ld-header-bridge">Checking…</span></div>
       </div>
       <div class="ld-global-status"><div class="ld-status ld-gen-status"></div></div>
-      <div class="ld-status ld-boot-status" role="status" style="padding:0 14px">Loading saved LumiDraw data…</div>
+      <div class="ld-status ld-boot-status" role="status" style="padding:0 14px">Loading saved Lumi Studio data…</div>
 
       <section class="ld-view ld-active" data-view="studio">
         <div class="ld-studio-shell">
@@ -874,6 +882,16 @@ function realSetup(ctx) {
                 </div>
                 <div class="ld-card">
                   <div class="ld-subtitle">Core generation</div>
+                  <span class="ld-label">Image renderer</span>
+                  <select class="ld-draft-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option></select>
+                  <div class="ld-swarm-tools" style="display:none;margin-top:8px">
+                    <button class="ld-btn" data-act="swarm-reload">Connect / refresh SwarmUI</button>
+                    <span class="ld-label">Load settings from a SwarmUI preset</span>
+                    <select class="ld-swarm-preset"><option value="">— choose a saved SwarmUI preset —</option></select>
+                    <button class="ld-btn" data-act="swarm-import">Load into workspace</button>
+                    <div class="ld-help">Imports render settings only—not prompts or characters. Save this workspace as a new preset and select it for Story images. Nothing is changed in SwarmUI.</div>
+                    <div class="ld-status ld-swarm-workspace-status"></div>
+                  </div>
                   <span class="ld-label">Model</span>
                   <input class="ld-draft-model" list="ld-model-catalog" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog"></datalist>
                   <div class="ld-row" style="margin-top:7px">
@@ -889,9 +907,15 @@ function realSetup(ctx) {
                   </div>
                 </div>
                 <div class="ld-card">
-                  <div class="ld-subtitle">Draw Things settings</div>
-                  <div class="ld-help">Everything Draw Things reported on the last Sync, editable here. Generate uses these directly — no round-trip through Draw Things. Save them to a preset with the buttons below.</div>
+                  <div class="ld-subtitle ld-renderer-settings-title">Draw Things settings</div>
+                  <div class="ld-help ld-renderer-settings-help">Everything Draw Things reported on the last Sync, editable here. Generate uses these directly — no round-trip through Draw Things. Save them to a preset with the buttons below.</div>
                   <div class="ld-dt-settings" style="margin-top:8px"></div>
+                  <div class="ld-swarm-settings" style="display:none">
+                    <span class="ld-label">Scheduler (blank uses SwarmUI default)</span><select class="ld-draft-scheduler"></select>
+                    <details><summary>Additional SwarmUI parameters (advanced)</summary>
+                    <textarea class="ld-draft-swarm-params" style="min-height:100px" placeholder="{}"></textarea>
+                    <div class="ld-help">Native SwarmUI parameter names. Loading a SwarmUI preset fills these automatically. Prompt, seed, batch, model, LoRAs and the visible settings are controlled separately. Custom workflows, image-to-image and video are not supported in this release.</div></details>
+                  </div>
                 </div>
                 <div class="ld-card">
                   <div class="ld-subtitle">Workspace</div>
@@ -905,7 +929,7 @@ function realSetup(ctx) {
                 </div>
                 <div class="ld-card">
                   <div class="ld-row" style="align-items:center">
-                    <div class="ld-status ld-catalog-status">Checking LumiDraw Bridge…</div>
+                    <div class="ld-status ld-catalog-status">Checking Lumi Studio Bridge…</div>
                     <button class="ld-btn ld-compact" style="flex:0 0 auto" data-act="refresh-catalog">Rescan ⟳</button>
                   </div>
                 </div>
@@ -989,12 +1013,12 @@ function realSetup(ctx) {
             <select class="ld-auto-interval" aria-label="Automatic image frequency"><option value="5">Every 5 story replies</option><option value="1">Every story reply</option></select>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-strip-directives" style="width:auto" /> Hide generated images and image-request directives from the story model</label>
-            <div class="ld-help">Some presets teach the model to request pictures by writing markdown such as <code>![tags](/api/v1/images/gen)</code>. Those never render, and each one left in the history teaches the model to write another. This removes them from what the model sees for each generation — your stored messages are never modified. Real images, including LumiDraw's own, are always left alone.</div>
+            <div class="ld-help">Some presets teach the model to request pictures by writing markdown such as <code>![tags](/api/v1/images/gen)</code>. Those never render, and each one left in the history teaches the model to write another. This removes them from what the model sees for each generation — your stored messages are never modified. Real images, including Lumi Studio's own, are always left alone.</div>
             <label style="display:flex;align-items:center;gap:7px;margin-top:11px;font-size:12px"><input type="checkbox" class="ld-size-images" style="width:auto" /> Set the display width of images in chat</label>
             <div class="ld-size-images-row" style="display:none;align-items:center;gap:8px;margin-top:6px"><input type="range" class="ld-image-width" min="200" max="1200" step="10" style="flex:1" /><input type="number" class="ld-image-width-num" min="200" max="1200" step="10" style="width:76px" /><span style="font-size:12px;opacity:0.7">px</span></div>
             <div class="ld-help">Applies immediately, to every image in the conversation. This is presentation only — nothing is regenerated and no message is modified. Leave it off if you already size images with your own custom CSS, or the two will fight.</div>
             <label style="display:flex;align-items:center;gap:7px;margin-top:11px;font-size:12px"><input type="checkbox" class="ld-optimized-previews" style="width:auto" /> Use optimized image previews</label>
-            <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-delete-chat-images" style="width:auto" /> Delete unshared LumiDraw images when their chat is deleted</label>
+            <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-delete-chat-images" style="width:auto" /> Delete unshared Lumi Studio images when their chat is deleted</label>
             <div class="ld-parser-binding-controls" style="margin-top:9px">
               <span class="ld-label">Parser engine</span>
               <select class="ld-parser-engine">
@@ -1031,7 +1055,7 @@ function realSetup(ctx) {
                   <span class="ld-label" style="margin:0;flex:0 0 auto">Playing as</span>
                   <select class="ld-chat-persona" style="flex:1"></select>
                 </div>
-                <div class="ld-help" style="margin-top:3px">Who <em>you</em> are in this chat. Lumiverse does not record a persona per chat, so LumiDraw cannot read it — pick once and it is remembered for this chat only. This beats the cast's persona, so a new story is not stuck with whoever the last one was played as.</div>
+                <div class="ld-help" style="margin-top:3px">Who <em>you</em> are in this chat. Lumiverse does not record a persona per chat, so Lumi Studio cannot read it — pick once and it is remembered for this chat only. This beats the cast's persona, so a new story is not stuck with whoever the last one was played as.</div>
                 <label style="display:flex;align-items:center;gap:6px;margin-top:5px;font-size:12px">
                   <input type="checkbox" class="ld-cast-fantasy" />
                   <span>Fantasy setting — don't treat elves as a mistake</span>
@@ -1066,7 +1090,7 @@ function realSetup(ctx) {
                 <input type="checkbox" class="ld-direct-mode" />
                 <span><strong>Direct mode</strong> — let the parser write the prompt</span>
               </label>
-              <div class="ld-help" style="margin-top:4px">The parser reads your character sheets, wardrobe, and place. Single-character images use a tag run. With two to four people, LumiDraw groups each person's saved appearance and current scene details under one heading, then uses short positional references for their interactions.</div>
+              <div class="ld-help" style="margin-top:4px">The parser reads your character sheets, wardrobe, and place. Single-character images use a tag run. With two to four people, Lumi Studio groups each person's saved appearance and current scene details under one heading, then uses short positional references for their interactions.</div>
             </div>
             <div class="ld-row" style="margin-top:9px">
               <div><span class="ld-label">Minimum images (0 = model decides)</span><input class="ld-minimg" type="number" min="0" max="4" step="1" /></div>
@@ -1168,7 +1192,10 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
           <div class="ld-editor ld-card" style="display:none">
             <div class="ld-subtitle">Preset editor</div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
-            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><div class="ld-hint">Installed models autocomplete. For Draw Things Cloud Compute, type a model from its Official or Community channel — cloud refuses local merges, and the model need not be installed here.</div>
+            <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option></select>
+            <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><div class="ld-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div>
+            <div class="ld-ed-swarm-settings" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler"></select><span class="ld-label">Additional SwarmUI parameters (JSON)</span><textarea class="ld-ed-swarm-params" placeholder="{}"></textarea></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div style="flex:0 0 82px"><span class="ld-label">Steps</span><input class="ld-ed-steps" type="number" min="1" max="150" /></div>
@@ -1260,10 +1287,10 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <span class="ld-label" style="margin-top:7px">Scene anchor (default location)</span><input class="ld-ed-scene-anchor" placeholder="mycetheric grove, pink bioluminescent mushrooms, glowing moss" />
             <label class="ld-check" style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px"><input type="checkbox" class="ld-ed-break" style="width:auto" /> Separate each character with BREAK</label>
             <div class="ld-hint">Inserts BREAK between the characters in a multi-subject prompt. BREAK resets the attention chunk, which is what keeps one character's hair, build or clothes from reaching another. Only add BREAK to your quality tags — never to a character's own tags, or it lands mid-description.</div>
-            <div class="ld-help">Where this story takes place, as tags. The parser is a separate, stateless call that only sees the current passage and a short recency window — during a long scene the prose stops naming the location, so it can go blind to it and invent one. This is handed over on every request as the established location. LumiDraw updates its own record when a passage clearly moves the characters; this is the starting point and the fallback.</div>
+            <div class="ld-help">Where this story takes place, as tags. The parser is a separate, stateless call that only sees the current passage and a short recency window — during a long scene the prose stops naming the location, so it can go blind to it and invent one. This is handed over on every request as the established location. Lumi Studio updates its own record when a passage clearly moves the characters; this is the starting point and the fallback.</div>
             <span class="ld-label" style="margin-top:7px">Banned tags</span><input class="ld-ed-banned" />
             <span class="ld-label" style="margin-top:9px">Anima artist index</span>
-            <div class="ld-help" style="margin-top:2px">An artist tag Anima was never trained on is <strong>ignored in silence</strong> — no error, just a blander image and no way to tell the style did nothing. Paste an artist index here once and LumiDraw will check your <code>@tags</code> and suggest the near miss. Not bundled: 59,000 names is a megabyte of dead weight for everyone who never loads it.</div>
+            <div class="ld-help" style="margin-top:2px">An artist tag Anima was never trained on is <strong>ignored in silence</strong> — no error, just a blander image and no way to tell the style did nothing. Paste an artist index here once and Lumi Studio will check your <code>@tags</code> and suggest the near miss. Not bundled: 59,000 names is a megabyte of dead weight for everyone who never loads it.</div>
             <textarea class="ld-artist-index" rows="3" placeholder="One artist name per line. A leading @ and a trailing work count are both fine."></textarea>
             <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
               <button class="ld-btn ld-compact" data-act="artist-load">Load index</button>
@@ -1291,7 +1318,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Connection</span><div style="display:flex;gap:6px;align-items:center"><select class="ld-parser-conn" style="flex:1"><option value="">— default connection —</option></select><button class="ld-btn ld-compact" data-act="refresh-parser-sources" title="Reload available parser connections">↻</button></div></div>
               <div><span class="ld-label">Model override (leave empty)</span><div style="display:flex;gap:6px;align-items:center"><input class="ld-parser-model" style="flex:1" placeholder="leave empty to use the connection's own model" /><button class="ld-btn ld-compact ld-clear-override" data-act="clear-model-override" title="Go back to the connection's own model" style="display:none">Clear</button></div><div class="ld-model-override-note" style="font-size:11px;margin-top:4px"></div></div>
-              <div><span class="ld-label">Temperature</span><input class="ld-parser-temperature" type="number" min="0" max="2" step="0.05" value="0.2" /><div class="ld-hint">Parser sampling temperature. Some models want a specific value; 0.2 is LumiDraw's default.</div></div>
+              <div><span class="ld-label">Temperature</span><input class="ld-parser-temperature" type="number" min="0" max="2" step="0.05" value="0.2" /><div class="ld-hint">Parser sampling temperature. Some models want a specific value; 0.2 is Lumi Studio's default.</div></div>
               <div>
                 <span class="ld-label">Settings Draw Things refused</span>
                 <div style="display:flex;gap:6px;align-items:center">
@@ -1305,6 +1332,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             </div>
           </div>
           <div data-settings-section="connection" class="ld-card">
+            <div class="ld-subtitle">SwarmUI</div>
+            <span class="ld-label">Server address</span><input class="ld-swarm-url" value="http://localhost:7801" />
+            <div class="ld-help">For SwarmUI on this Mac, keep http://localhost:7801. The Lumiverse server makes the connection, including when you use your phone. Keep SwarmUI running. This preview supports local access without an account login.</div>
+            <button class="ld-btn" data-act="swarm-test">Save address and test SwarmUI</button>
+            <div class="ld-status ld-swarm-status"></div>
+          </div>
+          <div data-settings-section="connection" class="ld-card">
             <div class="ld-subtitle">Draw Things API</div>
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Host</span><input class="ld-host" /></div>
@@ -1313,7 +1347,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-section-actions"><button class="ld-btn" data-act="save-settings">Save connections</button><button class="ld-btn" data-act="test">Test Draw Things</button></div>
           </div>
           <div data-settings-section="connection" class="ld-card">
-            <div class="ld-subtitle">LumiDraw Bridge catalog</div>
+            <div class="ld-subtitle">Lumi Studio Bridge catalog</div>
             <div class="ld-row ld-mobile-stack">
               <div><span class="ld-label">Host</span><input class="ld-bridge-host" value="127.0.0.1" /></div>
               <div style="flex:0 0 120px"><span class="ld-label">Port</span><input class="ld-bridge-port" type="number" value="7863" /></div>
@@ -1357,7 +1391,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           <div data-settings-section="advanced" class="ld-card">
             <div class="ld-subtitle">Diagnostics</div>
             <button class="ld-btn" data-act="restore-chat-images">Restore chat images</button>
-            <div class="ld-help">Reattach existing LumiDraw images to this chat. No generation, parser or Jev call.</div>
+            <div class="ld-help">Reattach existing Lumi Studio images to this chat. No generation, parser or Jev call.</div>
             <div class="ld-status ld-image-restore-status"></div>
             <button class="ld-btn" data-act="diagnose">Run diagnostics 🔍</button>
             <button class="ld-btn" data-act="troubleshooting" style="margin-top:7px">Troubleshooting report…</button>
@@ -1718,14 +1752,14 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     currentLine.appendChild(document.createTextNode('Generation preset: '))
     currentLine.appendChild(make('strong', 'ld-story-preset-name', 'None'))
     heroText.appendChild(currentLine)
-    addHelp(heroText, 'Story decides who, where, and what to prompt. The generation preset only decides how Draw Things renders it.')
+    addHelp(heroText, 'Story decides who, where, and what to prompt. The generation preset chooses the renderer (Draw Things or SwarmUI) and its image settings.')
     const heroActions = inline(controls.scan, controls.scanOld, controls.cancelScan)
     hero.append(heroText, heroActions)
     setup.appendChild(hero)
 
     const behavior = card('Illustration behavior')
     if (controls.presetSelect) {
-      behavior.appendChild(field('Generation preset', controls.presetSelect, 'Model, sampler, steps, dimensions, LoRAs, and Draw Things settings only.'))
+      behavior.appendChild(field('Generation preset', controls.presetSelect, 'Renderer, model, sampler, steps, dimensions, LoRAs, and renderer-specific settings only.'))
     }
     behavior.appendChild(field('Behavior', controls.mode,
       'Choose the prompt pipeline and trigger together. Manual uses the Scan buttons; automatic follows your image frequency below. Off means no story illustrations.'))
@@ -1747,12 +1781,12 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
     const display = card('Chat image display')
     display.appendChild(checkbox(controls.sizeImages, 'Set a custom image width',
-      'Applies to native LumiDraw images generated with v1.3.3 or newer. Older inline images are left entirely to Lumiverse.'))
+      'Applies to native Lumi Studio images generated with v1.3.3 or newer. Older inline images are left entirely to Lumiverse.'))
     if (controls.sizeRow) display.appendChild(controls.sizeRow)
     display.appendChild(checkbox(controls.optimizedPreviews, 'Use optimized previews (recommended)',
       'History uses Lumiverse’s small cached tier and chat/current images use its large tier. The original stays available for the viewer, regeneration, and download.'))
-    display.appendChild(checkbox(controls.deleteChatImages, 'Delete unshared LumiDraw images with a deleted chat',
-      'Removes the LumiDraw upload and its cached previews only when no other chat uses it. Draw Things keeps its own generated copy.'))
+    display.appendChild(checkbox(controls.deleteChatImages, 'Delete unshared Lumi Studio images with a deleted chat',
+      'Removes the Lumi Studio upload and its cached previews only when no other chat uses it. Draw Things keeps its own generated copy.'))
     setup.appendChild(display)
     if (controls.lastStatus) {
       controls.lastStatus.classList.add('ld-reset-status')
@@ -1868,7 +1902,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     promptCard.appendChild(field('Prompt prefix', storyPrefix))
     promptCard.appendChild(field('Negative prompt', storyNegative))
     promptCard.appendChild(field('Banned tags', storyBanned))
-    promptCard.appendChild(field('Scene anchor', storyAnchor, 'Starting/fallback location. LumiDraw can still update its scene memory as the story moves.'))
+    promptCard.appendChild(field('Scene anchor', storyAnchor, 'Starting/fallback location. Lumi Studio can still update its scene memory as the story moves.'))
     promptCard.appendChild(checkbox(storyBreak, 'Use BREAK separators when compiling supported prompts'))
     prompting.appendChild(promptCard)
 
@@ -1899,7 +1933,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (controls.debugTitle) debugCard.appendChild(controls.debugTitle)
     else debugCard.appendChild(make('div', 'ld-subtitle ld-parser-debug-title', 'Last parser result'))
     addHelp(debugCard, 'Raw parser/compiler output lives here so the normal Story setup stays readable.')
-    debugCard.appendChild(field('Final Draw Things prompt', controls.finalPrompt))
+    debugCard.appendChild(field('Final image prompt', controls.finalPrompt))
     const parsedDetails = details('Parsed scene / parser reply')
     if (controls.parsedScene) parsedDetails.body.appendChild(controls.parsedScene)
     debugCard.appendChild(parsedDetails.el)
@@ -1914,7 +1948,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     coreSummary.readOnly = true
     coreSummaryCard.appendChild(coreSummary)
     debug.appendChild(coreSummaryCard)
-    const dtCompat = details('Draw Things API compatibility', 'If Draw Things rejects a generation setting, LumiDraw remembers it here and omits it on later requests.')
+    const dtCompat = details('Draw Things API compatibility', 'If Draw Things rejects a generation setting, Lumi Studio remembers it here and omits it on later requests.')
     dtCompat.body.appendChild(field('Rejected settings', inline(controls.rejectedKeys, controls.clearRejectedKeys)))
     debug.appendChild(dtCompat.el)
 
@@ -1980,7 +2014,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const title = presetManager.querySelector('.ld-subtitle')
       const help = presetManager.querySelector('.ld-help')
       if (title) title.textContent = 'Generation presets'
-      if (help) help.textContent = 'A generation preset is only the image recipe: model, sampler, steps, dimensions, LoRAs, and Draw Things settings.'
+      if (help) help.textContent = 'A generation preset is only the image recipe: renderer, model, sampler, steps, dimensions, LoRAs, and renderer-specific settings.'
       if (newPreset) newPreset.textContent = '＋ New generation preset'
     }
     if (presetEditor) {
@@ -2511,11 +2545,17 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       if (!draftConfig) workspaceEl.textContent = 'Not loaded'
       else {
         const model = String(draftConfig.model || '').replace(/\.ckpt$/i, '')
-        workspaceEl.textContent = `${draftDirty ? 'Modified' : 'Ready'}${model ? ' · ' + model : ''}`
+        workspaceEl.textContent = `${usesSwarm(draftConfig) ? 'SwarmUI' : 'Draw Things'} · ${draftDirty ? 'Modified' : 'Ready'}${model ? ' · ' + model : ''}`
       }
     }
 
     const bridge = catalog.bridge || {}
+    if ($('.ld-header-service')) $('.ld-header-service').textContent = usesSwarm(draftConfig) ? 'SwarmUI' : 'Bridge'
+    if (usesSwarm(draftConfig)) {
+      if (bridgeEl) bridgeEl.textContent = swarmCatalogData.version ? `${swarmCatalogData.version} · ${swarmCatalogData.models.length} models` : 'Not connected'
+      if (bridgeDot) { bridgeDot.classList.toggle('ld-online', !!swarmCatalogData.version); bridgeDot.classList.toggle('ld-offline', !swarmCatalogData.version) }
+      return
+    }
     if (bridgeEl) {
       bridgeEl.textContent = bridge.connected
         ? `${bridge.version || 'Connected'} · ${catalog.models.length} models · ${catalog.loras.length} LoRAs`
@@ -2645,7 +2685,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     row.className = 'ld-row'
     const fileInput = document.createElement('select')
     fileInput.className = 'ld-lora-file'
-    populateSelect(fileInput, catalog.loras, file || '', '— choose LoRA —')
+    populateSelect(fileInput, rendererCatalog(draftConfig).loras, file || '', '— choose LoRA —')
     const weightInput = document.createElement('input')
     weightInput.type = 'number'
     weightInput.step = '0.05'
@@ -2701,7 +2741,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const count = $('.ld-lora-count')
     if (!grid) return
     const query = String(($('.ld-lora-search') && $('.ld-lora-search').value) || '').trim().toLowerCase()
-    const items = (catalog.loras || []).filter((file) => !query || String(file).toLowerCase().includes(query))
+    const items = (rendererCatalog(draftConfig).loras || []).filter((file) => !query || String(file).toLowerCase().includes(query))
     if (count) count.textContent = `${items.length}${query ? ' matching' : ' installed'}`
     grid.innerHTML = ''
     if (!items.length) {
@@ -2886,8 +2926,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (!box) return
     box.innerHTML = ''
     const config = draftConfig || {}
+    if (usesSwarm(config)) return
     const keys = Object.keys(config)
-      .filter((key) => !DT_CORE_KEYS.has(key))
+      .filter((key) => !DT_CORE_KEYS.has(key) && key !== 'renderBackend' && key !== 'swarmParams')
       .sort((a, b) => a.localeCompare(b))
     if (!keys.length) {
       box.innerHTML = '<div class="ld-status">Press <strong>Sync ⟳</strong> to read every setting Draw Things currently has. They all become editable here.</div>'
@@ -2961,17 +3002,28 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     else delete config.height
     config.loras = [...dom.queryAll('.ld-draft-loras .ld-row')].map((row) => ({
       file: row.querySelector('.ld-lora-file').value.trim(),
-      weight: parseFloat(row.querySelector('.ld-lora-weight').value) || 1,
+      weight: row.querySelector('.ld-lora-weight').value === '' ? 1 : Number(row.querySelector('.ld-lora-weight').value),
     })).filter((lora) => lora.file)
-    readDtSettingsFromControls(config)
+    if (usesSwarm(config)) config.swarmParams = readSwarmParams('draft')
+    else readDtSettingsFromControls(config)
     return config
   }
 
   function renderDraftControls() {
     const config = draftConfig || {}
+    const activeCatalog = rendererCatalog(config)
+    $('[data-act="sync"]').title = usesSwarm(config) ? 'Refresh SwarmUI models and saved presets' : 'Capture the recipe currently shown in Draw Things'
+    $('.ld-draft-backend').value = usesSwarm(config) ? 'swarmui' : 'drawthings'
+    $('.ld-swarm-tools').style.display = usesSwarm(config) ? '' : 'none'
+    $('.ld-swarm-settings').style.display = usesSwarm(config) ? '' : 'none'
+    $('.ld-dt-settings').style.display = usesSwarm(config) ? 'none' : ''
+    $('.ld-renderer-settings-title').textContent = usesSwarm(config) ? 'SwarmUI settings' : 'Draw Things settings'
+    $('.ld-renderer-settings-help').textContent = usesSwarm(config) ? 'Only SwarmUI-native settings are sent. Draw Things settings and its cloud option do not apply.' : 'Settings captured from Draw Things on the last Sync. Save the workspace to a preset to use them in Story.'
+    populateDatalist('ld-model-catalog', activeCatalog.models.map(m => m.file))
+    writeSwarmParams('draft', config)
     ensureDraftModelOption(config.model || '')
     $('.ld-draft-model').value = config.model || ''
-    populateSelect($('.ld-draft-sampler'), catalog.samplers, config.sampler || '', '— choose sampler —')
+    populateSelect($('.ld-draft-sampler'), activeCatalog.samplers, config.sampler || '', '— choose sampler —')
     $('.ld-draft-steps').value = config.steps !== undefined ? config.steps : ''
     $('.ld-draft-cfg').value = config.guidance_scale !== undefined ? config.guidance_scale : ''
     $('.ld-draft-w').value = config.width || ''
@@ -2983,6 +3035,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     }
     if (!(config.loras || []).length) loraBox.appendChild(draftLoraRow('', 1))
     renderDtSettings()
+    renderLoraLibrary()
   }
 
   function hydrateDraftFromSource(source, { force = false } = {}) {
@@ -3002,7 +3055,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
 
   function onDraftControlChange() {
-    draftConfig = readDraftConfigFromControls()
+    try { draftConfig = readDraftConfigFromControls() }
+    catch (error) { setStatus('.ld-draft-status', error.message, 'err'); return }
     draftDirty = true
     renderChips()
     saveDraftLocal()
@@ -3637,7 +3691,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const res = await call('scan_story', payload)
       const refreshed = await call('init', {}, 15000)
       const mountChatId = activeChatIdFromCtx()
-      if (mountChatId) await refreshImagePlacements(mountChatId).catch((error) => console.log('[LumiDraw] image refresh after Scan failed:', error.message))
+      if (mountChatId) await refreshImagePlacements(mountChatId).catch((error) => console.log('[Lumi Studio] image refresh after Scan failed:', error.message))
       history = refreshed.history
       storyDebug = res.storyDebug || refreshed.storyDebug || storyDebug
       autoStatus = refreshed.lastAutoStatus || autoStatus
@@ -3680,7 +3734,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       ['ld-ed-negative', 'Preset negative prompt'],
       ['ld-parser-instr', 'Parser instruction'],
       ['ld-protocol', 'Inline instruction'],
-      ['ld-story-final-prompt', 'Final Draw Things prompt'],
+      ['ld-story-final-prompt', 'Final image prompt'],
       ['ld-story-parsed', 'Parsed scene and parser reply'],
     ]
     for (const [className, title] of titles) if (textarea.classList.contains(className)) return title
@@ -3831,7 +3885,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       return
     }
     const c = draftConfig
-    const bits = []
+    const bits = [usesSwarm(c) ? 'SwarmUI' : 'Draw Things']
     if (c.model) bits.push(`model: ${c.model}`)
     if (c.sampler) bits.push(`sampler: ${c.sampler}`)
     if (c.steps !== undefined) bits.push(`${c.steps} steps`)
@@ -4051,7 +4105,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         height: recipeConfig && recipeConfig.height,
       })
       setStatus('.ld-gen-status', res.mode === 'mounted'
-        ? 'Added a native LumiDraw image to the latest story message.'
+        ? 'Added a native Lumi Studio image to the latest story message.'
         : (res.mode === 'inserted' ? 'Added a copy at the top of the latest story message.' : 'Added image to chat.'), 'good')
     } catch (e) {
       setStatus('.ld-gen-status', e.message, 'err')
@@ -4220,6 +4274,11 @@ ${entry.prompt || ''}`.trim()
 
   // ------------------------------------------------------------------ actions
   async function doSync(statusSel) {
+    if (usesSwarm(draftConfig)) {
+      await loadSwarmCatalog()
+      setStatus(statusSel, 'SwarmUI connected. Choose a saved SwarmUI preset above and load it; browser workspace settings are not exposed by its API.', 'good')
+      return
+    }
     setStatus(statusSel, 'Syncing from Draw Things…')
     const res = await call('sync_state')
     syncedConfig = res.captured
@@ -4241,9 +4300,14 @@ ${entry.prompt || ''}`.trim()
 
   async function doGenerate() {
     if (busy) return
-    draftConfig = readDraftConfigFromControls()
+    try { draftConfig = readDraftConfigFromControls() }
+    catch (error) { setStatus('.ld-gen-status', error.message, 'err'); return }
     if (!draftConfig) {
       setStatus('.ld-gen-status', 'No workspace settings yet — choose a preset or press Sync.', 'err')
+      return
+    }
+    if (!draftConfig.model && usesSwarm(draftConfig)) {
+      setStatus('.ld-gen-status', 'Choose a SwarmUI model or load a SwarmUI preset first.', 'err')
       return
     }
     if (!draftConfig.model) {
@@ -4252,7 +4316,7 @@ ${entry.prompt || ''}`.trim()
     busy = true
     const btn = $('[data-act="generate"]')
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="ld-spin">◌</span> Generating…' }
-    setStatus('.ld-gen-status', 'Sent to Draw Things — hold tight…')
+    setStatus('.ld-gen-status', 'Sent to ' + (usesSwarm(draftConfig) ? 'SwarmUI' : 'Draw Things') + ' — hold tight…')
     try {
       const bundle = currentDraftBundle()
       const seedRaw = $('.ld-seed').value
@@ -4264,7 +4328,7 @@ ${entry.prompt || ''}`.trim()
         seed: seedRaw === '' ? undefined : Number(seedRaw),
         config: bundle.config,
         extra: null,
-      })
+      }, usesSwarm(bundle.config) ? 900000 : 630000)
       history = res.history
       selectedOutputUrl = res.entry && res.entry.images && res.entry.images[0] ? res.entry.images[0].url : null
       renderHistory()
@@ -4601,7 +4665,7 @@ ${entry.prompt || ''}`.trim()
               storyDebug = saved.storyDebug
               renderStoryDebug()
             }
-          }).catch((error) => console.log('[LumiDraw] could not persist Debug selection:', error.message))
+          }).catch((error) => console.log('[Lumi Studio] could not persist Debug selection:', error.message))
         }
       }
       const applyResult = (entry, index) => {
@@ -4709,7 +4773,7 @@ ${entry.prompt || ''}`.trim()
   // connections can change nothing at all while looking like it changed
   // everything. Say so where the field is.
   // ------------------------------------------------------------------ native story images
-  // 1.3.5 keeps SimTracker-style extension-owned mounts, but restores LumiDraw's
+  // 1.3.5 keeps SimTracker-style extension-owned mounts, but restores Lumi Studio's
   // original scene placement: every image owns its own mount and that mount is
   // inserted immediately after the rendered paragraph containing the parser's
   // saved anchor. The assistant message itself is never rewritten with <img>.
@@ -4955,7 +5019,7 @@ ${entry.prompt || ''}`.trim()
           ? ctx.dom.inject(where.target, placementMarkup(item), where.position)
           : dom.inject(where.target, placementMarkup(item), where.position)
       } catch (error) {
-        console.warn('[LumiDraw] anchored native image inject failed:', error && error.message ? error.message : error)
+        console.warn('[Lumi Studio] anchored native image inject failed:', error && error.message ? error.message : error)
       }
       if (!mount) { complete = false; continue }
       imagePlacementMounts.set(placementId, mount)
@@ -5084,7 +5148,7 @@ ${entry.prompt || ''}`.trim()
   if (restoreImageButton) restoreImageButton.addEventListener('click', () => restoreChatImages(true))
 
   // Pre-1.3.3 images remain canonical message content owned by Lumiverse's
-  // inline-image renderer. LumiDraw deliberately leaves them alone.
+  // inline-image renderer. Lumi Studio deliberately leaves them alone.
   function applyImageSize() {
     const on = $('.ld-size-images') && $('.ld-size-images').checked
     const row = $('.ld-size-images-row')
@@ -5193,7 +5257,7 @@ ${entry.prompt || ''}`.trim()
       const remove = row.id
         ? `<button class="ld-btn ld-compact" data-act="wardrobe-drop" data-id="${row.id}" data-name="${name}" data-declared="${row.declared ? '1' : ''}" title="${row.declared ? 'Delete this character — the story invented it' : "Remove from this chat's cast; the saved character is kept"}" style="padding:2px 7px">×</button>`
         : ''
-      // WHERE THESE TAGS LIVE, and a way to get there. "LumiDraw has the Fanny
+      // WHERE THESE TAGS LIVE, and a way to get there. "Lumi Studio has the Fanny
       // character saved somehow, somewhere cause the image it produced used the
       // lumicast tags. But I can't find where it is to edit it." A row that
       // produced tags but gives no route to the thing that owns them is the
@@ -5726,9 +5790,9 @@ ${entry.prompt || ''}`.trim()
     if (event.target === lightbox) closeLightbox()
   })
 
-  // Clicking a LumiDraw-generated image anywhere in the chat transcript opens
+  // Clicking a Lumi Studio-generated image anywhere in the chat transcript opens
   // it in the viewer, ready to fix. Deliberately conservative: the click is
-  // only intercepted when the image URL is one LumiDraw actually produced, so
+  // only intercepted when the image URL is one Lumi Studio actually produced, so
   // avatars, host UI, and anything inside our own panel behave normally.
   function onDocumentImageClick(event) {
     const target = event.target
@@ -5788,6 +5852,48 @@ ${entry.prompt || ''}`.trim()
   // ---------------- preset editor ----------------
   let editorOriginalName = null
   let editorExtra = null
+  let editorRenderConfig = {}
+
+  function readSwarmParams(prefix) {
+    let params
+    try { params = JSON.parse($('.ld-' + prefix + '-swarm-params').value || '{}') }
+    catch { throw new Error('Additional SwarmUI parameters must be valid JSON. Your saved preset has not been changed.') }
+    if (!params || typeof params !== 'object' || Array.isArray(params)) throw new Error('SwarmUI parameters must be a JSON object.')
+    const scheduler = $('.ld-' + prefix + '-scheduler').value
+    if (scheduler) params.scheduler = scheduler
+    else delete params.scheduler
+    return params
+  }
+
+  function writeSwarmParams(prefix, config) {
+    const params = { ...(config.swarmParams || {}) }
+    populateSelect($('.ld-' + prefix + '-scheduler'), swarmCatalogData.schedulers, params.scheduler || '', '— SwarmUI default —')
+    delete params.scheduler
+    $('.ld-' + prefix + '-swarm-params').value = JSON.stringify(params, null, 2)
+  }
+
+  async function loadSwarmCatalog() {
+    setStatus('.ld-swarm-workspace-status', 'Connecting to SwarmUI…')
+    try {
+      swarmCatalogData = await call('swarm_catalog', {}, 65000)
+      const current = $('.ld-swarm-preset').value
+      populateSelect($('.ld-swarm-preset'), swarmCatalogData.presets.map(p => p.name), current, '— choose a saved SwarmUI preset —')
+      if (!current && swarmCatalogData.presets.length === 1) $('.ld-swarm-preset').value = swarmCatalogData.presets[0].name
+      const message = `SwarmUI ${swarmCatalogData.version} · ${swarmCatalogData.models.length} models · ${swarmCatalogData.presets.length} presets. ${swarmCatalogData.warning || ''}`
+      setStatus('.ld-swarm-status', message, 'good'); setStatus('.ld-swarm-workspace-status', message, 'good')
+      if (usesSwarm(draftConfig)) renderDraftControls()
+      if ($('.ld-ed-backend').value === 'swarmui') {
+        populateDatalist('ld-model-catalog-ed', swarmCatalogData.models.map(m => m.file))
+        populateSelect($('.ld-ed-sampler'), swarmCatalogData.samplers, $('.ld-ed-sampler').value, '— choose sampler —')
+      }
+      return swarmCatalogData
+    } catch (error) {
+      swarmCatalogData.version = ''
+      renderHeaderState()
+      setStatus('.ld-swarm-status', error.message, 'err'); setStatus('.ld-swarm-workspace-status', error.message, 'err')
+      throw error
+    }
+  }
 
   async function loadCatalog(refresh = false) {
     setStatus('.ld-catalog-status', refresh ? 'Rescanning Bridge catalog…' : 'Loading catalog…')
@@ -5803,13 +5909,13 @@ ${entry.prompt || ''}`.trim()
         currentRecipe: res.currentRecipe || null,
       }
       const editorModelValue = $('.ld-ed-model') ? $('.ld-ed-model').value : ''
-      populateDatalist('ld-model-catalog-ed', catalog.models.map((model) => model.file))
+      populateDatalist('ld-model-catalog-ed', rendererCatalog({renderBackend: $('.ld-ed-backend').value}).models.map((model) => model.file))
       if ($('.ld-ed-model') && editorModelValue) $('.ld-ed-model').value = editorModelValue
       const draftModelValue = (draftConfig && draftConfig.model) || ($('.ld-draft-model') && $('.ld-draft-model').value) || ''
-      populateDatalist('ld-model-catalog', catalog.models.map((model) => model.file))
+      populateDatalist('ld-model-catalog', rendererCatalog(draftConfig).models.map((model) => model.file))
       if ($('.ld-draft-model') && draftModelValue) $('.ld-draft-model').value = draftModelValue
       const editorSamplerValue = $('.ld-ed-sampler') ? $('.ld-ed-sampler').value : ''
-      populateSelect($('.ld-ed-sampler'), catalog.samplers, editorSamplerValue, '— choose sampler —')
+      populateSelect($('.ld-ed-sampler'), rendererCatalog({renderBackend: $('.ld-ed-backend').value}).samplers, editorSamplerValue, '— choose sampler —')
       if (draftConfig) renderDraftControls()
       else populateSelect($('.ld-draft-sampler'), catalog.samplers, '', '— choose sampler —')
       renderCatalogStatus()
@@ -5818,7 +5924,7 @@ ${entry.prompt || ''}`.trim()
       if (bootDisposed) throw e
       catalog.bridge = { connected: false, error: e.message }
       renderCatalogStatus()
-      console.log('[LumiDraw] catalog load failed:', e.message)
+      console.log('[Lumi Studio] catalog load failed:', e.message)
       throw e
     }
   }
@@ -5828,7 +5934,7 @@ ${entry.prompt || ''}`.trim()
     row.className = 'ld-row'
     const fi = document.createElement('select')
     fi.className = 'ld-lora-file'
-    populateSelect(fi, catalog.loras, file || '', '— choose LoRA —')
+    populateSelect(fi, rendererCatalog({renderBackend: $('.ld-ed-backend').value}).loras, file || '', '— choose LoRA —')
     const wi = document.createElement('input')
     wi.type = 'number'; wi.step = '0.05'; wi.style.flex = '0 0 70px'
     wi.value = weight !== undefined ? weight : 1
@@ -5841,7 +5947,6 @@ ${entry.prompt || ''}`.trim()
   }
 
   async function openEditor(nameOrNull, seedPreset = null) {
-    await loadCatalog()
     const box = $('.ld-editor')
     box.style.display = 'block'
     const p = nameOrNull ? presets.find((x) => x.name === nameOrNull) : null
@@ -5849,9 +5954,15 @@ ${entry.prompt || ''}`.trim()
     editorOriginalName = p ? p.name : null
     editorExtra = p ? (p.extra || null) : (seed ? (seed.extra || null) : null)
     const c = p ? (p.config || {}) : (seed ? (seed.config || {}) : (syncedConfig || {}))
+    editorRenderConfig = cloneJson(c)
+    $('.ld-ed-backend').value = usesSwarm(c) ? 'swarmui' : 'drawthings'
+    $('.ld-ed-swarm-settings').style.display = usesSwarm(c) ? '' : 'none'
+    try { if (usesSwarm(c)) await loadSwarmCatalog(); else await loadCatalog() } catch { /* saved presets remain editable offline */ }
+    populateDatalist('ld-model-catalog-ed', rendererCatalog(c).models.map(m => m.file))
+    writeSwarmParams('ed', c)
     $('.ld-ed-name').value = p ? p.name : ''
     $('.ld-ed-model').value = c.model || ''
-    populateSelect($('.ld-ed-sampler'), catalog.samplers, c.sampler || '', '— choose sampler —')
+    populateSelect($('.ld-ed-sampler'), rendererCatalog(c).samplers, c.sampler || '', '— choose sampler —')
     $('.ld-ed-steps').value = c.steps !== undefined ? c.steps : ''
     $('.ld-ed-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''
     $('.ld-ed-w').value = c.width || ''
@@ -6050,7 +6161,7 @@ ${entry.prompt || ''}`.trim()
     }
     q('.ld-report-share').onclick = async () => {
       if (!file) return
-      try { await navigator.share({ files: [file], title: 'LumiDraw troubleshooting report' }); status('Report shared.') }
+      try { await navigator.share({ files: [file], title: 'Lumi Studio troubleshooting report' }); status('Report shared.') }
       catch (error) { status(error.name === 'AbortError' ? 'Sharing cancelled. The report is still ready.' : 'Sharing failed. Use Download file instead.') }
     }
     q('.ld-report-copy').onclick = async () => {
@@ -6166,7 +6277,8 @@ ${entry.prompt || ''}`.trim()
   })
 
   $('[data-act="draft-save-new"]').addEventListener('click', () => {
-    const bundle = currentDraftBundle()
+    let bundle
+    try { bundle = currentDraftBundle() } catch (error) { setStatus('.ld-draft-status', error.message, 'err'); return }
     if (!bundle.config) {
       setStatus('.ld-draft-status', 'No workspace settings to save yet — press Sync first.', 'err')
       return
@@ -6194,6 +6306,52 @@ ${entry.prompt || ''}`.trim()
     }
   })
 
+  $('.ld-draft-backend').addEventListener('change', async () => {
+    const next = $('.ld-draft-backend').value
+    try {
+      const previous = readDraftConfigFromControls()
+      rendererDrafts[usesSwarm(previous) ? 'swarmui' : 'drawthings'] = previous
+      draftConfig = cloneJson(rendererDrafts[next] || (next === 'swarmui' ? {renderBackend:'swarmui', swarmParams:{}} : {}))
+      draftDirty = true
+      renderDraftControls(); saveDraftLocal(); renderChips()
+      if (next === 'swarmui') await loadSwarmCatalog()
+      setStatus('.ld-draft-status', 'Renderer changed in the workspace only. Save a new preset to use it for Story images.')
+    } catch (error) { setStatus('.ld-draft-status', error.message, 'err'); renderDraftControls() }
+  })
+  $('[data-act="swarm-reload"]').addEventListener('click', () => {
+    try { draftConfig = readDraftConfigFromControls() } catch (e) { setStatus('.ld-draft-status', e.message, 'err'); return }
+    loadSwarmCatalog().catch(() => {})
+  })
+  $('[data-act="swarm-test"]').addEventListener('click', async () => {
+    try {
+      const result = await call('save_settings', {swarmUrl: $('.ld-swarm-url').value})
+      settings = result.settings
+      await loadSwarmCatalog()
+    } catch (e) { setStatus('.ld-swarm-status', e.message, 'err') }
+  })
+  $('[data-act="swarm-import"]').addEventListener('click', () => {
+    const selected = swarmCatalogData.presets.find(p => p.name === $('.ld-swarm-preset').value)
+    if (!selected) { setStatus('.ld-swarm-workspace-status', 'Choose a SwarmUI preset first.', 'err'); return }
+    hydrateDraftFromSource({config:selected.config, negativePrompt:$('.ld-negative').value, label:'SwarmUI “' + selected.name + '”'}, {force:true})
+    draftDirty = true; saveDraftLocal()
+    setStatus('.ld-draft-status', 'Loaded “' + selected.name + '”. Use Save new below, then select that preset for Story images.', 'good')
+  })
+  $('.ld-ed-backend').addEventListener('change', async () => {
+    const swarm = $('.ld-ed-backend').value === 'swarmui'
+    editorRenderConfig = swarm ? {renderBackend:'swarmui',swarmParams:{}} : {}
+    editorExtra = null
+    for (const field of ['model','steps','cfg','w','h']) $('.ld-ed-' + field).value = ''
+    $('.ld-ed-loras').innerHTML = ''
+    $('.ld-ed-swarm-settings').style.display = swarm ? '' : 'none'
+    populateDatalist('ld-model-catalog-ed', rendererCatalog(editorRenderConfig).models.map(m => m.file))
+    populateSelect($('.ld-ed-sampler'), rendererCatalog(editorRenderConfig).samplers, '', '— choose sampler —')
+    writeSwarmParams('ed', editorRenderConfig)
+    try { if (swarm) await loadSwarmCatalog(); else await loadCatalog() } catch (e) { setStatus('.ld-ed-status', e.message, 'err') }
+    writeSwarmParams('ed', editorRenderConfig)
+    $('.ld-ed-loras').appendChild(loraRow('', 1))
+  })
+  $('.ld-draft-scheduler').addEventListener('change', onDraftControlChange)
+  $('.ld-draft-swarm-params').addEventListener('change', onDraftControlChange)
   for (const selector of ['.ld-draft-model', '.ld-draft-sampler', '.ld-draft-steps', '.ld-draft-cfg', '.ld-draft-w', '.ld-draft-h', '.ld-negative']) {
     const control = $(selector)
     if (control) {
@@ -6207,19 +6365,20 @@ ${entry.prompt || ''}`.trim()
       const name = $('.ld-ed-name').value.trim()
       if (!name) throw new Error('Preset needs a name.')
       const base = editorOriginalName ? (presets.find((x) => x.name === editorOriginalName) || {}) : {}
-      const config = { ...(base.config || syncedConfig || {}) }
+      const config = { ...editorRenderConfig }
+      if (usesSwarm(config)) config.swarmParams = readSwarmParams('ed')
       config.model = $('.ld-ed-model').value
       if (!config.model) throw new Error('Pick a model.')
       const setIf = (sel, key, float) => {
         const v = $(sel).value
         if (v !== '') config[key] = float ? parseFloat(v) : (isNaN(Number(v)) ? v : parseInt(v, 10))
         }
-      const sv = $('.ld-ed-sampler').value.trim(); if (sv) config.sampler = sv
+      const sv = $('.ld-ed-sampler').value.trim(); if (sv) config.sampler = sv; else delete config.sampler
       setIf('.ld-ed-steps', 'steps'); setIf('.ld-ed-cfg', 'guidance_scale', true)
       setIf('.ld-ed-w', 'width'); setIf('.ld-ed-h', 'height')
       config.loras = [...$('.ld-editor').querySelectorAll('.ld-ed-loras .ld-row')].map((row) => ({
         file: row.querySelector('.ld-lora-file').value.trim(),
-        weight: parseFloat(row.querySelector('.ld-lora-weight').value) || 1,
+        weight: row.querySelector('.ld-lora-weight').value === '' ? 1 : Number(row.querySelector('.ld-lora-weight').value),
       })).filter((l) => l.file)
       const res = await call('save_preset', {
         name,
@@ -6278,7 +6437,7 @@ ${entry.prompt || ''}`.trim()
       })
       rescanInputActionUnsub = rescanInputAction.onClick(openStoryPicker)
     } catch (e) {
-      console.log('[LumiDraw] input-bar rescan action unavailable:', e.message)
+      console.log('[Lumi Studio] input-bar rescan action unavailable:', e.message)
     }
   }
   $('.ld-story-close').addEventListener('click', closeStoryPicker)
@@ -6483,6 +6642,7 @@ ${entry.prompt || ''}`.trim()
     const res = await call('save_settings', {
       host: $('.ld-host').value,
       port: $('.ld-port').value,
+      swarmUrl: $('.ld-swarm-url').value,
       bridgeHost: $('.ld-bridge-host').value,
       bridgePort: $('.ld-bridge-port').value,
       cloudEnabled: $('.ld-cloud-enabled').checked,
@@ -6548,9 +6708,9 @@ ${entry.prompt || ''}`.trim()
     const resetInstruction = $('[data-act="reset-parser"]')
     if (engineField) engineField.style.display = direct ? 'none' : ''
     if (note) note.textContent = direct
-      ? 'Direct mode has its own built-in parser rules: the parser receives character sheets, wardrobe, place/context and writes the finished image prompt. LumiDraw does not run the scene compiler afterward.'
+      ? 'Direct mode has its own built-in parser rules: the parser receives character sheets, wardrobe, place/context and writes the finished image prompt. Lumi Studio does not run the scene compiler afterward.'
       : engine === 'anima'
-        ? 'Structured JSON uses the current message plus optional reference context and Loom continuity, then LumiDraw compiles the final prompt.'
+        ? 'Structured JSON uses the current message plus optional reference context and Loom continuity, then Lumi Studio compiles the final prompt.'
         : 'Known-good fallback: instruction-only parsing. The returned tag prompt goes directly to Draw Things without identity JSON or the Anima compiler.'
     if (label) {
       label.textContent = engine === 'anima' ? 'Anima hybrid scene-extraction guidance' : 'Legacy parser instruction'
@@ -6641,7 +6801,7 @@ ${entry.prompt || ''}`.trim()
     settings.parserModel = ''
     const input = $('.ld-parser-model')
     if (input) input.value = ''
-    console.log('[LumiDraw] cleared the model override "' + stored + '" — it was written by the connection picker, not typed. Requests now follow the selected connection.')
+    console.log('[Lumi Studio] cleared the model override "' + stored + '" — it was written by the connection picker, not typed. Requests now follow the selected connection.')
     try { call('save_settings', { parserModel: '' }, 10000) } catch (e) {}
     return true
   }
@@ -6700,7 +6860,7 @@ ${entry.prompt || ''}`.trim()
   }
 
   $('[data-act="test-bridge"]').addEventListener('click', async () => {
-    setStatus('.ld-bridge-status', 'Connecting to LumiDraw Bridge…')
+    setStatus('.ld-bridge-status', 'Connecting to Lumi Studio Bridge…')
     try {
       await pushSettings()
       const result = await call('test_bridge', {}, 12000)
@@ -6767,7 +6927,7 @@ ${entry.prompt || ''}`.trim()
     const m = ctx.messages
 
     if (!m || typeof m.registerTagInterceptor !== 'function') {
-      console.log('[LumiDraw] messages.registerTagInterceptor unavailable')
+      console.log('[Lumi Studio] messages.registerTagInterceptor unavailable')
       ctx.sendToBackend({
         type: 'frontend_status', requestId: makeId(),
         version: EXTENSION_VERSION, historyRefresh: !!refreshHistoryButton,
@@ -6795,7 +6955,7 @@ ${entry.prompt || ''}`.trim()
         if (!body) return
         ctx.sendToBackend({ type: 'pregenerate', requestId: makeId(), body, aspect })
       } catch (e) {
-        console.log('[LumiDraw] dt-image interceptor error:', e.message)
+        console.log('[Lumi Studio] dt-image interceptor error:', e.message)
       }
     }
 
@@ -6812,7 +6972,7 @@ ${entry.prompt || ''}`.trim()
         // GENERATION_ENDED listener remains active during this short window, so
         // a genuinely new reply is still illustrated.
         if (Date.now() - parserInterceptorRegisteredAt < parserTagBootGraceMs) {
-          console.log('[LumiDraw] ignored parser tag replayed during startup')
+          console.log('[Lumi Studio] ignored parser tag replayed during startup')
           return
         }
         const messageId = String(payload && payload.messageId || '')
@@ -6820,13 +6980,13 @@ ${entry.prompt || ''}`.trim()
         const key = `${chatId}:${messageId}:${String(payload && payload.fullMatch || '')}`
         if (key && key === lastParserKey) return
         lastParserKey = key
-        console.log('[LumiDraw] committed parser trigger received')
+        console.log('[Lumi Studio] committed parser trigger received')
         ctx.sendToBackend({
           type: 'parser_trigger', requestId: makeId(),
           messageId, chatId,
         })
       } catch (e) {
-        console.log('[LumiDraw] parser trigger error:', e.message)
+        console.log('[Lumi Studio] parser trigger error:', e.message)
       }
     }
 
@@ -6837,7 +6997,7 @@ ${entry.prompt || ''}`.trim()
       )
       inlineInterceptorReady = true
     } catch (e) {
-      console.log('[LumiDraw] dt-image interceptor registration failed:', e.message)
+      console.log('[Lumi Studio] dt-image interceptor registration failed:', e.message)
     }
 
     try {
@@ -6847,7 +7007,7 @@ ${entry.prompt || ''}`.trim()
       )
       parserInterceptorReady = true
     } catch (e) {
-      console.log('[LumiDraw] parser interceptor registration failed:', e.message)
+      console.log('[Lumi Studio] parser interceptor registration failed:', e.message)
     }
 
     ctx.sendToBackend({
@@ -6883,13 +7043,13 @@ ${entry.prompt || ''}`.trim()
               content: String(payload.content || eventMessage.content || eventMessage.text || ''),
             })
           } catch (error) {
-            console.log('[LumiDraw] GENERATION_ENDED forwarding failed:', error.message)
+            console.log('[Lumi Studio] GENERATION_ENDED forwarding failed:', error.message)
           }
         })
         if (typeof off === 'function') imageLifecycleUnsubs.push(off)
         generationEndedReady = true
       } catch (error) {
-        console.log('[LumiDraw] GENERATION_ENDED listener unavailable:', error.message)
+        console.log('[Lumi Studio] GENERATION_ENDED listener unavailable:', error.message)
       }
       try {
         const off = ctx.events.on('CHARACTER_MESSAGE_RENDERED', (payload) => {
@@ -6915,13 +7075,13 @@ ${entry.prompt || ''}`.trim()
               })
             }
           } catch (error) {
-            console.log('[LumiDraw] CHARACTER_MESSAGE_RENDERED forwarding failed:', error.message)
+            console.log('[Lumi Studio] CHARACTER_MESSAGE_RENDERED forwarding failed:', error.message)
           }
         })
         if (typeof off === 'function') imageLifecycleUnsubs.push(off)
         renderedReady = true
       } catch (error) {
-        console.log('[LumiDraw] CHARACTER_MESSAGE_RENDERED listener unavailable:', error.message)
+        console.log('[Lumi Studio] CHARACTER_MESSAGE_RENDERED listener unavailable:', error.message)
       }
     }
     if (ctx.events && typeof ctx.events.on === 'function') {
@@ -6953,7 +7113,7 @@ ${entry.prompt || ''}`.trim()
             if (!id) return
             lastSeenChatId = id
             renderStoryContinuity(id)
-            refreshImagePlacements(id).catch((error) => console.log('[LumiDraw] image refresh after chat switch failed:', error.message))
+            refreshImagePlacements(id).catch((error) => console.log('[Lumi Studio] image refresh after chat switch failed:', error.message))
             loadCasts({ chatId: id }).catch(() => {})
             loadWardrobe(true, false, id).catch(() => {})
           }
@@ -6966,7 +7126,7 @@ ${entry.prompt || ''}`.trim()
         })
         if (typeof off === 'function') imageLifecycleUnsubs.push(off)
       } catch (error) {
-        console.log('[LumiDraw] CHAT_SWITCHED image listener unavailable:', error.message)
+        console.log('[Lumi Studio] CHAT_SWITCHED image listener unavailable:', error.message)
       }
       try {
         const off = ctx.events.on('MESSAGE_SWIPED', (payload) => {
@@ -6978,7 +7138,7 @@ ${entry.prompt || ''}`.trim()
         })
         if (typeof off === 'function') imageLifecycleUnsubs.push(off)
       } catch (error) {
-        console.log('[LumiDraw] MESSAGE_SWIPED image listener unavailable:', error.message)
+        console.log('[Lumi Studio] MESSAGE_SWIPED image listener unavailable:', error.message)
       }
       try {
         const off = ctx.events.on('MESSAGE_DELETED', (payload) => {
@@ -6990,7 +7150,7 @@ ${entry.prompt || ''}`.trim()
         })
         if (typeof off === 'function') imageLifecycleUnsubs.push(off)
       } catch (error) {
-        console.log('[LumiDraw] MESSAGE_DELETED image listener unavailable:', error.message)
+        console.log('[Lumi Studio] MESSAGE_DELETED image listener unavailable:', error.message)
       }
     }
 
@@ -7013,12 +7173,12 @@ ${entry.prompt || ''}`.trim()
   function loadBootCatalog() {
     if (bootDisposed || catalogReady) return Promise.resolve()
     if (catalogInFlight) return catalogInFlight
-    catalogInFlight = loadCatalog().then(() => {
+    catalogInFlight = (usesSwarm(draftConfig) ? loadSwarmCatalog() : loadCatalog()).then(() => {
       if (bootDisposed) return
       catalogReady = true
       setStatus('.ld-boot-status', '')
     }).catch((error) => {
-      if (!bootDisposed) setStatus('.ld-boot-status', 'Saved data is loaded. The model catalog is unavailable; it will retry when you return to LumiDraw. ' + error.message, 'err')
+      if (!bootDisposed) setStatus('.ld-boot-status', 'Saved data is loaded. The model catalog is unavailable; it will retry when you return to Lumi Studio. ' + error.message, 'err')
     }).finally(() => { catalogInFlight = null })
     return catalogInFlight
   }
@@ -7043,6 +7203,7 @@ ${entry.prompt || ''}`.trim()
       defaults = res.defaults || defaults
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
+      $('.ld-swarm-url').value = settings.swarmUrl || 'http://localhost:7801'
       $('.ld-bridge-host').value = settings.bridgeHost || '127.0.0.1'
       $('.ld-bridge-port').value = settings.bridgePort || 7863
       $('.ld-cloud-enabled').checked = !!settings.cloudEnabled
@@ -7075,7 +7236,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-use-loom-ledger').checked = settings.useLoomLedger !== false
       try {
         await reloadParserSources(false)
-      } catch (e) { console.log('[LumiDraw] connections list failed:', e.message) }
+      } catch (e) { console.log('[Lumi Studio] connections list failed:', e.message) }
       if (bootDisposed) return false
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
@@ -7130,7 +7291,7 @@ ${entry.prompt || ''}`.trim()
       const bootChatId = activeChatIdFromCtx()
       if (bootChatId) {
         lastSeenChatId = String(bootChatId)
-        refreshImagePlacements(bootChatId).catch((error) => console.log('[LumiDraw] native image placement refresh failed:', error.message))
+        refreshImagePlacements(bootChatId).catch((error) => console.log('[Lumi Studio] native image placement refresh failed:', error.message))
       }
       loadCasts(bootChatId ? { chatId: String(bootChatId) } : {}).catch(() => {})
       loadWardrobe(true, false, bootChatId ? String(bootChatId) : '').catch(() => {})
@@ -7146,14 +7307,14 @@ ${entry.prompt || ''}`.trim()
       if (versionEl) versionEl.textContent = installed ? `v${installed}` : ''
       const launcher = $('.ld-launcher')
       if (launcher && installed) {
-        launcher.title = `LumiDraw Studio v${installed}`
-        launcher.setAttribute('aria-label', `LumiDraw Studio v${installed}`)
+        launcher.title = `Lumi Studio v${installed}`
+        launcher.setAttribute('aria-label', `Lumi Studio v${installed}`)
       }
       // A half-installed extension is a real failure mode — copying backend.js and
       // forgetting frontend.js leaves two versions running against each other, and
       // every symptom of that looks like a bug in the feature instead.
       if (installed && installed !== EXTENSION_VERSION) {
-        console.warn(`[LumiDraw] version mismatch — frontend.js is v${EXTENSION_VERSION}, ` +
+        console.warn(`[Lumi Studio] version mismatch — frontend.js is v${EXTENSION_VERSION}, ` +
           `the installed manifest says v${installed}. One of the files did not get copied.`)
         if (versionEl) {
           versionEl.textContent = `v${installed} · UI v${EXTENSION_VERSION}`
@@ -7161,11 +7322,11 @@ ${entry.prompt || ''}`.trim()
           versionEl.title = 'The frontend and the manifest disagree — one file was not copied.'
         }
       }
-      console.log(`[LumiDraw] backend connected — UI v${EXTENSION_VERSION}, installed v${installed || 'unknown'}`)
+      console.log(`[Lumi Studio] backend connected — UI v${EXTENSION_VERSION}, installed v${installed || 'unknown'}`)
       return true
     } catch (e) {
-      console.log('[LumiDraw] backend not ready yet:', e.message)
-      if (!bootDisposed) setStatus('.ld-boot-status', 'LumiDraw could not finish loading. This does not mean your saved data was deleted. Retrying automatically. ' + e.message, 'err')
+      console.log('[Lumi Studio] backend not ready yet:', e.message)
+      if (!bootDisposed) setStatus('.ld-boot-status', 'Lumi Studio could not finish loading. This does not mean your saved data was deleted. Retrying automatically. ' + e.message, 'err')
       return false
     }
   }
