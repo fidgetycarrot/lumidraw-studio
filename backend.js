@@ -1,6 +1,8 @@
-// LumiDraw Studio — backend
-// Runs in Spindle's Bun process runtime. Talks to the Draw Things HTTP API
-// (A1111-compatible surface with DT-native payload keys) on localhost.
+// Lumi Studio — backend
+// Spindle runtime; Draw Things and SwarmUI renderer adapters.
+// Active story pipeline: story + tracker reference -> verified continuity ->
+// parser candidates -> Jev scene review -> compiler -> final review -> renderer.
+// Saved identities remain authoritative; image output never writes story facts.
 //
 // Empirically verified against Draw Things (July 2026):
 //   - GET  /                    → full current config as JSON (exact model names)
@@ -1237,6 +1239,23 @@ async function saveCharacters(characters) {
 
 async function getHistory() {
   return spindle.storage.getJson(HISTORY_FILE, { fallback: [] })
+}
+
+// Keep the on-disk record/rollback format unchanged. Galleries need previews and
+// recipes, not every historical parser transcript. Full diagnostics stay on the
+// backend and are loaded for just the selected image/report when requested.
+function historyPreview(entry) {
+  if (!entry || typeof entry !== 'object') return entry
+  const { scene, trace, troubleshooting, generationRequest, ...preview } = entry
+  return { ...preview, diagnosticsDeferred: !!(scene || trace || troubleshooting || generationRequest) }
+}
+
+function historyFrontendPayload(data) {
+  if (!data || typeof data !== 'object') return data
+  const result = { ...data }
+  if (Array.isArray(data.history)) result.history = data.history.map(historyPreview)
+  if (data.entry && Array.isArray(data.entry.images)) result.entry = historyPreview(data.entry)
+  return result
 }
 
 async function pushHistory(entry, userId = '') {
@@ -3831,8 +3850,7 @@ function buildAnimaParserInput(messages, targetIndex, target, settings, sceneSta
   if (sceneState && (sceneState.outfits || []).length) {
     stateLines.push(...sceneState.outfits.map((entry) => `${entry.name} is wearing: ${entry.tags.join(', ')}`))
   }
-  // Only when the record cannot answer. A populated wardrobe is authoritative and
-  // this would be noise on top of it.
+  // Earlier mentions can fill gaps, but never override a later narrated change.
   if (sceneState && (sceneState.clothingDigest || []).length) {
     stateLines.push('Clothing mentioned earlier in this story, oldest first — use it to work out what they are wearing now, and remember a later line undoes an earlier one:\n' +
       sceneState.clothingDigest.map((line) => '- ' + line).join('\n'))
@@ -3842,11 +3860,11 @@ function buildAnimaParserInput(messages, targetIndex, target, settings, sceneSta
     // scene with nothing but a location should not pay for advice about clothes.
     const wardrobeRule = (sceneState && (sceneState.outfits || []).length)
       ? (settings.mode === 'direct' || settings.directMode === true
-        ? '\nAttire is kept for you. Each clothing line above is what that character is wearing NOW — copy it exactly unless the CURRENT PASSAGE changes, removes, or adds clothing (a time-skip counts). When it changes, report the complete new outfit in "outfits". Never re-word unchanged clothing: a re-wording reads as a costume change.'
+        ? '\nThese clothing lines are the established state BEFORE this passage. Preserve unchanged items. If the CURRENT PASSAGE changes clothing, use the outfit at the chosen image moment, not an earlier or later outfit. Report changes in "outfits" using the existing format. Never re-word unchanged clothing.'
         : '\nAttire is kept for you. OMIT a subject\'s outfit array entirely when the CURRENT PASSAGE does not change it — silence means unchanged, and the wardrobe line above is used. Fill it in only when the passage changes, removes, or adds clothing, or when a time-skip ("later", "the next morning", "after dressing") means they would have changed. When you do fill it in, give the WHOLE outfit, not the one garment the passage mentioned. Never re-describe clothing that has not changed: a re-wording reads as a costume change to the image model. If the CURRENT PASSAGE clearly shows different clothes — a change, not a re-wording — report the passage\'s version; your report outranks the wardrobe line.')
       : ''
-    sections.push('----- ESTABLISHED SCENE STATE — AUTHORITATIVE -----\n' +
-      'This is where the story currently is. Use it for setting and lighting unless the CURRENT PASSAGE states that the characters moved or the light changed. Never invent a different place, and never describe a location that appears nowhere in this request.' +
+    sections.push('----- ESTABLISHED SCENE STATE — BEFORE THIS PASSAGE -----\n' +
+      'This is the starting state, not a lock on the current scene. Use it for setting and lighting unless the CURRENT PASSAGE establishes a change. Choose the state at the image moment. Never invent a different place, and never describe a location that appears nowhere in this request.' +
       wardrobeRule + '\n\n' +
       stateLines.join('\n'))
   }
@@ -4851,7 +4869,7 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
 
 
 function notifyFrontend(userId, type, data = {}) {
-  try { spindle.sendToFrontend({ type, ...data }, userId) } catch (e) {
+  try { spindle.sendToFrontend({ type, ...historyFrontendPayload(data) }, userId) } catch (e) {
     spindle.log.warn('[lumidraw] notifyFrontend failed for ' + type + ': ' + e.message)
   }
 }
@@ -10972,6 +10990,7 @@ function directGroupMechanicsDebug(image, profiles, banned = '') {
     rating: String((image && image.rating) || ''),
     wardrobeSnapshot: (image && image.wardrobeSnapshot) || {},
     wardrobeDecisions: (image && image.wardrobeDecisions) || [],
+    wardrobePipeline: (image && image.wardrobePipeline) || null,
     relationDecisions: (image && image.relationDecisions) || [],
     presenceRejections: (image && image.presenceRejections) || [],
     soloFallback: (image && (image.soloFallback || image.soloFallbackReview)) || null,
@@ -12263,10 +12282,8 @@ function injectDirectSceneMood(prompt, image, trace = null) {
   return blocks.join(' BREAK ')
 }
 
-// Turn the prompts the parser wrote into images. Everything the compiler used to
-// do between "the model has spoken" and "send it" is gone: no scene graph, no
-// defences, no substitutions. Quality tags in front, the author's negative
-// behind, the identity lock in the middle, send.
+// Direct candidates still pass presence/identity checks, wardrobe resolution,
+// optional Jev planning, compilation and final review before rendering.
 function directProfileAudit(profiles) {
   return allKnownProfiles(profiles).map((profile) => ({
     ref: profile.ref, name: profile.anchor, libraryId: profile.libraryId || '',
@@ -12340,16 +12357,8 @@ async function runDirectImagesImpl(initialImages, ctx) {
   const grounding = [passage, (parserInput && parserInput.contextPreview) || ''].filter(Boolean).join('\n')
   const rememberedWardrobe = continuity && continuity.before || await readSceneMemory(chatId, preset.name, userId)
   const plannedRun = settings.experimentalJevPlanner !== false && await jevActiveFor(userId, settings)
-  let rollingWardrobe = effectiveWardrobeForProfiles(rememberedWardrobe, profiles)
-  for (const image of ordered) {
-    const resolver = settings.experimentalSceneCore ? resolveCoreWardrobe : resolveDirectWardrobeForImage
-    const resolved = resolver(image, profiles, rollingWardrobe, grounding, passage, { content: target && target.content || '' })
-    image.resolvedWardrobe = resolved.outfits
-    image.resolvedWardrobeChanges = resolved.changes
-    if (storyMemoryIndependent) applyStoryMomentSnapshot(image, continuity, rememberedWardrobe, profiles, passage)
-    if (!plannedRun) rollingWardrobe = resolved.outfits
-    for (const note of resolved.notes) spindle.log.info('[lumidraw] direct · wardrobe resolve · ' + note)
-  }
+  prepareDirectWardrobes(ordered, { profiles, settings, before: rememberedWardrobe, continuity,
+    storyMemoryIndependent, plannedRun, grounding, passage, content: target && target.content || '' })
 
   const jevReview = await observeJev(ordered, { profiles, priorWardrobe: effectiveWardrobeForProfiles(rememberedWardrobe, profiles),
     storyMemoryIndependent,
@@ -12428,7 +12437,7 @@ async function runDirectImagesImpl(initialImages, ctx) {
     assertStoryScanActive(scan)
     const { image, prompt: finalPrompt, negativePrompt, mechanics: groupMechanics } = prepared[index]
     setStoryScanStage(scan, 'generating',
-      `Sending image ${index + 1} of ${prepared.length} to Draw Things.`)
+      `Sending image ${index + 1} of ${prepared.length} to ${imageRenderer(preset.config) === 'swarmui' ? 'SwarmUI' : 'Draw Things'}.`)
 
     const dims = aspectDims(preset.config, image.aspect)
     const entry = await generateAndUpload({
@@ -15768,6 +15777,15 @@ function stopAutomaticScanWork(reason = 'Automatic illustration was turned off.'
     })
   }
 
+  // Remove cancelled waiters immediately. Reject before they acquire the lane
+  // so their cleanup cannot release a lane still owned by another scan.
+  for (let i = scanWaiters.length - 1; i >= 0; i--) {
+    if (!scanWaiters[i].job.cancelled) continue
+    const [waiter] = scanWaiters.splice(i, 1)
+    waiter.reject(new Error(reason))
+  }
+  broadcastQueuePositions()
+
   let stoppedActive = false
   if (activeStoryScan && activeStoryScan.auto) {
     stoppedActive = true
@@ -15796,43 +15814,19 @@ function stopAutomaticScanWork(reason = 'Automatic illustration was turned off.'
   return { stoppedJobs, stoppedActive }
 }
 
-// CHARACTER_MESSAGE_RENDERED fires for every message the host renders,
-// including the existing history it paints while a chat is loading. Without a
-// grace window, opening the app queued an automatic scan for the last old
-// message — a visible "Preparing story message" timer (and potentially a
-// generation) that nobody requested. GENERATION_ENDED is the real completion
-// signal and is not gated.
+// Only a real completion event may start automatic illustration. Rendering a
+// message or encountering its parser tag is not evidence of a new story reply,
+// even minutes after opening the app. Host disable stops this worker; its next
+// start establishes a fresh boundary without reading or rewriting chat history.
 const BACKEND_STARTED_AT = Date.now()
-const RENDERED_EVENT_GRACE_MS = 12000
-
-// WHEN THE ECHO STORM ACTUALLY ARRIVES.
-//
-// "Opening the browser page it's generating images. I didn't send any new
-//  messages, and I didn't press anything."
-//
-// The automatic trigger is a BROWSER event: the frontend listens for
-// CHARACTER_MESSAGE_RENDERED and forwards it. Open the page after a while and
-// the chat renders its whole backlog at once, so every un-illustrated message
-// fires the trigger together — a stampede nobody asked for, on his GPU.
-//
-// A guard for exactly this already existed and could not fire: it measured from
-// BACKEND start, and Spindle had been up for hours. The storm does not come from
-// the backend booting. It comes from a FRONTEND connecting, which can happen at
-// any moment of the backend's life — every reload, every reopened tab, every
-// laptop waking up.
-//
-// The frontend already announces itself on load with `frontend_status`. That is
-// the signal, and it was being logged and thrown away.
-let lastFrontendConnectAt = 0
-function isStartupRenderedEcho(source) {
-  if (!/(?:rendered|parser-tag)/i.test(String(source || ''))) return false
-  // Whichever came last. A backend restart and a page load both produce the same
-  // burst, and only the most recent one bounds the window.
-  const since = Date.now() - Math.max(BACKEND_STARTED_AT, lastFrontendConnectAt)
-  return since < RENDERED_EVENT_GRACE_MS
+let automaticScanBoundaryAt = BACKEND_STARTED_AT
+let automaticScanRevision = 0
+function automaticScanEnabled(settings) {
+  return !!settings && ['parser', 'direct'].includes(settings.mode) && settings.autoScan !== false
 }
-
-const PARSER_TAG_RECENT_MS = 5 * 60 * 1000
+function isAutomaticCompletion(source) {
+  return /^(?:(?:frontend|backend)-)?generation-ended$/.test(String(source || ''))
+}
 
 function messageTimeMs(value) {
   if (value === null || value === undefined || value === '') return 0
@@ -15842,13 +15836,22 @@ function messageTimeMs(value) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-function parserTagMessageIsRecent(target, now = Date.now()) {
-  if (!target) return false
-  const at = Math.max(
-    messageTimeMs(target.activeSwipeAt),
-    messageTimeMs(target.updatedAt),
-    messageTimeMs(target.createdAt))
-  return at > 0 && now >= at && now - at <= PARSER_TAG_RECENT_MS
+function automaticTargetSkip(target, options, settings) {
+  if (!automaticScanEnabled(settings)) return 'Automatic illustration is disabled.'
+  if (!isAutomaticCompletion(options.source) || !options.messageId || String(target.id || '') !== String(options.messageId)) {
+    return 'Only a completed new reply can start automatic illustration. Use Scan to illustrate an older message.'
+  }
+  if (options.autoRevision !== undefined && options.autoRevision !== automaticScanRevision) {
+    return 'Automatic work from before the last off/on change was discarded.'
+  }
+  const boundary = Math.max(automaticScanBoundaryAt, Number(settings.autoScanResumeAt) || 0)
+  // Native chat timestamps have whole-second precision. Compare at that same
+  // precision, not updatedAt/swipe dates: an edit or image mount is not a reply.
+  const createdAt = messageTimeMs(target.createdAt)
+  if (!target.isAssistant || !createdAt || Math.floor(createdAt / 1000) < Math.floor(boundary / 1000)) {
+    return 'Reply predates automatic illustration being enabled, or its creation time is unknown. No parser call was made; manual Scan remains available.'
+  }
+  return ''
 }
 
 function autoScanKey(userId, chatId, messageId) {
@@ -15878,12 +15881,10 @@ function scheduleAutoStoryScan(userId, request = {}) {
   const messageId = String(request.messageId || '')
   const source = String(request.source || 'auto-event')
   if (!userId) return { accepted: false, note: 'Automatic scan has no userId.' }
-  if (!chatId && !messageId) return { accepted: false, note: 'Automatic scan has neither chatId nor messageId.' }
-  if (isStartupRenderedEcho(source)) {
-    spindle.log.info('[lumidraw] ignored render echo from a page load · source=' + source +
-      (messageId ? ' · message=' + messageId : '') +
-      ' — opening or reloading Lumiverse re-renders the backlog, which is not a reason to illustrate it')
-    return { accepted: false, startupEcho: true, messageId, chatId, source }
+  if (!chatId || !messageId) return { accepted: false, note: 'Automatic scan requires the completed reply\'s chat and message IDs.' }
+  if (!isAutomaticCompletion(source)) {
+    return { accepted: false, startupEcho: true, messageId, chatId, source,
+      note: 'Displaying a message or its parser tag does not start automatic illustration.' }
   }
 
   pruneRecentAutoScans()
@@ -15908,6 +15909,7 @@ function scheduleAutoStoryScan(userId, request = {}) {
     key, userId, chatId, messageId, source, sources: [source],
     expectedContent: String(request.content || '').slice(-7000),
     queuedAt: Date.now(),
+    autoRevision: automaticScanRevision,
     cancelled: false,
     cancelReason: '',
   }
@@ -15919,6 +15921,14 @@ function scheduleAutoStoryScan(userId, request = {}) {
 
   const promise = (async () => {
     try {
+      // Capture enabled state at admission, not only after the settling delay.
+      // An event received while Off must not come alive if On is clicked later.
+      const admissionSettings = await getSettings()
+      if (!automaticScanEnabled(admissionSettings) || job.autoRevision !== automaticScanRevision) {
+        const note = 'Automatic illustration was disabled when this reply arrived.'
+        setAutoStatus(userId, { mode: admissionSettings.mode, status: 'idle', messageId, chatId, source, note })
+        return { mode: admissionSettings.mode, processed: 0, skipped: true, note }
+      }
       await wait(Math.max(250, Number(request.delayMs) || 650))
       if (job.cancelled) {
         return {
@@ -16002,12 +16012,12 @@ function scheduleAutoStoryScan(userId, request = {}) {
           setAutoStatus(userId, { mode: 'parser', status: 'idle', messageId: job.messageId, chatId: job.chatId, source, note: already.note })
           return already
         }
-        const effectiveSource = uniqueStrings(job.sources || [job.source]).join('+') || source
         result = await scanStory(userId, {
           force: false,
           auto: true,
           _fromQueue: true,
-          source: effectiveSource,
+          source: job.source,
+          autoRevision: job.autoRevision,
           messageId: job.messageId,
           chatId: job.chatId,
           expectedContent: job.expectedContent,
@@ -16035,6 +16045,10 @@ function scheduleAutoStoryScan(userId, request = {}) {
       spindle.log.info('[lumidraw] auto scan result · source=' + effectiveSource + ' · ' + JSON.stringify(result))
       return result
     } catch (error) {
+      if (job.cancelled) {
+        return { mode: 'off', processed: 0, skipped: true, cancelled: true,
+          note: job.cancelReason || 'Automatic work was discarded.' }
+      }
       recentAutoScans.set(key, Date.now())
       spindle.log.warn('[lumidraw] auto scan failed · source=' + source + ' · ' + error.message)
       setAutoStatus(userId, { mode: 'parser', status: 'error', messageId: job.messageId, chatId: job.chatId, source, note: error.message })
@@ -16188,8 +16202,14 @@ async function automaticImageCadence(userId, chatId, target, settings) {
     }
     const file = 'image_cadence/' + scFingerprint(String(chatId)) + '.json'
     const saved = await spindle.userStorage.getJson(file, { userId, fallback: null })
-    const result = advanceAutoCadence(saved && saved.chatId === chatId ? saved : null, String(target.id), every)
-    if (!result.duplicate) await spindle.userStorage.setJson(file, { ...result.state, chatId }, { userId })
+    const resumeAt = Number(settings.autoScanResumeAt) || 0
+    let previous = saved && saved.chatId === chatId ? saved : null
+    // Explicit Off -> On starts a new interval. Keep the seen IDs so duplicate
+    // completion events/rerolls still cannot count twice. Ordinary panel opens
+    // and worker restarts do not erase previously counted enabled replies.
+    if (previous && (Number(previous.resumeAt) || 0) !== resumeAt) previous = { ...previous, progress: 0 }
+    const result = advanceAutoCadence(previous, String(target.id), every)
+    if (!result.duplicate) await spindle.userStorage.setJson(file, { ...result.state, chatId, resumeAt }, { userId })
     return { ...result, note: result.duplicate ? 'This reply already counted toward the automatic image schedule; rerolls do not count again.'
       : result.due ? 'Automatic image due after ' + every + ' story replies.'
         : 'Story reply ' + result.state.progress + '/' + every + ' — next automatic image in ' + (every - result.state.progress) + '. Continuity remains active; Scan latest generates now.' }
@@ -16236,18 +16256,14 @@ async function scanStoryCore(userId, options = {}) {
   }
   assertStoryScanActive(scan)
 
-  // The parser-tag interceptor is a fallback for host builds where generation
-  // lifecycle events are unavailable. It also sees tags in old messages when
-  // a chat backlog is rendered or virtualized. Only a recently committed
-  // message/swipe may use this automatic fallback; old messages remain
-  // available through the explicit Scan picker.
-  if (options.auto && /parser-tag/i.test(String(options.source || '')) &&
-      !parserTagMessageIsRecent(target)) {
-    const note = 'Skipped an old parser tag from the rendered chat backlog; no parser call was made.'
-    spindle.log.info('[lumidraw] ignored old parser tag · message=' + String(target.id || '') +
-      ' · content-source=' + String(target.contentSource || 'unknown') +
-      (Number.isInteger(target.swipeId) ? ' · swipe=' + target.swipeId : ''))
-    return { mode: settings.mode, processed: 0, skipped: true, startupEcho: true, note }
+  // Recheck at the real target, before continuity absorption, Jev, cadence or
+  // the image parser. A queued/replayed completion must not backfill off-time.
+  if (options.auto) {
+    const note = automaticTargetSkip(target, options, settings)
+    if (note) {
+      spindle.log.info('[lumidraw] automatic reply skipped · message=' + String(target.id || '') + ' · ' + note)
+      return { mode: settings.mode, processed: 0, skipped: true, startupEcho: true, note }
+    }
   }
 
   const storyDebugMeta = {
@@ -16338,10 +16354,6 @@ async function scanStoryCore(userId, options = {}) {
   }
 
   if (options.auto && ['parser', 'direct'].includes(settings.mode)) {
-    if (/(?:rendered|parser-tag)/i.test(String(options.source || '')) &&
-        !/generation-ended/i.test(String(options.source || '')) && !parserTagMessageIsRecent(target)) {
-      return { mode: settings.mode, processed: 0, skipped: true, note: 'Old rendered reply ignored; image schedule unchanged.' }
-    }
     const cadence = await automaticImageCadence(userId, chatId, target, settings)
     if (!cadence.due) {
       if (scan) setStoryScanStage(scan, 'done', cadence.note)
@@ -16497,10 +16509,9 @@ async function scanStoryCore(userId, options = {}) {
       const guidance = (settings.parserInstruction || DEFAULT_PARSER_INSTRUCTION)
         .replaceAll('{{max_images}}', String(settings.maxImages || 2))
         .replaceAll('{{min_images}}', String(settings.minImages || 0))
-      const resolvedGuidance = await resolveMacros(guidance, userId, chatId)
-      // DIRECT MODE. The parser writes the finished prompt instead of a scene
-      // graph, and none of the compiler below runs. Off by default; your existing
-      // pipeline is untouched until you turn it on.
+      // Custom legacy guidance is not part of Direct's established JSON contract.
+      const resolvedGuidance = directMode ? '' : await resolveMacros(guidance, userId, chatId)
+      // Direct uses the built-in candidate schema followed by checked compilation.
       const savedPlacesForParser = await getPlaces()
       const instruction = directMode
         ? buildDirectInstruction(profilesForPrompt, {
@@ -16517,7 +16528,7 @@ async function scanStoryCore(userId, options = {}) {
           resolvedGuidance + structuredParserSchema(settings.maxImages || 2, profiles, settings.minImages || 0),
           composeDynamicGuidance(dynamicGuidanceBlocks({ profiles, settings, places: savedPlacesForParser, wardrobe: (rememberedState && rememberedState.outfits) || null })))
       const instrLabel = directMode
-        ? `direct mode — the parser writes the prompt (${instruction.length} chars)`
+        ? `direct mode — parser candidates followed by checked compilation (${instruction.length} chars)`
         : (usingCustom ? `custom guidance + structured compiler (${instruction.length} chars)` : 'structured subject compiler')
       setStoryScanStage(scan, 'parsing', 'Waiting for the selected parser model.')
       spindle.log.info('[lumidraw] Anima parser context · previous_messages=' + parserInput.contextMessageCount + ' · loom_ledger=' + (parserInput.ledgerFound ? 'found' : 'none'))
@@ -16630,7 +16641,7 @@ async function scanStoryCore(userId, options = {}) {
       for (const item of acceptedParsed) {
         parserImageIndex++
         assertStoryScanActive(scan)
-        setStoryScanStage(scan, 'generating', `Sending image ${parserImageIndex} of ${acceptedParsed.length} to Draw Things.`)
+        setStoryScanStage(scan, 'generating', `Sending image ${parserImageIndex} of ${acceptedParsed.length} to ${imageRenderer(preset.config) === 'swarmui' ? 'SwarmUI' : 'Draw Things'}.`)
         const compiled = await compileSceneWithPreset(item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '', digest)
         const dims = aspectDims(preset.config, compiled.aspect)
         const parserAlt = markdownAltText(compiled.core)
@@ -16743,7 +16754,7 @@ async function scanStoryCore(userId, options = {}) {
     for (const line of lines) {
       legacyImageIndex++
       assertStoryScanActive(scan)
-      setStoryScanStage(scan, 'generating', `Sending image ${legacyImageIndex} of ${lines.length} to Draw Things.`)
+      setStoryScanStage(scan, 'generating', `Sending image ${legacyImageIndex} of ${lines.length} to ${imageRenderer(preset.config) === 'swarmui' ? 'SwarmUI' : 'Draw Things'}.`)
       const prompt = [lead, prefix, line].filter(Boolean).join(', ')
       if (!firstPrompt) firstPrompt = line
       const entry = await generateAndUpload({
@@ -16879,7 +16890,7 @@ async function buildCatalog(settings, { refresh = false } = {}) {
 // ---------------------------------------------------------------------------
 
 function ok(payload, requestId, data) {
-  return { type: `${payload.type}:result`, requestId, ok: true, ...data }
+  return { type: `${payload.type}:result`, requestId, ok: true, ...historyFrontendPayload(data) }
 }
 
 function fail(payload, requestId, err) {
@@ -17268,19 +17279,12 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
       await saveStoryDebug(reparseDebug, userId)
       const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
       await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
-      let reparseWardrobe = effectiveWardrobeForProfiles(rememberedState, profiles)
-      for (const item of orderScenesByPassage(reconciled.images, passage)) {
-        const resolver = settings.experimentalSceneCore ? resolveCoreWardrobe : resolveDirectWardrobeForImage
-        const resolvedWardrobe = resolver(
-          item, profiles, reparseWardrobe,
-          [passage, parserInput.contextPreview || ''].filter(Boolean).join('\n'), passage,
-          { corrections: rememberedState.reparseCorrections, content: target.content })
-        if (!planningCandidates) reparseWardrobe = resolvedWardrobe.outfits
-        item.resolvedWardrobe = resolvedWardrobe.outfits
-        item.resolvedWardrobeChanges = resolvedWardrobe.changes
-        if (storyMemoryIndependent) applyStoryMomentSnapshot(item, storyContinuity, rememberedState, profiles, passage, rememberedState.reparseCorrections)
-        jevCandidates.push(item)
-      }
+      const ordered = orderScenesByPassage(reconciled.images, passage)
+      prepareDirectWardrobes(ordered, { profiles, settings, before: rememberedState, continuity: storyContinuity,
+        storyMemoryIndependent, plannedRun: planningCandidates,
+        grounding: [passage, parserInput.contextPreview || ''].filter(Boolean).join('\n'), passage,
+        content: target.content, corrections: rememberedState.reparseCorrections })
+      jevCandidates.push(...ordered)
       const jevReview = await observeJev(jevCandidates, { profiles, priorWardrobe: effectiveWardrobeForProfiles(rememberedState, profiles),
         planner: settings.experimentalJevPlanner !== false, storyMemoryIndependent, maxOutputImages: settings.maxImages || 2,
         avoidUngenderedNpcs: settings.preferKnownCastMoments !== false,
@@ -17462,7 +17466,7 @@ async function replaceOneImage(userId, payload) {
       }, userId)
 
       const newUrl = entry.images && entry.images[0] ? entry.images[0].url : ''
-      if (!newUrl) throw new Error('Draw Things returned no image.')
+      if (!newUrl) throw new Error('The image renderer returned no image.')
       let outfitStoryUpdated = false
       let outfitStoryError = ''
       if (payload.updateStoryWardrobe === true) {
@@ -17770,10 +17774,16 @@ spindle.onFrontendMessage(async (payload, userId) => {
           settings.maxSubjects = Math.max(2, Math.min(4, Number(payload.maxSubjects) || 2))
         }
         if (settings.experimentalSceneCore && !prev.experimentalSceneCore) await backupBeforeSceneCore()
+        let automaticStopped = { stoppedJobs: 0, stoppedActive: false }
+        if (automaticScanEnabled(prev) !== automaticScanEnabled(settings)) {
+          automaticScanRevision += 1
+          automaticScanBoundaryAt = Date.now()
+          if (automaticScanEnabled(settings)) settings.autoScanResumeAt = automaticScanBoundaryAt
+          automaticStopped = stopAutomaticScanWork('Automatic illustration changed. Work from before the change was discarded; only new replies will be illustrated.')
+        } else if (!automaticScanEnabled(settings)) {
+          automaticStopped = stopAutomaticScanWork('Automatic illustration was turned off. Queued work was discarded; the active automatic request was cancelled.')
+        }
         await spindle.storage.setJson(SETTINGS_FILE, settings, { indent: 2 })
-        const automaticStopped = ((settings.mode !== 'parser' && settings.mode !== 'direct') || settings.autoScan === false)
-          ? stopAutomaticScanWork('Automatic illustration was turned off. Queued work was discarded; the active automatic request was cancelled.')
-          : { stoppedJobs: 0, stoppedActive: false }
         reply = ok(payload, requestId, { settings, automaticStopped })
         break
       }
@@ -17895,9 +17905,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
 
       case 'frontend_status': {
-        // A page just loaded or reloaded. Its backlog is about to render and
-        // every message in it will announce itself as freshly rendered.
-        lastFrontendConnectAt = Date.now()
+        // Reconnecting a frontend must neither backfill history nor reset the
+        // schedule for a backend that has continued listening to new replies.
         spindle.log.info('[lumidraw] frontend status: v' + String(payload.version || '?') +
           ' · history-refresh=' + (payload.historyRefresh ? 'ready' : 'missing') +
           ' · inline-tag=' + (payload.inlineInterceptor ? 'ready' : 'missing') +
@@ -18175,6 +18184,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
         reply = ok(payload, requestId, {
           rows: imageWardrobeRows(context.source, context.profiles),
           canUpdateStory: !!(context.source.origin || {}).chatId,
+          sceneDebug: context.source.scene ? { scene: context.source.scene, trace: context.source.trace || [],
+            troubleshooting: context.source.troubleshooting || null } : null,
         })
         break
       }
@@ -19092,15 +19103,15 @@ if (typeof spindle.registerInterceptor === 'function') {
 
 // Automatic illustration event fan-in. GENERATION_ENDED is authoritative
 // because it fires after the assistant message has been saved and carries the
-// exact chat/message IDs. CHARACTER_MESSAGE_RENDERED and the frontend XML tag
-// listener remain compatibility fallbacks; scheduleAutoStoryScan deduplicates
-// all three sources before any parser cost is incurred.
+// exact chat/message IDs. Frontend and backend completion events deduplicate;
+// rendered-message/XML compatibility callbacks are acknowledged but never
+// admitted as automatic work, regardless of their age or connection timing.
 ;(() => {
   const on = (typeof spindle.on === 'function') ? spindle.on.bind(spindle)
     : (spindle.events && typeof spindle.events.on === 'function') ? spindle.events.on.bind(spindle.events)
     : null
   if (!on) {
-    spindle.log.warn('[lumidraw] lifecycle events unavailable — frontend events, parser tag, and manual scan remain available')
+    spindle.log.warn('[lumidraw] lifecycle events unavailable — frontend completion events and manual scan remain available; rendered history never starts scans')
     return
   }
 
@@ -19228,7 +19239,7 @@ if (typeof spindle.registerInterceptor === 'function') {
         spindle.log.warn('[lumidraw] CHARACTER_MESSAGE_RENDERED handler failed: ' + error.message)
       }
     })
-    spindle.log.info('[lumidraw] documented CHARACTER_MESSAGE_RENDERED fallback registered')
+    spindle.log.info('[lumidraw] rendered-message compatibility listener registered (does not start automatic scans)')
   } catch (error) {
     spindle.log.warn('[lumidraw] CHARACTER_MESSAGE_RENDERED registration failed: ' + error.message)
   }
@@ -21208,7 +21219,7 @@ async function extractStoryContinuity({ userId, chatId, settings, profiles, befo
   const coverage = reviewed.answers.coverage
   diagnostics.coverage = coverage && jevConfident(coverage) ? coverage.choice : 'unclear'
   diagnostics.accepted = accepted.length
-  if (diagnostics.coverage !== 'complete') diagnostics.issues.push('Some end-of-message facts may be missing; automatic continuity needs recovery before it is considered complete.')
+  if (diagnostics.coverage !== 'complete') diagnostics.issues.push('Completeness is uncertain. Verified facts were retained; this alone does not trigger another extraction of the same source.')
   diagnostics.dressingPreconditions = scxDressingPreconditions(accepted)
   const events = scxSort(accepted)
   const after = reduceStoryContinuityEvents(before, events, profiles)
@@ -21372,7 +21383,23 @@ function scResult(status, record, row, extra = {}) {
     source: scCopy(row && row.source || {}), diagnostics: { ...(row && row.diagnostics || {}), journal: true,
       attempts: row && row.attempts || 0, migratedBaseline: record && record.baseline && record.baseline.label,
       limitedHistoricalCoverage: !!(record && record.baseline && record.baseline.limitedHistoricalCoverage),
-      imageDerivedMemoryImported: false, ...extra } }
+      imageDerivedMemoryImported: false,
+      retryPolicy: scContinuityRetryDecision(row), ...extra } }
+}
+
+// Retrying the same prose because a completeness score is uncertain adds cost
+// without new evidence. Keep partial facts, continue forward, and retry only a
+// failed request/missing verifier answer. Explicit sync can still retry partials
+// within the existing two-attempt ceiling. Never change confidence thresholds.
+function scContinuityRetryDecision(row, manual = false) {
+  if (!row) return { eligible: false, reason: 'No source checkpoint.' }
+  if (['error', 'pending'].includes(row.status)) return { eligible: true, reason: 'Source processing did not complete.' }
+  if (row.status !== 'partial') return { eligible: false, reason: 'Source checkpoint is complete or manually corrected.' }
+  if (manual) return { eligible: true, reason: 'Explicit story sync requested a partial-source recheck.' }
+  if ((row.diagnostics && row.diagnostics.rejected || []).some(item => item.reason === 'missing answer')) {
+    return { eligible: true, reason: 'A specific candidate did not receive a verifier answer.' }
+  }
+  return { eligible: false, reason: 'Verified facts retained; uncertainty or unsupported proposals alone do not justify replay.' }
 }
 function scPresetName(input) { return typeof input.preset === 'string' ? input.preset : input.preset && input.preset.name || input.presetName || '' }
 function scAcceptedState(before, after) {
@@ -21519,13 +21546,14 @@ async function ensureStoryContinuity(input) {
         generation: (current.generation || 0) + 1, dirty: false, at: Date.now() }))
     }
     let head = scHead(record)
-    const retry = record.entries.find(row => ['partial', 'error', 'pending'].includes(row.status) && (record.attempts[row.revision] || 0) < 2 &&
-      (requestedRevision !== row.revision || input.source === 'manual story sync' || retryPolicyUpgrade))
+    // Repair the head, never rewind a settled suffix because an old partial row
+    // remains uncertain. Keep that checkpoint durable until its replacement
+    // commits: cancellation/crash during a retry must not erase verified facts.
+    const retry = head && scContinuityRetryDecision(head, input.source === 'manual story sync').eligible &&
+      (record.attempts[head.revision] || 0) < 2 &&
+      (requestedRevision !== head.revision || input.source === 'manual story sync' || retryPolicyUpgrade) ? head : null
     if (retry) {
-      const first = record.entries.findIndex(row => row.revision === retry.revision)
-      record = await scMutate(userId, key, current => ({ ...current, entries: current.entries.slice(0, first),
-        generation: (current.generation || 0) + 1, at: Date.now() }))
-      head = scHead(record)
+      head = record.entries[record.entries.length - 2] || null
     }
     if (head && head.revision === requestedRevision) {
       if (record.dirty) record = await scMutate(userId, key, current => ({ ...current, dirty: false,
@@ -21536,7 +21564,8 @@ async function ensureStoryContinuity(input) {
     const pending = items.filter(item => item.narrative && item.index >= start && item.index <= targetIndex)
     let processed = 0
     for (const item of pending.slice(0, 3)) {
-      const revision = scRevision(userId, chatId, scope, item, items), before = scReplayBefore(record, item)
+      const revision = scRevision(userId, chatId, scope, item, items)
+      const before = retry && revision === retry.revision ? scCopy(retry.before) : scReplayBefore(record, item)
       const mayExtract = (record.attempts[revision] || 0) < 2
       const attempts = Math.min(2, (record.attempts[revision] || 0) + 1)
       const generation = record.generation || 0
@@ -21555,6 +21584,14 @@ async function ensureStoryContinuity(input) {
           reason: mayExtract ? 'Story extraction failed; existing state retained.' : 'Two-attempt limit reached; source checkpoint holds prior state and later messages may still proceed.',
           retryExhausted: !mayExtract } }
       }
+      // A transient repair failure must not erase already verified facts from
+      // this exact revision. Changed/swiped revisions never reuse these facts.
+      if (retry && retry.revision === revision && (retry.events || []).length &&
+          (!extracted || !['ok', 'partial'].includes(extracted.status))) {
+        extracted = { status: 'partial', after: retry.after, events: retry.events, source: retry.source,
+          diagnostics: { ...retry.diagnostics, retryFailure: extracted && extracted.diagnostics || {},
+            acceptedFactsRetained: true } }
+      }
       const status = extracted && ['ok', 'partial'].includes(extracted.status) ? extracted.status : 'error'
       const after = status === 'error' ? before : scAcceptedState(before, extracted.after)
       let fresh = false
@@ -21571,7 +21608,8 @@ async function ensureStoryContinuity(input) {
       record = await scMutate(userId, key, latestRecord => {
         if (!latestRecord || latestRecord.generation !== generation) return false
         committed = true
-        const next = { ...latestRecord, entries: [...latestRecord.entries, row], generation: generation + 1, dirty: false, at: Date.now() }
+        const next = { ...latestRecord, entries: [...latestRecord.entries.filter(entry => entry.index < item.index), row],
+          generation: generation + 1, dirty: false, at: Date.now() }
         // Bound storage while retaining a real pre-message checkpoint for the
         // oldest retained source. Older requests become read-only unavailable.
         if (next.entries.length > 96) {
@@ -21679,6 +21717,34 @@ async function ensureStoryContinuityForScan(input) {
     notifyFrontend(input.userId, 'story_continuity_updated', { chatId, messageId: target.id, continuity: storyContinuityDiagnostic(result) })
   }
   return result
+}
+
+function prepareDirectWardrobes(images, { profiles, settings, before, continuity, storyMemoryIndependent,
+  plannedRun, grounding = '', passage = '', content = '', corrections = {} }) {
+  let rolling = effectiveWardrobeForProfiles(before, profiles)
+  const historical = storyMemoryIndependent && continuity && continuity.status === 'historical-unavailable'
+  for (const image of images) {
+    // Only one authority prepares an outfit. Do not execute and log a legacy
+    // decision that the canonical snapshot would immediately overwrite.
+    if (!storyMemoryIndependent || historical) {
+      const resolve = settings.experimentalSceneCore ? resolveCoreWardrobe : resolveDirectWardrobeForImage
+      const resolved = resolve(image, profiles, rolling, grounding, passage, { content, corrections })
+      image.resolvedWardrobe = resolved.outfits
+      image.resolvedWardrobeChanges = resolved.changes
+      if (!plannedRun) rolling = resolved.outfits
+      for (const note of resolved.notes || []) spindle.log.info('[lumidraw] direct · wardrobe resolve · ' + note)
+    } else {
+      // The old resolver also restored non-clothing parser details. Preserve
+      // that normalization before Jev without running its outfit inference.
+      if (settings.experimentalSceneCore) coreRestoreSubjectDetails(image, profiles)
+      image.wardrobeDecisions = []
+      image.coreWardrobeDecisions = []
+    }
+    if (storyMemoryIndependent) applyStoryMomentSnapshot(image, continuity, before, profiles, passage, corrections)
+    image.wardrobePipeline = { owner: historical ? 'historical-passage' : storyMemoryIndependent ? 'story-continuity' : 'legacy-passage',
+      legacyResolverUsed: !storyMemoryIndependent || !!historical, memoryWriteAllowed: !storyMemoryIndependent }
+  }
+  return images
 }
 
 function applyStoryMomentSnapshot(image, continuity, before, profiles, passage, corrections = {}) {

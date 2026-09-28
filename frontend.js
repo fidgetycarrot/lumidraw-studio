@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.6.0-swarm.1'
+const EXTENSION_VERSION = '1.6.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1008,7 +1008,7 @@ function realSetup(ctx) {
               <option value="direct-manual">Direct — manual scans only</option>
               <option value="direct-auto">Direct — automatic after replies</option>
             </select>
-            <div class="ld-mode-note ld-help">Choose the prompt pipeline and its trigger together. Manual uses the Scan buttons; automatic follows your image frequency. Scan latest bypasses the wait.</div>
+            <div class="ld-mode-note ld-help">Manual uses the Scan buttons; automatic counts new replies while enabled, with no catch-up for replies written while off. Scan latest bypasses the wait.</div>
             <input type="checkbox" class="ld-autoscan" hidden aria-hidden="true" tabindex="-1" />
             <select class="ld-auto-interval" aria-label="Automatic image frequency"><option value="5">Every 5 story replies</option><option value="1">Every story reply</option></select>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
@@ -2124,6 +2124,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   let imageOutfitEpoch = 0
   let imageOutfitsLoading = false
   let selectedImageSceneDebug = null
+  let originalImageSceneDebug = null
   let imageFixBusy = false
   let selectedOutputUrl = null
   let lightboxScale = 1
@@ -2337,6 +2338,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   function closeRegenPanel() {
     imageOutfitEpoch++
+    selectedImageSceneDebug = null
+    originalImageSceneDebug = null
     const box = $('.ld-lightbox-regen')
     if (box) box.style.display = 'none'
     setStatus('.ld-lightbox-regen-status', '')
@@ -2394,6 +2397,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     try {
       const result = await call('image_wardrobe', { imageUrl }, 30000)
       if (epoch !== imageOutfitEpoch) return
+      originalImageSceneDebug = result.sceneDebug || null
+      selectedImageSceneDebug = originalImageSceneDebug
       originalImageOutfitRows = result.rows || []
       renderImageOutfitRows(originalImageOutfitRows)
       $('.ld-lightbox-outfit-story').disabled = !result.canUpdateStory
@@ -2413,7 +2418,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     imageOutfitDrafts = {}
     imageOutfitRows = []
     originalImageOutfitRows = []
-    selectedImageSceneDebug = entry.scene ? { scene: entry.scene, trace: entry.trace || [], troubleshooting: entry.troubleshooting || null } : null
+    originalImageSceneDebug = entry.scene ? { scene: entry.scene, trace: entry.trace || [], troubleshooting: entry.troubleshooting || null } : null
+    selectedImageSceneDebug = originalImageSceneDebug
     $('.ld-lightbox-outfit-story').checked = false
     $('.ld-lightbox-outfit-story').disabled = true
     loadImageOutfits(item.image.url)
@@ -4164,20 +4170,31 @@ ${entry.prompt || ''}`.trim()
     stage.appendChild(meta)
   }
 
+  const historyThumbs = new Map()
   function renderHistory() {
     renderCurrentOutput()
     const el = $('.ld-history')
     if (!el) return
-    el.innerHTML = ''
+    const fragment = document.createDocumentFragment()
+    const retained = new Set()
     if (!history.length) {
       const empty = document.createElement('div')
       empty.className = 'ld-lora-empty'
       empty.textContent = 'No recent images yet.'
-      el.appendChild(empty)
+      el.replaceChildren(empty)
+      historyThumbs.clear()
       return
     }
     for (const entry of history) {
       for (const img of entry.images || []) {
+        const key = img.url
+        const signature = JSON.stringify([entry, img])
+        const cached = historyThumbs.get(key)
+        retained.add(key)
+        if (cached && cached.signature === signature) {
+          fragment.appendChild(cached.wrap)
+          continue
+        }
         const wrap = document.createElement('div')
         wrap.className = 'ld-thumb'
         const hit = document.createElement('button')
@@ -4244,9 +4261,12 @@ ${entry.prompt || ''}`.trim()
         row.appendChild(del)
         wrap.appendChild(hit)
         wrap.appendChild(row)
-        el.appendChild(wrap)
+        historyThumbs.set(key, { signature, wrap })
+        fragment.appendChild(wrap)
       }
     }
+    for (const key of historyThumbs.keys()) if (!retained.has(key)) historyThumbs.delete(key)
+    el.replaceChildren(fragment)
   }
 
   function selectPreset(name) {
@@ -4709,7 +4729,7 @@ ${entry.prompt || ''}`.trim()
           revert.title = 'Put the prompt this image was actually made with back in the box'
           revert.addEventListener('click', () => {
             promptBox.value = reparseOriginalPrompt
-            selectedImageSceneDebug = item.entry.scene ? { scene: item.entry.scene, trace: item.entry.trace || [], troubleshooting: item.entry.troubleshooting || null } : null
+            selectedImageSceneDebug = originalImageSceneDebug
             renderImageOutfitRows(originalImageOutfitRows)
             syncReparseDebug({ prompt: reparseOriginalPrompt }, null, 'original image prompt')
           })
@@ -6708,10 +6728,10 @@ ${entry.prompt || ''}`.trim()
     const resetInstruction = $('[data-act="reset-parser"]')
     if (engineField) engineField.style.display = direct ? 'none' : ''
     if (note) note.textContent = direct
-      ? 'Direct mode has its own built-in parser rules: the parser receives character sheets, wardrobe, place/context and writes the finished image prompt. Lumi Studio does not run the scene compiler afterward.'
+      ? 'Direct mode uses the built-in parser format. Story continuity and SimTracker supply reference facts; the parser proposes scenes, Jev reviews them when active, and Lumi Studio compiles the final prompt while preserving saved character identities.'
       : engine === 'anima'
         ? 'Structured JSON uses the current message plus optional reference context and Loom continuity, then Lumi Studio compiles the final prompt.'
-        : 'Known-good fallback: instruction-only parsing. The returned tag prompt goes directly to Draw Things without identity JSON or the Anima compiler.'
+        : 'Legacy fallback: instruction-only parsing. The returned tag prompt goes to the selected renderer without identity JSON or the Anima compiler.'
     if (label) {
       label.textContent = engine === 'anima' ? 'Anima hybrid scene-extraction guidance' : 'Legacy parser instruction'
       label.style.display = direct ? 'none' : ''
@@ -7360,6 +7380,7 @@ ${entry.prompt || ''}`.trim()
     document.removeEventListener('visibilitychange', onImageRestoreWake)
     for (const event of ['focus', 'pageshow', 'online']) window.removeEventListener(event, onImageRestoreWake)
     if (wardrobeRefreshTimer) clearTimeout(wardrobeRefreshTimer)
+    historyThumbs.clear()
     imageOutfitEpoch++
     if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
