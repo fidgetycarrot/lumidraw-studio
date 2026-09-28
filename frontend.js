@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.6.1'
+const EXTENSION_VERSION = '1.6.2'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -896,6 +896,7 @@ function realSetup(ctx) {
                   <input class="ld-draft-model" list="ld-model-catalog" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog"></datalist>
                   <div class="ld-row" style="margin-top:7px">
                     <div><span class="ld-label">Sampler</span><select class="ld-draft-sampler"><option value="">— choose sampler —</option></select></div>
+                    <div class="ld-draft-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-draft-scheduler" title="Blank uses SwarmUI's default. Save to your preset to use this for Story images."></select></div>
                   </div>
                   <div class="ld-row" style="margin-top:7px">
                     <div><span class="ld-label">Steps</span><input class="ld-draft-steps" type="number" min="1" max="150" /></div>
@@ -911,7 +912,6 @@ function realSetup(ctx) {
                   <div class="ld-help ld-renderer-settings-help">Everything Draw Things reported on the last Sync, editable here. Generate uses these directly — no round-trip through Draw Things. Save them to a preset with the buttons below.</div>
                   <div class="ld-dt-settings" style="margin-top:8px"></div>
                   <div class="ld-swarm-settings" style="display:none">
-                    <span class="ld-label">Scheduler (blank uses SwarmUI default)</span><select class="ld-draft-scheduler"></select>
                     <details><summary>Additional SwarmUI parameters (advanced)</summary>
                     <textarea class="ld-draft-swarm-params" style="min-height:100px" placeholder="{}"></textarea>
                     <div class="ld-help">Native SwarmUI parameter names. Loading a SwarmUI preset fills these automatically. Prompt, seed, batch, model, LoRAs and the visible settings are controlled separately. Custom workflows, image-to-image and video are not supported in this release.</div></details>
@@ -1195,11 +1195,14 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option></select>
             <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
             <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><div class="ld-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div>
-            <div class="ld-ed-swarm-settings" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler"></select><span class="ld-label">Additional SwarmUI parameters (JSON)</span><textarea class="ld-ed-swarm-params" placeholder="{}"></textarea></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
-              <div style="flex:0 0 82px"><span class="ld-label">Steps</span><input class="ld-ed-steps" type="number" min="1" max="150" /></div>
-              <div style="flex:0 0 82px"><span class="ld-label">CFG</span><input class="ld-ed-cfg" type="number" step="0.5" min="0" /></div>
+              <div class="ld-ed-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler" title="Blank uses SwarmUI's default."></select></div>
+            </div>
+            <div class="ld-ed-swarm-settings" style="display:none"><details><summary>Additional SwarmUI parameters (advanced)</summary><textarea class="ld-ed-swarm-params" placeholder="{}"></textarea><div class="ld-help">Native SwarmUI parameters as JSON. Sampler and scheduler are controlled above.</div></details></div>
+            <div class="ld-row" style="margin-top:7px">
+              <div><span class="ld-label">Steps</span><input class="ld-ed-steps" type="number" min="1" max="150" /></div>
+              <div><span class="ld-label">CFG</span><input class="ld-ed-cfg" type="number" step="0.5" min="0" /></div>
             </div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Width</span><input class="ld-ed-w" type="number" step="64" min="256" /></div>
@@ -3894,6 +3897,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const bits = [usesSwarm(c) ? 'SwarmUI' : 'Draw Things']
     if (c.model) bits.push(`model: ${c.model}`)
     if (c.sampler) bits.push(`sampler: ${c.sampler}`)
+    if (usesSwarm(c)) bits.push(`scheduler: ${c.swarmParams?.scheduler || 'SwarmUI default'}`)
     if (c.steps !== undefined) bits.push(`${c.steps} steps`)
     if (c.guidance_scale !== undefined) bits.push(`cfg ${c.guidance_scale}`)
     if (c.width && c.height) bits.push(`${c.width}×${c.height}`)
@@ -5887,6 +5891,7 @@ ${entry.prompt || ''}`.trim()
 
   function writeSwarmParams(prefix, config) {
     const params = { ...(config.swarmParams || {}) }
+    $('.ld-' + prefix + '-scheduler-field').style.display = usesSwarm(config) ? '' : 'none'
     populateSelect($('.ld-' + prefix + '-scheduler'), swarmCatalogData.schedulers, params.scheduler || '', '— SwarmUI default —')
     delete params.scheduler
     $('.ld-' + prefix + '-swarm-params').value = JSON.stringify(params, null, 2)
@@ -5905,6 +5910,8 @@ ${entry.prompt || ''}`.trim()
       if ($('.ld-ed-backend').value === 'swarmui') {
         populateDatalist('ld-model-catalog-ed', swarmCatalogData.models.map(m => m.file))
         populateSelect($('.ld-ed-sampler'), swarmCatalogData.samplers, $('.ld-ed-sampler').value, '— choose sampler —')
+        // Refresh available choices, not the recipe: retain unsaved editor values/JSON.
+        populateSelect($('.ld-ed-scheduler'), swarmCatalogData.schedulers, $('.ld-ed-scheduler').value, '— SwarmUI default —')
       }
       return swarmCatalogData
     } catch (error) {
@@ -5977,6 +5984,7 @@ ${entry.prompt || ''}`.trim()
     editorRenderConfig = cloneJson(c)
     $('.ld-ed-backend').value = usesSwarm(c) ? 'swarmui' : 'drawthings'
     $('.ld-ed-swarm-settings').style.display = usesSwarm(c) ? '' : 'none'
+    $('.ld-ed-scheduler-field').style.display = usesSwarm(c) ? '' : 'none'
     try { if (usesSwarm(c)) await loadSwarmCatalog(); else await loadCatalog() } catch { /* saved presets remain editable offline */ }
     populateDatalist('ld-model-catalog-ed', rendererCatalog(c).models.map(m => m.file))
     writeSwarmParams('ed', c)
