@@ -12829,11 +12829,14 @@ function directAnchorFor(profile) {
   const declared = Array.isArray(profile.identityTags)
     ? profile.identityTags
     : String(profile.identityTags || '').split(',')
-  return enforceOnePresentation(rewriteKnownAliases(uniqueStrings([
+  // Saved model-language is authored configuration, not parser prose. Preserve
+  // aliases, spelling and weight syntax; do not elect one presentation or cap
+  // the saved inventory when supplying it to the parser.
+  return coreTags([
     profile.subject,
     ...declared,
     ...(profile.appearance || []),
-  ].map(animaTag).filter(Boolean))), profile.anchor || profile.ref).slice(0, 28)
+  ])
 }
 
 // Direct mode uses one mechanically-vetted binding name in the natural-language
@@ -19265,7 +19268,11 @@ IMAGE VIEW GUIDANCE FOR CANDIDATES — use the existing fields, no new schema or
 - A private named prop should include its evidenced object type in visual wording, not its name alone: use the known warhammer/wand/etc only when the saved prop definition or passage establishes that type. Keep it with the actual holder, not automatically its owner. Unknown prop types stay unknown; do not invent a description.
 - A private creature/species name is not a visual description. When a creature participates, describe its source-established body shape and two or three distinctive visible features, attached to that creature in the existing fields. Do not assume a fantasy name is known to the image model, turn a beast into a human, or invent legs, anatomy, colors or size. A creature doing the main action must not disappear from the scene wording. Keep the source name for binding, but explain it visually.
 - Write the opening as a short actor + visible verb + recipient/object instruction, not a literary summary. Keep motives, emotions described only internally, ornamental adverbs and nested while/as clauses out of it. Put appearances, clothing, facial cues and surroundings in their existing dedicated fields. One clear opening action plus the later subject details is enough; do not compress the entire passage into a sentence.
-- Saved identity, count tags, weights and approved clothing are not material to rewrite for prettier prose. Keep each character's details bound to that character. LumiDraw supplies the protected sheet information mechanically.`
+- Saved identity, count tags, weights and approved clothing are not material to rewrite for prettier prose. Keep each character's details bound to that character. LumiDraw supplies the protected sheet information mechanically.
+- Keep the essential visible action when simplifying. "Mira sits on a barrel pulling on boots" must not become only "Mira sits on a barrel". Use subject + active verb + visible object; put simultaneous supporting actions in that subject's details. Avoid dangling participles or pronouns with two possible owners.
+- Choose framing around the action: putting on or lacing footwear needs the feet visible, not a cowboy shot, portrait or waist-up crop. A garment worn elsewhere is not by itself a reason to widen a shot. Do not change the depicted action to fit a crop.
+- Describe unfamiliar manufactured items with their established visual type/material, while retaining the name for binding. Do not guess what a coined material looks like. A setting is a physical venue plus supported surroundings, not an administrative title, mood, or an invented furnished room.
+- Keep the existing JSON fields and evidence format. The app assembles paragraphs after parsing; do not return a prose prompt instead of the required structured response.`
 }
 
 function plannerSelectedImages(images, limit) {
@@ -20086,8 +20093,8 @@ async function planJevScene(images, scope, prefs) {
           const targets = Object.fromEntries(plan.subjects.filter(s => s.ref !== subject.ref).map((s, n) => ['target' + n, 'looking at ' + s.name]))
           const original = (jpSceneSubjects(working[i], profiles).find(s => s.ref === subject.ref) || {}).details || []
           const contextual = original.filter(detail => directExpressionKind(detail) === 'gaze').slice(0, 2)
-          const gaze = { down: 'looking down', away: 'looking away', up: 'looking up', ahead: 'looking ahead', ...targets,
-            ...Object.fromEntries(contextual.filter(detail => !Object.values(targets).includes(detail)).map((detail, n) => ['context' + n, detail])) }
+          const gaze = plannedUniqueChoices({ down: 'looking down', away: 'looking away', up: 'looking up', ahead: 'looking ahead', ...targets,
+            ...Object.fromEntries(contextual.map((detail, n) => ['context' + n, detail])) })
           jpAddQuestion(third, { candidate: i + 1, kind: 'gaze', name: subject.name, ref: subject.ref, options: gaze }, { type: 'choice',
             instructions: 'Current gaze of ' + subject.name + ' in candidate ' + (i + 1) + ' AT ITS SELECTED MOMENT. Do not backdate a later gaze shift. Do not infer eye contact simply from conversation. Choose a named target only if this character looks at that person. Context options are parser proposals, NOT facts; select them only when this same subject and direction/target are supported in the selected beat. If the gaze is at an object not offered, choose unclear; never substitute a person.',
             criteria: { unclear: 'No offered gaze is clearly established.', ...gaze } }, 3)
@@ -20185,6 +20192,30 @@ function plannedFramingTags(value) {
   return plannedCompilerTags(value).filter(tag => /^(?:(?:extreme |medium[- ]|medium |medium[- ]wide |long |wide |full |bust |cowboy |establishing |group |two[- ]|three[- ])?shot|(?:extreme |medium )?close[- ]?up|headshot|portrait|upper body|full body|waist[- ]up(?: shot)?|medium[- ]wide(?: group shot)?|from (?:front|side|behind|above|below)|(?:high|low|eye[- ]level|eye level|overhead|three[- ]quarter|dutch) (?:angle|view)|eye[- ]level|three[- ]quarter view|front view|side view|rear view|over the shoulder)$/i.test(tag))
 }
 
+function plannedUniqueChoices(options) {
+  const seen = new Set()
+  return Object.fromEntries(Object.entries(options).filter(([, value]) => {
+    const key = normalizeIdentityText(value)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  }))
+}
+
+// Only a depicted footwear action, not a saved outfit containing shoes, can
+// widen a crop. This changes image presentation, never wardrobe or memory.
+function plannedActionFraming(opening, framing) {
+  const footwear = '(?:boots?|shoes?|sneakers?|sandals?|slippers?)'
+  const action = new RegExp('\\b(?:put(?:s|ting)? on|pull(?:s|ing)? on|tak(?:e|es|ing) off|remov(?:e|es|ing)|lac(?:e|es|ing)|unlac(?:e|es|ing)|ty(?:ing)|ties|tighten(?:s|ing)?)\\b[^.!?;]{0,70}\\b' + footwear + '\\b|\\b(?:pull(?:s|ing)?|tighten(?:s|ing)?|ties|tying|lac(?:e|es|ing))\\b[^.!?;]{0,45}\\b(?:bootlaces?|shoelaces?)\\b', 'i')
+  const matched = action.exec(opening)
+  if (!matched || /\b(?:not|never|without|will|would|might|plans? to)\s+(?:\w+\s+){0,2}$/i.test(opening.slice(0, matched.index))) return { framing, changes: [] }
+  const crop = /^(?:portrait|headshot|(?:extreme |medium )?close[- ]?up|bust shot|upper body|waist[- ]up(?: shot)?|cowboy shot|medium shot)$/i
+  if (framing.some(tag => /^(?:full[- ]body(?: shot)?|wide shot|long shot|establishing shot)$/i.test(tag))) return { framing, changes: [] }
+  return { framing: uniqueStrings(['full body', ...framing.filter(tag => !crop.test(tag))]),
+    changes: [{ kind: 'action-framing', before: framing.slice(), after: 'full body',
+      reason: 'The depicted footwear action requires visible feet.' }] }
+}
+
 function plannedSubjectRef(subject, profiles) {
   return (directGroupProfileFor(subject, profiles) || {}).ref || 'npc:' + normalizeIdentityText(subject.name || '')
 }
@@ -20251,28 +20282,8 @@ function plannedIncidentalTraits(subject, passage) {
 function plannedIdentityView(subject, profile, clothing, frame) {
   const full = (subject.coreIdentity || []).slice()
   const mandatory = new Set(coreTags(profile && profile.identityTags).map(normalizeIdentityText))
-  const distant = /\b(?:wide|long|full body|cowboy|establishing|group|medium[- ]wide)\b/i.test(frame)
-  const close = /\b(?:close[- ]?up|headshot|portrait|bust shot)\b/i.test(frame)
-  const fullyCoveredHands = clothing.visible.some(tag => /\b(?:gloves|gauntlets)\b/i.test(tag) &&
-    !/\b(?:one|single|removed|off|fingerless|open|exposed|uncovered)\b/i.test(tag)) &&
-    !clothing.worn.some(tag => /\b(?:glove|gauntlet)\b.*\b(?:removed|off)\b|\b(?:one|single)\s+(?:glove|gauntlet)\b/i.test(tag))
-  const kept = [], omitted = []
-  for (const tag of full) {
-    const key = normalizeIdentityText(tag)
-    let reason = ''
-    if (!mandatory.has(key)) {
-      if (fullyCoveredHands && /\b(?:palm|palms|hand|hands)\b/i.test(tag) && /\b(?:tattoo|tattooed|burned|scar|scarred|mark|marked)\b/i.test(tag)) {
-        reason = 'hand marking concealed by explicitly worn gloves or gauntlets'
-      } else if (distant && !close && /^(?:oval face|small (?:straight )?nose|straight nose|full lips|defined cheekbones|high cheekbones|handsome|beautiful)$/i.test(tag)) {
-        reason = 'optional fine facial detail at the selected wider framing'
-      } else if (key === normalizeIdentityText(subject.coreSubjectPhrase)) {
-        reason = 'already stated in the subject introduction'
-      }
-    }
-    if (reason) omitted.push({ tag, reason })
-    else kept.push(tag)
-  }
-  return { full, kept, omitted, mandatory: [...mandatory], policy: 'no numeric identity cap; saved Always include tags remain mandatory' }
+  return { full, kept: full.slice(), omitted: [], mandatory: [...mandatory],
+    policy: 'saved identity tags and weights preserved; no crop, visibility or brevity pruning' }
 }
 
 function plannedApplySubjectDecisions(image, profiles) {
@@ -20285,10 +20296,11 @@ function plannedApplySubjectDecisions(image, profiles) {
     if (!selected) continue
     for (const kind of ['face', 'gaze']) {
       const status = selected[kind + 'Status'] || 'skipped'
-      if (!['accepted', 'unclear'].includes(status)) continue
+      // Uncertainty is not evidence that the parser's visible cue is false.
+      if (status !== 'accepted') continue
       subject.details = (subject.details || []).filter(detail => {
         const cue = directExpressionKind(detail) === kind || (kind === 'face' && /\b(?:laughing|ashamed|shy|stern|sour-faced)\b/i.test(detail))
-        if (cue) omissions.push({ ref, detail, reason: status === 'accepted' ? 'replaced by the selected character expression' : 'optional expression was not established by the review' })
+        if (cue) omissions.push({ ref, detail, reason: 'replaced by the selected character expression' })
         return !cue
       })
       if (status === 'accepted' && typeof selected[kind] === 'string' && selected[kind].trim()) {
@@ -20392,11 +20404,21 @@ function jvFreezeDocument(value) {
 
 function jvRenderPromptDocument(document, opening, setting) {
   const protectedParts = document.protected
+  if (document.layout === 'paragraphs-v1') return plannedPromptParagraphs(protectedParts, opening, setting)
   const lines = [protectedParts.countLine,
     opening ? `Scene: ${opening.replace(/[.]+$/, '')}.` : '',
     protectedParts.framingLine, setting, protectedParts.moodLine,
     ...protectedParts.subjects.map(subject => subject.text), ...protectedParts.tailLines]
   return plannedCompilerGrammar(joinPromptParts([...protectedParts.headerParts, lines.filter(Boolean).join(' ')]))
+}
+
+function plannedPromptParagraphs(parts, opening, setting) {
+  // Do not run global grammar/alias cleanup over user-authored model controls.
+  // Natural wording can be cleaned separately without changing a saved weight.
+  return [joinPromptParts([...parts.headerParts, parts.countLine.replace(/,+$/, '')]),
+    [opening ? `Scene: ${opening.replace(/[.]+$/, '')}.` : '', parts.framingLine].filter(Boolean).join(' '),
+    [setting, parts.moodLine].filter(Boolean).join(' '),
+    ...parts.subjects.map(subject => subject.text), ...parts.tailLines].filter(Boolean).join('\n\n')
 }
 
 function jvConciseOpening(opening, subjects) {
@@ -20427,9 +20449,13 @@ function jvLiteralOpening(opening) {
   // Offered alternatives, not automatic semantic edits. Jev independently
   // checks fidelity against the story before one can be selected.
   let text = String(opening || '').replace(/\b(?:quietly|gently|slowly|deliberately|dramatically|fiercely|defiantly|secretly|tenderly|intently|carefully|firmly)\s+/gi, '')
-  text = text.replace(/(?:,\s*|\s+)(?:savoring|savouring|relishing|hoping|wondering|remembering|imagining|realizing|realising|contemplating|planning)\b.*$/i, '')
-    .replace(/\s+(?:while|as)\s+(?:he|she|they|[A-Z][\w'-]*)\s+(?:secretly\s+|silently\s+)?(?:hopes?|wonders?|remembers?|imagines?|realizes?|realises?|contemplates?|plans?)\b.*$/, '')
-    .replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, '')
+  const internal = /(?:,\s*|\s+)(?:hoping|wondering|remembering|imagining|realizing|realising|contemplating|planning)\b.*$/i.exec(text)
+    || /\s+(?:while|as)\s+(?:he|she|they|[A-Z][\w'-]*)\s+(?:secretly\s+|silently\s+)?(?:hopes?|wonders?|remembers?|imagines?|realizes?|realises?|contemplates?|plans?)\b.*$/.exec(text)
+  // An internal-state clause can contain the only visible action/object too.
+  // Never crop that mechanically; the parser or an owner-bound alternative
+  // must supply a faithful version instead (e.g. the captured boots scene).
+  if (internal && !/\b(?:while|as|and|pull\w*|put\w*|hold\w*|touch\w*|wear\w*|boot\w*|shoe\w*|lac\w*|press\w*|rub\w*|apply\w*|applies|hand\w*|grip\w*|walk\w*|lean\w*|sit\w*|stand\w*)\b/i.test(internal[0])) text = text.slice(0, internal.index)
+  text = text.replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, '')
   if (!text || normalizeIdentityText(text) === normalizeIdentityText(opening)) return null
   return { opening: text, changes: [{ kind: 'literal-visible-action', source: opening,
     reason: 'Offered removal of ornamental manner words/internal commentary; independent source-fidelity approval is required.' }] }
@@ -20438,13 +20464,13 @@ function jvLiteralOpening(opening) {
 function jvPrimaryOpening(opening, subjects) {
   const split = /^(.*?)\s+while\s+(.+)$/i.exec(opening)
   if (!split || split[1].trim().split(/\s+/).length < 4 || /\b(?:while|because|until|if)\b/i.test(split[1])) return null
-  // Do not lose the only description of an unknown creature/prop by cropping
-  // its clause. Every named secondary participant must have its own block.
-  const known = subjects.flatMap(s => String(s.name || '').split(/\s+/)).map(normalizeIdentityText)
-  const named = split[2].match(/\b[A-Z][a-z]+\b/g) || []
-  if (named.some(name => !known.includes(normalizeIdentityText(name)))) return null
-  return { opening: split[1].trim(), changes: [{ kind: 'primary-visible-action', removed: split[2],
-    reason: 'Candidate focuses the opening on one visible action. Jev must reject if the omitted clause is essential or changes the depicted moment; protected subject details remain intact.' }] }
+  const known = subjects.flatMap(s => [s.name, s.referenceLabel]).filter(Boolean)
+  if (!known.some(name => new RegExp('^' + escapeRegExp(name) + '\\s+', 'i').test(split[2]))) return null
+  // Split rather than amputate a second action. Unknown/pronominal subjects
+  // keep the original because a sentence split might change their referent.
+  return { opening: split[1].trim().replace(/[,;]+$/, '') + '. ' + upperFirst(split[2].trim()),
+    changes: [{ kind: 'separate-visible-actions', source: opening,
+      reason: 'Both named subjects and both actions retained in separate simple sentences; Jev must still verify the selected moment and ownership.' }] }
 }
 
 function jvCreatureOpening(opening, subjects, passage, moment) {
@@ -20487,7 +20513,8 @@ function jvCreatureOpening(opening, subjects, passage, moment) {
 function jvCreatePromptDocument(image, parts, finalized) {
   const originalEnvironment = JSON.parse(JSON.stringify(parts.environment))
   const document = {
-    version: 1,
+    version: 2,
+    layout: parts.layout || 'legacy-inline',
     policy: 'Only compiler-offered opening/setting wording may change. Character ownership, tags, counts, model header, framing, bound actions and negative prompt are byte-protected.',
     protected: {
       header: parts.header, headerParts: parts.headerParts.slice(), counts: parts.counts.slice(), countLine: parts.counts.join(', ') + ',',
@@ -20508,6 +20535,11 @@ function jvCreatePromptDocument(image, parts, finalized) {
   const primary = jvPrimaryOpening(literal ? literal.opening : parts.opening, document.protected.subjects)
   if (primary && !openings.some(option => option.opening === primary.opening)) openings.push({ id: 'primary', ...primary,
     changes: [...(literal ? literal.changes : []), ...primary.changes] })
+  const bound = (parts.boundLines || []).find(line => line.kind === 'relation' && line.text &&
+    normalizeIdentityText(line.text) !== normalizeIdentityText(parts.opening))
+  if (bound) openings.push({ id: 'bound', opening: bound.text.replace(/[.]+$/, ''),
+    changes: [{ kind: 'owner-bound-visible-action', owners: bound.owners.slice(), source: parts.opening,
+      reason: 'Existing structured relation offered as the opening, not a generated action. Jev must reject if it drops the primary moment or an essential action.' }] })
   const grounded = jvCreatureOpening(literal ? literal.opening : parts.opening, document.protected.subjects,
     parts.passage || '', image.moment_evidence || image.anchor || '')
   if (grounded) openings.push({ id: 'grounded', ...grounded,
@@ -20570,7 +20602,7 @@ function finalizePlannedImagePrompt(image, ctx) {
     lighting: plannedCompilerTags(plan.environment && plan.environment.lighting) }
   const rawFraming = plannedFramingTags(String(originalPrompt).split(/\bBREAK\b/)[0])
   const angleTag = tag => /\b(?:from|angle|view|eye[- ]level|shoulder)\b/i.test(tag)
-  const framing = typeof plan.framing === 'string' ? plannedFramingTags(plan.framing)
+  let framing = typeof plan.framing === 'string' ? plannedFramingTags(plan.framing)
     : plan.framing && plan.framing.status === 'accepted' ? plannedFramingTags([
       ...(plan.framing.shot ? [plan.framing.shot] : rawFraming.filter(tag => !angleTag(tag))),
       ...(plan.framing.angle ? [plan.framing.angle] : rawFraming.filter(angleTag)),
@@ -20611,6 +20643,10 @@ function finalizePlannedImagePrompt(image, ctx) {
   const openingProps = coreOpeningPropDescriptions(opening, image, profiles, preset.bannedTags)
   opening = upperFirst(plannedCompilerGrammar(openingProps.text))
   core.sceneAction.propBindings = openingProps.bindings
+  const actionFrame = plannedActionFraming(opening, framing)
+  framing = actionFrame.framing
+  image.prompt = framing.join(', ')
+  core.location.frame = [...framing, ...image.setting, ...image.lighting]
   const openingKey = normalizeIdentityText(opening)
   for (const subject of image.groupSubjects) {
     const profile = directGroupProfileFor(subject, profiles), ref = profile && profile.ref || subject.name
@@ -20652,7 +20688,9 @@ function finalizePlannedImagePrompt(image, ctx) {
     image.wardrobeSnapshot[ref] = clothing.worn
     const label = plannedCompilerGrammar(directGroupSubjectIntroduction(subject, profiles))
     const tags = uniqueStrings([...identity, ...clothing.visible, ...details])
-    const description = `${upperFirst(label)}: ${tags.join(', ')}.`
+    const description = [identity.length ? `${upperFirst(label)}: ${identity.join(', ')}.` : `${upperFirst(label)}.`,
+      clothing.visible.length ? `Clothing: ${clothing.visible.join(', ')}.` : '',
+      details.length ? `Pose and expression: ${details.join(', ')}.` : ''].filter(Boolean).join(' ')
     descriptions.push(description)
     protectedSubjects.push({ ref, name: subject.name, introduction: label,
       referenceLabel: directGroupSubjectLabel(subject, profiles), countTag: directGroupCountTag(subject, profiles),
@@ -20696,15 +20734,19 @@ function finalizePlannedImagePrompt(image, ctx) {
   const defences = directDefences(body, profiles, image.rating), countDefences = directGroupCountDefences(body)
   const header = reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), image.rating).split(/\bBREAK\b/)
     .map(part => part.replace(/^[\s,.]+|[\s,.]+$/g, '')).filter(Boolean).join(', ')
-  const prompt = plannedCompilerGrammar(joinPromptParts([header, image.rating || '', ...defences.positive, body]))
+  const headerParts = [header, image.rating || '', ...defences.positive]
+  const prompt = plannedPromptParagraphs({ headerParts, countLine: counts.join(', '),
+    framingLine: framing.length ? framing.join(', ') + '.' : '', moodLine: lines[4],
+    subjects: protectedSubjects, tailLines: lines.slice(5 + descriptions.length).filter(Boolean) }, opening, lines[3])
   const negativePrompt = negativeWith(directRosterNegative(preset.negativePrompt), uniqueStrings([...defences.negatives, ...countDefences.negatives, ...directGroupAdultDefences(image)]))
   core.preflight = plannedPreflight(image, counts, descriptions, profiles)
-  core.compilation = { source: 'unified scene plan', originalPrompt, framing, omissions, appliedDecisions: decisions.applied,
-    identityPolicy: 'complete saved record; visibility-aware rendering without a numeric trait cap',
+  core.compilation = { source: 'unified scene plan', originalPrompt, framing, framingAdjustments: actionFrame.changes,
+    layout: 'paragraphs-v1', omissions, appliedDecisions: decisions.applied,
+    identityPolicy: 'saved tags and weights preserved without crop pruning, alias rewriting or presentation election',
     wordCount: prompt.split(/\s+/).filter(Boolean).length }
   core.sceneAction.rendered = opening
   core.output = { prompt, negativePrompt }
-  jvCreatePromptDocument(image, { header, headerParts: [header, image.rating || '', ...defences.positive],
+  jvCreatePromptDocument(image, { layout: 'paragraphs-v1', header, headerParts,
     counts, framing, moodLine: lines[4], opening, setting: lines[3], subjects: protectedSubjects,
     tailLines: lines.slice(5 + descriptions.length).filter(Boolean), boundLines,
     environment: Object.fromEntries(['place', 'surroundings', 'lighting'].map(field =>
@@ -21997,7 +22039,7 @@ async function reviewFinalJevPrompts(prepared, scope = {}) {
     const original = Array.isArray(all) && all.find(variant => variant.id === 'original')
     if (!original || !jvClarityVariantValid(entry.image, base, original)) { reject('Original compiler document failed its consistency guard.'); continue }
     const variants = all.filter(variant => variant && variant.id !== 'original' &&
-      /^(?:visual|(?:concise|literal|primary|grounded)(?:-visual)?)$/.test(variant.id) && variant.prompt !== base.prompt && jvClarityVariantValid(entry.image, base, variant))
+      /^(?:visual|(?:concise|literal|primary|bound|grounded)(?:-visual)?)$/.test(variant.id) && variant.prompt !== base.prompt && jvClarityVariantValid(entry.image, base, variant))
       .filter((variant, at, list) => list.findIndex(other => other.id === variant.id) === at)
     const moment = String(entry.image.moment_evidence || entry.image.anchor || '')
     const source = jvFinalSource(scope.passage, moment)
