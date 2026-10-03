@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.6.4'
+const EXTENSION_VERSION = '1.6.5'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -49,7 +49,7 @@ function lumidrawContinuityStatus(continuity) {
   if (['ok', 'updated', 'complete'].includes(state)) return { tone: 'good', text: 'Story memory updated — outfits and location follow the whole message, independently of its images.' }
   const diagnostics = continuity.diagnostics || {}
   const detail = diagnostics.reason || (diagnostics.issues || [])[0] || ''
-  if (state === 'partial') return { tone: 'err', text: 'Story memory partially updated — some facts remain uncertain. Established details are retained; unresolved changes remain visible in Debug.' + (detail ? ' ' + detail : '') }
+  if (state === 'partial') return { tone: 'err', text: 'Story memory partially updated — some facts remain uncertain. Confirmed details are kept; conflicting clothing may be marked unknown. Review wardrobe is available if you need to resolve it.' + (detail ? ' ' + detail : '') }
   return { tone: 'err', text: 'Story memory pending — established details are retained; it is not confirmed up to date yet.' + (detail ? ' ' + detail : '') }
 }
 
@@ -294,6 +294,9 @@ function realSetup(ctx) {
   let autoStatus = null
   let liveScanStatus = null
   let liveScanStatusAt = 0
+  let scanRequestSequence = 0
+  const retiredScanIds = new Set()
+  const wardrobeDiagnosticsByChat = new Map()
   let clickedChatImageUrl = ''
   let clickedChatPlacementId = ''
   let imagePlacements = []
@@ -433,8 +436,29 @@ function realSetup(ctx) {
       return
     }
     if (payload.type === 'scan_status') {
-      liveScanStatus = payload.scan || null
+      const incoming = payload.scan ? { ...payload.scan } : null
+      if (incoming && incoming.id && retiredScanIds.has(String(incoming.id))) return
+      const previous = liveScanStatus
+      if (incoming && previous) {
+        // A delayed update from an older scan cannot take over a newer one.
+        // The same scan may resume normally after a local contact-loss notice.
+        if (incoming.id && previous.id && Number(incoming.startedAt) < Number(previous.startedAt)) return
+        const sameScan = incoming.id && previous.id && incoming.id === previous.id
+        if (sameScan && Number.isFinite(Number(incoming.elapsedMs)) && Number.isFinite(Number(previous.elapsedMs)) &&
+            Number(incoming.elapsedMs) < Number(previous.elapsedMs)) return
+        if (sameScan && previous.backendTerminal && !['done', 'cancelled', 'error'].includes(incoming.stage)) return
+        if (incoming.id && previous.id && incoming.id !== previous.id) {
+          retireScanStatus(previous.id)
+          scanRequestSequence++
+        }
+      }
+      liveScanStatus = incoming
       liveScanStatusAt = Date.now()
+      if (liveScanStatus && ['done', 'cancelled', 'error'].includes(liveScanStatus.stage)) {
+        liveScanStatus.backendTerminal = true
+        liveScanStatus.endedAt = Number.isFinite(Number(liveScanStatus.elapsedMs))
+          ? Number(liveScanStatus.startedAt) + Number(liveScanStatus.elapsedMs) : liveScanStatusAt
+      }
       renderLiveScanStatus()
       if (liveScanStatus && liveScanStatus.stage === 'done') {
         const chatId = activeChatIdFromCtx()
@@ -1072,6 +1096,7 @@ function realSetup(ctx) {
                   <span class="ld-label" style="margin:0">Wardrobe of record — this chat</span>
                   <button class="ld-btn ld-compact" data-act="wardrobe-refresh" title="Reload saved clothing only; does not run the parser">Refresh ↻</button>
                   <button class="ld-btn ld-compact" data-act="wardrobe-sync" title="Optional: run the parser once to check the latest passage for clothing changes; no image is generated">Sync latest passage</button>
+                  <button class="ld-btn ld-compact" data-act="wardrobe-review" title="Optional recovery: review recent clothing evidence and choose the current outfit">Review wardrobe</button>
                 </div>
                 <div class="ld-wardrobe-rows" style="margin-top:6px"></div>
                 <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
@@ -1710,6 +1735,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       castStatus: $('.ld-cast-status'),
       wardrobeRefresh: $('[data-act="wardrobe-refresh"]'),
       wardrobeSync: $('[data-act="wardrobe-sync"]'),
+      wardrobeReview: $('[data-act="wardrobe-review"]'),
       wardrobeRows: $('.ld-wardrobe-rows'),
       wardrobeAdd: $('.ld-wardrobe-add'),
       wardrobeAddButton: $('[data-act="wardrobe-add"]'),
@@ -1806,11 +1832,19 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (controls.castStatus) castCard.appendChild(controls.castStatus)
     cast.appendChild(castCard)
 
-    const wardrobeCard = card('Automatic clothing tracking', 'With the active Jev planner, the whole message updates story clothing automatically, even if the pictured moment is earlier or image generation fails. Hidden layers and shoes stay remembered. Use “Fix this image…” for image-only corrections. Save is a one-time story correction, not a lock. Refresh reloads the display; Sync is recovery only, not a routine step.')
-    wardrobeCard.appendChild(inline(make('span', 'ld-label', 'Complete current outfit'), controls.wardrobeRefresh, controls.wardrobeSync))
+    const wardrobeCard = card('Automatic clothing tracking', 'With the active Jev planner, the whole message updates story clothing automatically, even if the pictured moment is earlier or image generation fails. Hidden layers and shoes stay remembered. Use “Fix this image…” for image-only corrections. Save is a one-time story correction, not a lock. Refresh reloads the display. Sync and Review wardrobe are optional recovery tools; normal tracking needs neither. Review reads a bounded recent history with one extra parser call and lets you choose what is current before applying anything.')
+    wardrobeCard.appendChild(inline(make('span', 'ld-label', 'Complete current outfit'), controls.wardrobeRefresh, controls.wardrobeSync, controls.wardrobeReview))
     if (controls.wardrobeRows) wardrobeCard.appendChild(controls.wardrobeRows)
     wardrobeCard.appendChild(field('Add a saved character to this chat', inline(controls.wardrobeAdd, controls.wardrobeAddButton)))
     if (controls.wardrobeStatus) wardrobeCard.appendChild(controls.wardrobeStatus)
+    wardrobeCard.appendChild(make('div', 'ld-help ld-wardrobe-disputes'))
+    const wardrobeReviewPanel = make('div', 'ld-wardrobe-review-panel')
+    wardrobeReviewPanel.hidden = true
+    wardrobeReviewPanel.setAttribute('aria-live', 'polite')
+    wardrobeCard.appendChild(wardrobeReviewPanel)
+    const wardrobeDiagnostics = make('div', 'ld-wardrobe-diagnostics')
+    wardrobeDiagnostics.hidden = true
+    wardrobeCard.appendChild(wardrobeDiagnostics)
     const trackedClothing = make('details', 'ld-tracked-clothing')
     trackedClothing.appendChild(make('summary', 'ld-label', 'Tracked clothing — diagnostics'))
     trackedClothing.appendChild(wardrobeCard)
@@ -2145,6 +2179,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     el.textContent = msg || ''
     el.classList.remove('ld-err', 'ld-good')
     if (kind) el.classList.add(kind === 'err' ? 'ld-err' : 'ld-good')
+    if (sel === '.ld-wardrobe-status' && kind === 'err' && msg) {
+      rememberWardrobeDiagnostic({ error: String(msg) })
+    }
     if (el.classList.contains('ld-gen-status')) {
       const bar = el.closest('.ld-global-status')
       if (bar) bar.style.display = msg ? 'block' : 'none'
@@ -3386,12 +3423,19 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     scanElapsedTimer = null
   }
 
+  function retireScanStatus(id) {
+    if (!id) return
+    retiredScanIds.add(String(id))
+    if (retiredScanIds.size > 16) retiredScanIds.delete(retiredScanIds.values().next().value)
+  }
+
   function renderLiveScanStatus() {
     const cancelButton = $('[data-act="cancel-scan"]')
     const scanButton = $('[data-act="scan"]')
     const oldButton = $('[data-act="scan-old"]')
     const scan = liveScanStatus
-    const active = !!(scan && !['done', 'cancelled', 'error'].includes(scan.stage))
+    const stoppedStages = ['done', 'cancelled', 'error', 'connection_lost']
+    const active = !!(scan && !stoppedStages.includes(scan.stage))
     const modeNow = selectedStoryMode()
     const parserDriven = modeNow === 'parser' || modeNow === 'direct'
     if (cancelButton) {
@@ -3411,26 +3455,25 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       stopScanElapsedTimer()
       return
     }
-    const update = () => {
-      const elapsed = Math.max(0, Math.round((Date.now() - Number(scan.startedAt)) / 1000))
-      const message = scan.messageId ? `message ${scan.messageId.slice(0, 8)}…` : 'story message'
-      // The backend heartbeats every running scan every 10 s. Silence beyond
-      // 45 s means the scan (or the backend) is dead — say so and stop the
-      // eternally climbing counter instead of impersonating progress.
-      const silence = liveScanStatusAt ? Date.now() - liveScanStatusAt : 0
-      if (!['done', 'cancelled', 'error'].includes(scan.stage) && silence > 45000) {
-        setStatus('.ld-gen-status', `Scan lost contact with the backend after ${elapsed}s (no updates for ${Math.round(silence / 1000)}s). It will not complete — run the parser again, or reload the extension if this repeats.`, 'err')
-        liveScanStatus = { ...scan, stage: 'error', cancellable: false }
-        stopScanElapsedTimer()
-        renderLiveScanStatus()
-        return
+    const now = Date.now()
+    const silence = liveScanStatusAt ? now - liveScanStatusAt : 0
+    if (active && silence > 45000) {
+      liveScanStatus = {
+        ...scan, stage: 'connection_lost', endedAt: now, cancellable: false,
+        note: `No backend update for ${Math.round(silence / 1000)}s. The scan's outcome is unknown; it may still be running or may have been interrupted. No retry was started. A later update will restore its status.`,
       }
-      const stageLabel = String(scan.stage || 'working').replace(/_/g, ' ')
-      setStatus('.ld-gen-status', `${stageLabel[0].toUpperCase() + stageLabel.slice(1)} ${message} · ${elapsed}s${scan.note ? ' — ' + scan.note : ''}`, scan.stage === 'error' ? 'err' : (scan.stage === 'done' ? 'good' : undefined))
-      if (['done', 'cancelled', 'error'].includes(scan.stage)) stopScanElapsedTimer()
+      stopScanElapsedTimer()
+      renderLiveScanStatus()
+      return
     }
-    update()
-    if (active && !scanElapsedTimer) scanElapsedTimer = setInterval(update, 1000)
+    if (!active && !scan.endedAt) scan.endedAt = now
+    const elapsed = Math.max(0, Math.round(((active ? now : scan.endedAt) - Number(scan.startedAt)) / 1000))
+    const message = scan.messageId ? `message ${scan.messageId.slice(0, 8)}…` : 'story message'
+    const stageLabel = String(scan.stage || 'working').replace(/_/g, ' ')
+    setStatus('.ld-gen-status', `${stageLabel[0].toUpperCase() + stageLabel.slice(1)} ${message} · ${elapsed}s${scan.note ? ' — ' + scan.note : ''}`, ['error', 'connection_lost'].includes(scan.stage) ? 'err' : (scan.stage === 'done' ? 'good' : undefined))
+    // Re-read the current status on every tick. Capturing a prior scan here
+    // would overwrite newer stages and hide a later connection-loss warning.
+    if (active && !scanElapsedTimer) scanElapsedTimer = setInterval(renderLiveScanStatus, 1000)
     if (!active) stopScanElapsedTimer()
   }
 
@@ -3687,18 +3730,24 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   async function runStoryScan(messageId, label = 'latest story message', force = false) {
     closeStoryPicker()
+    const requestSequence = ++scanRequestSequence
+    retireScanStatus(liveScanStatus && liveScanStatus.id)
     liveScanStatus = {
       stage: 'starting', note: `Scanning ${label}.`, messageId: messageId || '',
       startedAt: Date.now(), cancellable: true,
     }
+    liveScanStatusAt = Date.now()
     renderLiveScanStatus()
     try {
       const payload = { force: !!force }
       if (messageId !== undefined && messageId !== null && messageId !== '') payload.messageId = messageId
       const res = await call('scan_story', payload)
+      if (requestSequence !== scanRequestSequence) return
       const refreshed = await call('init', {}, 15000)
+      if (requestSequence !== scanRequestSequence) return
       const mountChatId = activeChatIdFromCtx()
       if (mountChatId) await refreshImagePlacements(mountChatId).catch((error) => console.log('[Lumi Studio] image refresh after Scan failed:', error.message))
+      if (requestSequence !== scanRequestSequence) return
       history = refreshed.history
       storyDebug = res.storyDebug || refreshed.storyDebug || storyDebug
       autoStatus = refreshed.lastAutoStatus || autoStatus
@@ -3708,11 +3757,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         ...(liveScanStatus || {}),
         stage: res.cancelled ? 'cancelled' : (res.mode === 'busy' ? 'error' : 'done'),
         note: res.note || `Done (${res.mode}).`,
+        endedAt: Date.now(),
         cancellable: false,
       }
       renderLiveScanStatus()
     } catch (e) {
-      liveScanStatus = { ...(liveScanStatus || {}), stage: 'error', note: e.message, cancellable: false }
+      if (requestSequence !== scanRequestSequence) return
+      liveScanStatus = { ...(liveScanStatus || {}), stage: 'error', note: e.message, endedAt: Date.now(), cancellable: false }
       renderLiveScanStatus()
     }
   }
@@ -5240,6 +5291,245 @@ ${entry.prompt || ''}`.trim()
   let wardrobeLibrary = []
   let wardrobeReadSequence = 0
   let wardrobeRefreshTimer = null
+  let wardrobeViewEpoch = 0
+  let wardrobeReview = null
+  let wardrobeReviewSequence = 0
+
+  function currentWardrobeChatId() {
+    return String(activeChatIdFromCtx() || lastSeenChatId || '')
+  }
+
+  function wardrobeContextCurrent(chatId, epoch) {
+    return epoch === wardrobeViewEpoch && String(chatId) === currentWardrobeChatId()
+  }
+
+  function rememberWardrobeDiagnostic(patch, chatId = currentWardrobeChatId()) {
+    if (!chatId) return
+    const previous = wardrobeDiagnosticsByChat.get(chatId) || {}
+    wardrobeDiagnosticsByChat.set(chatId, {
+      ...previous, ...patch, version: EXTENSION_VERSION, chatId,
+      ...(patch.error ? { errorAt: new Date().toISOString() } : {}),
+      updatedAt: new Date().toISOString(),
+    })
+    if (chatId === currentWardrobeChatId()) renderWardrobeDiagnostics()
+  }
+
+  function renderWardrobeDiagnostics() {
+    const box = $('.ld-wardrobe-diagnostics')
+    if (!box) return
+    const diagnostic = wardrobeDiagnosticsByChat.get(currentWardrobeChatId())
+    box.replaceChildren()
+    box.hidden = !diagnostic
+    if (!diagnostic) return
+    if (diagnostic.error) {
+      const error = document.createElement('p')
+      error.className = 'ld-status ld-err ld-wardrobe-last-error'
+      error.textContent = 'Last wardrobe error: ' + diagnostic.error
+      box.append(error)
+    }
+    const copy = document.createElement('button')
+    copy.className = 'ld-btn ld-compact'
+    copy.dataset.act = 'wardrobe-copy-details'
+    copy.textContent = 'Copy wardrobe error/details'
+    const details = document.createElement('details')
+    const summary = document.createElement('summary')
+    summary.textContent = 'Wardrobe details'
+    const report = document.createElement('pre')
+    report.style.cssText = 'white-space:pre-wrap;max-height:24rem;overflow:auto'
+    report.textContent = JSON.stringify(diagnostic, null, 2)
+    details.append(summary, report)
+    const fallback = document.createElement('textarea')
+    fallback.className = 'ld-wardrobe-copy-text'
+    fallback.readOnly = true
+    fallback.hidden = true
+    fallback.setAttribute('aria-label', 'Wardrobe details to copy')
+    const result = document.createElement('div')
+    result.className = 'ld-help ld-wardrobe-copy-status'
+    result.setAttribute('role', 'status')
+    box.append(copy, details, fallback, result)
+  }
+
+  function resetWardrobeView() {
+    wardrobeViewEpoch++
+    wardrobeReadSequence++
+    wardrobeReviewSequence++
+    wardrobeReview = null
+    const panel = $('.ld-wardrobe-review-panel')
+    if (panel) { panel.replaceChildren(); panel.hidden = true }
+    const button = $('[data-act="wardrobe-review"]')
+    if (button) { button.disabled = false; button.textContent = 'Review wardrobe' }
+    const sync = $('[data-act="wardrobe-sync"]')
+    if (sync) { sync.disabled = false; sync.textContent = 'Sync latest passage' }
+    const disputes = $('.ld-wardrobe-disputes')
+    if (disputes) disputes.textContent = ''
+    renderWardrobeDiagnostics()
+  }
+
+  function renderWardrobeReview(review) {
+    const box = $('.ld-wardrobe-review-panel')
+    if (!box) return
+    box.replaceChildren()
+    box.hidden = false
+    const heading = document.createElement('h4')
+    heading.textContent = 'Choose the current complete outfit'
+    const description = document.createElement('p')
+    description.className = 'ld-help'
+    const lookback = review.lookback || {}
+    description.textContent = `Reviewed ${Number(lookback.count) || 0} recent story messages${lookback.limited ? ' (history was limited)' : ''}. Older or unstated clothing may be missing. Check layers and shoes. Only your chosen outfits will be applied; unresolved choices keep the saved record.`
+    box.append(heading, description)
+    for (const note of review.notes || []) {
+      const line = document.createElement('p')
+      line.className = 'ld-help'
+      line.textContent = String(note)
+      box.append(line)
+    }
+    for (const row of review.rows || []) {
+      const group = document.createElement('fieldset')
+      group.style.cssText = 'margin:8px 0;padding:10px;min-width:0'
+      const legend = document.createElement('legend')
+      legend.textContent = String(row.name || row.ref || 'Character')
+      const current = document.createElement('div')
+      current.className = 'ld-help'
+      current.textContent = 'Saved now: ' + (Array.isArray(row.current) ? row.current.join(', ') : String(row.current || ''))
+      const reason = document.createElement('div')
+      reason.className = 'ld-help'
+      reason.textContent = String(row.reason || '')
+      const select = document.createElement('select')
+      select.className = 'ld-wardrobe-review-choice'
+      select.dataset.rowId = String(row.id)
+      select.setAttribute('aria-label', 'Current outfit for ' + String(row.name || row.ref || 'character'))
+      select.style.width = '100%'
+      const unresolved = document.createElement('option')
+      unresolved.value = ''
+      unresolved.textContent = 'Leave unresolved — make no change'
+      select.append(unresolved)
+      for (const choice of row.choices || []) {
+        const option = document.createElement('option')
+        option.value = String(choice.id)
+        const tags = Array.isArray(choice.tags) ? choice.tags.join(', ') : String(choice.tags || '')
+        option.textContent = String(choice.label || choice.id) + (tags ? ' — ' + tags : '')
+        select.append(option)
+      }
+      const evidence = document.createElement('div')
+      evidence.className = 'ld-help ld-wardrobe-review-evidence'
+      evidence.style.whiteSpace = 'pre-wrap'
+      evidence.textContent = 'Choose an option to see its source and story evidence.'
+      select.addEventListener('change', () => {
+        const choice = (row.choices || []).find(item => String(item.id) === select.value)
+        const quotes = choice && (Array.isArray(choice.evidence) ? choice.evidence : [choice.evidence]).filter(Boolean)
+        evidence.textContent = choice ? ['Source: ' + String(choice.source || 'not recorded'), ...(quotes || []).map(quote => String(quote))].join('\n') : 'No choice made; the saved record will stay as it is.'
+        const apply = box.querySelector('[data-act="wardrobe-review-apply"]')
+        if (apply) apply.disabled = ![...box.querySelectorAll('.ld-wardrobe-review-choice')].some(item => item.value)
+      })
+      group.append(legend, current, reason, select, evidence)
+      box.append(group)
+    }
+    const apply = document.createElement('button')
+    apply.className = 'ld-btn ld-primary'
+    apply.dataset.act = 'wardrobe-review-apply'
+    apply.textContent = 'Apply chosen outfits'
+    apply.disabled = true
+    const close = document.createElement('button')
+    close.className = 'ld-btn'
+    close.dataset.act = 'wardrobe-review-close'
+    close.textContent = 'Close review'
+    box.append(apply, close)
+  }
+
+  if ($('[data-act="wardrobe-review"]')) {
+    $('[data-act="wardrobe-review"]').addEventListener('click', async (event) => {
+      const chatId = currentWardrobeChatId(), epoch = wardrobeViewEpoch
+      if (!chatId) { setStatus('.ld-wardrobe-status', 'Select a chat before reviewing its wardrobe.', 'err'); return }
+      const sequence = ++wardrobeReviewSequence
+      const button = event.currentTarget
+      button.disabled = true
+      button.textContent = 'Reviewing…'
+      rememberWardrobeDiagnostic({ operation: 'review', requestAt: new Date().toISOString() }, chatId)
+      wardrobeReview = null
+      const box = $('.ld-wardrobe-review-panel')
+      box.replaceChildren(); box.hidden = false
+      box.textContent = 'Reading bounded recent clothing history. No outfit will change until you choose and apply it…'
+      try {
+        const res = await call('wardrobe_review', { chatId }, 300000)
+        if (!wardrobeContextCurrent(chatId, epoch) || sequence !== wardrobeReviewSequence) return
+        if (!res.review || !res.review.id) throw new Error('The wardrobe review returned no usable choices.')
+        wardrobeReview = { ...res.review, chatId }
+        rememberWardrobeDiagnostic({ operation: 'review', review: res.review }, chatId)
+        renderWardrobeReview(wardrobeReview)
+      } catch (error) {
+        if (!wardrobeContextCurrent(chatId, epoch) || sequence !== wardrobeReviewSequence) return
+        box.textContent = 'Wardrobe review could not finish. Your saved outfits are unchanged.'
+        setStatus('.ld-wardrobe-status', String(error.message || error), 'err')
+      } finally {
+        if (wardrobeContextCurrent(chatId, epoch) && sequence === wardrobeReviewSequence) {
+          button.disabled = false; button.textContent = 'Review wardrobe'
+        }
+      }
+    })
+  }
+
+  if ($('.ld-wardrobe-review-panel')) {
+    $('.ld-wardrobe-review-panel').addEventListener('click', async event => {
+      const close = event.target.closest('[data-act="wardrobe-review-close"]')
+      if (close) {
+        wardrobeReviewSequence++; wardrobeReview = null
+        $('.ld-wardrobe-review-panel').hidden = true
+        return
+      }
+      const button = event.target.closest('[data-act="wardrobe-review-apply"]')
+      if (!button || button.disabled || !wardrobeReview) return
+      const chatId = wardrobeReview.chatId, epoch = wardrobeViewEpoch, reviewId = wardrobeReview.id
+      const sequence = wardrobeReviewSequence
+      if (!wardrobeContextCurrent(chatId, epoch)) return
+      const selections = {}
+      for (const select of $('.ld-wardrobe-review-panel').querySelectorAll('.ld-wardrobe-review-choice')) {
+        if (select.value) selections[select.dataset.rowId] = select.value
+      }
+      if (!Object.keys(selections).length) return
+      button.disabled = true
+      for (const select of $('.ld-wardrobe-review-panel').querySelectorAll('select')) select.disabled = true
+      rememberWardrobeDiagnostic({ operation: 'review_apply', reviewId, selections, requestAt: new Date().toISOString() }, chatId)
+      try {
+        const res = await call('wardrobe_review_apply', { chatId, reviewId, selections }, 30000)
+        if (!wardrobeContextCurrent(chatId, epoch) || sequence !== wardrobeReviewSequence) return
+        wardrobeReview = res.review ? { ...res.review, chatId } : null
+        rememberWardrobeDiagnostic({ operation: 'review_apply', applied: res.applied, review: res.review || null, notes: res.notes || [] }, chatId)
+        setStatus('.ld-wardrobe-status', `${Number(res.applied) || 0} outfit correction(s) applied. Unresolved choices were left as they were. Automatic tracking continues.`, 'good')
+        if (wardrobeReview && wardrobeReview.status === 'needs-review') renderWardrobeReview(wardrobeReview)
+        else $('.ld-wardrobe-review-panel').hidden = true
+        await loadWardrobe(true, false, chatId)
+      } catch (error) {
+        if (!wardrobeContextCurrent(chatId, epoch) || sequence !== wardrobeReviewSequence) return
+        setStatus('.ld-wardrobe-status', String(error.message || error), 'err')
+      } finally {
+        if (wardrobeContextCurrent(chatId, epoch) && sequence === wardrobeReviewSequence) {
+          button.disabled = false
+          for (const select of $('.ld-wardrobe-review-panel').querySelectorAll('select')) select.disabled = false
+        }
+      }
+    })
+  }
+
+  if ($('.ld-wardrobe-diagnostics')) {
+    $('.ld-wardrobe-diagnostics').addEventListener('click', async event => {
+      if (!event.target.closest('[data-act="wardrobe-copy-details"]')) return
+      const chatId = currentWardrobeChatId(), epoch = wardrobeViewEpoch
+      const diagnostic = wardrobeDiagnosticsByChat.get(chatId)
+      if (!diagnostic) return
+      const text = JSON.stringify(diagnostic, null, 2)
+      try {
+        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') throw new Error('Clipboard unavailable')
+        await navigator.clipboard.writeText(text)
+        if (wardrobeContextCurrent(chatId, epoch)) $('.ld-wardrobe-copy-status').textContent = 'Wardrobe details copied.'
+      } catch (_) {
+        if (!wardrobeContextCurrent(chatId, epoch)) return
+        const fallback = $('.ld-wardrobe-copy-text')
+        fallback.value = text; fallback.hidden = false
+        fallback.focus(); fallback.select()
+        $('.ld-wardrobe-copy-status').textContent = 'Automatic copying is unavailable. Copy the selected details below.'
+      }
+    })
+  }
 
   function refreshTrackedWardrobe(chatId) {
     if (wardrobeRefreshTimer) clearTimeout(wardrobeRefreshTimer)
@@ -5480,14 +5770,22 @@ ${entry.prompt || ''}`.trim()
 
   async function loadWardrobe(quiet = true, scan = false, explicitChatId = '') {
     const sequence = ++wardrobeReadSequence
-    const requestedChatId = String(explicitChatId || lastSeenChatId || '')
+    const epoch = wardrobeViewEpoch
+    const requestedChatId = String(explicitChatId || currentWardrobeChatId())
     try {
       const res = await call('wardrobe', { chatId: requestedChatId, scan }, 30000)
-      if (sequence !== wardrobeReadSequence) return res
+      if (sequence !== wardrobeReadSequence || !wardrobeContextCurrent(requestedChatId, epoch)) return res
       // Chat switches can happen while this request is in flight. Keep old data from
       // flashing back into the panel after the new chat is already active.
       if (requestedChatId && lastSeenChatId && requestedChatId !== String(lastSeenChatId)) return res
       wardrobeLibrary = res.library || []
+      const disputes = Array.isArray(res.wardrobeDisputes) ? res.wardrobeDisputes : []
+      const disputeStatus = $('.ld-wardrobe-disputes')
+      if (disputeStatus) disputeStatus.textContent = disputes.length
+        ? `${disputes.length} clothing detail(s) need confirmation. Automatic tracking continues. Review wardrobe can help resolve them.` : ''
+      if (disputes.length || wardrobeDiagnosticsByChat.has(requestedChatId)) {
+        rememberWardrobeDiagnostic({ wardrobeDisputes: disputes, storyContinuity: res.storyContinuity || null }, requestedChatId)
+      }
       if (res.storyContinuity) receiveStoryContinuity(res.chatId || requestedChatId, res.storyContinuity)
       // The Characters tab was loaded once, at init. A story that invents
       // somebody mid-chat writes a real, editable character the panel never
@@ -5511,6 +5809,7 @@ ${entry.prompt || ''}`.trim()
         ? where + '.' + found + wore
         : `Reloaded this chat's saved wardrobe state.`, res.chatId ? 'good' : 'err')
     } catch (e) {
+      if (sequence !== wardrobeReadSequence || !wardrobeContextCurrent(requestedChatId, epoch)) return
       setStatus('.ld-wardrobe-status', e.message, 'err')
     }
   }
@@ -5534,17 +5833,19 @@ ${entry.prompt || ''}`.trim()
 
   if ($('[data-act="wardrobe-add"]')) {
     $('[data-act="wardrobe-add"]').addEventListener('click', async () => {
+      const chatId = currentWardrobeChatId(), epoch = wardrobeViewEpoch
       const select = $('.ld-wardrobe-add')
       if (!select || !select.value) { setStatus('.ld-wardrobe-status', 'Pick a saved character first.', 'err'); return }
       const label = select.options[select.selectedIndex].textContent
       try {
-        const res = await call('wardrobe', { chatId: lastSeenChatId, add: select.value }, 15000)
+        const res = await call('wardrobe', { chatId, add: select.value }, 15000)
+        if (!wardrobeContextCurrent(chatId, epoch)) return
         wardrobeLibrary = res.library || wardrobeLibrary
         if (Array.isArray(res.characters)) { characters = res.characters; renderCharacterList() }
         renderWardrobeRows(res.rows)
         renderWardrobeAdd(res.rows)
         setStatus('.ld-wardrobe-status', `Added ${label.split('  ')[0]} to this chat's cast.`, 'good')
-      } catch (e) { setStatus('.ld-wardrobe-status', e.message, 'err') }
+      } catch (e) { if (wardrobeContextCurrent(chatId, epoch)) setStatus('.ld-wardrobe-status', e.message, 'err') }
     })
   }
 
@@ -5556,18 +5857,23 @@ ${entry.prompt || ''}`.trim()
   }
   if ($('[data-act="wardrobe-sync"]')) {
     $('[data-act="wardrobe-sync"]').addEventListener('click', async (event) => {
+      const chatId = currentWardrobeChatId(), epoch = wardrobeViewEpoch
+      if (!chatId) { setStatus('.ld-wardrobe-status', 'Select a chat before syncing its wardrobe.', 'err'); return }
       const button = event.currentTarget
       const oldText = button.textContent
       button.disabled = true
       button.textContent = 'Syncing…'
+      rememberWardrobeDiagnostic({ operation: 'sync_latest', requestAt: new Date().toISOString() }, chatId)
       setStatus('.ld-wardrobe-status', 'Parsing the latest story passage for explicit clothing changes. No image will be generated…', '')
       try {
-        const res = await call('wardrobe', { chatId: lastSeenChatId, syncLatest: true }, 300000)
+        const res = await call('wardrobe', { chatId, syncLatest: true }, 300000)
+        if (!wardrobeContextCurrent(chatId, epoch)) return
+        rememberWardrobeDiagnostic({ operation: 'sync_latest', messageId: res.syncMessageId || '', syncDiagnostics: res.syncDiagnostics || {}, syncRejected: res.syncRejected || [] }, chatId)
         wardrobeLibrary = res.library || wardrobeLibrary
         if (Array.isArray(res.characters)) { characters = res.characters; renderCharacterList() }
         renderWardrobeRows(res.rows)
         renderWardrobeAdd(res.rows)
-        loadCasts({ chatId: lastSeenChatId }).catch(() => {})
+        loadCasts({ chatId }).catch(() => {})
         const updates = res.synced || []
         const ignored = res.syncRejected || []
         const jev = res.syncDiagnostics && res.syncDiagnostics.jevReview
@@ -5600,32 +5906,39 @@ ${entry.prompt || ''}`.trim()
           if (statusEl) statusEl.append(details)
         }
       } catch (e) {
+        if (!wardrobeContextCurrent(chatId, epoch)) return
         setStatus('.ld-wardrobe-status', e.message, 'err')
       } finally {
-        button.disabled = false
-        button.textContent = oldText
+        if (wardrobeContextCurrent(chatId, epoch)) {
+          button.disabled = false
+          button.textContent = oldText
+        }
       }
     })
   }
   // The save button is created by renderWardrobeRows, so the listener is delegated.
   if ($('.ld-wardrobe-rows')) {
     $('.ld-wardrobe-rows').addEventListener('change', async (event) => {
+      const chatId = currentWardrobeChatId(), epoch = wardrobeViewEpoch
       const swapEl = event.target.closest('.ld-wardrobe-swap')
       if (!swapEl || !swapEl.value) return
       const from = swapEl.getAttribute('data-id')
       const label = swapEl.options[swapEl.selectedIndex].textContent
       try {
-        const res = await call('wardrobe', { chatId: lastSeenChatId, replace: { from, to: swapEl.value } }, 15000)
+        const res = await call('wardrobe', { chatId, replace: { from, to: swapEl.value } }, 15000)
+        if (!wardrobeContextCurrent(chatId, epoch)) return
         wardrobeLibrary = res.library || wardrobeLibrary
         if (Array.isArray(res.characters)) { characters = res.characters; renderCharacterList() }
         renderWardrobeRows(res.rows)
         renderWardrobeAdd(res.rows)
         setStatus('.ld-wardrobe-status', `Now using your saved ${label}. The story's version was replaced.`, 'good')
       } catch (e) {
+        if (!wardrobeContextCurrent(chatId, epoch)) return
         setStatus('.ld-wardrobe-status', e.message, 'err')
       }
     })
     $('.ld-wardrobe-rows').addEventListener('click', async (event) => {
+      const chatId = currentWardrobeChatId(), epoch = wardrobeViewEpoch
       const swapEl = event.target.closest('.ld-wardrobe-swap')
       if (swapEl) return
       // Take me to the thing that owns these tags.
@@ -5645,10 +5958,12 @@ ${entry.prompt || ''}`.trim()
           : `Remove ${name} from this chat's cast? The character itself is kept in the Characters tab.`
         if (!window.confirm(question)) return
         try {
-          const res = await call('wardrobe', { chatId: lastSeenChatId, remove: [drop.getAttribute('data-id')] }, 15000)
+          const res = await call('wardrobe', { chatId, remove: [drop.getAttribute('data-id')] }, 15000)
+          if (!wardrobeContextCurrent(chatId, epoch)) return
           renderWardrobeRows(res.rows)
           setStatus('.ld-wardrobe-status', `${name} removed.`, 'good')
         } catch (e) {
+          if (!wardrobeContextCurrent(chatId, epoch)) return
           setStatus('.ld-wardrobe-status', e.message, 'err')
         }
         return
@@ -5664,7 +5979,8 @@ ${entry.prompt || ''}`.trim()
       if (!ref || !input) return
       const set = { [ref]: clear ? '' : input.value }
       try {
-        const res = await call('wardrobe', { set, chatId: lastSeenChatId }, 15000)
+        const res = await call('wardrobe', { set, chatId }, 15000)
+        if (!wardrobeContextCurrent(chatId, epoch)) return
         renderWardrobeRows(res.rows)
         const returned = (res.rows || []).find((item) => String(item.ref || '') === String(ref)) || {}
         setStatus('.ld-wardrobe-status', clear
@@ -5673,6 +5989,7 @@ ${entry.prompt || ''}`.trim()
             : `${name}'s current outfit was cleared. No clothing is recorded until the story or you establishes it.`)
           : `Saved only ${name}'s current outfit. Other characters were untouched; later story clothing changes can still update it.`, 'good')
       } catch (e) {
+        if (!wardrobeContextCurrent(chatId, epoch)) return
         setStatus('.ld-wardrobe-status', e.message, 'err')
       }
     })
@@ -6470,11 +6787,12 @@ ${entry.prompt || ''}`.trim()
         ...(liveScanStatus || {}),
         stage: res.cancelled ? 'cancelling' : 'cancelled',
         note: res.note || (res.cancelled ? 'Cancellation requested.' : 'No scan was running.'),
+        endedAt: res.cancelled ? null : Date.now(),
         cancellable: false,
       }
       renderLiveScanStatus()
     } catch (e) {
-      liveScanStatus = { ...(liveScanStatus || {}), stage: 'error', note: e.message, cancellable: false }
+      liveScanStatus = { ...(liveScanStatus || {}), stage: 'error', note: e.message, endedAt: Date.now(), cancellable: false }
       renderLiveScanStatus()
     }
   })
@@ -7148,6 +7466,7 @@ ${entry.prompt || ''}`.trim()
           const context = readImageEventContext(payload)
           const eventChatId = String(context.chatId || (payload && (payload.chatId || payload.id || (payload.chat && payload.chat.id))) || '')
           lastSeenChatId = eventChatId
+          resetWardrobeView()
           renderStoryContinuity(eventChatId)
           for (const placementId of [...imagePlacementMounts.keys()]) clearImagePlacementMount(placementId)
           for (const timer of imageAttachRetryTimers.values()) clearTimeout(timer)
@@ -7424,6 +7743,9 @@ ${entry.prompt || ''}`.trim()
     document.removeEventListener('visibilitychange', onImageRestoreWake)
     for (const event of ['focus', 'pageshow', 'online']) window.removeEventListener(event, onImageRestoreWake)
     if (wardrobeRefreshTimer) clearTimeout(wardrobeRefreshTimer)
+    stopScanElapsedTimer()
+    wardrobeViewEpoch++
+    wardrobeReviewSequence++
     historyThumbs.clear()
     imageOutfitEpoch++
     if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()
