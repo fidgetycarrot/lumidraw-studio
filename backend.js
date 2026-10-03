@@ -1288,6 +1288,77 @@ async function saveImagePlacementState(state) {
   await spindle.storage.setJson(IMAGE_PLACEMENTS_FILE, { version: 1, chats }, { indent: 2 })
 }
 
+let imagePlacementWriteLane = Promise.resolve()
+let imagePlacementBackupReady = false
+const changedLegacyPlacementMessages = new Set()
+function withImagePlacementWrite(task) {
+  const run = imagePlacementWriteLane.catch(() => {}).then(async () => {
+    if (!imagePlacementBackupReady) {
+      const backup = 'image_placements_pre_1_6_4.json'
+      if (!(await spindle.storage.getJson(backup, { fallback: null }))) {
+        const raw = await spindle.storage.getJson(IMAGE_PLACEMENTS_FILE, { fallback: null })
+        if (raw) await spindle.storage.setJson(backup, raw, { indent: 2 })
+      }
+      imagePlacementBackupReady = true
+    }
+    return task()
+  })
+  imagePlacementWriteLane = run.catch(() => {})
+  return run
+}
+
+function legacyImagePassageRevision(entry) {
+  const passage = entry && entry.troubleshooting && entry.troubleshooting.passage
+  // Diagnostics may redact story text. Such a copy cannot prove which exact
+  // revision was illustrated; use the explicit compatibility path instead.
+  if (typeof passage !== 'string' || !passage.trim() || /\[(?:REDACTED|URL omitted|depth limit)\]/i.test(passage)) return ''
+  return storyImageRevision(passage)
+}
+
+async function bindLegacyImagePlacements(chatId, messages) {
+  return withImagePlacementWrite(async () => {
+    const state = await getImagePlacementState(), byMessage = state.chats[chatId]
+    if (!byMessage) return
+    const unbound = Object.values(byMessage).flat().filter(p => p && !p.sourceRevision)
+    if (!unbound.length) return
+    const current = new Map(messages.map(m => { const b = messageBits(m); return [String(b.id || ''), b] }))
+    const history = await getHistory()
+    let changed = false
+    for (const placement of unbound) {
+      const target = current.get(String(placement.messageId || ''))
+      const entry = history.find(e => e.origin && e.origin.messageId === placement.messageId && e.origin.chatId === chatId &&
+        (e.images || []).some(image => sameImageRef(image, placement)))
+      const historicalRevision = legacyImagePassageRevision(entry)
+      if (historicalRevision) {
+        placement.sourceRevision = historicalRevision
+        placement.bindingSource = 'saved-generation-passage'; changed = true
+      } else if (target && cleanParserMessageText(target.content || '').trim() && !placement.legacyUnbound &&
+          !changedLegacyPlacementMessages.has(chatId + ':' + placement.messageId)) {
+        // Preserve the attachment the previous version already displayed. This
+        // is a compatibility snapshot, NOT proof of the original model input.
+        // It is captured once and can never follow a later edited/swiped text.
+        placement.sourceRevision = storyImageRevision(target.content)
+        placement.bindingSource = 'legacy-existing-attachment'; changed = true
+      }
+    }
+    if (changed) {
+      await saveImagePlacementState(state)
+    }
+  })
+}
+
+async function protectUnboundImagePlacements(chatId, messageId) {
+  if (!chatId || !messageId) return
+  changedLegacyPlacementMessages.add(chatId + ':' + messageId)
+  return withImagePlacementWrite(async () => {
+    const state = await getImagePlacementState()
+    const items = state.chats[chatId] && state.chats[chatId][messageId] || []
+    let changed = false
+    for (const item of items) if (!item.sourceRevision && !item.legacyUnbound) { item.legacyUnbound = true; changed = true }
+    if (changed) await saveImagePlacementState(state)
+  })
+}
+
 function nativePlacementId() {
   return `ldp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
 }
@@ -1324,6 +1395,31 @@ async function listImagePlacements(chatId) {
   return out.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0))
 }
 
+async function visibleImagePlacements(userId, chatId) {
+  if (!(await listImagePlacements(chatId)).length) return []
+  const { messages } = await fetchMessages(userId, chatId)
+  await bindLegacyImagePlacements(chatId, messages)
+  const placements = await listImagePlacements(chatId)
+  const current = new Map(messages.map(m => { const b = messageBits(m); return [String(b.id || ''), b] }))
+  let history = null
+  const visible = []
+  for (const placement of placements) {
+    const target = current.get(String(placement.messageId || ''))
+    if (!target || !cleanParserMessageText(target.content || '').trim()) continue
+    let revision = placement.sourceRevision
+    if (!revision) {
+      // Legacy placements had no swipe binding. Recover only from the saved
+      // generation-time passage, never attach an ambiguous image to a reroll.
+      if (!history) history = await getHistory()
+      const entry = history.find(entry => entry.origin && entry.origin.messageId === placement.messageId &&
+        entry.origin.chatId === chatId && (entry.images || []).some(image => sameImageRef(image, placement)))
+      revision = legacyImagePassageRevision(entry)
+    }
+    if (revision === storyImageRevision(target.content)) visible.push({ ...placement, sourceRevision: revision })
+  }
+  return visible
+}
+
 async function findImagePlacement(criteria = {}) {
   const state = await getImagePlacementState()
   const candidates = []
@@ -1358,6 +1454,10 @@ async function findImagePlacement(criteria = {}) {
 }
 
 async function recordImagePlacement(userId, input = {}) {
+  return withImagePlacementWrite(() => recordImagePlacementUnlocked(userId, input))
+}
+
+async function recordImagePlacementUnlocked(userId, input = {}) {
   const chatId = String(input.chatId || '').trim()
   const messageId = String(input.messageId || '').trim()
   const url = String(input.imageUrl || input.url || '').trim()
@@ -1372,7 +1472,8 @@ async function recordImagePlacement(userId, input = {}) {
   if (input.placementId) index = items.findIndex((item) => String(item && item.placementId || '') === String(input.placementId))
   if (index < 0 && input.allowDuplicate !== true) {
     const wanted = normalizeForImageMatch(url)
-    index = items.findIndex((item) => normalizeForImageMatch(item && item.url || '') === wanted)
+    index = items.findIndex((item) => normalizeForImageMatch(item && item.url || '') === wanted &&
+      String(item && item.sourceRevision || '') === String(input.sourceRevision || ''))
   }
   const previous = index >= 0 ? items[index] : null
   const order = previous && Number.isFinite(Number(previous.order))
@@ -1390,6 +1491,7 @@ async function recordImagePlacement(userId, input = {}) {
     height: placementNumber(input.height || (previous && previous.height)),
     anchor: String(input.anchor || (previous && previous.anchor) || '').trim().slice(0, 500),
     source: String(input.source || (previous && previous.source) || 'story'),
+    sourceRevision: String(input.sourceRevision || (previous && previous.sourceRevision) || ''),
     order,
     at: previous && previous.at ? previous.at : Date.now(),
     updatedAt: Date.now(),
@@ -1398,11 +1500,19 @@ async function recordImagePlacement(userId, input = {}) {
   else items.push(placement)
   byMessage[messageId] = items
   await saveImagePlacementState(state)
-  if (userId) notifyFrontend(userId, 'image_placement_upserted', { placement })
+  if (userId) notifyFrontend(userId, 'image_placements_changed', { chatId, messageId })
+  if (userId) {
+    try { await reconcileAutomaticCadence(userId, chatId) }
+    catch (error) { spindle.log.warn('[lumidraw] image saved; schedule refresh deferred: ' + error.message) }
+  }
   return placement
 }
 
 async function removeImagePlacements(userId, criteria = {}) {
+  return withImagePlacementWrite(() => removeImagePlacementsUnlocked(userId, criteria))
+}
+
+async function removeImagePlacementsUnlocked(userId, criteria = {}) {
   const state = await getImagePlacementState()
   const removed = []
   for (const [chatId, byMessage] of Object.entries(state.chats)) {
@@ -1637,7 +1747,7 @@ async function replaceImagePlacement(userId, criteria, entry, alt = '') {
   })
 }
 
-async function placeGeneratedStoryImage(userId, { chatId, messageId, entry, alt, dims, anchor, source }) {
+async function placeGeneratedStoryImage(userId, { chatId, messageId, entry, alt, dims, anchor, source, target }) {
   const image = entry && Array.isArray(entry.images) ? entry.images[0] : null
   if (!image || !image.url) throw new Error('Generated image has no URL to mount in the story.')
   const cfg = entry && entry.recipe && entry.recipe.config ? entry.recipe.config : {}
@@ -1651,6 +1761,7 @@ async function placeGeneratedStoryImage(userId, { chatId, messageId, entry, alt,
     height: (dims && dims.height) || cfg.height,
     anchor,
     source,
+    sourceRevision: target ? storyImageRevision(target.content) : String(entry && entry.origin && entry.origin.sourceRevision || ''),
   })
 }
 
@@ -3989,14 +4100,18 @@ async function fetchMessages(userId, explicitChatId = '') {
   // Current documented Chat Mutation shape. Explicit event chat IDs matter for
   // automatic scans because the user may switch chats before the parser starts.
   if (chatId) shapes.push([chatId], [chatId, userId], [{ chatId, userId }])
-  shapes.push([undefined, userId], [{ userId }], [])
+  // Never reconcile an explicit chat against an unrelated active chat.
+  if (!explicitChatId) shapes.push([undefined, userId], [{ userId }], [])
   const errs = []
   for (const args of shapes) {
     if (args.length && args[0] === null) continue
     try {
       const res = await withTimeout(chatApi.getMessages(...args), 15000, 'chats.getMessages')
       const arr = Array.isArray(res) ? res : (res && (res.messages || res.items))
-      if (Array.isArray(arr) && arr.length) {
+      if (Array.isArray(arr)) {
+        if (explicitChatId && arr.some(m => (m.chat_id || m.chatId) && String(m.chat_id || m.chatId) !== chatId)) {
+          errs.push('returned another chat'); continue
+        }
         const ts = (m) => m.createdAt || m.created_at || m.timestamp || 0
         if (arr.length > 1 && ts(arr[0]) > ts(arr[arr.length - 1])) arr.reverse()
         return { messages: arr, chatId }
@@ -12468,6 +12583,7 @@ async function runDirectImagesImpl(initialImages, ctx) {
         dims,
         anchor: image.anchor,
         source: 'direct',
+        target,
       }))
     }
   }
@@ -15763,6 +15879,29 @@ function releaseScanLane() {
 }
 const recentAutoScans = new Map()
 
+function invalidateAutomaticMessage(chatId, messageId, currentContent = null) {
+  changedLegacyPlacementMessages.add(chatId + ':' + messageId)
+  const revision = currentContent === null ? null : storyImageRevision(currentContent)
+  for (const job of autoScanJobs.values()) {
+    if (job.chatId !== chatId || job.messageId !== messageId) continue
+    if (revision && job.expectedContent && storyImageRevision(job.expectedContent) === revision) continue
+    job.cancelled = true
+    job.cancelReason = 'The story reply changed or was deleted; its old automatic illustration was cancelled.'
+  }
+  for (let i = scanWaiters.length - 1; i >= 0; i--) {
+    if (!scanWaiters[i].job.cancelled) continue
+    const [waiter] = scanWaiters.splice(i, 1)
+    waiter.reject(new Error(waiter.job.cancelReason))
+  }
+  broadcastQueuePositions()
+  const scan = activeStoryScan
+  if (scan && scan.auto && scan.chatId === chatId && scan.messageId === messageId &&
+      (!revision || scan.sourceRevision !== revision)) {
+    scan.cancelled = true
+    if (scan.abortController) { try { scan.abortController.abort() } catch { /* provider already finished */ } }
+  }
+}
+
 // Turning automatic illustration off must stop work that was already admitted,
 // not merely prevent the next trigger. This marks delayed and queued jobs before
 // they can reach the parser, and aborts the provider request for the one active
@@ -15841,11 +15980,15 @@ function messageTimeMs(value) {
 
 function automaticTargetSkip(target, options, settings) {
   if (!automaticScanEnabled(settings)) return 'Automatic illustration is disabled.'
+  if (options.generationType === 'swipe') return 'Swipes do not automatically generate images. Use Scan after accepting this version.'
   if (!isAutomaticCompletion(options.source) || !options.messageId || String(target.id || '') !== String(options.messageId)) {
     return 'Only a completed new reply can start automatic illustration. Use Scan to illustrate an older message.'
   }
   if (options.autoRevision !== undefined && options.autoRevision !== automaticScanRevision) {
     return 'Automatic work from before the last off/on change was discarded.'
+  }
+  if (options.expectedContent && storyImageRevision(options.expectedContent) !== storyImageRevision(target.content)) {
+    return 'The completed version is no longer selected. No automatic image was started for another swipe.'
   }
   const boundary = Math.max(automaticScanBoundaryAt, Number(settings.autoScanResumeAt) || 0)
   // Native chat timestamps have whole-second precision. Compare at that same
@@ -15857,12 +16000,12 @@ function automaticTargetSkip(target, options, settings) {
   return ''
 }
 
-function autoScanKey(userId, chatId, messageId) {
+function autoScanKey(userId, chatId, messageId, content = '') {
   // message IDs are globally stable enough for deduplication. Ignoring chatId
   // when one is present lets a tag callback with a missing chatId be enriched
   // by the later GENERATION_ENDED event instead of starting a competing job.
   return messageId
-    ? [String(userId || ''), 'message', String(messageId)].join(':')
+    ? [String(userId || ''), 'message', String(messageId), ...(content ? [storyImageRevision(content)] : [])].join(':')
     : [String(userId || ''), 'chat', String(chatId || ''), '__latest__'].join(':')
 }
 
@@ -15889,28 +16032,33 @@ function scheduleAutoStoryScan(userId, request = {}) {
     return { accepted: false, startupEcho: true, messageId, chatId, source,
       note: 'Displaying a message or its parser tag does not start automatic illustration.' }
   }
+  if (String(request.generationType || '').toLowerCase() === 'swipe') {
+    return { accepted: false, swipe: true, messageId, chatId, source,
+      note: 'Swipes are manual-image decisions. The reply count has not increased; use Scan after accepting a version.' }
+  }
 
   pruneRecentAutoScans()
-  const key = autoScanKey(userId, chatId, messageId)
+  const key = autoScanKey(userId, chatId, messageId, request.content)
   if (autoScanJobs.has(key)) {
     const existing = autoScanJobs.get(key)
     if (existing) {
       if (!existing.chatId && chatId) existing.chatId = chatId
       if (!existing.messageId && messageId) existing.messageId = messageId
-      if (!existing.expectedContent && request.content) existing.expectedContent = String(request.content).slice(-7000)
+      if (!existing.expectedContent && request.content) existing.expectedContent = String(request.content)
       existing.sources = uniqueStrings([...(existing.sources || [existing.source]), source])
     }
     spindle.log.info('[lumidraw] auto trigger deduplicated/enriched · source=' + source + (messageId ? ' · message=' + messageId : ''))
     return { accepted: false, duplicate: true, enriched: true, messageId, chatId, source }
   }
-  if (recentAutoScans.has(key)) {
+  if (request.content && recentAutoScans.has(key)) {
     spindle.log.info('[lumidraw] recent auto trigger ignored · source=' + source + (messageId ? ' · message=' + messageId : ''))
     return { accepted: false, duplicate: true, recent: true, messageId, chatId, source }
   }
 
   const job = {
     key, userId, chatId, messageId, source, sources: [source],
-    expectedContent: String(request.content || '').slice(-7000),
+    expectedContent: String(request.content || ''),
+    generationType: String(request.generationType || ''),
     queuedAt: Date.now(),
     autoRevision: automaticScanRevision,
     cancelled: false,
@@ -15946,37 +16094,11 @@ function scheduleAutoStoryScan(userId, request = {}) {
         return result
       }
 
-      // An event replay for an already-illustrated message (startup echoes,
-      // re-renders, chat switches) is settled here from local storage, before
-      // any scan widget, chat fetch, or message lookup is started.
-      //
-      // Compared against the event's copy of the content, which may differ from
-      // the stored message. That is fine: a false "not illustrated" here costs
-      // one message fetch, and the authoritative check inside the scan — the one
-      // holding the real text — still stops it. A false "illustrated" is the
-      // expensive direction, and that is the one this cannot produce.
-      if (job.messageId && await wasProcessed(job.messageId, job.expectedContent || undefined)) {
-        const result = { mode: 'parser', processed: 0, skipped: true, note: 'This message was already illustrated.' }
-        recentAutoScans.set(key, Date.now())
-        // Logged, because this used to be the one path that returned in silence:
-        // the log showed the parser protocol injected, the trigger queued, and
-        // then nothing at all, which reads like a crash rather than a skip.
-        spindle.log.info('[lumidraw] auto scan skipped · this message was already illustrated · message=' + job.messageId)
-        setAutoStatus(userId, { mode: 'parser', status: 'idle', messageId: job.messageId, chatId: job.chatId, source, note: result.note })
-        return result
-      }
+      // Count the authoritative logical reply even if a manual scan illustrated
+      // it first. The processed-content guard remains after the cadence gate.
 
       // Do not lose an automatic message just because another manual/automatic
       // scan owns the single Draw Things/parser lane. Take a place in line.
-      if (job.messageId && activeStoryScan && activeStoryScan.messageId === job.messageId) {
-        const result = { mode: 'parser', processed: 0, skipped: true, note: 'This message is already being scanned.' }
-        recentAutoScans.set(key, Date.now())
-        setAutoStatus(userId, {
-          mode: 'parser', status: 'joined', messageId: job.messageId, chatId: job.chatId, source,
-          note: result.note,
-        })
-        return result
-      }
       await acquireScanLane(job, userId, source)
 
       let result
@@ -16005,16 +16127,6 @@ function scheduleAutoStoryScan(userId, request = {}) {
           })
           return stopped
         }
-        // The wait may have been long. A manual Scan press, or the scan that
-        // was holding the lane, may have illustrated this message in the
-        // meantime — so ask again rather than illustrating it twice.
-        if (job.messageId && await wasProcessed(job.messageId, job.expectedContent || undefined)) {
-          const already = { mode: 'parser', processed: 0, skipped: true, note: 'This message was illustrated while it waited in the queue.' }
-          recentAutoScans.set(key, Date.now())
-          spindle.log.info('[lumidraw] auto scan skipped · illustrated while it waited in the queue · message=' + job.messageId)
-          setAutoStatus(userId, { mode: 'parser', status: 'idle', messageId: job.messageId, chatId: job.chatId, source, note: already.note })
-          return already
-        }
         result = await scanStory(userId, {
           force: false,
           auto: true,
@@ -16024,6 +16136,7 @@ function scheduleAutoStoryScan(userId, request = {}) {
           messageId: job.messageId,
           chatId: job.chatId,
           expectedContent: job.expectedContent,
+          generationType: job.generationType,
         })
       } finally {
         releaseScanLane()
@@ -16184,16 +16297,84 @@ async function scanStory(userId, options = {}) {
 }
 
 const autoCadenceLocks = new Map()
-function advanceAutoCadence(previous, messageId, every) {
-  every = Number(every) === 1 ? 1 : 5
-  const state = previous && typeof previous === 'object' ? previous : {}
-  const seen = Array.isArray(state.seen) ? state.seen.filter(id => typeof id === 'string') : []
-  if (seen.includes(messageId)) return { state, due: false, duplicate: true }
-  const validProgress = state.every === every && Number.isInteger(state.progress) && state.progress >= 0 && state.progress < every
-  const progress = (validProgress ? state.progress : 0) + 1
-  return { state: { version: 1, every, progress: progress % every, seen: [...seen, messageId].slice(-512) }, due: progress >= every, duplicate: false }
+function storyImageRevision(text) {
+  return scFingerprint(cleanParserMessageText(String(text || '')).replace(/\s+/g, ' ').trim())
 }
-async function automaticImageCadence(userId, chatId, target, settings) {
+
+function cadenceReplyEligible(messages, index) {
+  const target = messageBits(messages[index])
+  if (!target.isAssistant) return false
+  const text = stripParserUtilityCards(stripParserTrigger(stripThinking(target.content || '')))
+  if (outOfCharacterVerdict(text).ooc || !stripMarkupForClassification(text).replace(/[^\p{L}\p{N}]/gu, '').length) return false
+  const prompting = precedingUserMessage(messages, index)
+  return !prompting || !outOfCharacterVerdict(String(prompting.content || '')).ooc
+}
+
+function cadenceState(previous, every, resumeAt, messages) {
+  const prior = previous && typeof previous === 'object' ? previous : {}
+  // Only real admitted completions enter this journal. Historical chat reads
+  // can reconcile it, but cannot import a backlog of uncounted replies.
+  let rows = Array.isArray(prior.rows) ? prior.rows.map(row => ({ id: row.id, counted: !!row.counted, eligible: !!row.eligible }))
+    : (Array.isArray(prior.seen) ? [...new Set(prior.seen.filter(id => typeof id === 'string'))] : [])
+      .map(id => ({ id, counted: true, eligible: true }))
+  if (prior.version !== 3 && resumeAt && Array.isArray(messages)) {
+    const times = new Map(messages.map(m => { const b = messageBits(m); return [String(b.id || ''), messageTimeMs(b.createdAt)] }))
+    rows = rows.map(row => ({ ...row, counted: row.counted && !!times.get(row.id) &&
+      Math.floor(times.get(row.id) / 1000) >= Math.floor(resumeAt / 1000) }))
+  }
+  if ((prior.every && prior.every !== every) || (Number(prior.resumeAt) || 0) !== resumeAt) {
+    rows = rows.map(row => ({ ...row, counted: false }))
+  }
+  return { version: 3, every, resumeAt, rows }
+}
+
+function reconcileCadenceState(state, messages) {
+  if (!Array.isArray(messages)) return state
+  const current = new Map(messages.map((m, index) => [String(messageBits(m).id || ''), index]))
+  state.rows = state.rows.filter(row => current.has(row.id)).map(row => ({ ...row,
+    eligible: cadenceReplyEligible(messages, current.get(row.id)) }))
+  return state
+}
+
+function advanceAutoCadence(previous, messageId, every, options = {}) {
+  every = Number(every) === 1 ? 1 : 5
+  const state = reconcileCadenceState(cadenceState(previous, every, Number(options.resumeAt) || 0, options.messages), options.messages)
+  let row = state.rows.find(row => row.id === messageId)
+  const duplicate = !!row
+  const eligible = options.eligible !== false
+  if (!row && messageId) {
+    row = { id: messageId, counted: eligible && !options.existingOnly && !options.swipe, eligible }
+    state.rows.push(row)
+  } else if (row) row.eligible = eligible
+  updateCadenceProgress(state, options.messages, options.anchorId)
+  state.seen = state.rows.map(row => row.id) // readable rollback/diagnostic field
+  // A swipe or repeated completion can never spend an image slot. A failed
+  // fifth reply leaves the count due for the next NEW in-character reply.
+  const due = !!(!duplicate && row && row.counted && row.eligible && !options.swipe && state.progress >= every)
+  return { state, due, duplicate }
+}
+
+function updateCadenceProgress(state, messages, anchorId = '') {
+  const order = new Map((Array.isArray(messages) ? messages.map(m => String(messageBits(m).id || '')) : state.rows.map(r => r.id))
+    .map((id, index) => [id, index]))
+  const anchorIndex = order.has(anchorId) ? order.get(anchorId) : -1
+  state.anchorId = anchorIndex >= 0 ? anchorId : ''
+  state.progress = state.rows.filter(row => row.counted && row.eligible && order.has(row.id) && order.get(row.id) > anchorIndex).length
+}
+
+async function latestIllustratedReply(chatId, messages) {
+  if (!Array.isArray(messages)) return ''
+  // Any successfully mounted image establishes the logical reply as a reference
+  // point, including a manual image. Hiding that image on another swipe does not
+  // move the reference point backwards or secretly make the next reply due.
+  const mounted = new Set((await listImagePlacements(chatId)).map(item => String(item.messageId || '')))
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const bits = messageBits(messages[i])
+    if (bits.isAssistant && mounted.has(String(bits.id))) return String(bits.id)
+  }
+  return ''
+}
+async function automaticImageCadence(userId, chatId, target, settings, options = {}) {
   const every = Number(settings.autoImageEvery) === 1 ? 1 : 5
   if (!target.isAssistant || !target.id) return { due: false, note: 'Only new assistant story replies advance the image schedule.' }
   const key = JSON.stringify([userId, chatId])
@@ -16207,18 +16388,33 @@ async function automaticImageCadence(userId, chatId, target, settings) {
     const saved = await spindle.userStorage.getJson(file, { userId, fallback: null })
     const resumeAt = Number(settings.autoScanResumeAt) || 0
     let previous = saved && saved.chatId === chatId ? saved : null
-    // Explicit Off -> On starts a new interval. Keep the seen IDs so duplicate
-    // completion events/rerolls still cannot count twice. Ordinary panel opens
-    // and worker restarts do not erase previously counted enabled replies.
-    if (previous && (Number(previous.resumeAt) || 0) !== resumeAt) previous = { ...previous, progress: 0 }
-    const result = advanceAutoCadence(previous, String(target.id), every)
-    if (!result.duplicate) await spindle.userStorage.setJson(file, { ...result.state, chatId, resumeAt }, { userId })
-    return { ...result, note: result.duplicate ? 'This reply already counted toward the automatic image schedule; rerolls do not count again.'
-      : result.due ? 'Automatic image due after ' + every + ' story replies.'
-        : 'Story reply ' + result.state.progress + '/' + every + ' — next automatic image in ' + (every - result.state.progress) + '. Continuity remains active; Scan latest generates now.' }
+    const anchorId = await latestIllustratedReply(chatId, options.messages)
+    const result = advanceAutoCadence(previous, String(target.id), every, { ...options, resumeAt, anchorId })
+    const next = { ...result.state, chatId }
+    if (JSON.stringify(saved) !== JSON.stringify(next)) await spindle.userStorage.setJson(file, next, { userId })
+    return { ...result, note: result.duplicate || options.swipe ? 'This reply already counted or is a swipe; use Scan to illustrate the version you accept.'
+      : result.due ? 'Automatic image due: ' + result.state.progress + ' new in-character replies since the latest illustrated message (or enabled interval).'
+        : 'Story reply ' + result.state.progress + '/' + every + ' since the latest illustrated message — next automatic image in ' + Math.max(0, every - result.state.progress) + '. OOC and swipes do not advance the count.' }
   })
   autoCadenceLocks.set(key, task)
   try { return await task } finally { if (autoCadenceLocks.get(key) === task) autoCadenceLocks.delete(key) }
+}
+
+async function reconcileAutomaticCadence(userId, chatId) {
+  if (!userId || !chatId || !spindle.userStorage) return
+  const key = JSON.stringify([userId, chatId]), prior = autoCadenceLocks.get(key) || Promise.resolve()
+  const task = prior.catch(() => {}).then(async () => {
+    const file = 'image_cadence/' + scFingerprint(String(chatId)) + '.json'
+    const saved = await spindle.userStorage.getJson(file, { userId, fallback: null })
+    if (!saved || saved.chatId !== chatId) return
+    const { messages } = await fetchMessages(userId, chatId)
+    const state = reconcileCadenceState(cadenceState(saved, saved.every, Number(saved.resumeAt) || 0, messages), messages)
+    updateCadenceProgress(state, messages, await latestIllustratedReply(chatId, messages))
+    state.seen = state.rows.map(row => row.id)
+    await spindle.userStorage.setJson(file, { ...state, chatId }, { userId })
+  })
+  autoCadenceLocks.set(key, task)
+  try { await task } finally { if (autoCadenceLocks.get(key) === task) autoCadenceLocks.delete(key) }
 }
 
 async function scanStoryCore(userId, options = {}) {
@@ -16256,6 +16452,7 @@ async function scanStoryCore(userId, options = {}) {
   if (scan) {
     scan.messageId = String(target.id || requestedMessageId || '')
     scan.chatId = String(chatId || options.chatId || '')
+    scan.sourceRevision = storyImageRevision(target.content)
   }
   assertStoryScanActive(scan)
 
@@ -16347,6 +16544,9 @@ async function scanStoryCore(userId, options = {}) {
     }
   }
   if (oocVerdict.ooc) {
+    if (options.auto && ['parser', 'direct'].includes(settings.mode)) {
+      await automaticImageCadence(userId, chatId, target, settings, { messages, eligible: false })
+    }
     const note = `Skipped: ${oocVerdict.reason}.`
     spindle.log.info('[lumidraw] out-of-character message skipped · ' + oocVerdict.reason +
       (target.id ? ' · message=' + target.id : ''))
@@ -16357,7 +16557,10 @@ async function scanStoryCore(userId, options = {}) {
   }
 
   if (options.auto && ['parser', 'direct'].includes(settings.mode)) {
-    const cadence = await automaticImageCadence(userId, chatId, target, settings)
+    const boundary = Math.max(automaticScanBoundaryAt, Number(settings.autoScanResumeAt) || 0)
+    const cadence = await automaticImageCadence(userId, chatId, target, settings, { messages,
+      swipe: options.generationType === 'swipe' || Number(target.swipeCount) > 1,
+      existingOnly: Math.floor(messageTimeMs(target.createdAt) / 1000) < Math.floor(boundary / 1000) })
     if (!cadence.due) {
       if (scan) setStoryScanStage(scan, 'done', cadence.note)
       return { mode: settings.mode, processed: 0, skipped: true, cadence: true, note: cadence.note }
@@ -16408,6 +16611,7 @@ async function scanStoryCore(userId, options = {}) {
           dims,
           anchor: body,
           source: 'inline',
+          target,
         })
         // Remove only the private generation directive. The large image itself
         // is mounted by the frontend, so this small text edit cannot introduce
@@ -16675,6 +16879,7 @@ async function scanStoryCore(userId, options = {}) {
           dims,
           anchor: item.anchor,
           source: 'parser',
+          target,
         }))
         debugEntries.push({
           anchor: item.anchor,
@@ -16775,6 +16980,7 @@ async function scanStoryCore(userId, options = {}) {
         dims: entry.recipe && entry.recipe.config,
         anchor: parsed[legacyImageIndex - 1] ? parsed[legacyImageIndex - 1].anchor : '',
         source: 'legacy-parser',
+        target,
       }))
     }
     assertStoryScanActive(scan)
@@ -17966,6 +18172,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           messageId: payload.messageId,
           chatId: payload.chatId,
           content: payload.content,
+          generationType: payload.generationType,
           source: 'frontend-generation-ended',
           delayMs: 350,
         })
@@ -18904,6 +19111,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           width,
           height,
           source: 'manual',
+          sourceRevision: storyImageRevision(target.content),
           allowDuplicate: true,
         })
         reply = ok(payload, requestId, { mode: 'mounted', placement })
@@ -18987,7 +19195,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
       case 'get_image_mounts': {
         let chatId = String(payload.chatId || '').trim()
         if (!chatId) chatId = String((await resolveActiveChatId(userId)) || '')
-        const placements = chatId ? await listImagePlacements(chatId) : []
+        if (chatId && payload.changedMessageId) await protectUnboundImagePlacements(chatId, String(payload.changedMessageId))
+        const placements = chatId ? await visibleImagePlacements(userId, chatId) : []
         reply = ok(payload, requestId, { chatId, placements })
         break
       }
@@ -19140,6 +19349,7 @@ if (typeof spindle.registerInterceptor === 'function') {
           messageId,
           chatId,
           content: payload.content || eventMessage.content || eventMessage.text || '',
+          generationType: payload.generationType,
           source: 'backend-generation-ended',
           delayMs: 300,
         })
@@ -19158,16 +19368,22 @@ if (typeof spindle.registerInterceptor === 'function') {
         const payload = normalizedPayload(evt)
         const eventMessage = payload.message && typeof payload.message === 'object' ? payload.message : {}
         const messageId = String(payload.messageId || eventMessage.messageId || eventMessage.id || '')
-        const chatId = String(payload.chatId || eventMessage.chatId || (payload.chat && payload.chat.id) || '')
+        const chatId = String(payload.chatId || eventMessage.chatId || eventMessage.chat_id || (payload.chat && payload.chat.id) || '')
+        if (messageId && chatId) invalidateAutomaticMessage(chatId, messageId,
+          typeof eventMessage.content === 'string' ? messageBits(eventMessage).content : null)
         const uid = payload.userId || (evt && evt.userId) || eventMessage.userId || await recallUserId()
         if (!messageId) return
-        await removeImagePlacements(uid, { chatId, messageId })
+        // Swipes hide mismatched placements; they never erase another version's
+        // saved image. Only a generation-ended event may request a new image.
+        await protectUnboundImagePlacements(chatId, messageId)
+        notifyFrontend(uid, 'image_placements_changed', { chatId, messageId })
+        if (payload.action !== 'added') await reconcileAutomaticCadence(uid, chatId)
         scheduleStoryContinuity(uid, { messageId, chatId, source: 'message-swiped' })
       } catch (error) {
-        spindle.log.warn('[lumidraw] MESSAGE_SWIPED image cleanup failed: ' + error.message)
+        spindle.log.warn('[lumidraw] MESSAGE_SWIPED visibility update failed: ' + error.message)
       }
     })
-    spindle.log.info('[lumidraw] MESSAGE_SWIPED native-image cleanup and story reconciliation registered')
+    spindle.log.info('[lumidraw] MESSAGE_SWIPED version-bound images and story reconciliation registered')
   } catch (error) {
     spindle.log.warn('[lumidraw] MESSAGE_SWIPED registration failed: ' + error.message)
   }
@@ -19179,7 +19395,12 @@ if (typeof spindle.registerInterceptor === 'function') {
         const message = payload.message && typeof payload.message === 'object' ? payload.message : {}
         const messageId = String(payload.messageId || message.id || message.messageId || '')
         const chatId = String(payload.chatId || message.chatId || message.chat_id || '')
+        if (messageId && chatId) invalidateAutomaticMessage(chatId, messageId,
+          typeof message.content === 'string' ? messageBits(message).content : null)
         const uid = payload.userId || (evt && evt.userId) || message.userId || await recallUserId()
+        await protectUnboundImagePlacements(chatId, messageId)
+        notifyFrontend(uid, 'image_placements_changed', { chatId, messageId })
+        await reconcileAutomaticCadence(uid, chatId)
         scheduleStoryContinuity(uid, { messageId, chatId, source: 'message-edited' })
       } catch (error) { spindle.log.warn('[lumidraw] MESSAGE_EDITED continuity: ' + error.message) }
     })
@@ -19209,10 +19430,12 @@ if (typeof spindle.registerInterceptor === 'function') {
         const payload = normalizedPayload(evt)
         const eventMessage = payload.message && typeof payload.message === 'object' ? payload.message : {}
         const messageId = String(payload.messageId || eventMessage.messageId || eventMessage.id || '')
-        const chatId = String(payload.chatId || eventMessage.chatId || (payload.chat && payload.chat.id) || '')
+        const chatId = String(payload.chatId || eventMessage.chatId || eventMessage.chat_id || (payload.chat && payload.chat.id) || '')
+        if (messageId && chatId) invalidateAutomaticMessage(chatId, messageId)
         const uid = payload.userId || (evt && evt.userId) || eventMessage.userId || await recallUserId()
         if (!messageId) return
         await removeImagePlacements(uid, { chatId, messageId })
+        await reconcileAutomaticCadence(uid, chatId)
         scheduleStoryContinuity(uid, { messageId, chatId, source: 'message-deleted' })
       } catch (error) {
         spindle.log.warn('[lumidraw] MESSAGE_DELETED image cleanup failed: ' + error.message)

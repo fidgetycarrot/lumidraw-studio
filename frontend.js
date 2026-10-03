@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.6.3'
+const EXTENSION_VERSION = '1.6.4'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -371,27 +371,25 @@ function realSetup(ctx) {
       setStatus('.ld-gen-status', 'SwarmUI rendering' + (payload.percent == null ? '…' : ' · ' + payload.percent + '%'))
       return
     }
-    if (payload.type === 'image_placement_upserted') {
-      const placement = payload.placement
-      if (placement && placement.placementId) {
-        const index = imagePlacements.findIndex((item) => item && item.placementId === placement.placementId)
-        if (index >= 0) imagePlacements[index] = placement
-        else imagePlacements.push(placement)
-        const activeChat = activeChatIdFromCtx()
-        const placementChat = String(placement.chatId || '')
-        if (!activeChat || !placementChat || activeChat === placementChat) {
-          imagePlacementChatId = placementChat || imagePlacementChatId || activeChat
-          scheduleImageAttach(String(placement.messageId || ''))
-        }
-      }
+    if (payload.type === 'image_placements_changed' || payload.type === 'image_placement_upserted') {
+      // A generation may finish after its swipe is no longer selected. Only the
+      // backend's current-visibility read may add images to the displayed cache.
+      refreshImageVisibilityForEvent(payload.placement || payload)
       return
     }
     if (payload.type === 'image_placement_removed') {
-      const removed = Array.isArray(payload.placements) ? payload.placements : []
+      const activeChat = activeChatIdFromCtx()
+      const eventChat = readImageEventContext(payload).chatId
+      if (eventChat && activeChat && eventChat !== activeChat) return
+      const removed = (Array.isArray(payload.placements) ? payload.placements : [])
+        .filter((item) => item && (!activeChat || !item.chatId || String(item.chatId) === activeChat))
+      if (!removed.length) return
       const ids = new Set(removed.map((item) => String(item && item.placementId || '')).filter(Boolean))
       const affected = new Set(removed.map((item) => String(item && item.messageId || '')).filter(Boolean))
+      imagePlacementRefreshSeq++
       if (ids.size) imagePlacements = imagePlacements.filter((item) => !ids.has(String(item && item.placementId || '')))
       for (const messageId of affected) renderImagesIntoMessage(messageId)
+      refreshImageVisibilityForEvent(payload)
       return
     }
     if (payload.type === 'history_updated') {
@@ -4884,6 +4882,8 @@ ${entry.prompt || ''}`.trim()
 
   function placementsForMessage(messageId) {
     const id = String(messageId || '')
+    const activeChat = activeChatIdFromCtx()
+    if (activeChat && imagePlacementChatId && activeChat !== imagePlacementChatId) return []
     return imagePlacements
       .filter((item) => item && String(item.messageId || '') === id &&
         (!imagePlacementChatId || String(item.chatId || '') === imagePlacementChatId))
@@ -5086,20 +5086,48 @@ ${entry.prompt || ''}`.trim()
     return false
   }
 
-  async function refreshImagePlacements(chatId = '') {
-    const seq = ++imagePlacementRefreshSeq
+  function refreshImageVisibilityForEvent(payload, changeKind = '') {
+    const context = readImageEventContext(payload)
+    const activeChat = activeChatIdFromCtx()
+    if (context.chatId && activeChat && context.chatId !== activeChat) return
+    if (changeKind) {
+      // Invalidate reads already in flight before clearing the visible swipe.
+      // Pending render callbacks then see an empty cache for this message.
+      imagePlacementRefreshSeq++
+      clearImageMessageMount(context.messageId)
+      imagePlacements = imagePlacements.filter((item) => String(item && item.messageId || '') !== context.messageId)
+    }
+    const chatId = activeChat || context.chatId
+    const change = changeKind ? { changedMessageId: context.messageId, changeKind } : {}
+    if (chatId) return refreshImagePlacements(chatId, change).catch((error) => {
+      console.log('[Lumi Studio] image visibility refresh failed:', error.message)
+    })
+  }
+
+  async function refreshImagePlacements(chatId = '', options = {}) {
     const wantedChat = String(chatId || activeChatIdFromCtx() || '')
-    const res = await call('get_image_mounts', { chatId: wantedChat }, 15000)
+    const activeChat = activeChatIdFromCtx()
+    if (imageRestoreDisposed || (wantedChat && activeChat && wantedChat !== activeChat)) return
+    const seq = ++imagePlacementRefreshSeq
+    // The frontend can receive a change before the backend lifecycle listener.
+    // Carry that fact with the read so old unbound attachments cannot migrate
+    // onto the newly selected text in that interval.
+    const change = options.changedMessageId ? {
+      changedMessageId: String(options.changedMessageId), changeKind: String(options.changeKind || ''),
+    } : {}
+    const res = await call('get_image_mounts', { chatId: wantedChat, ...change }, 15000)
     if (imageRestoreDisposed || seq !== imagePlacementRefreshSeq) return
     const currentChat = activeChatIdFromCtx()
     if (wantedChat && currentChat && wantedChat !== currentChat) return
     const nextChatId = String(res.chatId || wantedChat || '')
+    if (nextChatId && currentChat && nextChatId !== currentChat) return
     if (imagePlacementChatId && nextChatId && imagePlacementChatId !== nextChatId) {
       for (const placementId of [...imagePlacementMounts.keys()]) clearImagePlacementMount(placementId)
     }
     imagePlacementChatId = nextChatId
     if (nextChatId) lastSeenChatId = nextChatId
-    imagePlacements = Array.isArray(res.placements) ? res.placements : []
+    imagePlacements = (Array.isArray(res.placements) ? res.placements : [])
+      .filter((item) => item && (!nextChatId || String(item.chatId || '') === nextChatId))
     const activePlacementIds = new Set(imagePlacements.map((item) => String(item && item.placementId || '')).filter(Boolean))
     for (const placementId of [...imagePlacementMounts.keys()]) {
       if (!activePlacementIds.has(placementId)) clearImagePlacementMount(placementId)
@@ -7068,6 +7096,7 @@ ${entry.prompt || ''}`.trim()
               type: 'generation_ended', requestId: makeId(),
               messageId: context.messageId,
               chatId: String(chatId),
+              generationType: String(payload.generationType || ''),
               content: String(payload.content || eventMessage.content || eventMessage.text || ''),
             })
           } catch (error) {
@@ -7115,6 +7144,7 @@ ${entry.prompt || ''}`.trim()
     if (ctx.events && typeof ctx.events.on === 'function') {
       try {
         const off = ctx.events.on('CHAT_SWITCHED', (payload) => {
+          imagePlacementRefreshSeq++
           const context = readImageEventContext(payload)
           const eventChatId = String(context.chatId || (payload && (payload.chatId || payload.id || (payload.chat && payload.chat.id))) || '')
           lastSeenChatId = eventChatId
@@ -7159,22 +7189,28 @@ ${entry.prompt || ''}`.trim()
       try {
         const off = ctx.events.on('MESSAGE_SWIPED', (payload) => {
           const context = readImageEventContext(payload)
-          const messageId = context.messageId
-          if (!messageId) return
-          clearImageMessageMount(messageId)
-          imagePlacements = imagePlacements.filter((item) => String(item && item.messageId || '') !== messageId)
+          if (!context.messageId) return
+          refreshImageVisibilityForEvent(payload, 'swiped')
         })
         if (typeof off === 'function') imageLifecycleUnsubs.push(off)
       } catch (error) {
         console.log('[Lumi Studio] MESSAGE_SWIPED image listener unavailable:', error.message)
       }
       try {
+        const off = ctx.events.on('MESSAGE_EDITED', (payload) => {
+          const context = readImageEventContext(payload)
+          if (!context.messageId) return
+          refreshImageVisibilityForEvent(payload, 'edited')
+        })
+        if (typeof off === 'function') imageLifecycleUnsubs.push(off)
+      } catch (error) {
+        console.log('[Lumi Studio] MESSAGE_EDITED image listener unavailable:', error.message)
+      }
+      try {
         const off = ctx.events.on('MESSAGE_DELETED', (payload) => {
           const context = readImageEventContext(payload)
-          const messageId = context.messageId
-          if (!messageId) return
-          clearImageMessageMount(messageId)
-          imagePlacements = imagePlacements.filter((item) => String(item && item.messageId || '') !== messageId)
+          if (!context.messageId) return
+          refreshImageVisibilityForEvent(payload, 'deleted')
         })
         if (typeof off === 'function') imageLifecycleUnsubs.push(off)
       } catch (error) {
