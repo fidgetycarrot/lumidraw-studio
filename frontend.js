@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.6.5'
+const EXTENSION_VERSION = '1.6.6'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -296,6 +296,11 @@ function realSetup(ctx) {
   let liveScanStatusAt = 0
   let scanRequestSequence = 0
   const retiredScanIds = new Set()
+  // Live renderer frames are session-only display state, never story memory.
+  let liveRendererPreview = null
+  let previewNoticeTimer = null
+  let previewStartedAt = 0
+  const retiredPreviewIds = new Set()
   const wardrobeDiagnosticsByChat = new Map()
   let clickedChatImageUrl = ''
   let clickedChatPlacementId = ''
@@ -371,7 +376,7 @@ function realSetup(ctx) {
   const unsub = ctx.onBackendMessage((payload) => {
     if (!payload) return
     if (payload.type === 'renderer_progress') {
-      setStatus('.ld-gen-status', 'SwarmUI rendering' + (payload.percent == null ? '…' : ' · ' + payload.percent + '%'))
+      receiveRendererPreview(payload)
       return
     }
     if (payload.type === 'image_placements_changed' || payload.type === 'image_placement_upserted') {
@@ -485,6 +490,14 @@ function realSetup(ctx) {
       box-shadow: 0 2px 10px rgba(0,0,0,.28); user-select: none;
     }
     .ld-launcher:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
+    .ld-launcher.ld-preview-active { width:96px; height:96px; padding:0; overflow:hidden; }
+    .ld-launcher-preview { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#101116; pointer-events:none; }
+    .ld-launcher-preview[hidden], .ld-launcher-status[hidden], .ld-launcher-progress[hidden] { display:none; }
+    .ld-launcher.ld-has-preview > svg { visibility:hidden; }
+    .ld-launcher-status { position:absolute; bottom:10px; left:0; right:0; padding:4px 3px; background:rgba(12,14,20,.86); color:#fff; font:600 11px/1.25 system-ui,sans-serif; text-align:center; pointer-events:none; }
+    .ld-launcher-progress { position:absolute; bottom:3px; left:6px; width:calc(100% - 12px); height:4px; accent-color:#b8b6ff; pointer-events:none; }
+    .ld-launcher.ld-preview-error { border-color:#e69494; }
+    .ld-launcher.ld-preview-error .ld-launcher-status { color:#ffd4d4; }
     .ld-panel {
       position: fixed; right: 16px; bottom: 140px; z-index: 2147482001;
       width: min(1180px, calc(100vw - 24px)); max-width: calc(100vw - 24px);
@@ -861,6 +874,9 @@ function realSetup(ctx) {
         <circle cx="9" cy="9" r="1.8"></circle>
         <path d="M21 15.5l-4.2-4.2a1.6 1.6 0 0 0-2.3 0L6 20"></path>
       </svg>
+      <img class="ld-launcher-preview" alt="SwarmUI image in progress" draggable="false" hidden />
+      <span class="ld-launcher-status" hidden></span>
+      <progress class="ld-launcher-progress" max="100" aria-label="SwarmUI generation progress" hidden></progress>
     </button>
     <div class="ld-panel">
       <div class="ld-head">
@@ -2130,6 +2146,10 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   applyUiResetV11()
 
   const launcher = $('.ld-launcher')
+  $('.ld-launcher-preview').addEventListener('error', () => {
+    if (liveRendererPreview) liveRendererPreview.preview = ''
+    renderLauncherPreview()
+  })
   const panel = $('.ld-panel')
   const fullscreenToggle = $('.ld-fullscreen-toggle')
   const textEditor = $('.ld-text-editor')
@@ -2173,6 +2193,158 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   let lightboxPinchStart = null
 
   // ------------------------------------------------------------------ helpers
+  function retireRendererPreview(id) {
+    if (!id) return
+    retiredPreviewIds.add(String(id))
+    if (retiredPreviewIds.size > 64) retiredPreviewIds.delete(retiredPreviewIds.values().next().value)
+  }
+
+  function clearPreviewNoticeTimer() {
+    if (previewNoticeTimer !== null) clearTimeout(previewNoticeTimer)
+    previewNoticeTimer = null
+  }
+
+  function validRendererPreview(value) {
+    // Never fetch a URL supplied by a progress event; only bounded raster data.
+    return typeof value === 'string' && value.length <= 2 * 1024 * 1024 &&
+      /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
+  }
+
+  function rendererPreviewVisible(value) {
+    const chatId = String(activeChatIdFromCtx() || '')
+    return !value.chatId || (!!chatId && String(value.chatId) === chatId)
+  }
+
+  function schedulePreviewDismissal(value) {
+    clearPreviewNoticeTimer()
+    previewNoticeTimer = setTimeout(() => {
+      previewNoticeTimer = null
+      if (liveRendererPreview !== value) return
+      value.dismissed = true
+      renderLauncherPreview()
+    }, value.stage === 'error' ? 8000 : 4000)
+  }
+
+  function receiveRendererPreview(payload) {
+    if (payload.renderer !== 'SwarmUI' || !rendererPreviewVisible(payload)) return
+    const id = typeof payload.generationId === 'string' ? payload.generationId : ''
+    const startedAt = payload.startedAt, sequence = payload.sequence
+    if (!id || id.length > 200 || !Number.isFinite(startedAt) || !Number.isSafeInteger(sequence) || sequence < 0 ||
+        !['started', 'rendering', 'complete', 'error'].includes(payload.stage) || retiredPreviewIds.has(id)) return
+    if (payload.scanId && retiredScanIds.has(String(payload.scanId))) return
+    const scan = liveScanStatus
+    if (payload.scanId && scan && payload.scanId === scan.id && scan.backendTerminal) return
+    const previous = liveRendererPreview
+    const same = previous && previous.generationId === id
+    if (same && (sequence <= previous.sequence || previous.terminal || startedAt !== previous.startedAt)) return
+    if (!same && startedAt < previewStartedAt) return
+    if (!same) {
+      if (previous) retireRendererPreview(previous.generationId)
+      clearPreviewNoticeTimer()
+      previewStartedAt = startedAt
+    }
+    const terminal = payload.stage === 'complete' || payload.stage === 'error'
+    const percent = typeof payload.percent === 'number' && Number.isFinite(payload.percent)
+      ? Math.max(0, Math.min(100, Math.round(payload.percent))) : null
+    const value = {
+      generationId: id, startedAt, sequence, stage: payload.stage, terminal, receivedAt: Date.now(),
+      chatId: String(payload.chatId || ''), scanId: String(payload.scanId || ''), percent,
+      imageIndex: Number.isSafeInteger(payload.imageIndex) && payload.imageIndex > 0 ? payload.imageIndex : null,
+      imageTotal: Number.isSafeInteger(payload.imageTotal) && payload.imageTotal > 0 ? payload.imageTotal : null,
+      preview: terminal ? '' : validRendererPreview(payload.preview) ? payload.preview : same ? previous.preview : '',
+    }
+    liveRendererPreview = value
+    if (scan && value.scanId && value.scanId === scan.id && !scan.backendTerminal) liveScanStatusAt = Date.now()
+    if (terminal) {
+      retireRendererPreview(id)
+      schedulePreviewDismissal(value)
+    }
+    renderLauncherPreview()
+    const label = terminal ? (value.stage === 'error' ? 'SwarmUI generation failed. See the generation error for details.' : 'SwarmUI rendered the image; saving output…')
+      : 'SwarmUI rendering' + (percent == null ? '…' : ' · ' + percent + '%')
+    setStatus('.ld-gen-status', label, value.stage === 'error' ? 'err' : undefined)
+  }
+
+  function renderLauncherPreview() {
+    const button = $('.ld-launcher'), img = $('.ld-launcher-preview')
+    const status = $('.ld-launcher-status'), progress = $('.ld-launcher-progress')
+    if (!button || !img || !status || !progress) return
+    const scan = liveScanStatus
+    let value = liveRendererPreview
+    if (value && value.scanId && retiredScanIds.has(value.scanId)) {
+      value.preview = ''
+      retireRendererPreview(value.generationId)
+      liveRendererPreview = null
+      clearPreviewNoticeTimer()
+      value = null
+    }
+    if (value && !rendererPreviewVisible(value)) value = null
+    // A newer scan takes over from a finished/retired image, not vice versa.
+    if (value && scan && scan.id && rendererPreviewVisible(scan) && Number(scan.startedAt) > value.startedAt &&
+        (value.terminal || (value.scanId && scan.id !== value.scanId))) value = null
+    const ended = scan && ['done', 'error', 'cancelled'].includes(scan.stage)
+    const contactLost = scan && scan.stage === 'connection_lost'
+    if (value && value.scanId && scan && value.scanId === scan.id && ended && !value.scanEnded) {
+      value.preview = ''
+      value.terminal = true
+      value.scanEnded = true
+      value.dismissed = false
+      value.stage = scan.stage === 'done' ? 'complete' : 'error'
+      value.scanNote = scan.stage === 'cancelled' ? 'Cancelled' : scan.stage === 'error' ? 'Failed' : 'Done'
+      retireRendererPreview(value.generationId)
+      schedulePreviewDismissal(value)
+    }
+    let text = '', title = '', preview = '', pct = null, active = false, failed = false
+    if (value) {
+      active = !value.dismissed
+      failed = value.stage === 'error'
+      preview = !value.terminal ? value.preview : ''
+      pct = !value.terminal ? value.percent : null
+      const batch = value.imageIndex && value.imageTotal ? value.imageIndex + '/' + value.imageTotal : ''
+      text = value.terminal ? (value.scanNote || (failed ? 'Failed' : 'Rendered')) :
+        [batch, pct === null ? 'Rendering…' : pct + '%'].filter(Boolean).join(' · ')
+      title = 'SwarmUI · ' + (batch ? 'Image ' + value.imageIndex + ' of ' + value.imageTotal + ' · ' : '') + text
+    } else if (scan && !ended && rendererPreviewVisible(scan) && scan.renderer === 'SwarmUI') {
+      active = true
+      text = scan.stage === 'generating' ? 'Rendering…' : 'Preparing scene'
+      title = 'Lumi Studio · ' + text
+    }
+    // Silence means unknown, not cancelled. A later frame may resume this job.
+    if (contactLost && rendererPreviewVisible(scan) && (!value || (value.scanId === scan.id && value.receivedAt <= Number(scan.endedAt || 0)))) {
+      active = scan.renderer === 'SwarmUI' || !!value
+      failed = true; text = 'Check status'; title = 'Lumi Studio · Connection status unknown'; preview = ''; pct = null
+    }
+    const previousRect = button.getBoundingClientRect()
+    button.classList.toggle('ld-preview-active', active)
+    button.classList.toggle('ld-has-preview', active && !!preview)
+    button.classList.toggle('ld-preview-error', active && failed)
+    button.setAttribute('aria-busy', String(active && !(value && value.terminal)))
+    button.title = active ? title : 'Lumi Studio v' + EXTENSION_VERSION
+    button.setAttribute('aria-label', button.title + ' — open Studio')
+    status.hidden = !active
+    status.textContent = active ? text : ''
+    img.hidden = !active || !preview
+    if (active && preview) {
+      if (img.getAttribute('src') !== preview) img.setAttribute('src', preview)
+    } else img.removeAttribute('src')
+    progress.hidden = !active || !!(value && value.terminal)
+    if (pct === null) progress.removeAttribute('value')
+    else progress.value = pct
+    // Growing the draggable button must not place it beyond a phone's edge.
+    if (active && (previousRect.right > window.innerWidth - 4 || previousRect.bottom > window.innerHeight - 4 || button.style.left)) {
+      applyPos(previousRect.left, previousRect.top)
+    }
+  }
+
+  function resetRendererPreviewForChat() {
+    if (liveRendererPreview && liveRendererPreview.chatId) {
+      retireRendererPreview(liveRendererPreview.generationId)
+      liveRendererPreview = null
+      clearPreviewNoticeTimer()
+    }
+    renderLauncherPreview()
+  }
+
   function setStatus(sel, msg, kind) {
     const el = $(sel)
     if (!el) return
@@ -3430,6 +3602,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
 
   function renderLiveScanStatus() {
+    renderLauncherPreview()
     const cancelButton = $('[data-act="cancel-scan"]')
     const scanButton = $('[data-act="scan"]')
     const oldButton = $('[data-act="scan-old"]')
@@ -3734,6 +3907,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     retireScanStatus(liveScanStatus && liveScanStatus.id)
     liveScanStatus = {
       stage: 'starting', note: `Scanning ${label}.`, messageId: messageId || '',
+      chatId: activeChatIdFromCtx() || '',
       startedAt: Date.now(), cancellable: true,
     }
     liveScanStatusAt = Date.now()
@@ -4394,6 +4568,7 @@ ${entry.prompt || ''}`.trim()
       const bundle = currentDraftBundle()
       const seedRaw = $('.ld-seed').value
       const res = await call('generate', {
+        chatId: activeChatIdFromCtx() || '',
         prompt: $('.ld-prompt').value,
         // Studio is fully isolated. Add any quality tags, subjects, or other
         // prompt text manually in the prompt field when you want them.
@@ -4490,6 +4665,17 @@ ${entry.prompt || ''}`.trim()
       }
     }
     drag = null
+  })
+  launcher.addEventListener('pointercancel', () => { drag = null })
+  // Pointer taps are handled above; keyboard activation has no pointerdown.
+  launcher.addEventListener('click', (event) => {
+    if (event.detail !== 0) return
+    panel.classList.toggle('ld-open')
+    if (panel.classList.contains('ld-open')) {
+      placePanel()
+      document.body.classList.toggle('ld-fullscreen-lock', panel.classList.contains('ld-fullscreen'))
+      if (!initialized) tryInit()
+    } else document.body.classList.remove('ld-fullscreen-lock')
   })
 
   // Settings was a flat scroll of five unrelated cards, where a cloud panel for a
@@ -7466,6 +7652,7 @@ ${entry.prompt || ''}`.trim()
           const context = readImageEventContext(payload)
           const eventChatId = String(context.chatId || (payload && (payload.chatId || payload.id || (payload.chat && payload.chat.id))) || '')
           lastSeenChatId = eventChatId
+          resetRendererPreviewForChat()
           resetWardrobeView()
           renderStoryContinuity(eventChatId)
           for (const placementId of [...imagePlacementMounts.keys()]) clearImagePlacementMount(placementId)
@@ -7744,6 +7931,9 @@ ${entry.prompt || ''}`.trim()
     for (const event of ['focus', 'pageshow', 'online']) window.removeEventListener(event, onImageRestoreWake)
     if (wardrobeRefreshTimer) clearTimeout(wardrobeRefreshTimer)
     stopScanElapsedTimer()
+    clearPreviewNoticeTimer()
+    if (liveRendererPreview) liveRendererPreview.preview = ''
+    liveRendererPreview = null
     wardrobeViewEpoch++
     wardrobeReviewSequence++
     historyThumbs.clear()

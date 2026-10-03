@@ -2708,11 +2708,66 @@ async function swarmImage(settings, location) {
   return bytes.toString('base64')
 }
 
+const SWARM_PREVIEW_MAX_LENGTH = 2 * 1024 * 1024
+let swarmGenerationSequence = 0
+function swarmPreviewData(value) {
+  if (typeof value !== 'string' || value.length > SWARM_PREVIEW_MAX_LENGTH) return null
+  const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(value)
+  if (!match || match[2].length % 4) return null
+  // No HTML/SVG, URLs, fetches or metadata. Check the claimed raster signature
+  // too; previews are untrusted socket data and never library/history images.
+  const bytes = Buffer.from(match[2].slice(0, 32), 'base64')
+  const valid = match[1] === 'png' ? bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))
+    : match[1] === 'jpeg' ? bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
+      : bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'
+  return valid ? value : null
+}
+function swarmProgressLifecycle(progress, context = {}) {
+  const startedAt = Date.now(), generationId = 'swarm-' + startedAt + '-' + (++swarmGenerationSequence) + '-' + Math.random().toString(36).slice(2, 8)
+  const binding = {}
+  for (const key of ['chatId', 'scanId']) if (typeof context[key] === 'string' && context[key].length && context[key].length <= 256) binding[key] = context[key]
+  for (const key of ['imageIndex', 'imageTotal']) if (Number.isInteger(context[key]) && context[key] > 0 && context[key] <= 100) binding[key] = context[key]
+  let sequence = 0, percent = null, terminal = false, lastFrameAt = null, timer = null, pending = null
+  const emit = (stage, preview) => {
+    if (typeof progress !== 'function') return
+    const packet = { renderer: 'SwarmUI', ...binding, generationId, startedAt, sequence: ++sequence, stage, percent,
+      ...(preview ? { preview } : {}) }
+    try { const result = progress(packet); if (result && typeof result.catch === 'function') result.catch(() => {}) } catch { /* UI transport is optional. */ }
+  }
+  const flush = () => {
+    if (timer !== null) { clearTimeout(timer); timer = null }
+    if (terminal || !pending) return
+    const frame = pending; pending = null; lastFrameAt = Date.now()
+    emit('rendering', frame.preview)
+  }
+  emit('started')
+  return {
+    update(value = {}) {
+      if (terminal) return
+      if (typeof value.percent === 'number' && Number.isFinite(value.percent)) percent = Math.max(0, Math.min(100, Math.round(value.percent)))
+      const preview = swarmPreviewData(value.preview)
+      // Preserve the newest preview if a percent-only/status packet arrives
+      // before the timer; a preview-only packet needs no percentage to display.
+      pending = { ...(pending || {}), ...(preview ? { preview } : {}) }
+      if (lastFrameAt === null || Date.now() - lastFrameAt >= 500) flush()
+      else if (timer === null) timer = setTimeout(flush, Math.max(1, 500 - (Date.now() - lastFrameAt)))
+    },
+    finish(stage) {
+      if (terminal) return
+      flush(); terminal = true
+      if (timer !== null) { clearTimeout(timer); timer = null }
+      pending = null
+      if (stage === 'complete') percent = 100
+      emit(stage === 'complete' ? 'complete' : 'error')
+    },
+  }
+}
+
 function swarmSocketRequest(settings, payload, session, progress) {
   return new Promise((resolve, reject) => {
     const url = swarmBaseUrl(settings).replace(/^http/, 'ws') + '/API/GenerateText2ImageWS'
     const socket = new WebSocket(url), images = new Map()
-    let settled = false, lastProgress = 0
+    let settled = false
     const finish = error => {
       if (settled) return
       settled = true; clearTimeout(timer)
@@ -2744,10 +2799,11 @@ function swarmSocketRequest(settings, payload, session, progress) {
         images.set(String(item.batch_index ?? 0), item.image)
       }
       for (const index of Array.isArray(data.discard_indices) ? data.discard_indices : []) images.delete(String(index))
-      if (progress && (data.gen_progress || data.status) && Date.now() - lastProgress > 3000) {
-        lastProgress = Date.now()
-        const n = Number(data.gen_progress && data.gen_progress.overall_percent)
-        try { progress({ percent: Number.isFinite(n) && data.gen_progress ? Math.max(0, Math.min(100, Math.round(n * 100))) : null }) } catch { /* UI is optional */ }
+      if (progress && (data.gen_progress || data.status)) {
+        const gp = data.gen_progress && typeof data.gen_progress === 'object' && !Array.isArray(data.gen_progress) ? data.gen_progress : {}
+        const n = typeof gp.overall_percent === 'number' ? gp.overall_percent : gp.current_percent
+        try { progress({ percent: typeof n === 'number' && Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n * 100))) : null,
+          ...(typeof gp.preview === 'string' ? { preview: gp.preview } : {}) }) } catch { /* UI is optional */ }
       }
       if (data.socket_intention === 'close') finish()
     }
@@ -2759,25 +2815,34 @@ function swarmSocketRequest(settings, payload, session, progress) {
   })
 }
 
-async function generateSwarmImages(settings, payload, progress) {
-  let result
-  if (typeof WebSocket === 'function') {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try { result = await swarmSocketRequest(settings, payload, await swarmSession(settings), progress); break }
-      catch (error) { if (error.code !== 'invalid_session_id' || attempt) throw error }
+async function generateSwarmImages(settings, payload, progress, context = {}) {
+  const lifecycle = swarmProgressLifecycle(progress, context)
+  try {
+    let result
+    if (typeof WebSocket === 'function') {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try { result = await swarmSocketRequest(settings, payload, await swarmSession(settings), value => lifecycle.update(value)); break }
+        catch (error) { if (error.code !== 'invalid_session_id' || attempt) throw error }
+      }
+    } else {
+      // Compatibility for older hosts only. Never fall back after a socket was
+      // opened: the original request could already be rendering.
+      lifecycle.update()
+      result = await swarmApi(settings, 'GenerateText2Image', payload, 600000)
     }
-  } else {
-    // Compatibility for older hosts only. Never fall back after a socket was
-    // opened: the original request could already be rendering.
-    result = await swarmApi(settings, 'GenerateText2Image', payload, 600000)
+    if (!Array.isArray(result.images) || result.images.length !== 1) throw new Error('SwarmUI did not return exactly one image. Check its generation history before retrying.')
+    const item = result.images[0]
+    const images = [await swarmImage(settings, typeof item === 'string' ? item : item && item.image)]
+    lifecycle.finish('complete')
+    return images
+  } catch (error) {
+    lifecycle.finish('error')
+    throw error
   }
-  if (!Array.isArray(result.images) || result.images.length !== 1) throw new Error('SwarmUI did not return exactly one image. Check its generation history before retrying.')
-  const item = result.images[0]
-  return [await swarmImage(settings, typeof item === 'string' ? item : item && item.image)]
 }
 
-async function generateImages(settings, payload, label = 'generation', renderer = 'drawthings', progress = null) {
-  if (renderer === 'swarmui') return { images: await generateSwarmImages(settings, payload, progress), backend: 'swarmui' }
+async function generateImages(settings, payload, label = 'generation', renderer = 'drawthings', progress = null, context = {}) {
+  if (renderer === 'swarmui') return { images: await generateSwarmImages(settings, payload, progress, context), backend: 'swarmui' }
   if (!cloudEnabled(settings)) return { images: await dtGenerate(settings, payload), backend: 'local' }
   try {
     const images = await cloudGenerate(settings, payload)
@@ -4918,7 +4983,7 @@ function finalClarityDebugForPrompt(debug, prompt, negativePrompt) {
     ...(core ? { sceneCore: { ...core, finalClarityReview: invalidated } } : {}) } }
 }
 
-async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, seed, origin, debug }, userId, scan = null) {
+async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, seed, origin, debug, progressContext = {} }, userId, scan = null) {
   assertStoryScanActive(scan)
   // A manual prompt/outfit correction is the user's instruction. Keep it, and
   // do not carry a successful clarity verdict over from a different prompt.
@@ -4945,8 +5010,12 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     spindle.log.info('[lumidraw] no model in the payload — Draw Things will use the model selected in its own UI')
   }
   const started = Date.now()
+  const renderContext = { ...progressContext, chatId: String(origin && origin.chatId || progressContext.chatId || scan && scan.chatId || ''),
+    ...(scan && scan.id ? { scanId: scan.id } : {}),
+    imageIndex: progressContext.imageIndex || origin && origin.sceneIndex || 1,
+    imageTotal: progressContext.imageTotal || origin && origin.sceneCount || 1 }
   const { images, backend, fellBackFrom } = await generateImages(settings, payloadOut, 'story generation', imageRenderer(merged),
-    progress => notifyFrontend(userId, 'renderer_progress', { renderer: 'SwarmUI', ...progress }))
+    progress => notifyFrontend(userId, 'renderer_progress', progress), renderContext)
   assertStoryScanActive(scan)
   const uploads = []
   for (const b64 of images) {
@@ -12568,6 +12637,7 @@ async function runDirectImagesImpl(initialImages, ctx) {
       config: preset.config,
       extra: preset.extra,
       dims,
+      progressContext: { imageIndex: index + 1, imageTotal: prepared.length },
       origin: { ...origin, mode: 'direct', alt: storyImageAltText(finalPrompt), swipeId: target && target.swipeId },
       debug: { troubleshooting: { passage: target && target.content || '', profiles, settings: troubleshootingSettings(settings),
         parserDebug: { ...debugBase, entries: [debugEntries[index]], selectedEntryIndex: 1 } },
@@ -15316,6 +15386,8 @@ function setStoryScanStage(scan, stage, note = '') {
       stage,
       note,
       messageId: scan.messageId || '',
+      chatId: scan.chatId || '',
+      ...(scan.renderer ? { renderer: scan.renderer } : {}),
       startedAt: scan.startedAt,
       elapsedMs,
       cancellable: !['done', 'cancelled', 'error'].includes(stage),
@@ -15949,6 +16021,8 @@ function stopAutomaticScanWork(reason = 'Automatic illustration was turned off.'
         stage: 'cancelling',
         note: reason,
         messageId: activeStoryScan.messageId || '',
+        chatId: activeStoryScan.chatId || '',
+        ...(activeStoryScan.renderer ? { renderer: activeStoryScan.renderer } : {}),
         startedAt: activeStoryScan.startedAt,
         elapsedMs: Date.now() - activeStoryScan.startedAt,
         cancellable: false,
@@ -16276,6 +16350,8 @@ async function scanStory(userId, options = {}) {
         stage: scan.stage,
         note: scan.note,
         messageId: scan.messageId || '',
+        chatId: scan.chatId || '',
+        ...(scan.renderer ? { renderer: scan.renderer } : {}),
         startedAt: scan.startedAt,
         elapsedMs: totalAge,
         cancellable: true,
@@ -16440,6 +16516,10 @@ async function scanStoryCore(userId, options = {}) {
   const preset = storyPresetFor(savedPreset, settings)
   if (!preset) {
     return { mode: settings.mode, note: 'No generation preset selected — choose one in Story → Setup.' }
+  }
+  if (scan) {
+    scan.renderer = imageRenderer(preset.config) === 'swarmui' ? 'SwarmUI' : 'Draw Things'
+    setStoryScanStage(scan, 'starting', scan.note || 'Preparing story message.')
   }
 
   const located = await locateStoryMessage(userId, {
@@ -16607,6 +16687,7 @@ async function scanStoryCore(userId, options = {}) {
             config: preset.config,
             extra: preset.extra,
             dims,
+            progressContext: { imageIndex: tags.indexOf(m) + 1, imageTotal: tags.length, ...(scan && scan.id ? { scanId: scan.id } : {}) },
             origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'inline', alt: inlineAlt },
           }, userId)
         }
@@ -16864,6 +16945,7 @@ async function scanStoryCore(userId, options = {}) {
           prompt: compiled.prompt,
           debug: { trace: compiled.trace, scene: compiled.scene },
           negativePrompt: negativeWith(preset.negativePrompt, compiled.garmentNegatives),
+          progressContext: { imageIndex: parserImageIndex, imageTotal: acceptedParsed.length },
           config: preset.config,
           extra: preset.extra,
           dims,
@@ -16978,6 +17060,7 @@ async function scanStoryCore(userId, options = {}) {
         negativePrompt: preset.negativePrompt,
         config: preset.config,
         extra: preset.extra,
+        progressContext: { imageIndex: legacyImageIndex, imageTotal: lines.length },
         origin: { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '', mode: 'legacy-parser' },
       }, userId, scan)
       mds.push(await placeGeneratedStoryImage(userId, {
@@ -18162,6 +18245,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
               ? 'Cancellation requested. Draw Things may finish its current local render, but LumiDraw will discard it.'
               : 'Cancellation requested. Waiting for the current provider call to release.',
             messageId: activeStoryScan.messageId || '',
+            chatId: activeStoryScan.chatId || '',
+            ...(activeStoryScan.renderer ? { renderer: activeStoryScan.renderer } : {}),
             startedAt: activeStoryScan.startedAt,
             elapsedMs: Date.now() - activeStoryScan.startedAt,
             cancellable: false,
@@ -18231,6 +18316,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
             const entry = await generateAndUpload({
               prompt: compiled.prompt,
               debug: { trace: compiled.trace, scene: compiled.scene }, negativePrompt: preset.negativePrompt, config: preset.config, extra: preset.extra, dims,
+              progressContext: { chatId: String(chatId || ''), imageIndex: 1, imageTotal: 1 },
             }, userId)
             pregenCache.set(fp, entry)
             if (pregenCache.size > 8) pregenCache.delete(pregenCache.keys().next().value)
@@ -19072,8 +19158,12 @@ spindle.onFrontendMessage(async (payload, userId) => {
           spindle.log.info('[lumidraw] Studio generation sent with no model — Draw Things will use the model selected in its own UI')
         }
         const started = Date.now()
+        let renderChatId = String(payload.chatId || '')
+        if (!renderChatId && imageRenderer(payload.config) === 'swarmui') {
+          try { renderChatId = String(await resolveActiveChatId(userId) || '') } catch { /* Studio rendering does not require a story chat. */ }
+        }
         const { images, backend, fellBackFrom } = await generateImages(settings, payloadOut, 'Studio generation', imageRenderer(payload.config),
-          progress => notifyFrontend(userId, 'renderer_progress', { renderer: 'SwarmUI', ...progress }))
+          progress => notifyFrontend(userId, 'renderer_progress', progress), { chatId: renderChatId, imageIndex: 1, imageTotal: 1 })
 
         // Persist to Lumiverse's image library (tagged to this extension).
         // Operator-scoped installs require an explicit userId on user-owned
