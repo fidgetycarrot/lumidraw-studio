@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.6.6'
+const EXTENSION_VERSION = '1.6.7'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -300,6 +300,9 @@ function realSetup(ctx) {
   let liveRendererPreview = null
   let previewNoticeTimer = null
   let previewStartedAt = 0
+  let pendingRendererStatus = null
+  let previewViewportDirty = false
+  let previewDisposed = false
   const retiredPreviewIds = new Set()
   const wardrobeDiagnosticsByChat = new Map()
   let clickedChatImageUrl = ''
@@ -336,18 +339,31 @@ function realSetup(ctx) {
     return lumidrawImageVariantUrl(original, tier, settings.optimizedPreviews !== false)
   }
 
+  const previewSourceStates = new WeakMap()
   function setPreviewImageSource(img, original, tier) {
     if (!img) return
     const canonical = String(original || '')
-    img.dataset.lumidrawOriginalUrl = canonical
+    const requested = previewUrl(canonical, tier)
+    const previous = previewSourceStates.get(img)
+    if (img.dataset.lumidrawOriginalUrl !== canonical) img.dataset.lumidrawOriginalUrl = canonical
     if (!img.dataset.lumidrawPreviewFallbackBound) {
       img.dataset.lumidrawPreviewFallbackBound = '1'
       img.addEventListener('error', () => {
         const fallback = String(img.dataset.lumidrawOriginalUrl || '')
-        if (fallback && img.getAttribute('src') !== fallback) img.src = fallback
+        if (fallback && img.getAttribute('src') !== fallback) {
+          const state = previewSourceStates.get(img)
+          if (state) state.failed = true
+          img.src = fallback
+        }
       })
     }
-    img.src = previewUrl(canonical, tier)
+    // Do not reload an unchanged image, or repeatedly retry a failed thumbnail
+    // during remount/resize. A different display tier gets a fresh attempt.
+    const state = previous && previous.requested === requested && previous.canonical === canonical
+      ? previous : { requested, canonical, failed: false }
+    previewSourceStates.set(img, state)
+    const desired = state.failed ? canonical : requested
+    if (img.getAttribute('src') !== desired) img.src = desired
   }
 
   function refreshNativePreviewSources() {
@@ -2262,10 +2278,26 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     renderLauncherPreview()
     const label = terminal ? (value.stage === 'error' ? 'SwarmUI generation failed. See the generation error for details.' : 'SwarmUI rendered the image; saving output…')
       : 'SwarmUI rendering' + (percent == null ? '…' : ' · ' + percent + '%')
-    setStatus('.ld-gen-status', label, value.stage === 'error' ? 'err' : undefined)
+    pendingRendererStatus = { value, stage: value.stage, label, kind: value.stage === 'error' ? 'err' : undefined }
+    paintRendererStatus()
+  }
+
+  function paintRendererStatus() {
+    if (previewDisposed || document.hidden || !pendingRendererStatus) return
+    const pending = pendingRendererStatus
+    pendingRendererStatus = null
+    // A scan may finish or change chats while this document is hidden. Do not
+    // replace that newer status with a deferred renderer notification.
+    if (pending.value !== liveRendererPreview || pending.stage !== pending.value.stage ||
+        pending.value.scanEnded || !rendererPreviewVisible(pending.value)) return
+    const el = $('.ld-gen-status')
+    if (el && (el.textContent !== pending.label || el.classList.contains('ld-err') !== (pending.kind === 'err') || el.classList.contains('ld-good'))) {
+      setStatus('.ld-gen-status', pending.label, pending.kind)
+    }
   }
 
   function renderLauncherPreview() {
+    if (previewDisposed) return
     const button = $('.ld-launcher'), img = $('.ld-launcher-preview')
     const status = $('.ld-launcher-status'), progress = $('.ld-launcher-progress')
     if (!button || !img || !status || !progress) return
@@ -2314,29 +2346,68 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       active = scan.renderer === 'SwarmUI' || !!value
       failed = true; text = 'Check status'; title = 'Lumi Studio · Connection status unknown'; preview = ''; pct = null
     }
-    const previousRect = button.getBoundingClientRect()
-    button.classList.toggle('ld-preview-active', active)
-    button.classList.toggle('ld-has-preview', active && !!preview)
-    button.classList.toggle('ld-preview-error', active && failed)
-    button.setAttribute('aria-busy', String(active && !(value && value.terminal)))
-    button.title = active ? title : 'Lumi Studio v' + EXTENSION_VERSION
-    button.setAttribute('aria-label', button.title + ' — open Studio')
-    status.hidden = !active
-    status.textContent = active ? text : ''
-    img.hidden = !active || !preview
+    if (document.hidden) {
+      // Keep accepting the latest state, but do not paint hidden-tab progress.
+      // Privacy/lifecycle clearing still happens immediately on chat switch,
+      // cancellation, error, completion, or replacement by a new generation.
+      if (!active || !preview) {
+        if (img.hasAttribute('src')) img.removeAttribute('src')
+        if (!img.hidden) img.hidden = true
+      }
+      return
+    }
+    const resized = button.classList.contains('ld-preview-active') !== active
+    // Only the active/idle transition changes launcher dimensions. A default
+    // CSS-anchored launcher already grows inward; only a dragged one needs a
+    // geometry read and clamp. Percent/frame updates must never force layout.
+    const previousRect = resized && button.style.left ? button.getBoundingClientRect() : null
+    for (const [name, enabled] of [['ld-preview-active', active], ['ld-has-preview', active && !!preview], ['ld-preview-error', active && failed]]) {
+      if (button.classList.contains(name) !== enabled) button.classList.toggle(name, enabled)
+    }
+    const busyText = String(active && !(value && value.terminal))
+    if (button.getAttribute('aria-busy') !== busyText) button.setAttribute('aria-busy', busyText)
+    const buttonTitle = active ? title : 'Lumi Studio v' + EXTENSION_VERSION
+    if (button.title !== buttonTitle) button.title = buttonTitle
+    const ariaLabel = buttonTitle + ' — open Studio'
+    if (button.getAttribute('aria-label') !== ariaLabel) button.setAttribute('aria-label', ariaLabel)
+    if (status.hidden !== !active) status.hidden = !active
+    const statusText = active ? text : ''
+    if (status.textContent !== statusText) status.textContent = statusText
+    const imageHidden = !active || !preview
+    if (img.hidden !== imageHidden) img.hidden = imageHidden
     if (active && preview) {
       if (img.getAttribute('src') !== preview) img.setAttribute('src', preview)
-    } else img.removeAttribute('src')
-    progress.hidden = !active || !!(value && value.terminal)
-    if (pct === null) progress.removeAttribute('value')
-    else progress.value = pct
+    } else if (img.hasAttribute('src')) img.removeAttribute('src')
+    const progressHidden = !active || !!(value && value.terminal)
+    if (progress.hidden !== progressHidden) progress.hidden = progressHidden
+    if (pct === null) {
+      if (progress.hasAttribute('value')) progress.removeAttribute('value')
+    } else if (progress.getAttribute('value') !== String(pct)) progress.value = pct
     // Growing the draggable button must not place it beyond a phone's edge.
-    if (active && (previousRect.right > window.innerWidth - 4 || previousRect.bottom > window.innerHeight - 4 || button.style.left)) {
-      applyPos(previousRect.left, previousRect.top)
-    }
+    if (previousRect) applyPos(previousRect.left, previousRect.top)
   }
 
+  function onPreviewViewportChange() {
+    if (previewDisposed) return
+    if (document.hidden) { previewViewportDirty = true; return }
+    previewViewportDirty = false
+    if (!launcher.style.left) return
+    const rect = launcher.getBoundingClientRect()
+    applyPos(rect.left, rect.top)
+  }
+
+  function onPreviewVisibilityChange() {
+    if (previewDisposed || document.hidden) return
+    renderLauncherPreview()
+    paintRendererStatus()
+    if (previewViewportDirty) onPreviewViewportChange()
+  }
+
+  document.addEventListener('visibilitychange', onPreviewVisibilityChange)
+  window.addEventListener('resize', onPreviewViewportChange)
+
   function resetRendererPreviewForChat() {
+    pendingRendererStatus = null
     if (liveRendererPreview && liveRendererPreview.chatId) {
       retireRendererPreview(liveRendererPreview.generationId)
       liveRendererPreview = null
@@ -2731,6 +2802,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (persist) {
       try { localStorage.setItem(MAIN_VIEW_KEY, next) } catch { /* best effort */ }
     }
+    flushHistoryViews()
   }
 
   function setMobileTab(name, persist = true) {
@@ -2745,6 +2817,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (persist) {
       try { localStorage.setItem(MOBILE_TAB_KEY, next) } catch { /* best effort */ }
     }
+    flushHistoryViews()
   }
 
   function renderHeaderState() {
@@ -4362,18 +4435,43 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       : 'Loaded this history image, prompt, and seed into Create. This older history item did not save its negative prompt.', 'good')
   }
 
+  let currentOutputDirty = true
+  let historyGalleryDirty = true
+  let currentOutputSignature = null
+
+  function historyViewVisible(element) {
+    if (!element || document.hidden || !panel.classList.contains('ld-open')) return false
+    const view = element.closest('.ld-view')
+    if (view && !view.classList.contains('ld-active')) return false
+    if (window.matchMedia && window.matchMedia('(max-width: 840px)').matches) {
+      const pane = element.closest('[data-mobile-panel]')
+      if (pane && !pane.classList.contains('ld-mobile-active')) return false
+    }
+    return true
+  }
+
   function renderCurrentOutput() {
+    currentOutputDirty = true
+    flushCurrentOutput()
+  }
+
+  function flushCurrentOutput() {
     const stage = $('.ld-current-output')
-    if (!stage) return
-    stage.innerHTML = ''
+    if (!currentOutputDirty || !historyViewVisible(stage)) return
     const item = currentOutputItem()
     const entry = item && item.entry
     const image = item && item.image
+    const signature = entry && image
+      ? JSON.stringify([image.url, previewUrl(image.url, 'lg'), entry.prompt, entry.model, entry.seed, entry.durationMs])
+      : 'empty'
+    currentOutputDirty = false
+    if (currentOutputSignature === signature) return
+    currentOutputSignature = signature
     if (!entry || !image) {
       const empty = document.createElement('div')
       empty.className = 'ld-output-empty'
       empty.textContent = 'Your newest image will appear here.'
-      stage.appendChild(empty)
+      stage.replaceChildren(empty)
       return
     }
     const hit = document.createElement('button')
@@ -4382,6 +4480,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     hit.title = 'Open image viewer'
     hit.setAttribute('aria-label', 'Open generated image viewer')
     const img = document.createElement('img')
+    img.decoding = 'async'
     setPreviewImageSource(img, image.url, 'lg')
     img.alt = (entry.prompt || 'Generated image').slice(0, 160)
     img.draggable = false
@@ -4393,33 +4492,43 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     meta.textContent = parts.join(' · ')
     meta.title = `${parts.join(' · ')}
 ${entry.prompt || ''}`.trim()
-    stage.appendChild(hit)
-    stage.appendChild(meta)
+    stage.replaceChildren(hit, meta)
   }
 
   const historyThumbs = new Map()
   function renderHistory() {
+    historyGalleryDirty = true
     renderCurrentOutput()
+    flushHistoryGallery()
+  }
+
+  function flushHistoryGallery() {
     const el = $('.ld-history')
-    if (!el) return
-    const fragment = document.createDocumentFragment()
+    if (!historyGalleryDirty || !historyViewVisible(el)) return
+    historyGalleryDirty = false
+    const ordered = []
     const retained = new Set()
     if (!history.length) {
-      const empty = document.createElement('div')
-      empty.className = 'ld-lora-empty'
-      empty.textContent = 'No recent images yet.'
-      el.replaceChildren(empty)
+      if (el.childNodes.length !== 1 || !el.firstElementChild || !el.firstElementChild.classList.contains('ld-lora-empty')) {
+        const empty = document.createElement('div')
+        empty.className = 'ld-lora-empty'
+        empty.textContent = 'No recent images yet.'
+        el.replaceChildren(empty)
+      }
       historyThumbs.clear()
       return
     }
     for (const entry of history) {
       for (const img of entry.images || []) {
         const key = img.url
-        const signature = JSON.stringify([entry, img])
+        if (retained.has(key)) continue
+        // The effective URL changes when optimized previews are toggled, even
+        // though the saved image and its history record have not changed.
+        const signature = JSON.stringify([entry, img, previewUrl(img.url, 'sm')])
         const cached = historyThumbs.get(key)
         retained.add(key)
         if (cached && cached.signature === signature) {
-          fragment.appendChild(cached.wrap)
+          ordered.push(cached.wrap)
           continue
         }
         const wrap = document.createElement('div')
@@ -4489,12 +4598,33 @@ ${entry.prompt || ''}`.trim()
         wrap.appendChild(hit)
         wrap.appendChild(row)
         historyThumbs.set(key, { signature, wrap })
-        fragment.appendChild(wrap)
+        ordered.push(wrap)
       }
     }
     for (const key of historyThumbs.keys()) if (!retained.has(key)) historyThumbs.delete(key)
-    el.replaceChildren(fragment)
+    // Keep unchanged image elements mounted: moving every thumbnail through a
+    // fragment forces decode/layout work and wakes unrelated DOM observers.
+    const desired = new Set(ordered)
+    for (const child of [...el.childNodes]) if (!desired.has(child)) child.remove()
+    let cursor = el.firstChild
+    for (const wrap of ordered) {
+      if (wrap !== cursor) el.insertBefore(wrap, cursor)
+      cursor = wrap.nextSibling
+    }
   }
+
+  function flushHistoryViews() {
+    flushCurrentOutput()
+    flushHistoryGallery()
+  }
+
+  // Only observe our own panel's visibility, not the page or chat. This also
+  // covers Lumiverse's drawer and the recovered launcher opening the panel.
+  const historyPanelObserver = typeof MutationObserver !== 'undefined'
+    ? new MutationObserver(flushHistoryViews) : null
+  if (historyPanelObserver) historyPanelObserver.observe(panel, { attributes: true, attributeFilter: ['class'] })
+  document.addEventListener('visibilitychange', flushHistoryViews)
+  window.addEventListener('resize', flushHistoryViews)
 
   function selectPreset(name) {
     const preset = presets.find((item) => item.name === name)
@@ -5099,10 +5229,18 @@ ${entry.prompt || ''}`.trim()
     imageAttachRetryTimers.delete(id)
   }
 
+  const retiredImageMounts = new WeakSet()
   function clearImagePlacementMount(placementId) {
     const id = String(placementId || '')
     const mount = imagePlacementMounts.get(id)
-    if (mount) dom.uninject(mount)
+    if (mount) {
+      // A host cooperative replay may already hold this wrapper in a queued
+      // callback. If it arrives after a swipe/removal, it is no longer ours.
+      retiredImageMounts.add(mount)
+      // Also make late replays inert after teardown, when our observer is gone.
+      if (typeof mount.replaceChildren === 'function') mount.replaceChildren()
+      dom.uninject(mount)
+    }
     imagePlacementMounts.delete(id)
     imagePlacementRenderKeys.delete(id)
     imagePlacementMountMessages.delete(id)
@@ -5117,14 +5255,34 @@ ${entry.prompt || ''}`.trim()
     cancelImageAttachRetry(id)
   }
 
+  // Placement snapshots are replaced, never mutated in place. Index once per
+  // snapshot instead of scanning all historical images for each mounted row.
+  let indexedImagePlacements = null
+  let indexedImageChatId = ''
+  let imagePlacementsByMessage = new Map()
+  function placementMessageIndex() {
+    if (indexedImagePlacements === imagePlacements && indexedImageChatId === imagePlacementChatId) return imagePlacementsByMessage
+    indexedImagePlacements = imagePlacements
+    indexedImageChatId = imagePlacementChatId
+    imagePlacementsByMessage = new Map()
+    for (const item of imagePlacements) {
+      if (!item || (imagePlacementChatId && String(item.chatId || '') !== imagePlacementChatId)) continue
+      const id = String(item.messageId || '')
+      if (!id) continue
+      if (!imagePlacementsByMessage.has(id)) imagePlacementsByMessage.set(id, [])
+      imagePlacementsByMessage.get(id).push(item)
+    }
+    for (const items of imagePlacementsByMessage.values()) {
+      items.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0))
+    }
+    return imagePlacementsByMessage
+  }
+
   function placementsForMessage(messageId) {
     const id = String(messageId || '')
     const activeChat = activeChatIdFromCtx()
     if (activeChat && imagePlacementChatId && activeChat !== imagePlacementChatId) return []
-    return imagePlacements
-      .filter((item) => item && String(item.messageId || '') === id &&
-        (!imagePlacementChatId || String(item.chatId || '') === imagePlacementChatId))
-      .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0))
+    return placementMessageIndex().get(id) || []
   }
 
   function placementRenderKey(item) {
@@ -5159,17 +5317,22 @@ ${entry.prompt || ''}`.trim()
 
   function applyNativeImageSizingToMount(mount) {
     if (!mount || !mount.querySelectorAll) return
+    const size = (node, name, value) => {
+      if (node.style.getPropertyValue(name) !== value || node.style.getPropertyPriority(name) !== 'important') {
+        node.style.setProperty(name, value, 'important')
+      }
+    }
     for (const item of mount.querySelectorAll('.ld-chat-image-item')) {
       const px = configuredChatImageWidth(item.getAttribute('data-intrinsic-width'))
-      item.style.setProperty('width', `${px}px`, 'important')
-      item.style.setProperty('max-width', '100%', 'important')
+      size(item, 'width', `${px}px`)
+      size(item, 'max-width', '100%')
       const img = item.querySelector('.ld-chat-image')
       if (img) {
         setPreviewImageSource(img, img.dataset.lumidrawOriginalUrl || img.getAttribute('src') || '', 'lg')
-        img.style.setProperty('width', '100%', 'important')
-        img.style.setProperty('max-width', '100%', 'important')
-        img.style.setProperty('height', 'auto', 'important')
-        img.style.setProperty('max-height', 'none', 'important')
+        size(img, 'width', '100%')
+        size(img, 'max-width', '100%')
+        size(img, 'height', 'auto')
+        size(img, 'max-height', 'none')
       }
     }
   }
@@ -5229,13 +5392,13 @@ ${entry.prompt || ''}`.trim()
   // Returns true when every placement for this message has a live mount. A
   // missing virtualized row is not an error; keep the message pending and let
   // CHARACTER_MESSAGE_RENDERED satisfy it when Lumiverse mounts the row.
-  function renderImagesIntoMessage(messageId) {
+  function renderImagesIntoMessage(messageId, mountedNode = null) {
     const id = String(messageId || '')
     if (!id) return false
     const items = placementsForMessage(id)
     if (!items.length) { clearImageMessageMount(id); return true }
 
-    const messageNode = findMountedMessageElement(id)
+    const messageNode = mountedNode || findMountedMessageElement(id)
     if (!messageNode) {
       pendingImageMessageIds.add(id)
       return false
@@ -5247,9 +5410,19 @@ ${entry.prompt || ''}`.trim()
       if (mountedMessageId === id && !wantedIds.has(placementId)) { rebuild = true; break }
     }
     if (!rebuild) {
-      for (const item of items) {
+      for (const item of [...items].reverse()) {
         const placementId = String(item.placementId || '')
         const mount = imagePlacementMounts.get(placementId)
+        if (mount && imagePlacementRenderKeys.get(placementId) === placementRenderKey(item) &&
+          (!mount.isConnected || !messageNode.contains(mount))) {
+          // Keep the exact registered wrapper. Lumiverse's deferred replay can
+          // still be queued when our fallback runs; replacing it would let that
+          // old replay add a duplicate after we attach the new image.
+          const where = placementInjectionTarget(messageNode, item)
+          if (where.target && typeof where.target.insertAdjacentElement === 'function') {
+            try { where.target.insertAdjacentElement(where.position, mount) } catch { /* rebuild below */ }
+          }
+        }
         if (!mount || !mount.isConnected || !messageNode.contains(mount) || imagePlacementRenderKeys.get(placementId) !== placementRenderKey(item)) {
           rebuild = true
           break
@@ -5369,8 +5542,13 @@ ${entry.prompt || ''}`.trim()
     for (const placementId of [...imagePlacementMounts.keys()]) {
       if (!activePlacementIds.has(placementId)) clearImagePlacementMount(placementId)
     }
-    const messageIds = new Set(imagePlacements.map((item) => String(item && item.messageId || '')).filter(Boolean))
-    for (const id of messageIds) scheduleImageAttach(id)
+    const index = placementMessageIndex()
+    for (const id of pendingImageMessageIds) {
+      if (!index.has(id)) { pendingImageMessageIds.delete(id); cancelImageAttachRetry(id) }
+    }
+    // Historical offscreen rows are restored when mounted. Do not create a
+    // two-frame/timer retry burst for every saved image in a long conversation.
+    reconcileVisibleImages()
     return { count: imagePlacements.length, chatId: nextChatId }
   }
 
@@ -5381,21 +5559,58 @@ ${entry.prompt || ''}`.trim()
   let imageRestoreTimer = null
   let imageRestoreRequest = null
   let imageRestoreLastFetch = 0
-  function reconcileVisibleImages() {
+  const imageRestoreMessageIds = new Set()
+  let imageRestoreAllVisible = false
+  function messageIdForImageRestore(node) {
+    const element = node && (node.nodeType === 1 ? node : node.parentElement)
+    if (!element) return ''
+    try {
+      if (ctx.dom && typeof ctx.dom.getMessageId === 'function') return String(ctx.dom.getMessageId(element) || '')
+    } catch { /* older host fallback */ }
+    const row = element.closest && element.closest('[data-message-id], [data-messageid]')
+    return row ? String(row.getAttribute('data-message-id') || row.getAttribute('data-messageid') || '') : ''
+  }
+  function outerImageMessageNode(element, id) {
+    let node = element
+    while (node && node.parentElement && messageIdForImageRestore(node.parentElement) === id) node = node.parentElement
+    return node
+  }
+  function reconcileVisibleImages(messageIds = null) {
     if (imageRestoreDisposed || document.hidden) return
     const active = activeChatIdFromCtx()
     if (!active || active !== imagePlacementChatId) return
-    const ids = new Set(imagePlacements.map(p => String(p.messageId || '')).filter(Boolean))
+    const index = placementMessageIndex()
+    if (messageIds) {
+      for (const id of messageIds) {
+        if (!index.has(id)) continue
+        const node = findMountedMessageElement(id)
+        if (node) renderImagesIntoMessage(id, outerImageMessageNode(node, id))
+      }
+      return
+    }
     const mounted = ctx.dom && typeof ctx.dom.listMessageElements === 'function'
       ? ctx.dom.listMessageElements()
-      : [...document.querySelectorAll('[data-message-id]')].map(element => ({ messageId: element.getAttribute('data-message-id'), element }))
-    for (const row of mounted) if (ids.has(String(row.messageId))) renderImagesIntoMessage(String(row.messageId))
+      : [...document.querySelectorAll('[data-message-id], [data-messageid]')].map(element => ({ messageId: messageIdForImageRestore(element), element }))
+    const seen = new Set()
+    for (const row of mounted) {
+      const id = String(row.messageId || '')
+      if (!index.has(id) || seen.has(id)) continue
+      seen.add(id)
+      const node = row.element || findMountedMessageElement(id)
+      if (node) renderImagesIntoMessage(id, outerImageMessageNode(node, id))
+    }
   }
-  function queueVisibleImageRestore() {
-    if (imageRestoreDisposed || imageRestoreTimer !== null || !imagePlacements.length) return
+  function queueVisibleImageRestore(messageIds = null) {
+    if (imageRestoreDisposed || document.hidden || !imagePlacements.length) return
+    if (messageIds) for (const id of messageIds) imageRestoreMessageIds.add(id)
+    else imageRestoreAllVisible = true
+    if (imageRestoreTimer !== null) return
     imageRestoreTimer = setTimeout(() => {
       imageRestoreTimer = null
-      reconcileVisibleImages()
+      const ids = imageRestoreAllVisible ? null : new Set(imageRestoreMessageIds)
+      imageRestoreAllVisible = false
+      imageRestoreMessageIds.clear()
+      reconcileVisibleImages(ids)
     }, 100)
   }
   async function restoreChatImages(manual = false) {
@@ -5425,7 +5640,41 @@ ${entry.prompt || ''}`.trim()
     try { await request } finally { if (imageRestoreRequest === request) imageRestoreRequest = null }
   }
   const imageRestoreObserver = typeof MutationObserver === 'function' ? new MutationObserver(records => {
-    if (records.some(r => r.type === 'childList' && (r.addedNodes.length || r.removedNodes.length))) queueVisibleImageRestore()
+    if (imageRestoreDisposed) return
+    const index = !document.hidden && imagePlacements.length ? placementMessageIndex() : null
+    const affected = new Set()
+    const extensionUI = '.ld-panel, .ld-launcher, .ld-lightbox, [data-spindle-ext], [data-lumidraw="1"]'
+    for (const record of records) {
+      const target = record.target.nodeType === 1 ? record.target : record.target.parentElement
+      // Our widget/gallery (and other extensions' widgets) are not chat mounts.
+      if (!target || (target.closest && target.closest(extensionUI))) continue
+      const id = index ? messageIdForImageRestore(target) : ''
+      if (id && index.has(id)) {
+        // Our own successful injections must not schedule another restore pass.
+        const meaningfulAdded = [...record.addedNodes].some(node => node.nodeType !== 1 ||
+          !(node.matches(extensionUI) || node.querySelector('.ld-message-image-host')))
+        if (record.removedNodes.length || meaningfulAdded) affected.add(id)
+      }
+      for (const node of record.addedNodes) {
+        if (node.nodeType !== 1) continue
+        // Unregistering a host injection does not necessarily cancel a replay
+        // callback already queued by an older mounted row. Retire only exact
+        // wrappers previously owned by us, never arbitrary message content.
+        if (retiredImageMounts.has(node)) { dom.uninject(node); continue }
+        for (const host of node.querySelectorAll('.ld-message-image-host')) {
+          if (retiredImageMounts.has(host.parentElement)) dom.uninject(host.parentElement)
+        }
+        if (!index || node.matches(extensionUI)) continue
+        const ownId = messageIdForImageRestore(node)
+        if (ownId && index.has(ownId) && !node.querySelector('.ld-message-image-host')) affected.add(ownId)
+        // First-time virtual rows may arrive inside a newly mounted container.
+        for (const row of node.querySelectorAll('[data-message-id], [data-messageid]')) {
+          const rowId = messageIdForImageRestore(row)
+          if (index.has(rowId)) affected.add(rowId)
+        }
+      }
+    }
+    if (affected.size) queueVisibleImageRestore(affected)
   }) : null
   if (imageRestoreObserver) imageRestoreObserver.observe(document.body, { childList: true, subtree: true })
   const onImageRestoreWake = () => { if (!document.hidden) restoreChatImages(false) }
@@ -7931,12 +8180,19 @@ ${entry.prompt || ''}`.trim()
     for (const event of ['focus', 'pageshow', 'online']) window.removeEventListener(event, onImageRestoreWake)
     if (wardrobeRefreshTimer) clearTimeout(wardrobeRefreshTimer)
     stopScanElapsedTimer()
+    previewDisposed = true
+    pendingRendererStatus = null
+    document.removeEventListener('visibilitychange', onPreviewVisibilityChange)
+    window.removeEventListener('resize', onPreviewViewportChange)
     clearPreviewNoticeTimer()
     if (liveRendererPreview) liveRendererPreview.preview = ''
     liveRendererPreview = null
     wardrobeViewEpoch++
     wardrobeReviewSequence++
     historyThumbs.clear()
+    if (historyPanelObserver) historyPanelObserver.disconnect()
+    document.removeEventListener('visibilitychange', flushHistoryViews)
+    window.removeEventListener('resize', flushHistoryViews)
     imageOutfitEpoch++
     if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
