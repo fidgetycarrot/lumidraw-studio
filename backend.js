@@ -13666,28 +13666,27 @@ function directEvidenceInsideDialogue(passage, evidence) {
 
 function directMomentEvidenceContext(passage, evidence) {
   const raw = String(passage || '')
-  const words = normalizeIdentityText(evidence).split(/\s+/).filter(Boolean)
-  if (!raw || !words.length) return ''
-  let match = null
-  try { match = new RegExp(words.map(escapeRegExp).join('[^a-z0-9]+'), 'i').exec(raw) }
-  catch { return '' }
-  if (!match) return ''
-  const start = Math.max(0, match.index - 280)
-  const end = Math.min(raw.length, match.index + match[0].length + 280)
+  const location = scxMomentLocation(raw, evidence)
+  if (location.status !== 'located') return ''
+  const start = Math.max(0, location.range.start - 280)
+  const end = Math.min(raw.length, location.range.end + 280)
   return raw.slice(start, end).replace(/\s+/g, ' ').trim().slice(0, 800)
 }
 
 function assessDirectMomentEvidence(value, passage) {
   const evidence = String(value || '').replace(/\s+/g, ' ').trim().slice(0, 360)
   const evidenceNorm = normalizeIdentityText(evidence)
-  const passageNorm = normalizeIdentityText(passage)
   const words = evidenceNorm ? evidenceNorm.split(/\s+/).filter(Boolean).length : 0
   if (!evidenceNorm) return { valid: false, reason: 'moment_evidence was missing', evidence, words }
   if (words < 3 || words > 20) {
     return { valid: false, reason: `moment_evidence had ${words} words; expected 3-20`, evidence, words }
   }
-  if (!passageNorm.includes(evidenceNorm)) {
-    return { valid: false, reason: 'moment_evidence was not an exact quote from the current passage', evidence, words }
+  // Use the same bounded source locator as the wardrobe timeline. Accepting a
+  // quote here but failing to locate it there silently restored old clothing.
+  const location = scxMomentLocation(passage, evidence)
+  if (location.status !== 'located') {
+    return { valid: false, reason: 'moment_evidence: ' + location.reason, evidence, words,
+      sourceLocation: { scope: 'parser-passage', status: location.status, matchCount: location.matchCount } }
   }
   if (directEvidenceInsideDialogue(passage, evidence)) {
     return { valid: false, reason: 'moment_evidence came from dialogue rather than narrated action', evidence, words }
@@ -13702,7 +13701,9 @@ function assessDirectMomentEvidence(value, passage) {
       words,
     }
   }
-  return { valid: true, reason: '', evidence, words }
+  return { valid: true, reason: '', evidence, words,
+    sourceLocation: { scope: 'parser-passage', status: 'located', method: location.method,
+      start: location.range.start, end: location.range.end, text: location.range.text } }
 }
 
 function directMomentContradiction(image) {
@@ -21119,8 +21120,24 @@ function scxCoverageTag(value) {
   if (/^(?:(?:his|her|their|a|the)\s+)?(?:bare chest|bare chested|bare torso|naked torso|uncovered torso|uncovered chest)$/.test(tag)) return 'shirtless'
   return value
 }
+function scxClothingAlias(value) {
+  const original = scxText(value)
+  // This is a garment-head alias, not the general booru/identity rewriter.
+  // Cutoffs need not be denim: retain only modifiers the formatter supplied,
+  // which still require Jev's ordinary full-item or garment-only approval.
+  if (!/\bcut(?:[- ]?offs)\b/i.test(original)) return { item: original }
+  if (/\b(?:no|not|without|neither|never|missing|absent|unworn|removed)\b|n['’]t\b/i.test(original)) {
+    return { item: original, error: 'Negated clothing alias needs an explicit bare-state or removal event; it was not converted into worn shorts.' }
+  }
+  const match = /^((?:[\w-]+\s+){0,8})cut(?:[- ]?offs)$/i.exec(original)
+  if (!match) return { item: original, error: 'Unsupported clothing alias phrase; only a garment name with optional modifiers can be normalized.' }
+  const item = match[1] + 'shorts'
+  return { item, normalization: { original, normalized: item, rule: 'clothing-head:cutoffs-to-shorts' } }
+}
 function scxGarmentCore(value) {
-  const tag = String(scxCoverageTag(value) || '').trim()
+  const alias = scxClothingAlias(scxCoverageTag(value))
+  if (alias.error) return ''
+  const tag = alias.item
   if (coreAbsentSlots(tag).length) return tag
   // Only a recognized garment head may survive a rejected modifier. Do not
   // let garmentFamily's unknown-word fallback turn arbitrary prose into attire.
@@ -21168,7 +21185,7 @@ function scxTrackerProposals(reference, target, profiles, source) {
         if (seen.has(key)) continue
         seen.add(key)
         proposals.push({ kind: 'wardrobe', name: profile.anchor || profile.ref, operation: coreAbsentSlots(core).length ? 'bare' : 'observe',
-          items: [directWardrobeTag(proposed) ? proposed : core], evidence: range.text, source: 'narrative', occurrence: 1,
+          items: [directWardrobeTag(scxClothingAlias(proposed).item) ? proposed : core], evidence: range.text, source: 'narrative', occurrence: 1,
           _tracker: { field: evidence.field, snapshotMessageId: snapshot.source.messageId,
             recordFingerprint: snapshot.source.recordFingerprint, sourceMessageId: evidence.sourceMessageId,
             sourceSwipeId: evidence.sourceSwipeId, start: range.start, end: range.end } })
@@ -21306,6 +21323,60 @@ function scxQuoteRange(source, quote, occurrence = 1) {
   return { start, end, text: String(source).slice(start, end),
     unique: view.text.indexOf(needle) === at && view.text.indexOf(needle, at + 1) < 0 }
 }
+// Image moment location only. Canonical wardrobe-event quotes still use the
+// stricter scxQuoteRange above. Every retained character maps to the ORIGINAL
+// source, including when paired Markdown was removed from its presentation.
+// Commas and typographic dashes may vary; sentence boundaries, apostrophes,
+// negation and every word must stay intact. Never fuzzy-match a paraphrase.
+function scxMomentView(source) {
+  const view = scxEvidenceView(source)
+  let text = ''
+  const offsets = []
+  for (let i = 0; i < view.text.length; i++) {
+    const ch = view.text[i]
+    if (/[\s,–—]/.test(ch)) {
+      if (text && !text.endsWith(' ')) { text += ' '; offsets.push(view.offsets[i]) }
+    } else {
+      const lower = ch.toLowerCase()
+      text += lower
+      for (let j = 0; j < lower.length; j++) offsets.push(view.offsets[i])
+    }
+  }
+  if (text.endsWith(' ')) { text = text.slice(0, -1); offsets.pop() }
+  return { text, offsets }
+}
+function scxMomentLocation(source, quote) {
+  const raw = String(source || ''), evidence = String(quote || '')
+  const view = scxMomentView(raw), needle = scxMomentView(evidence).text
+  const matches = []
+  if (needle) for (let at = view.text.indexOf(needle); at >= 0; at = view.text.indexOf(needle, at + 1)) {
+    // Do not locate "he stands" inside "she stands", or "coat" in "coats".
+    if (!scxMomentBoundaries(view.text, at, at + needle.length)) continue
+    matches.push(at)
+    if (matches.length === 2) break // two matches already mean no safe location
+  }
+  if (matches.length !== 1) return { status: matches.length ? 'ambiguous' : 'missing', matchCount: matches.length,
+    reason: matches.length ? 'Quote matches more than one source occurrence; no occurrence was selected.'
+      : 'Quote was not found with the same words and sentence boundaries in the current passage.' }
+  const at = matches[0], start = view.offsets[at], end = view.offsets[at + needle.length - 1] + 1
+  const text = raw.slice(start, end)
+  const strict = scxQuoteRange(raw, evidence)
+  return { status: 'located', matchCount: 1, reason: '',
+    method: text === evidence ? 'exact' : strict && strict.start === start && strict.end === end ? 'presentation' : 'punctuation',
+    range: { start, end, text, unique: true } }
+}
+function scxMomentBoundaries(text, start, end) {
+  const word = ch => /[\p{L}\p{N}_]/u.test(ch || '')
+  return start >= 0 && end > start &&
+    !(word(text[start]) && word(text[start - 1])) &&
+    !(word(text[end - 1]) && word(text[end]))
+}
+function scxMomentSpan(view, start, end) {
+  const from = view.offsets.findIndex(offset => offset >= start)
+  if (from < 0) return ''
+  const to = view.offsets.findIndex(offset => offset >= end)
+  return view.text.slice(from, to < 0 ? view.text.length : to).trim()
+}
 function scxProfile(name, profiles) {
   return allKnownProfiles(profiles).find(p => p && p.ref && [p.anchor, p.promptName, p.ref].some(n => n && scxSame(n, name))) || null
 }
@@ -21336,12 +21407,16 @@ function scxEvent(raw, index, profiles, source) {
     const items = scxTags(raw.items)
     if (!profile) return { error: 'Wardrobe event does not identify a known saved character.' }
     if (!['wear', 'remove', 'observe', 'bare'].includes(raw.operation) || !items || !items.length) return { error: 'Invalid wardrobe operation/items.' }
-    const normalized = coreWardrobeTags(items.map(scxCoverageTag))
+    const aliases = coreWardrobeTags(items.map(scxCoverageTag)).map(scxClothingAlias)
+    const invalidAlias = aliases.find(row => row.error)
+    if (invalidAlias) return { error: invalidAlias.error }
+    const normalized = coreWardrobeTags(aliases.map(row => row.item))
     if (!normalized.length || normalized.some(item => !directWardrobeTag(item))) return { error: 'Wardrobe event contains unsupported non-clothing items.' }
     if (raw.operation === 'bare' && normalized.some(item => !coreAbsentSlots(item).length)) return { error: 'Bare event contains an item that is not an explicit absence state.' }
     if (raw.operation !== 'bare' && normalized.some(item => coreAbsentSlots(item).length)) return { error: 'Absence states require a separate bare event.' }
     if (raw.source === 'scene-card' && !['observe', 'bare'].includes(raw.operation)) return { error: 'A scene card supplies an observation, not a narrated action.' }
     Object.assign(event, { ref: profile.ref, name: profile.anchor || profile.ref, items: normalized,
+      ...(aliases.some(row => row.normalization) ? { clothingNormalizations: aliases.filter(row => row.normalization).map(row => row.normalization) } : {}),
       ...(raw._torsoCoverageOnly || items.some(item => scxCoverageTag(item) === 'shirtless' && item !== 'shirtless') ? { torsoCoverageOnly: true } : {}) })
   } else {
     const place = scxTags(raw.place || [], 4), surroundings = scxTags(raw.surroundings || [], 8), lighting = scxTags(raw.lighting || [], 4)
@@ -21592,13 +21667,29 @@ function storyStateAtMoment(result, before, momentEvidence, passage = '') {
   const parserWindow = scxText(passage)
   const windowAt = parserWindow && source.indexOf(parserWindow)
   const scoped = parserWindow && windowAt >= 0 && source.indexOf(parserWindow, windowAt + 1) < 0
+  const unlocated = (code, reason, location = null) => ({
+    ...scxClone(before), continuitySnapshot: { status: 'unlocated', code,
+      reason: reason + ' Pre-message clothing retained; end-of-message clothing was not substituted.',
+      evidenceSource: { scope: 'story-passage', revision: result && result.revision || null,
+        parserWindow: parserWindow ? 'supplied' : 'not-supplied', matchCount: location && location.matchCount } },
+  })
+  // A supplied parser window must belong to this very source revision. Never
+  // fall back to searching another part of the message (or another swipe).
+  if (parserWindow && !scoped) return unlocated(windowAt < 0 ? 'parser-window-missing' : 'parser-window-ambiguous',
+    windowAt < 0 ? 'The parser passage does not match the continuity source.' : 'The parser passage occurs more than once in the continuity source.')
   const haystack = scoped ? parserWindow : source
-  const moment = scxQuoteRange(haystack, quote)
-  const start = moment ? moment.start + (scoped ? windowAt : 0) : -1
-  if (!moment || !moment.unique) return {
-    ...scxClone(before), continuitySnapshot: { status: 'unlocated', reason: 'Moment evidence does not identify one exact source occurrence; pre-message state retained.' },
-  }
+  const location = scxMomentLocation(haystack, quote)
+  if (location.status !== 'located') return unlocated('moment-' + location.status, location.reason, location)
+  const moment = location.range
+  const start = moment.start + (scoped ? windowAt : 0)
   const end = moment.end + (scoped ? windowAt : 0)
+  const momentView = scxMomentView(source)
+  const momentAt = scxMomentSpan(momentView, start, end)
+  const viewStart = momentView.offsets.indexOf(start)
+  const viewEnd = momentView.offsets.findIndex(offset => offset >= end)
+  if (!scxMomentBoundaries(momentView.text, viewStart, viewEnd < 0 ? momentView.text.length : viewEnd) ||
+      momentAt !== scxMomentView(quote).text) return unlocated('parser-window-boundary',
+    'The selected quote crosses a word or presentation boundary in the complete continuity source.')
   const ambiguous = []
   const events = (result.events || []).filter(event => {
     if (event.source !== 'narrative' || event.start > end) return false
@@ -21606,7 +21697,9 @@ function storyStateAtMoment(result, before, momentEvidence, passage = '') {
     // "Mira enters the courtyard" can be the selected action inside the
     // event "Mira enters the courtyard through the open door". A later action
     // in a compound sentence must never be backdated to the first clause.
-    const eventAt = scxEvidenceView(event.at).text, momentAt = scxEvidenceView(quote).text
+    // Read both spans in one source coordinate view. Re-parsing a sliced quote
+    // can lose its closing Markdown delimiter and corrupt prefix comparison.
+    const eventAt = scxMomentSpan(momentView, event.start, event.end)
     if (event.start === start && eventAt.startsWith(momentAt) &&
         !/\b(?:then|before|after|later|subsequently|and|but|while|until|once)\b|[;.!?]/i.test(eventAt.slice(momentAt.length))) return true
     if (event.start < end) ambiguous.push(event.id)
@@ -21628,6 +21721,9 @@ function storyStateAtMoment(result, before, momentEvidence, passage = '') {
       evidence: event.evidence, observationStart: event.start, observationEnd: event.end })
   }
   state.continuitySnapshot = { status: ambiguous.length ? 'partial' : 'located', momentStart: start, momentEnd: end,
+    evidenceSource: { scope: 'story-passage', revision: result && result.revision || null,
+      method: location.method, text: source.slice(start, end), parserQuote: quote,
+      parserWindowStart: scoped ? windowAt : null, parserWindowEnd: scoped ? windowAt + parserWindow.length : null },
     appliedEventIds: events.map(event => event.id), ambiguousEventIds: ambiguous, retrospectiveObservations,
     notes: retrospectiveObservations.filter(row => row.status === 'applied').length
       ? ['Image clothing includes a later same-scene observation, not a later clothing change.'] : [],
@@ -22402,6 +22498,11 @@ function applyStoryMomentSnapshot(image, continuity, before, profiles, passage, 
   image.storyContinuity = { status: continuity && continuity.status || 'pending', revision: continuity && continuity.revision || null,
     source: 'story timeline at image moment', memoryWriteAllowed: false,
     snapshot: atMoment.continuitySnapshot || null }
+  if (atMoment.continuitySnapshot && atMoment.continuitySnapshot.status === 'unlocated') {
+    const note = 'Wardrobe fallback: ' + atMoment.continuitySnapshot.reason
+    image.notes = uniqueStrings([...(image.notes || []), note])
+    spindle.log.warn('[lumidraw] wardrobe moment · ' + atMoment.continuitySnapshot.code + ' · ' + note)
+  }
 }
 
 const storyContinuityScheduled = new Map()
@@ -22536,12 +22637,13 @@ async function jvFinalAssert(scope, deadline) {
 }
 function jvFinalSource(passage, moment) {
   const text = cleanParserMessageText(String(passage || ''))
-  const located = scxQuoteRange(text, moment)
-  if (!located || !located.unique) return null
-  if (text.length <= 16000) return { text, scope: 'complete current passage', selectedMoment: moment }
+  const location = scxMomentLocation(text, moment)
+  if (location.status !== 'located') return null
+  const located = location.range
+  if (text.length <= 16000) return { text, scope: 'complete current passage', selectedMoment: located.text }
   const at = located.start
-  return { text: text.slice(Math.max(0, at - 1800), Math.min(text.length, at + moment.length + 1800)),
-    scope: 'bounded excerpt around the exact selected moment; missing context is uncertainty, not permission to infer', selectedMoment: moment }
+  return { text: text.slice(Math.max(0, at - 1800), Math.min(text.length, located.end + 1800)),
+    scope: 'bounded excerpt around the exact selected moment; missing context is uncertainty, not permission to infer', selectedMoment: located.text }
 }
 function jvFinalQuestionSet(candidate, serial) {
   const prefix = 'c' + serial + '_'
@@ -22626,8 +22728,8 @@ async function reviewFinalJevPrompts(prepared, scope = {}) {
     const moment = String(entry.image.moment_evidence || entry.image.anchor || '')
     const source = jvFinalSource(scope.passage, moment)
     if (!source || !source.text || !moment) { reject('Selected source moment is unavailable for bounded final review; original retained.'); continue }
-    const candidate = { id: index + 1, original_prompt: base.prompt, selected_moment: moment,
-      source: sharedPassage ? { scope: source.scope + ' in state.current_passage', selectedMoment: moment } : source,
+    const candidate = { id: index + 1, original_prompt: base.prompt, selected_moment: source.selectedMoment,
+      source: sharedPassage ? { scope: source.scope + ' in state.current_passage', selectedMoment: source.selectedMoment } : source,
       protected_blocks: document.protected, natural_parts: document.natural,
       variants: variants.map(variant => ({ id: variant.id, prompt: variant.prompt, opening: variant.opening, setting: variant.setting, changes: variant.changes })) }
     const questions = jvFinalQuestionSet(candidate, index + 1)
