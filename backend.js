@@ -16714,6 +16714,64 @@ async function latestIllustratedReply(chatId, messages) {
   }
   return ''
 }
+// Clothing changes narrated in replies that do not get an image.
+//
+// The image resolver only accepts a CHANGE to an established outfit when the
+// illustrated passage itself shows it — earlier prose may only fill an unknown
+// wardrobe. That is the right rule for one passage, but with an image every five
+// replies it meant a change narrated in reply two (or in your own message) was
+// never seen by anything: the next image kept the old outfit forever. The story
+// journal does this per reply when it is on; without it, nothing did.
+//
+// So each passage the image schedule passes over gets the same small wardrobe
+// sync the Sync button runs, but only when it mentions clothing at all — most
+// replies cost nothing.
+async function trackWardrobeBetweenImages(userId, chatId, messages, targetIndex, preset, settings, { includeTarget = true } = {}) {
+  if (!preset || !Array.isArray(messages) || !Number.isInteger(targetIndex) || targetIndex < 0) return []
+  if (!(settings.parserEngine === 'anima' || settings.mode === 'direct' || settings.directMode === true)) return []
+  if (await storyContinuityEnabled(userId, settings)) return []
+  const target = messageBits(messages[targetIndex])
+  if (!target.isAssistant) return []
+  const indices = []
+  for (let i = targetIndex - 1; i >= 0; i--) {
+    const bits = messageBits(messages[i])
+    if (bits.isAssistant) break
+    if (bits.isUser) indices.unshift(i)
+  }
+  if (includeTarget) indices.push(targetIndex)
+  const applied = []
+  let profiles = null
+  for (const index of indices) {
+    const bits = messageBits(messages[index])
+    if (typeof bits.content !== 'string' || outOfCharacterVerdict(bits.content).ooc) continue
+    const passage = clipParserPassage(bits.content)
+    if (!passage || !CLOTHING_SENTENCE_RE.test(passage)) continue
+    if (!profiles) {
+      await absorbCastDeclarations(messages, targetIndex, preset, chatId)
+      profiles = await getStoryProfiles(preset, settings, userId, chatId)
+    }
+    const state = await readSceneMemory(chatId, preset.name, userId)
+    const currentOutfits = effectiveWardrobeForProfiles(state, profiles)
+    const input = buildWardrobeSyncInput(messages, index, bits, profiles, state)
+    const raw = await quietLLM(WARDROBE_SYNC_RULES.trim(), input, settings, userId, true)
+    const parsed = parseWardrobeSyncReply(raw, profiles, passage, currentOutfits, settings)
+    for (const reason of parsed.rejected) spindle.log.info('[lumidraw] between-image wardrobe ignored · ' + reason)
+    if (!parsed.updates.length) continue
+    const now = Date.now()
+    const outfits = {}
+    const outfitMeta = {}
+    for (const update of parsed.updates) {
+      outfits[update.ref] = update.outfit
+      outfitMeta[update.ref] = { source: 'latest-passage', at: now, messageId: String(bits.id || ''), evidence: update.evidence }
+    }
+    await rememberSceneState(chatId, preset.name, { outfits, outfitMeta })
+    spindle.log.info('[lumidraw] between-image wardrobe · ' + parsed.updates.map((update) =>
+      `${update.name}: ${update.outfit.join(', ')} <= "${update.evidence}"`).join(' · '))
+    applied.push(...parsed.updates)
+  }
+  return applied
+}
+
 async function automaticImageCadence(userId, chatId, target, settings, options = {}) {
   const every = Number(settings.autoImageEvery) === 1 ? 1 : 5
   if (!target.isAssistant || !target.id) return { due: false, note: 'Only new assistant story replies advance the image schedule.' }
@@ -16905,6 +16963,14 @@ async function scanStoryCore(userId, options = {}) {
     const cadence = await automaticImageCadence(userId, chatId, target, settings, { messages,
       swipe: options.generationType === 'swipe' || Number(target.swipeCount) > 1,
       existingOnly: Math.floor(messageTimeMs(target.createdAt) / 1000) < Math.floor(boundary / 1000) })
+    // Not illustrated, but still the story: whatever it does to anyone's clothes
+    // has to be on record before the next image is due. On the due reply the
+    // image resolver reads the reply itself, so only your preceding message is new.
+    try {
+      await trackWardrobeBetweenImages(userId, chatId, messages, targetIndex, preset, settings, { includeTarget: !cadence.due })
+    } catch (error) {
+      spindle.log.warn('[lumidraw] could not track clothing between images: ' + error.message)
+    }
     if (!cadence.due) {
       if (scan) setStoryScanStage(scan, 'done', cadence.note)
       return { mode: settings.mode, processed: 0, skipped: true, cadence: true, note: cadence.note }
