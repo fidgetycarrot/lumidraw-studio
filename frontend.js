@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.7.1'
+  const EXTENSION_VERSION = '1.8.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -3565,7 +3565,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const intro = node('div', 'ld-help', 'Optional: one character, several complete visual descriptions. Off keeps the existing single-description behavior; saved appearance cards are retained.')
       host.appendChild(intro)
       const body = node('div', 'ld-alt-body'); body.hidden = !editor.value.enabled
-      body.appendChild(node('div', 'ld-help', 'The selected card replaces Permanent appearance and Always include for the image. Name and count stay shared. Include every visible identity tag and weight you want in each card. For armor, save a complete armored design here rather than relying on Default outfit. Existing fields are not erased.'))
+      body.appendChild(node('div', 'ld-help', 'Each card is a complete saved visual design. Name, count, tags and weights remain yours. Story evidence selects the design; when two versions share a confirmed design but one detail is unresolved, only their identical shared tags are used. Your saved cards are never rewritten.'))
       const startLabel = node('label'), startTitle = node('span', 'ld-label', 'Starting appearance')
       const start = node('select', 'ld-alt-start'); start.disabled = editor.readonly
       for (const [i, variant] of editor.value.variants.entries()) {
@@ -3586,14 +3586,14 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         tags.placeholder = 'All visible traits for this version; comma or newline separated'
         const when = field(card, 'When to use this appearance', 'when', variant.when, true)
         when.placeholder = 'e.g. Wearing his power armor with his head uncovered. Taking off only the helmet selects this version.'
-        card.appendChild(node('div', 'ld-help', 'Automatic switching uses the active Jev story-continuity pipeline. If that is off or uncertain, the established appearance (or starting appearance) stays in use.'))
+        card.appendChild(node('div', 'ld-help', 'The story parser identifies changes; active Jev selects the supported saved design. Uncertainty about one distinguishing detail can retain the shared design without guessing that detail. If no change is established, the previous appearance remains.'))
         const clothingLabel = node('label'), clothingTitle = node('span', 'ld-label', 'Clothing and armor')
         const clothing = node('select', 'ld-alt-clothing'); clothing.disabled = editor.readonly
-        for (const [value, text] of [['tracked', 'Track clothing from the story'], ['included', 'Clothing/armor is included in this appearance']]) {
+        for (const [value, text] of [['tracked', 'Add story clothing to this body description'], ['included', 'This card includes the complete clothing / suit']]) {
           const option = node('option', '', text); option.value = value; clothing.appendChild(option)
         }
         clothing.value = variant.clothingMode; clothingLabel.append(clothingTitle, clothing); card.appendChild(clothingLabel)
-        card.appendChild(node('div', 'ld-help', 'Tracked: add only the current story outfit, not the legacy Default outfit. Included: put the complete clothing/armor in this card’s tags; do not add the tracked or default outfit. An unarmored appearance is not automatically undressed.'))
+        card.appendChild(node('div', 'ld-help', 'Choose the first option for a body description that needs separate clothes. Choose the second when these tags already describe a complete dressed or enclosed appearance. Old default outfits are not added to alternate appearances. The story still remembers underlayers and removed equipment.'))
         const actions = node('div', 'ld-row'); actions.style.marginTop = '8px'
         const duplicate = button('Duplicate appearance', () => {
           editor.capture()
@@ -4013,6 +4013,12 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         'Count: ' + (subject.count ? subject.count.saved + ' → ' + subject.count.resolved + ' [' + subject.count.source + ']' : 'not recorded by this version'),
         ...(subject.alternateAppearance ? ['Active appearance: ' + subject.alternateAppearance.label + ' [' + (subject.alternateAppearance.source || 'not recorded') + ']' +
           (subject.alternateAppearance.reason ? ' — ' + subject.alternateAppearance.reason : '')] : []),
+        ...(subject.alternateAppearance && subject.alternateAppearance.partial ? ['Appearance detail unresolved: only identical tags shared by the two saved designs were sent. No tags were rewritten or merged.'] : []),
+        ...(subject.resolvedSubject ? [
+          'Equipment relationships: ' + ((subject.resolvedSubject.equipment || []).map(item => item.item + ' [' + item.relation + ']').join('; ') || 'none separately established'),
+          'Known hidden regions: ' + (Object.entries(subject.resolvedSubject.visibility || {}).filter(([, value]) => value.status === 'hidden').map(([region, value]) => region + (value.coveredBy && value.coveredBy.length ? ' — ' + value.coveredBy.join(', ') : '')).join('; ') || 'none established; unknown does not mean uncovered'),
+          ...(subject.resolvedSubject.conflicts || []).map(item => 'State conflict: ' + (typeof item === 'string' ? item : item.reason || item.item || JSON.stringify(item))),
+        ] : []),
         'Saved identity: ' + (subject.identity || []).join(', '),
         ...(subject.renderedIdentity ? ['Identity sent to image model: ' + subject.renderedIdentity.join(', '),
           'Optional identity detail omitted: ' + ((subject.omittedIdentity || []).map(item => (item.tag || item.detail || item.item || '') + ' (' + item.reason + ')').join('; ') || 'none')] : []),
@@ -4046,6 +4052,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           const quote = rawQuote.length > 500 ? rawQuote.slice(0, 500) + '… (full quote in diagnostic report)' : rawQuote
           row.textContent = `${subject.name}: ${selectedAppearance.label} — ${selectedAppearance.source || 'source not recorded'}. ` +
             (quote ? `Story evidence: “${quote}”` : (selectedAppearance.reason || 'No confirmed story change; using the starting appearance.'))
+          if (selectedAppearance.partial) row.textContent += ' Shared design only; the difference between these saved versions remains unresolved.'
           appearanceEvidence.appendChild(row)
         }
       }
