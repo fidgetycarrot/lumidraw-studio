@@ -16726,12 +16726,50 @@ async function latestIllustratedReply(chatId, messages) {
 // So each passage the image schedule passes over gets the same small wardrobe
 // sync the Sync button runs, but only when it mentions clothing at all — most
 // replies cost nothing.
-async function trackWardrobeBetweenImages(userId, chatId, messages, targetIndex, preset, settings, { includeTarget = true } = {}) {
+const wardrobeBetweenImagesFlights = new Map()
+const wardrobeBetweenImagesDone = new Set()
+function wardrobeBetweenImagesKey(userId, chatId, messages, targetIndex, includeTarget) {
+  const bits = messageBits(messages[targetIndex])
+  return JSON.stringify([userId, chatId, String(bits.id || ''), scFingerprint(String(bits.content || '')), includeTarget])
+}
+// The answer is only saved if the story still reads the same and LumiDraw is
+// still on: an edit, swipe, deletion or Off during the request discards it.
+async function wardrobeBetweenImagesCurrent(userId, chatId, messages, targetIndex, preset, scan) {
+  if (scan && (scan.cancelled || scan.terminated)) return false
+  const settings = await getSettings()
+  if (settings.mode === 'off' || settings.activePreset !== preset.name || await storyContinuityEnabled(userId, settings)) return false
+  const fresh = await fetchMessages(userId, chatId)
+  const now = fresh && fresh.messages || []
+  if (String(fresh && fresh.chatId || chatId) !== String(chatId) || now.length < targetIndex + 1) return false
+  for (let i = 0; i <= targetIndex; i++) {
+    const a = messageBits(messages[i]), b = messageBits(now[i])
+    if (String(a.id || '') !== String(b.id || '') || String(a.content || '') !== String(b.content || '')) return false
+  }
+  return true
+}
+
+async function trackWardrobeBetweenImages(userId, chatId, messages, targetIndex, preset, settings, { includeTarget = true, scan = null } = {}) {
   if (!preset || !Array.isArray(messages) || !Number.isInteger(targetIndex) || targetIndex < 0) return []
   if (!(settings.parserEngine === 'anima' || settings.mode === 'direct' || settings.directMode === true)) return []
   if (await storyContinuityEnabled(userId, settings)) return []
   const target = messageBits(messages[targetIndex])
   if (!target.isAssistant) return []
+  // Lumiverse can report one completion twice (backend and frontend events).
+  // The same message text is read once; a swipe has different text.
+  const key = wardrobeBetweenImagesKey(userId, chatId, messages, targetIndex, includeTarget)
+  if (wardrobeBetweenImagesDone.has(key)) return []
+  if (wardrobeBetweenImagesFlights.has(key)) { await wardrobeBetweenImagesFlights.get(key).catch(() => {}); return [] }
+  const task = trackWardrobeBetweenImagesOnce(userId, chatId, messages, targetIndex, preset, settings, includeTarget, scan)
+  wardrobeBetweenImagesFlights.set(key, task)
+  try {
+    const result = await task
+    wardrobeBetweenImagesDone.add(key)
+    if (wardrobeBetweenImagesDone.size > 500) wardrobeBetweenImagesDone.delete(wardrobeBetweenImagesDone.values().next().value)
+    return result
+  } finally { wardrobeBetweenImagesFlights.delete(key) }
+}
+
+async function trackWardrobeBetweenImagesOnce(userId, chatId, messages, targetIndex, preset, settings, includeTarget, scan) {
   const indices = []
   for (let i = targetIndex - 1; i >= 0; i--) {
     const bits = messageBits(messages[i])
@@ -16753,10 +16791,20 @@ async function trackWardrobeBetweenImages(userId, chatId, messages, targetIndex,
     const state = await readSceneMemory(chatId, preset.name, userId)
     const currentOutfits = effectiveWardrobeForProfiles(state, profiles)
     const input = buildWardrobeSyncInput(messages, index, bits, profiles, state)
-    const raw = await quietLLM(WARDROBE_SYNC_RULES.trim(), input, settings, userId, true)
+    const raw = await quietLLM(WARDROBE_SYNC_RULES.trim(), input, settings, userId, true, scan)
     const parsed = parseWardrobeSyncReply(raw, profiles, passage, currentOutfits, settings)
     for (const reason of parsed.rejected) spindle.log.info('[lumidraw] between-image wardrobe ignored · ' + reason)
     if (!parsed.updates.length) continue
+    if (!(await wardrobeBetweenImagesCurrent(userId, chatId, messages, targetIndex, preset, scan))) {
+      spindle.log.info('[lumidraw] between-image wardrobe discarded · the story or settings changed while it was being read')
+      return applied
+    }
+    // Another writer may have recorded clothes for this message meanwhile.
+    const latest = effectiveWardrobeForProfiles(await readSceneMemory(chatId, preset.name, userId), profiles)
+    if (parsed.updates.some(update => JSON.stringify(latest[update.ref] || []) !== JSON.stringify(currentOutfits[update.ref] || []))) {
+      spindle.log.info('[lumidraw] between-image wardrobe discarded · saved clothing changed while it was being read')
+      return applied
+    }
     const now = Date.now()
     const outfits = {}
     const outfitMeta = {}
@@ -16967,7 +17015,7 @@ async function scanStoryCore(userId, options = {}) {
     // has to be on record before the next image is due. On the due reply the
     // image resolver reads the reply itself, so only your preceding message is new.
     try {
-      await trackWardrobeBetweenImages(userId, chatId, messages, targetIndex, preset, settings, { includeTarget: !cadence.due })
+      await trackWardrobeBetweenImages(userId, chatId, messages, targetIndex, preset, settings, { includeTarget: !cadence.due, scan })
     } catch (error) {
       spindle.log.warn('[lumidraw] could not track clothing between images: ' + error.message)
     }
@@ -21856,6 +21904,17 @@ function scxMomentSpan(view, start, end) {
   const to = view.offsets.findIndex(offset => offset >= end)
   return view.text.slice(from, to < 0 ? view.text.length : to).trim()
 }
+function scxClauseAnchor(text, items) {
+  const source = String(text || ''), words = [...source.matchAll(/[\p{L}\p{N}'’]+/gu)]
+  const heads = (Array.isArray(items) ? items : []).map(item => scxStem(normalizeIdentityText(item).split(/\s+/).pop())).filter(Boolean)
+  const hit = words.find(word => heads.includes(scxStem(word[0])))
+  if (!hit) return null
+  const before = source.slice(0, hit.index)
+  let start = 0
+  for (const match of before.matchAll(/[,;:—–]\s*|\s(?:and|then|but|while|before|after)\s/gi)) start = match.index + match[0].length
+  const end = hit.index + hit[0].length
+  return { start, end, text: source.slice(start, end), unique: true }
+}
 function scxProfile(name, profiles) {
   return allKnownProfiles(profiles).find(p => p && p.ref && [p.anchor, p.promptName, p.ref].some(n => n && scxSame(n, name))) || null
 }
@@ -21863,7 +21922,7 @@ function scxTags(value, maximum = 12) {
   if (!Array.isArray(value) || value.length > maximum || value.some(v => typeof v !== 'string' || !v.trim() || v.length > 160)) return null
   return uniqueStrings(value.map(v => v.trim()))
 }
-function scxEvent(raw, index, profiles, source) {
+function scxEvent(raw, index, profiles, source, { allowWithhold = false } = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'Event is not an object.' }
   if (!['wardrobe', 'environment', 'appearance'].includes(raw.kind) || !['narrative', 'scene-card'].includes(raw.source)) return { error: 'Event has unknown kind/source.' }
   const evidence = scxText(raw.evidence)
@@ -21889,8 +21948,12 @@ function scxEvent(raw, index, profiles, source) {
   // located the whole span is the anchor and formatter order breaks ties.
   const whole = { start: 0, end: range.text.length, text: range.text, unique: true }
   const atText = raw.at === undefined ? '' : scxText(raw.at)
-  let temporal = atText ? scxQuoteRange(range.text, atText) : whole
-  if (atText && (!temporal || !temporal.unique)) temporal = scxStemRange(range.text, atText) || whole
+  let temporal = atText ? scxQuoteRange(range.text, atText) : null
+  if (atText && (!temporal || !temporal.unique)) temporal = scxStemRange(range.text, atText)
+  // Without a usable "at", anchor on the clause that names the garment, so
+  // "Mira removes her coat and sits at the table" ends the removal at "coat"
+  // and a picture of her sitting is after it, not overlapping it.
+  if (!temporal) temporal = raw.kind === 'wardrobe' && scxClauseAnchor(range.text, raw.items) || whole
   const event = { id: 'e' + index, kind: raw.kind, operation: raw.operation, source: raw.source,
     evidence: range.text, at: temporal.text, occurrence, evidenceStart: range.start, evidenceEnd: range.end,
     start: range.start + temporal.start, end: range.start + temporal.end, sourceIndex: index, evidenceMethod,
@@ -21901,7 +21964,7 @@ function scxEvent(raw, index, profiles, source) {
     const profile = scxProfile(raw.name, profiles)
     const items = scxTags(raw.items)
     if (!profile) return { error: 'Wardrobe event does not identify a known saved character.' }
-    if (!['wear', 'remove', 'observe', 'bare', 'hold'].includes(raw.operation) || !items || !items.length) return { error: 'Invalid wardrobe operation/items.' }
+    if (!['wear', 'remove', 'observe', 'bare', 'hold', ...(allowWithhold ? ['withhold'] : [])].includes(raw.operation) || !items || !items.length) return { error: 'Invalid wardrobe operation/items.' }
     const aliases = coreWardrobeTags(items.map(scxCoverageTag)).map(scxClothingAlias)
     const invalidAlias = aliases.find(row => row.error)
     if (invalidAlias) return { error: invalidAlias.error }
@@ -21910,7 +21973,7 @@ function scxEvent(raw, index, profiles, source) {
     const unfamiliar = normalized.some(item => !directWardrobeTag(item))
     if (!normalized.length || unfamiliar && (!semantic.wearable || normalized.some(item => !scxEquipmentLabel(item)))) return { error: semantic.error || 'Unfamiliar wearable needs valid independently verifiable equipment metadata.' }
     if (raw.operation === 'bare' && normalized.some(item => !coreAbsentSlots(item).length)) return { error: 'Bare event contains an item that is not an explicit absence state.' }
-    if (raw.operation !== 'bare' && normalized.some(item => coreAbsentSlots(item).length)) return { error: 'Absence states require a separate bare event.' }
+    if (!['bare', 'withhold'].includes(raw.operation) && normalized.some(item => coreAbsentSlots(item).length)) return { error: 'Absence states require a separate bare event.' }
     if (raw.source === 'scene-card' && !['observe', 'bare', 'hold'].includes(raw.operation)) return { error: 'A scene card supplies an observation, not a narrated action.' }
     Object.assign(event, { ref: profile.ref, name: profile.anchor || profile.ref, items: normalized,
       ...(semantic.equipment ? { equipment: semantic.equipment } : {}),
@@ -22121,6 +22184,20 @@ function reduceStoryContinuityEvents(before, events, profiles = null) {
   let narratedEnvironment = false
   for (const event of scxSort(events)) {
     if (event.kind === 'wardrobe') {
+      if (event.operation === 'withhold') {
+        // Unresolved: these clothes are no longer asserted as worn, including
+        // any face/head coverage recorded for them, until the story settles it.
+        const prior = coreWardrobeTags(Object.prototype.hasOwnProperty.call(after.outfits, event.ref) ? after.outfits[event.ref] : event.seedOutfit || [])
+        const next = prior.filter(item => !event.items.some(old => scxSame(old, item)))
+        after.outfits[event.ref] = next
+        if (after.visualEquipment && after.visualEquipment[event.ref]) after.visualEquipment = { ...after.visualEquipment, [event.ref]:
+          after.visualEquipment[event.ref].filter(entry => entry.relation !== 'worn' || next.some(item => scxSame(item, entry.item))) }
+        if (Array.isArray(after.garmentBindings)) after.garmentBindings = after.garmentBindings.filter(binding =>
+          binding.wearerRef !== event.ref || next.some(item => scxSame(item, binding.garment)))
+        after.outfitMeta[event.ref] = { ...(after.outfitMeta[event.ref] || {}), source: 'scene-core', unresolved: true,
+          evidence: event.evidence, messageId: event.messageId || '', swipeId: event.swipeId, storyEvent: event.id, scope: 'end-of-message' }
+        continue
+      }
       if (event.operation === 'hold') {
         const entries = after.visualEquipment && after.visualEquipment[event.ref] || []
         const held = event.equipmentVerified || event.wearableVerified
@@ -22379,7 +22456,10 @@ function scxContestedItems(event) {
   if (event.operation === 'remove') return previous.filter(item => named.has(core(item)))
   if (event.operation === 'bare') return previous.slice()
   if (event.operation === 'hold') return []
-  return previous.filter(item => !named.has(core(item)))
+  // A red shirt is contested by a blue shirt even though both are "shirt"; a
+  // plain "shirt" observation does not contest the red one it may describe.
+  return previous.filter(item => !(event.items || []).some(next => scxSame(next, item) ||
+    scxSame(next, core(next)) && core(next) === core(item)))
 }
 
 async function extractStoryContinuity({ userId, chatId, settings, profiles, before, target, messages, targetIndex, trackerOnly = false }) {
@@ -22500,7 +22580,7 @@ async function extractStoryContinuity({ userId, chatId, settings, profiles, befo
     reviewed = await jevEvaluate(userId, prefs.model, verifyState, questions, 8000)
     diagnostics.usage.jev = reviewed.usage
   } catch (error) { return fail('Continuity verification failed: ' + String(error.message || error)) }
-  const accepted = []
+  const accepted = [], withheld = []
   for (const event of reviewCandidates) {
     const answer = reviewed.answers[event.id]
     const confident = answer && Object.prototype.hasOwnProperty.call(questions[event.id].criteria, answer.choice) && jevConfident(answer)
@@ -22543,6 +22623,12 @@ async function extractStoryContinuity({ userId, chatId, settings, profiles, befo
         displacedProfileDefaults: scxDisplacedProfileDefaults(before, applied, profiles) })
     } else {
       const contested = event.kind === 'wardrobe' && (verdict === 'unresolved' || !verdict && confident && answer.choice === 'disputed') ? scxContestedItems(event) : []
+      // Recorded as an event, not patched onto the result, so every replay
+      // (image moment, upgrade, late tracker check) withholds the same clothes.
+      if (contested.length) withheld.push({ ...event, id: event.id + '_unresolved', operation: 'withhold', items: contested,
+        coreItems: contested, previousItems: contested, unresolvedOperation: event.operation, proposedItems: event.items,
+        ...(Object.prototype.hasOwnProperty.call(before && before.outfits || {}, event.ref) ? {}
+          : { seedOutfit: coreWardrobeTags((known.find(profile => profile.ref === event.ref) || {}).defaultOutfit || []) }) })
       if (contested.length) diagnostics.disputes.push({
         ref: event.ref, name: event.name, slots: scxAffectedSlots(event), previousItems: contested, items: event.items,
         operation: event.operation, evidence: event.evidence, messageId: event.messageId, swipeId: event.swipeId, eventId: event.id,
@@ -22562,22 +22648,13 @@ async function extractStoryContinuity({ userId, chatId, settings, profiles, befo
   diagnostics.accepted = accepted.length
   if (!trackerOnly && diagnostics.coverage !== 'complete') diagnostics.issues.push('Completeness is uncertain. Verified facts were retained; this alone does not trigger another extraction of the same source.')
   diagnostics.dressingPreconditions = scxDressingPreconditions(accepted)
-  const events = scxSort(accepted)
+  const events = scxSort([...accepted, ...withheld])
   const after = reduceStoryContinuityEvents(before, events, profiles)
-  const unresolved = diagnostics.disputes.filter(dispute => !events.some(event => event.kind === 'wardrobe' && event.ref === dispute.ref &&
+  const unresolved = diagnostics.disputes.filter(dispute => !accepted.some(event => event.kind === 'wardrobe' && event.ref === dispute.ref &&
     event.source === dispute.source && event.start >= dispute.start && (scxAffectedSlots(event).includes('all') || dispute.slots.every(slot => scxAffectedSlots(event).includes(slot)))))
   if (unresolved.length) after.wardrobeDisputes = [...(after.wardrobeDisputes || []).filter(old => !unresolved.some(row => row.ref === old.ref &&
     row.slots.some(slot => (old.slots || []).includes(slot)))), ...unresolved].slice(-64)
-  // Contradicted clothes are unresolved, not silently kept as correct.
-  for (const dispute of unresolved) {
-    const worn = coreWardrobeTags(after.outfits && after.outfits[dispute.ref] || [])
-    const kept = worn.filter(item => !dispute.previousItems.some(old => scxSame(old, item)))
-    if (kept.length === worn.length) continue
-    after.outfits = { ...after.outfits, [dispute.ref]: kept }
-    after.outfitMeta = { ...(after.outfitMeta || {}), [dispute.ref]: { ...((after.outfitMeta || {})[dispute.ref] || {}),
-      source: 'scene-core', unresolved: true, messageId: dispute.messageId || '', evidence: dispute.evidence } }
-    diagnostics.withheldUnresolved = [...(diagnostics.withheldUnresolved || []), { ref: dispute.ref, items: worn.filter(item => !kept.includes(item)) }]
-  }
+  if (withheld.length) diagnostics.withheldUnresolved = withheld.map(event => ({ ref: event.ref, items: event.items, eventId: event.id }))
   return { status: diagnostics.rejected.length || !trackerOnly && diagnostics.coverage !== 'complete' ? 'partial' : 'ok', after, events, source, diagnostics }
 }
 
@@ -22658,7 +22735,7 @@ function scTrackerNormalizationMigration(record, input, items, scope) {
     revisions[row.revision] = revision
     const freshSource = scxSource(item.bits), events = [], omitted = []
     for (const event of row.events || []) {
-      const normalized = scxEvent({ ...event, name: event.name || event.ref }, event.sourceIndex || 0, input.profiles, freshSource)
+      const normalized = scxEvent({ ...event, name: event.name || event.ref }, event.sourceIndex || 0, input.profiles, freshSource, { allowWithhold: true })
       if (normalized.event) events.push({ ...event, ...normalized.event, id: event.id,
         // Source cleanup may rebind offsets, never re-certify a selection
         // against newly edited conditions without the ordinary Jev check.
@@ -22901,7 +22978,7 @@ async function scReconcileHeadTracker(input, record, key, scope, items) {
   }
   const after = events.length === (head.events || []).length ? scCopy(head.after)
     : reduceStoryContinuityEvents(head.before, events, input.profiles)
-  const resolves = (event, dispute) => event.kind === 'wardrobe' && event.ref === dispute.ref &&
+  const resolves = (event, dispute) => event.kind === 'wardrobe' && event.operation !== 'withhold' && event.ref === dispute.ref &&
     (dispute.messageId && dispute.messageId !== head.messageId || event.source === dispute.source && event.start >= dispute.start ||
       event.source === 'narrative' && dispute.source === 'scene-card') &&
     (scxAffectedSlots(event).includes('all') || (dispute.slots || []).every(slot => scxAffectedSlots(event).includes(slot)))
