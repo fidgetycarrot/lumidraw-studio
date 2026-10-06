@@ -16810,22 +16810,34 @@ async function trackWardrobePassage(userId, chatId, messages, index, targetIndex
   }
   if (!parsed.updates.length) return { applied: [] }
   // Another writer may have recorded clothes for this message meanwhile.
-  const latest = effectiveWardrobeForProfiles(await readSceneMemory(chatId, preset.name, userId), profiles)
+  const saved = await readSceneMemory(chatId, preset.name, userId)
+  const latest = effectiveWardrobeForProfiles(saved, profiles)
   if (parsed.updates.some(update => JSON.stringify(latest[update.ref] || []) !== JSON.stringify(currentOutfits[update.ref] || []))) {
     spindle.log.info('[lumidraw] between-image wardrobe discarded · saved clothing changed while it was being read')
     return { applied: [], discarded: true }
   }
+  // Later story stays authoritative: re-reading an edited earlier message must
+  // not overwrite clothes a later message on this branch already established.
+  const position = id => messages.findIndex(message => String(messageBits(message).id || '') === String(id || ''))
+  const updates = parsed.updates.filter(update => {
+    const meta = saved && saved.outfitMeta && saved.outfitMeta[update.ref]
+    const laterAt = meta && meta.messageId ? position(meta.messageId) : -1
+    if (laterAt > index) spindle.log.info(`[lumidraw] between-image wardrobe kept the later record for ${update.name} · ` +
+      'an edited earlier message cannot replace clothes a later message established')
+    return !(laterAt > index)
+  })
+  if (!updates.length) return { applied: [] }
   const now = Date.now()
   const outfits = {}
   const outfitMeta = {}
-  for (const update of parsed.updates) {
+  for (const update of updates) {
     outfits[update.ref] = update.outfit
     outfitMeta[update.ref] = { source: 'latest-passage', at: now, messageId: String(bits.id || ''), evidence: update.evidence }
   }
   await rememberSceneState(chatId, preset.name, { outfits, outfitMeta })
-  spindle.log.info('[lumidraw] between-image wardrobe · ' + parsed.updates.map((update) =>
+  spindle.log.info('[lumidraw] between-image wardrobe · ' + updates.map((update) =>
     `${update.name}: ${update.outfit.join(', ')} <= "${update.evidence}"`).join(' · '))
-  return { applied: parsed.updates }
+  return { applied: updates }
 }
 
 async function automaticImageCadence(userId, chatId, target, settings, options = {}) {
@@ -22230,8 +22242,11 @@ function reduceStoryContinuityEvents(before, events, profiles = null) {
           for (const slot of uniqueStrings([...scxAffectedSlots(event), ...(event.dispute && event.dispute.slots || [])])) touched.add(slot)
           narratedSlots.set(event.ref, touched)
         }
+        // Event ids restart at e0 in every message, so a dispute's identity is
+        // its message, swipe and event together. Only the same dispute, or a
+        // newer one over the same clothing slots, replaces an older notice.
         if (event.dispute) after.wardrobeDisputes = [...(after.wardrobeDisputes || []).filter(old => old.ref !== event.ref ||
-          old.eventId !== event.dispute.eventId && !(old.slots || []).some(slot => event.dispute.slots.includes(slot))), scxClone(event.dispute)].slice(-64)
+          scxDisputeKey(old) !== scxDisputeKey(event.dispute) && !(old.slots || []).some(slot => event.dispute.slots.includes(slot))), scxClone(event.dispute)].slice(-64)
         continue
       }
       if (event.operation === 'hold') {
@@ -22485,6 +22500,9 @@ function scxWardrobeVerdict(event, answer, approving = ['supported', 'garment_on
 }
 // Which saved clothes an unresolved change calls into question: the item said
 // to come off, or whatever else sits in the slot of an item said to be worn.
+function scxDisputeKey(dispute) {
+  return JSON.stringify([String(dispute && dispute.messageId || ''), dispute && dispute.swipeId != null ? dispute.swipeId : null, String(dispute && dispute.eventId || '')])
+}
 function scxContestedItems(event, { disputed = false } = {}) {
   const previous = event.previousItems || []
   const core = item => normalizeIdentityText(scxGarmentCore(item) || item)
@@ -23025,7 +23043,7 @@ async function scReconcileHeadTracker(input, record, key, scope, items) {
   // those may already have been resolved by the original checkpoint's events.
   for (const dispute of result.diagnostics && result.diagnostics.disputes || []) {
     if (!events.some(event => resolves(event, dispute)) && !unresolved.some(old =>
-      old.ref === dispute.ref && old.messageId === dispute.messageId && old.eventId === dispute.eventId)) unresolved.push(dispute)
+      old.ref === dispute.ref && scxDisputeKey(old) === scxDisputeKey(dispute))) unresolved.push(dispute)
   }
   after.wardrobeDisputes = unresolved.slice(-64)
   return await scMutate(input.userId, key, current => {
