@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-const EXTENSION_VERSION = '1.6.8'
+  const EXTENSION_VERSION = '1.7.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1221,6 +1221,7 @@ the diner = diner, booth seating, formica table, neon sign | aliases: the diner,
             <div><span class="ld-label">Always include (Direct mode)</span><input class="ld-persona-ed-identity" placeholder="futanari" /><div class="ld-hint">Non-negotiable identity tags. Direct mode restores these if the parser drops them. Stable futanari in Permanent appearance is also locked automatically.</div></div>
             <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-persona-ed-tags" style="min-height:58px"></textarea></div>
             <div><span class="ld-label">Default outfit tags</span><textarea class="ld-persona-ed-outfit" style="min-height:48px"></textarea></div>
+            <div class="ld-persona-ed-alternates"></div>
             <div><span class="ld-label">Default appearance state</span><input class="ld-persona-ed-default-state" placeholder="Default" /></div>
             <div><span class="ld-label">Appearance states / forms</span><textarea class="ld-persona-ed-states" style="min-height:92px" placeholder="Casual | casual clothes => t-shirt, jeans
 Armored [outfit=omit; subject=armored man] | armor, battle gear => heavy plate armor"></textarea></div>
@@ -1284,6 +1285,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
                 <div><span class="ld-label">Always include (direct mode)</span><input class="ld-ed-char-identity" placeholder="futanari" /></div>
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-chartags" style="min-height:58px" placeholder="feminine appearance, tall, curvy, long black hair, green eyes"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-char-outfit" style="min-height:48px" placeholder="black fitted jacket, dark trousers"></textarea></div>
+                <div class="ld-ed-char-alternates"></div>
                 <div><span class="ld-label">Default appearance state</span><input class="ld-ed-char-default-state" placeholder="Human" /></div>
                 <div><span class="ld-label">Appearance states / forms</span><textarea class="ld-ed-char-states" style="min-height:92px" placeholder="Human [count=1boy; outfit=inherit; subject=adult human man] | human form, unshifted => broad shoulders, messy dark brown hair
 Hybrid [count=1boy; outfit=inherit; subject=humanoid werewolf] | hybrid form, half-shifted => wolf ears, partial muzzle, furred arms, claws, tail
@@ -1316,6 +1318,7 @@ fangs = fangs, sharp teeth"></textarea></div>
                 <div><span class="ld-label">Stable subject phrase</span><input class="ld-ed-persona-subject" placeholder="adult man" /></div>
                 <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-ed-personatags" style="min-height:58px"></textarea></div>
                 <div><span class="ld-label">Default outfit tags</span><textarea class="ld-ed-persona-outfit" style="min-height:48px"></textarea></div>
+                <div class="ld-ed-persona-alternates"></div>
                 <div><span class="ld-label">Default appearance state</span><input class="ld-ed-persona-default-state" placeholder="Default" /></div>
                 <div><span class="ld-label">Appearance states / forms</span><textarea class="ld-ed-persona-states" style="min-height:92px"></textarea></div>
                 <div class="ld-row ld-mobile-stack"><div><span class="ld-label">Named looks (clothing)</span><textarea class="ld-ed-persona-looks" style="min-height:74px" placeholder="formal = black evening gown, heels | aliases: gala, the gown | no: jeans
@@ -3445,6 +3448,204 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (field) field.value = placesToText(places)
   }
 
+  // Alternate appearances are complete authored descriptions, not parser text.
+  // Keep their IDs stable across edits, library linking, and disabled saves.
+  const alternateAppearanceEditors = new WeakMap()
+  let alternateAppearanceSequence = 0
+
+  function alternateAppearanceId(used = []) {
+    let id
+    do { id = `appearance_${Date.now().toString(36)}_${(++alternateAppearanceSequence).toString(36)}` } while (used.includes(id))
+    return id
+  }
+
+  function alternateAppearanceTags(value) {
+    if (Array.isArray(value)) return value.map(String).map(tag => tag.trim()).filter(Boolean)
+    const tags = []; let tag = '', depth = 0
+    for (const ch of String(value || '')) {
+      if (ch === '(' || ch === '[' || ch === '{') depth++
+      if (ch === ')' || ch === ']' || ch === '}') depth = Math.max(0, depth - 1)
+      if ((ch === ',' || ch === '\n' || ch === '\r') && !depth) {
+        if (tag.trim()) tags.push(tag.trim())
+        tag = ''
+      } else tag += ch
+    }
+    if (tag.trim()) tags.push(tag.trim())
+    return tags
+  }
+
+  function alternateAppearanceValue(raw) {
+    const value = raw && typeof raw === 'object' ? raw : {}
+    const ids = []
+    const variants = (Array.isArray(value.variants) ? value.variants : []).map(item => {
+      const row = item && typeof item === 'object' ? item : {}
+      const id = row.id && !ids.includes(String(row.id)) ? String(row.id) : alternateAppearanceId(ids)
+      ids.push(id)
+      return { id, label: String(row.label || ''), subject: String(row.subject || ''), tags: alternateAppearanceTags(row.tags), when: String(row.when || ''), clothingMode: row.clothingMode === 'included' ? 'included' : 'tracked' }
+    })
+    return { enabled: value.enabled === true, startingId: ids.includes(value.startingId) ? value.startingId : (ids[0] || ''), variants }
+  }
+
+  function readAlternateAppearances(selector) {
+    const host = $(selector), editor = host && alternateAppearanceEditors.get(host)
+    if (!editor) return { enabled: false, startingId: '', variants: [] }
+    editor.capture()
+    return alternateAppearanceValue(editor.value)
+  }
+
+  function validateAlternateAppearanceDraft(value) {
+    if (!value.enabled) return
+    if (!value.variants.length) throw new Error('Add at least one appearance, or turn off alternate appearances.')
+    if (value.variants.length > 8) throw new Error('Keep at most 8 alternate appearances before saving.')
+    const labels = new Set()
+    for (const [i, variant] of value.variants.entries()) {
+      if (!variant.label.trim()) throw new Error(`Appearance ${i + 1} needs a name.`)
+      if (!variant.tags.length) throw new Error(`“${variant.label}” needs complete appearance tags.`)
+      if (!variant.when.trim()) throw new Error(`“${variant.label}” needs a plain-language description of when to use it.`)
+      if (variant.label.length > 80 || labels.has(variant.label.toLowerCase())) throw new Error('Give each alternate appearance a different name of at most 80 characters.')
+      if (variant.when.length > 600) throw new Error(`Keep the condition for “${variant.label}” to 600 characters or fewer.`)
+      if (variant.subject.length > 120) throw new Error(`Keep the subject phrase for “${variant.label}” to 120 characters or fewer.`)
+      if (variant.tags.length > 80 || variant.tags.some(tag => tag.length > 240) || variant.tags.join(', ').length > 6000) throw new Error(`“${variant.label}” needs at most 80 tags, 240 characters per tag, and 6,000 characters total. Nothing was truncated.`)
+      labels.add(variant.label.toLowerCase())
+    }
+  }
+
+  function setAlternateAppearancesLinked(selector, linked) {
+    const host = $(selector), editor = host && alternateAppearanceEditors.get(host)
+    if (!editor) return
+    editor.capture()
+    editor.readonly = !!linked
+    editor.render()
+  }
+
+  function writeAlternateAppearances(selector, raw, baseProfile) {
+    const host = $(selector)
+    if (!host) return
+    const editor = { value: alternateAppearanceValue(raw), readonly: false, capture() {}, render }
+    alternateAppearanceEditors.set(host, editor)
+
+    function node(tag, className, text) {
+      const el = document.createElement(tag)
+      if (className) el.className = className
+      if (text != null) el.textContent = text
+      return el
+    }
+    function button(text, action) {
+      const el = node('button', 'ld-btn ld-compact', text)
+      el.type = 'button'; el.disabled = editor.readonly
+      el.addEventListener('click', () => { if (!editor.readonly) action() })
+      return el
+    }
+    function field(card, label, name, value, multiline = false) {
+      const wrap = node('label'), title = node('span', 'ld-label', label)
+      const input = node(multiline ? 'textarea' : 'input', `ld-alt-${name}`)
+      input.value = value; input.disabled = editor.readonly
+      if (multiline) input.style.minHeight = name === 'tags' ? '90px' : '54px'
+      wrap.append(title, input); card.appendChild(wrap)
+      return input
+    }
+    function render() {
+      host.replaceChildren()
+      host.classList.add('ld-alternate-appearances')
+      host.style.margin = '12px 0'
+      // Keep legacy values intact, but do not present two competing switching
+      // editors while the new opt-in feature is enabled.
+      for (const suffix of ['default-state', 'states']) {
+        const legacy = $(selector.replace('alternates', suffix))
+        if (legacy?.parentElement) legacy.parentElement.hidden = editor.value.enabled
+      }
+      const legacyStates = $(selector.replace('alternates', 'states'))
+      const legacyHelp = legacyStates?.parentElement?.nextElementSibling
+      if (legacyHelp?.classList.contains('ld-help') && legacyHelp.textContent.includes('recognition phrases')) legacyHelp.hidden = editor.value.enabled
+      const toggleLabel = node('label', 'ld-label')
+      const toggle = node('input', 'ld-alt-enabled'); toggle.type = 'checkbox'; toggle.checked = editor.value.enabled; toggle.disabled = editor.readonly
+      toggle.style.width = 'auto'; toggle.style.marginRight = '8px'
+      toggleLabel.append(toggle, document.createTextNode('Use alternate appearances'))
+      host.appendChild(toggleLabel)
+      const intro = node('div', 'ld-help', 'Optional: one character, several complete visual descriptions. Off keeps the existing single-description behavior; saved appearance cards are retained.')
+      host.appendChild(intro)
+      const body = node('div', 'ld-alt-body'); body.hidden = !editor.value.enabled
+      body.appendChild(node('div', 'ld-help', 'The selected card replaces Permanent appearance and Always include for the image. Name and count stay shared. Include every visible identity tag and weight you want in each card. For armor, save a complete armored design here rather than relying on Default outfit. Existing fields are not erased.'))
+      const startLabel = node('label'), startTitle = node('span', 'ld-label', 'Starting appearance')
+      const start = node('select', 'ld-alt-start'); start.disabled = editor.readonly
+      for (const [i, variant] of editor.value.variants.entries()) {
+        const option = node('option', '', variant.label || `Appearance ${i + 1}`); option.value = variant.id; start.appendChild(option)
+      }
+      start.value = editor.value.startingId
+      startLabel.append(startTitle, start); body.appendChild(startLabel)
+      body.appendChild(node('div', 'ld-help', 'Used only when no story-confirmed appearance is known. The story can switch appearances automatically; you do not need to return to this editor for each change.'))
+      const cards = node('div', 'ld-alt-cards'); cards.style.display = 'grid'; cards.style.gap = '10px'; cards.style.marginTop = '10px'
+      const controls = []
+      for (const [index, variant] of editor.value.variants.entries()) {
+        const card = node('div', 'ld-card ld-alt-card'); card.dataset.appearanceId = variant.id
+        card.style.margin = '0'; card.appendChild(node('div', 'ld-subtitle', `Appearance ${index + 1}`))
+        const label = field(card, 'Appearance name', 'label', variant.label)
+        label.placeholder = 'e.g. Armored — helmet off'
+        const subject = field(card, 'Subject phrase (optional)', 'subject', variant.subject); subject.placeholder = 'e.g. adult man in power armor'
+        const tags = field(card, 'Complete appearance tags', 'tags', variant.tags.join(', '), true)
+        tags.placeholder = 'All visible traits for this version; comma or newline separated'
+        const when = field(card, 'When to use this appearance', 'when', variant.when, true)
+        when.placeholder = 'e.g. Wearing his power armor with his head uncovered. Taking off only the helmet selects this version.'
+        card.appendChild(node('div', 'ld-help', 'Automatic switching uses the active Jev story-continuity pipeline. If that is off or uncertain, the established appearance (or starting appearance) stays in use.'))
+        const clothingLabel = node('label'), clothingTitle = node('span', 'ld-label', 'Clothing and armor')
+        const clothing = node('select', 'ld-alt-clothing'); clothing.disabled = editor.readonly
+        for (const [value, text] of [['tracked', 'Track clothing from the story'], ['included', 'Clothing/armor is included in this appearance']]) {
+          const option = node('option', '', text); option.value = value; clothing.appendChild(option)
+        }
+        clothing.value = variant.clothingMode; clothingLabel.append(clothingTitle, clothing); card.appendChild(clothingLabel)
+        card.appendChild(node('div', 'ld-help', 'Tracked: add only the current story outfit, not the legacy Default outfit. Included: put the complete clothing/armor in this card’s tags; do not add the tracked or default outfit. An unarmored appearance is not automatically undressed.'))
+        const actions = node('div', 'ld-row'); actions.style.marginTop = '8px'
+        const duplicate = button('Duplicate appearance', () => {
+          editor.capture()
+          if (editor.value.variants.length >= 8) return
+          const original = editor.value.variants[index]
+          let number = 1, copyLabel
+          const labels = editor.value.variants.map(item => item.label.toLowerCase())
+          do { copyLabel = `${(original.label || 'Appearance').slice(0, 65)} copy${number === 1 ? '' : ' ' + number}`; number++ } while (labels.includes(copyLabel.toLowerCase()))
+          editor.value.variants.splice(index + 1, 0, { ...original, id: alternateAppearanceId(editor.value.variants.map(item => item.id)), label: copyLabel, tags: [...original.tags] })
+          render()
+        }); duplicate.classList.add('ld-alt-duplicate'); duplicate.disabled = editor.readonly || editor.value.variants.length >= 8
+        const remove = button('Delete appearance', () => {
+          editor.capture()
+          if (editor.value.variants.length <= 1 || !confirm(`Delete appearance “${editor.value.variants[index].label || 'Unnamed appearance'}”? This takes effect when you save the character.`)) return
+          editor.value.variants.splice(index, 1)
+          if (editor.value.startingId === variant.id) editor.value.startingId = editor.value.variants[0].id
+          render()
+        }); remove.classList.add('ld-alt-delete'); remove.disabled = editor.readonly || editor.value.variants.length <= 1
+        actions.append(duplicate, remove); card.appendChild(actions); cards.appendChild(card)
+        controls.push({ variant, label, subject, tags, when, clothing })
+        label.addEventListener('input', () => { const option = [...start.options].find(item => item.value === variant.id); if (option) option.textContent = label.value || `Appearance ${index + 1}` })
+      }
+      body.appendChild(cards)
+      const add = button('＋ Add appearance', () => {
+        editor.capture()
+        if (editor.value.variants.length >= 8) return
+        const id = alternateAppearanceId(editor.value.variants.map(item => item.id))
+        editor.value.variants.push({ id, label: '', subject: '', tags: [], when: '', clothingMode: 'tracked' })
+        if (!editor.value.startingId) editor.value.startingId = id
+        render()
+      }); add.classList.add('ld-alt-add'); add.disabled = editor.readonly || editor.value.variants.length >= 8; add.style.marginTop = '8px'
+      body.append(add, node('div', 'ld-help', 'Up to 8 appearances. Duplicate a card to make a helmet-on / helmet-off pair. Save the character or persona below when finished. Legacy Appearance states are preserved, but are not used or converted by this feature.'))
+      host.appendChild(body)
+      editor.capture = () => {
+        editor.value.enabled = toggle.checked
+        editor.value.startingId = start.value
+        for (const row of controls) Object.assign(row.variant, { label: row.label.value.trim(), subject: row.subject.value.trim(), tags: alternateAppearanceTags(row.tags.value), when: row.when.value.trim(), clothingMode: row.clothing.value })
+      }
+      toggle.addEventListener('change', () => {
+        editor.capture()
+        if (editor.value.enabled && !editor.value.variants.length) {
+          const base = typeof baseProfile === 'function' ? baseProfile() : {}
+          const id = alternateAppearanceId()
+          editor.value.variants.push({ id, label: 'Original appearance', subject: base.subject || '', tags: [...new Set([...alternateAppearanceTags(base.identityTags), ...alternateAppearanceTags(base.appearanceTags)])], when: '', clothingMode: 'tracked' })
+          editor.value.startingId = id
+        }
+        render()
+      })
+    }
+    render()
+  }
+
   function profileFromPreset(preset, kind) {
     const p = preset || {}
     const profile = (kind === 'character' ? p.characterProfile : p.personaProfile) || {}
@@ -3463,6 +3664,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       looks: looksToText(profile.looks),
       defaultLook: profile.defaultLook || '',
       defaultAppearanceState: profile.defaultAppearanceState || profile.defaultForm || '',
+      alternateAppearances: alternateAppearanceValue(profile.alternateAppearances),
     }
   }
 
@@ -3487,6 +3689,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       looks: $(`.ld-ed-${prefix}-looks`).value.trim(),
       defaultLook: $(`.ld-ed-${prefix}-default-look`).value.trim(),
       defaultAppearanceState: $(`.ld-ed-${prefix}-default-state`).value.trim(),
+      alternateAppearances: readAlternateAppearances(`.ld-ed-${prefix}-alternates`),
     }
   }
 
@@ -3508,6 +3711,11 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     $(`.ld-ed-${prefix}-looks`).value = looksToText(value.looks)
     $(`.ld-ed-${prefix}-default-look`).value = value.defaultLook || ''
     $(`.ld-ed-${prefix}-default-state`).value = value.defaultAppearanceState || value.defaultForm || ''
+    writeAlternateAppearances(`.ld-ed-${prefix}-alternates`, value.alternateAppearances, () => ({
+      subject: $(`.ld-ed-${prefix}-subject`).value,
+      identityTags: $(`.ld-ed-${prefix}-identity`)?.value || '',
+      appearanceTags: $(appearanceSelector).value,
+    }))
   }
 
   function linkedPersonaProfile(id) {
@@ -3533,6 +3741,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
 
   function setCharacterFieldsLinked(linked) {
+    setAlternateAppearancesLinked('.ld-ed-char-alternates', linked)
     const selectors = [
       '.ld-ed-char-anchor', '.ld-ed-char-count', '.ld-ed-char-subject', '.ld-ed-char-identity', '.ld-ed-chartags',
       '.ld-ed-char-outfit', '.ld-ed-char-default-state', '.ld-ed-char-states',
@@ -3604,6 +3813,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
 
   function setPersonaFieldsLinked(linked) {
+    setAlternateAppearancesLinked('.ld-ed-persona-alternates', linked)
     const selectors = [
       '.ld-ed-persona-anchor', '.ld-ed-persona-count', '.ld-ed-persona-subject', '.ld-ed-personatags',
       '.ld-ed-persona-outfit', '.ld-ed-persona-default-state', '.ld-ed-persona-states',
@@ -3639,6 +3849,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       partialFeatures: $('.ld-persona-ed-features').value.trim(),
       anatomyTags: $('.ld-persona-ed-anatomy').value.trim(),
       anatomyMode: $('.ld-persona-ed-anatomy-mode').value || 'relevant',
+      alternateAppearances: readAlternateAppearances('.ld-persona-ed-alternates'),
     }
   }
 
@@ -3659,6 +3870,11 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     $('.ld-persona-ed-features').value = partialFeaturesToText(value.partialFeatures)
     $('.ld-persona-ed-anatomy').value = value.anatomyTags || ''
     $('.ld-persona-ed-anatomy-mode').value = value.anatomyMode || 'relevant'
+    writeAlternateAppearances('.ld-persona-ed-alternates', value.alternateAppearances, () => ({
+      subject: $('.ld-persona-ed-subject').value,
+      identityTags: $('.ld-persona-ed-identity').value,
+      appearanceTags: $('.ld-persona-ed-tags').value,
+    }))
   }
 
 
@@ -3795,6 +4011,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       ...(core.subjects || []).flatMap((subject) => [
         '', subject.name + ' — ' + subject.introduction,
         'Count: ' + (subject.count ? subject.count.saved + ' → ' + subject.count.resolved + ' [' + subject.count.source + ']' : 'not recorded by this version'),
+        ...(subject.alternateAppearance ? ['Active appearance: ' + subject.alternateAppearance.label + ' [' + (subject.alternateAppearance.source || 'not recorded') + ']' +
+          (subject.alternateAppearance.reason ? ' — ' + subject.alternateAppearance.reason : '')] : []),
         'Saved identity: ' + (subject.identity || []).join(', '),
         ...(subject.renderedIdentity ? ['Identity sent to image model: ' + subject.renderedIdentity.join(', '),
           'Optional identity detail omitted: ' + ((subject.omittedIdentity || []).map(item => (item.tag || item.detail || item.item || '') + ' (' + item.reason + ')').join('; ') || 'none')] : []),
@@ -3807,6 +4025,31 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         .map(item => 'Action ' + (item.status || 'reviewed') + ': ' + (item.reason || 'see full diagnostic data')),
       '', ...(core.warnings || []).map((warning) => 'Note: ' + warning),
     ].join('\n') : ''
+    if (coreCard) {
+      let appearanceEvidence = coreCard.querySelector('.ld-alt-evidence')
+      if (!appearanceEvidence) {
+        appearanceEvidence = document.createElement('details')
+        appearanceEvidence.className = 'ld-alt-evidence'
+        coreCard.appendChild(appearanceEvidence)
+      }
+      appearanceEvidence.replaceChildren()
+      const selections = (core && core.subjects || []).filter(subject => subject.alternateAppearance)
+      appearanceEvidence.hidden = !selections.length
+      appearanceEvidence.open = false
+      if (selections.length) {
+        const summary = document.createElement('summary'); summary.textContent = 'Appearance selection evidence'
+        appearanceEvidence.appendChild(summary)
+        for (const subject of selections) {
+          const selectedAppearance = subject.alternateAppearance
+          const row = document.createElement('p')
+          const rawQuote = String(selectedAppearance.evidence || '')
+          const quote = rawQuote.length > 500 ? rawQuote.slice(0, 500) + '… (full quote in diagnostic report)' : rawQuote
+          row.textContent = `${subject.name}: ${selectedAppearance.label} — ${selectedAppearance.source || 'source not recorded'}. ` +
+            (quote ? `Story evidence: “${quote}”` : (selectedAppearance.reason || 'No confirmed story change; using the starting appearance.'))
+          appearanceEvidence.appendChild(row)
+        }
+      }
+    }
     prompt.value = debug && debug.lastCompiledPrompt ? debug.lastCompiledPrompt : ''
     if (meta) {
       if (!debug) {
@@ -4263,6 +4506,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       detail.className = 'ld-preset-model'
       const profile = character.profile || {}
       const formCount = Array.isArray(profile.appearanceStates) ? profile.appearanceStates.length : (String(profile.appearanceStates || '').trim() ? String(profile.appearanceStates).split(/\r?\n/).filter(Boolean).length : 0)
+      const alternateCount = profile.alternateAppearances?.variants?.length || 0
       // TELLING TWO "FANNY PRICE"S APART. A story can invent somebody you already
       // have, and this list showed a name and an anchor — which are identical for
       // both — so the wrong one got edited and the right one looked broken. Say
@@ -4271,7 +4515,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const story = profile.declaredByStory ? 'invented by a story' : ''
       const someTags = String(profile.appearanceTags || '').split(',').map((t) => t.trim()).filter(Boolean).slice(0, 4).join(', ')
       detail.textContent = [profile.anchor || '', story, someTags,
-        formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
+        alternateCount ? `${alternateCount} alternate appearance${alternateCount === 1 ? '' : 's'}${profile.alternateAppearances.enabled ? '' : ' (off)'}` : formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
       if (story) { name.style.opacity = '.72'; name.title = 'This one was written by a story, not by you. Its tags are a guess.' }
       name.appendChild(detail)
       name.addEventListener('click', () => openPersonaEditor(character.id, 'character'))
@@ -4316,7 +4560,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       detail.className = 'ld-preset-model'
       const profile = persona.profile || {}
       const formCount = Array.isArray(profile.appearanceStates) ? profile.appearanceStates.length : (String(profile.appearanceStates || '').trim() ? String(profile.appearanceStates).split(/\r?\n/).filter(Boolean).length : 0)
-      detail.textContent = [profile.anchor || '', formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
+      const alternateCount = profile.alternateAppearances?.variants?.length || 0
+      detail.textContent = [profile.anchor || '', alternateCount ? `${alternateCount} alternate appearance${alternateCount === 1 ? '' : 's'}${profile.alternateAppearances.enabled ? '' : ' (off)'}` : formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
       name.appendChild(detail)
       name.addEventListener('click', () => openPersonaEditor(persona.id))
       const edit = document.createElement('button')
@@ -7019,10 +7264,12 @@ ${entry.prompt || ''}`.trim()
       const name = $('.ld-persona-ed-name').value.trim()
       const kind = libEditorKind === 'character' ? 'character' : 'persona'
       if (!name) throw new Error(`${kind === 'character' ? 'Character' : 'Persona'} needs a library name.`)
+      const profile = libraryPersonaProfile()
+      validateAlternateAppearanceDraft(profile.alternateAppearances)
       const result = await call(kind === 'character' ? 'save_character' : 'save_persona', {
         id: personaEditorId || '',
         name,
-        profile: libraryPersonaProfile(),
+        profile,
       })
       personaEditorId = result.entry && result.entry.id ? result.entry.id : personaEditorId
       if (kind === 'character') {
