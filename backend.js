@@ -5997,6 +5997,7 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
 }
 
 async function resolveProfile(profile, userId, chatId) {
+  if (!profile) return null
   const resolveOne = async (value) => shortPhrase(await resolveMacros(value, userId, chatId), 'profile field', 10, 96, true)
   const resolveMany = async (values, label) => {
     const out = []
@@ -6156,6 +6157,19 @@ function savedChatLeadProfile(hostProfile, lead, cast) {
 
 // New chats deliberately do not auto-bind to a preset-derived cast.
 // Existing explicit chat→cast bindings are still honored by castSourceFor().
+function normalizeStoryLead(source, fallbackTags, ref, linkedId = '') {
+  const profile = normalizeProfile(source, fallbackTags, ref)
+  // normalizeProfile is also an editor validator, where a blank draft is useful.
+  // A chat with no assigned person must not turn that draft into a real roster
+  // entry named "character"/"persona". Explicit library links and any authored
+  // identity remain real profiles, including invalid counts needing correction.
+  const assigned = linkedId || profile.anchor !== ref || profile.promptName || profile.countTag || profile.subject || profile.identityTags ||
+    profile.appearance.length || profile.defaultOutfit.length || profile.anatomy.length ||
+    profile.visualAliases.length || profile.partialFeatures.length || profile.appearanceStates.length || profile.looks.length ||
+    profile.alternateAppearances.enabled || profile.alternateAppearances.variants.length
+  return assigned ? profile : null
+}
+
 async function getStoryProfiles(preset, settings, userId, chatId) {
   // New chats stay unbound until the user/story actually adds or selects a cast.
   // Legacy preset identities remain stored for rollback but are not active story state.
@@ -6173,7 +6187,7 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
       characterFallbackTags = linked.profile.appearanceTags || ''
     }
   }
-  const character = normalizeProfile(characterSource, characterFallbackTags, 'character')
+  const character = normalizeStoryLead(characterSource, characterFallbackTags, 'character', preset.characterLibraryId)
 
   let personaSource = preset.personaProfile
   let personaFallbackTags = preset.personaTags || ''
@@ -6185,7 +6199,7 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
       personaFallbackTags = linked.profile.appearanceTags || ''
     }
   }
-  const persona = normalizeProfile(personaSource, personaFallbackTags, 'persona')
+  const persona = normalizeStoryLead(personaSource, personaFallbackTags, 'persona', preset.personaLibraryId)
 
   // Additional cast: library characters beyond the main character/persona
   // pair, each with its own named ref, locked profile, states, and anatomy
@@ -6273,7 +6287,8 @@ async function getStoryProfiles(preset, settings, userId, chatId) {
       spindle.log.info(`[lumidraw] character comes from the chat: ${fromChat.anchor}`)
     } else if (fromChat) {
       spindle.log.info(`[lumidraw] the chat's card "${fromChat.anchor}" carries no visual tags — ` +
-        `it reads as a setting rather than a person, so ${leadCharacter.anchor || 'the cast\'s character'} is kept`)
+        (leadCharacter ? `the explicitly assigned character ${leadCharacter.anchor} is kept` :
+          'no visual lead character is assigned; actual people in the passage remain eligible'))
     }
     if (asPersona) {
       leadPersona = asPersona
@@ -15152,7 +15167,7 @@ STRICT OUTPUT CONTRACT — this overrides any conflicting formatting request abo
 ${chatRoleGuidance(profiles)}
 Return ONLY one compact JSON object — no markdown, no prose.
 Write every scene in the EXACT field order shown below. The order is a survival order: if your reply is ever cut off, everything already written must still form a usable scene, so the mandatory core (safety, core_action, setting, subjects) comes FIRST and droppable refinements (camera, lighting, style) come LAST:
-{"images":[{"anchor":"5-12 exact consecutive words from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence: the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList}|other_1","label":"other refs only — the name exactly as written, capitals kept","appearance_state":"exact saved state name, or empty","look":"exact saved look name, or empty","partial_features":["saved feature names showing now, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions, not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["from the CAMERA list below only"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
+{"images":[{"anchor":"5-12 exact consecutive words from CURRENT PASSAGE only","scene":{"safety":"safe|sensitive|nsfw|explicit","scene_statement":"one plain sentence: the subjects and the central visible action","core_action":"one short visible action or pose","setting":["essential location/context tags"],"subjects":[{"ref":"${knownRefList ? knownRefList + '|' : ''}other_1","label":"other refs only — the name exactly as written, capitals kept","appearance_state":"exact saved state name, or empty","look":"exact saved look name, or empty","partial_features":["saved feature names showing now, or omit"],"count_tag":"1girl|1boy|1other etc","booru_character":"published character tag or empty","booru_series":"source work or empty","position":"left|right|center|foreground|background","appearance":["other subjects only"],"outfit":["short visual tags"],"pose":["short visual phrases"],"support":"visible support surface or empty","expression":["short tags"],"action":["short tag-like actions, not involving another subject"],"anatomy_visible":false}],"relations":[{"actor":"subject ref","action":"short visible spatial phrase ending before target","target":"subject ref","details":["at most two visual modifiers"]}],"camera":["from the CAMERA list below only"],"lighting":["essential light tags"],"style":["essential style/mood tags"],"aspect":"3:4|4:3|1:1|9:16|16:9"}}]}
 ${minImages > 0
   ? `Return between ${minImages} and ${maxImages} image objects. ${minImages} is a FLOOR: find that many distinct visual moments even when one dominates — a second character's reaction, a change of position, a detail shown close. Each needs its own anchor from a different part of the passage.`
   : `Return at most ${maxImages} image object(s). If no image is warranted, return {"images":[]}.`}
@@ -15366,7 +15381,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
   const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
   const remembered = (memoryEntry.setting || []).length ? memoryEntry.setting : anchorTags
   const rawProfiles = await getStoryProfiles(preset, settings, userId, chatId)
-  const filterProfile = (profile) => ({
+  const filterProfile = (profile) => profile ? ({
     ...profile,
     appearance: applyBannedToList(profile.appearance, preset.bannedTags),
     defaultOutfit: applyBannedToList(profile.defaultOutfit, preset.bannedTags),
@@ -15375,7 +15390,7 @@ async function compileSceneWithPreset(sceneInput, preset, settings, userId, chat
       return kept.length === 2
     }),
     anatomy: applyBannedToList(profile.anatomy, preset.bannedTags),
-  })
+  }) : null
   const profiles = {
     character: filterProfile(rawProfiles.character),
     persona: filterProfile(rawProfiles.persona),
@@ -21951,7 +21966,7 @@ async function extractStoryContinuity({ userId, chatId, settings, profiles, befo
   if (!source.passage && !source.card) return { status: 'ok', after: unchanged(), events: [], source, diagnostics: { ...diagnostics, coverage: 'empty source' } }
   if (source.passage.length > 16000 || source.card.length > 8000) return fail('Story continuity source exceeds its bound. Nothing was truncated or sent.')
   const known = allKnownProfiles(profiles).filter(profile => profile && profile.ref)
-  if (!known.length || known.length > 8) return fail('Story continuity requires 1–8 known characters; no partial roster was sent.')
+  if (known.length > 8) return fail('Story continuity supports at most 8 known characters; no partial roster was sent.')
   const roster = known.map(profile => ({ ref: profile.ref, name: profile.anchor || profile.ref, subject: profile.subject || '',
     role: profile === profiles.persona ? 'user / second-person narration' : profile === profiles.character ? 'chat character' : 'supporting character',
     outfit_source: scxProfileDefaultOutfit(before, profile) ? 'profile default only; not evidence of current clothing'
@@ -21961,6 +21976,7 @@ async function extractStoryContinuity({ userId, chatId, settings, profiles, befo
   const state = { current_passage: source.passage, final_scene_card: source.card,
     source_role: target && (target.isUser || target.role === 'user') ? 'user narration: first-person refers to the saved user/persona unless explicitly attributed otherwise' : 'assistant story narration',
     known_characters: roster, established_environment: jevEnvironment(before || {}) }
+  if (!known.length) state.saved_roster_policy = 'No saved people are assigned to this chat. Track only the narrated environment here; do not invent a character/persona or emit wardrobe/appearance events. Incidental people may still be depicted by the separate image parser.'
   const appearances = scxAppearanceRoster(profiles, before)
   if (appearances.length) state.alternate_appearances = appearances
   const simTracker = simTrackerReference(messages || [], targetIndex, profiles, { chatId })
