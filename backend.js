@@ -22281,6 +22281,43 @@ function scxApplyItems(worn, items, preserveGenericPrior = true) {
   return uniqueStrings(result)
 }
 
+// Verified equipment details add to the usual clothing rules; they never turn
+// them off. Without this, a verified "blue shirt" with replacement scope none
+// was added next to the red one and the picture kept the red shirt. A familiar
+// garment still displaces what sits in its slot, as it does without details.
+// Only a stated different layer keeps the older piece: an open flannel shirt
+// worn over a tank top, a robe over pajamas. Body armor is one piece always.
+const SCX_SINGLE_PIECE_SLOTS = ['top:under', 'top:base', 'top:middle', 'top:outer', 'bottom:under', 'bottom:outer', 'feet:socks', 'feet:shoes', 'full', 'armor:torso']
+function scxUsualReplacement(before, worn, entries, event, items) {
+  if (!['wear', 'observe'].includes(event.operation)) return worn
+  const layer = event.equipmentVerified && event.equipment ? event.equipment.layer : null
+  let result = [...worn]
+  for (const item of items) {
+    const slot = scxWardrobeSlot(item)
+    if (!directWardrobeTag(item) || scxAbsentSlots(item).length || !SCX_SINGLE_PIECE_SLOTS.includes(slot)) continue
+    // A generic observation describes a piece already worn. Verified geometry
+    // has matched it, or left an ambiguous match alone on purpose; a bare
+    // classification adds it, so drop the copy where one piece fits.
+    if (event.operation === 'observe' && scxSame(item, garmentFamily(item))) {
+      const fits = result.filter(old => !scxSame(old, item) && scxWardrobeSlot(old) === slot &&
+        (garmentFamily(old) === garmentFamily(item) || slot === 'armor:torso'))
+      if (fits.length === 1 && !before.some(old => scxSame(old, item))) result = result.filter(old => !scxSame(old, item))
+      continue
+    }
+    const slots = slot === 'full' ? ['full', 'top:base', 'bottom:outer'] : [slot]
+    result = result.filter(old => {
+      if (scxSame(old, item)) return true
+      const bare = scxAbsentSlots(old)
+      if (bare.length) return !bare.includes('all') && !bare.some(value => slots.includes(value))
+      if (!slots.includes(scxWardrobeSlot(old))) return true
+      if (slot === 'armor:torso' || !layer) return false
+      const entry = entries.find(value => value.relation === 'worn' && scxSame(value.item, old) && value.layer)
+      return entry ? entry.layer !== layer : ['mid', 'outer'].includes(layer) && scxLegacyEquipment(old).layer === 'base'
+    })
+  }
+  return result
+}
+
 function scxProfileDefaultOutfit(state, profile) {
   if (!profile || !profile.ref) return false
   const meta = state && state.outfitMeta && state.outfitMeta[profile.ref]
@@ -22385,6 +22422,7 @@ function reduceStoryContinuityEvents(before, events, profiles = null) {
         : event.wearableVerified && event.wearable ? scxApplyClassifiedEquipment(worn, priorEquipment, { ...event, items }) : null
       let next = semantic ? semantic.worn : event.operation === 'hold' ? worn
         : event.operation === 'remove' ? scxRemoveItems(worn, items) : scxApplyItems(worn, items, event.operation !== 'wear')
+      if (semantic) next = scxUsualReplacement(worn, next, semantic.entries, event, items)
       if (event.removesWornBodyArmor && items.some(item => wardrobeTorsoArmor(item) && scxRemoveItems(worn, [item]).length === worn.length)) {
         next = next.filter(item => !wardrobeTorsoArmor(item))
       }
