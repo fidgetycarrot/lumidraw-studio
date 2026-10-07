@@ -8687,11 +8687,23 @@ function wardrobeTagList(value) {
   return uniqueStrings(pieces)
 }
 
+// Body armor is one piece at a time, whatever the story calls it: a new
+// cuirass replaces the old leather armor, though "cuirass", "breastplate" and
+// "armor" are different words. Helmets, limb pieces, mail and padding are
+// separate pieces and keep their own slots.
+const TORSO_ARMOR_RE = /\b(?:armou?r|cuirass(?:es)?|breastplates?|chest ?plates?|chest ?pieces?|brigandines?)\b/
+const ARMOR_ELSEWHERE_RE = /\b(?:head|helm|helmets?|neck|gorgets?|shoulders?|pauldrons?|spaulders?|arms?|forearms?|elbows?|vambraces?|rerebraces?|bracers?|wrists?|hands?|gauntlets?|gloves?|legs?|thighs?|cuisses|knees?|poleyns?|shins?|greaves?|feet|foot|boots?|sabatons?|tassets?|hips?|shields?|mail|chainmail|hauberks?|gambesons?|padded)\b/
+function wardrobeTorsoArmor(tag) {
+  const text = normalizeIdentityText(tag)
+  return TORSO_ARMOR_RE.test(text) && !ARMOR_ELSEWHERE_RE.test(text)
+}
+
 // A body zone is useful for coverage, but too coarse for continuity. Shirt,
 // pullover and coat may all be worn together; socks do not replace sneakers.
 function wardrobeSlot(tag) {
   const zone = garmentZone(tag)
   const text = normalizeIdentityText(tag)
+  if ((!zone || zone === 'top') && wardrobeTorsoArmor(tag)) return 'armor:torso'
   if (zone === 'top') {
     if (/\b(?:coat|jacket|blazer|cardigan|vest|cloak|poncho|bolero)\b/.test(text)) return 'top:outer'
     if (/\b(?:hoodie|sweatshirt|sweater|pullover)\b/.test(text)) return 'top:middle'
@@ -22258,7 +22270,8 @@ function scxApplyItems(worn, items, preserveGenericPrior = true) {
     if (absent.length) result = result.filter(old => !absent.includes('all') && !absent.includes(scxWardrobeSlot(old)) &&
       !scxAbsentSlots(old).some(s => absent.includes(s)))
     else {
-      const prior = result.find(old => garmentFamily(old) === garmentFamily(item) && scxWardrobeSlot(old) === slot)
+      // "Her breastplate" said of saved leather armor is the same armor.
+      const prior = result.find(old => (garmentFamily(old) === garmentFamily(item) || slot === 'armor:torso') && scxWardrobeSlot(old) === slot)
       if (prior && preserveGenericPrior && scxSame(item, garmentFamily(item))) item = prior
       result = result.filter(old => !scxAbsentSlots(old).includes('all') && !scxAbsentSlots(old).includes(slot) && scxWardrobeSlot(old) !== slot)
       if (slot === 'full') result = result.filter(old => !['top:base', 'bottom:outer'].includes(wardrobeSlot(old)))
@@ -22266,6 +22279,43 @@ function scxApplyItems(worn, items, preserveGenericPrior = true) {
     result.push(item)
   }
   return uniqueStrings(result)
+}
+
+// Verified equipment details add to the usual clothing rules; they never turn
+// them off. Without this, a verified "blue shirt" with replacement scope none
+// was added next to the red one and the picture kept the red shirt. A familiar
+// garment still displaces what sits in its slot, as it does without details.
+// Only a stated different layer keeps the older piece: an open flannel shirt
+// worn over a tank top, a robe over pajamas. Body armor is one piece always.
+const SCX_SINGLE_PIECE_SLOTS = ['top:under', 'top:base', 'top:middle', 'top:outer', 'bottom:under', 'bottom:outer', 'feet:socks', 'feet:shoes', 'full', 'armor:torso']
+function scxUsualReplacement(before, worn, entries, event, items) {
+  if (!['wear', 'observe'].includes(event.operation)) return worn
+  const layer = event.equipmentVerified && event.equipment ? event.equipment.layer : null
+  let result = [...worn]
+  for (const item of items) {
+    const slot = scxWardrobeSlot(item)
+    if (!directWardrobeTag(item) || scxAbsentSlots(item).length || !SCX_SINGLE_PIECE_SLOTS.includes(slot)) continue
+    // A generic observation describes a piece already worn. Verified geometry
+    // has matched it, or left an ambiguous match alone on purpose; a bare
+    // classification adds it, so drop the copy where one piece fits.
+    if (event.operation === 'observe' && scxSame(item, garmentFamily(item))) {
+      const fits = result.filter(old => !scxSame(old, item) && scxWardrobeSlot(old) === slot &&
+        (garmentFamily(old) === garmentFamily(item) || slot === 'armor:torso'))
+      if (fits.length === 1 && !before.some(old => scxSame(old, item))) result = result.filter(old => !scxSame(old, item))
+      continue
+    }
+    const slots = slot === 'full' ? ['full', 'top:base', 'bottom:outer'] : [slot]
+    result = result.filter(old => {
+      if (scxSame(old, item)) return true
+      const bare = scxAbsentSlots(old)
+      if (bare.length) return !bare.includes('all') && !bare.some(value => slots.includes(value))
+      if (!slots.includes(scxWardrobeSlot(old))) return true
+      if (slot === 'armor:torso' || !layer) return false
+      const entry = entries.find(value => value.relation === 'worn' && scxSame(value.item, old) && value.layer)
+      return entry ? entry.layer !== layer : ['mid', 'outer'].includes(layer) && scxLegacyEquipment(old).layer === 'base'
+    })
+  }
+  return result
 }
 
 function scxProfileDefaultOutfit(state, profile) {
@@ -22372,6 +22422,10 @@ function reduceStoryContinuityEvents(before, events, profiles = null) {
         : event.wearableVerified && event.wearable ? scxApplyClassifiedEquipment(worn, priorEquipment, { ...event, items }) : null
       let next = semantic ? semantic.worn : event.operation === 'hold' ? worn
         : event.operation === 'remove' ? scxRemoveItems(worn, items) : scxApplyItems(worn, items, event.operation !== 'wear')
+      if (semantic) next = scxUsualReplacement(worn, next, semantic.entries, event, items)
+      if (event.removesWornBodyArmor && items.some(item => wardrobeTorsoArmor(item) && scxRemoveItems(worn, [item]).length === worn.length)) {
+        next = next.filter(item => !wardrobeTorsoArmor(item))
+      }
       if (event.operation === 'bare') {
         const slots = items.flatMap(scxAbsentSlots)
         const regions = uniqueStrings(slots.flatMap(slot => slot === 'all' ? SCX_EQUIPMENT_REGIONS
@@ -22596,7 +22650,11 @@ function scxContestedItems(event, { disputed = false } = {}) {
   const previous = event.previousItems || []
   const core = item => normalizeIdentityText(scxGarmentCore(item) || item)
   const named = new Set((event.items || []).map(core))
-  if (event.operation === 'remove') return previous.filter(item => named.has(core(item)))
+  // Body armor is one piece at a time, so removing it under another name
+  // calls the saved body armor into question.
+  const armor = event.operation === 'remove' && (event.items || []).some(wardrobeTorsoArmor) &&
+    !previous.some(item => wardrobeTorsoArmor(item) && named.has(core(item)))
+  if (event.operation === 'remove') return previous.filter(item => named.has(core(item)) || armor && wardrobeTorsoArmor(item))
   if (event.operation === 'bare') return previous.slice()
   if (event.operation === 'hold') return []
   // A red shirt is contested by a blue shirt even though both are "shirt". Only
@@ -22604,7 +22662,7 @@ function scxContestedItems(event, { disputed = false } = {}) {
   // on a shirt, or a verifier calling it a contradiction, contests it.
   const generic = event.operation === 'observe' && !disputed
   return previous.filter(item => !(event.items || []).some(next => scxSame(next, item) ||
-    generic && scxSame(next, core(next)) && core(next) === core(item)))
+    generic && scxSame(next, core(next)) && (core(next) === core(item) || wardrobeTorsoArmor(next) && wardrobeTorsoArmor(item))))
 }
 
 async function extractStoryContinuity({ userId, chatId, settings, profiles, before, target, messages, targetIndex, trackerOnly = false }) {
@@ -22796,6 +22854,24 @@ async function extractStoryContinuity({ userId, chatId, settings, profiles, befo
   diagnostics.accepted = accepted.length
   if (!trackerOnly && diagnostics.coverage !== 'complete') diagnostics.issues.push('Completeness is uncertain. Verified facts were retained; this alone does not trigger another extraction of the same source.')
   diagnostics.dressingPreconditions = scxDressingPreconditions(accepted)
+  // A removal can name body armor by another word than the saved one: "his
+  // leather breastplate" for saved "black leather armor". Decided here, with
+  // the whole reply in view, and stored on the event so every replay agrees:
+  // it takes off the body armor being worn, unless new body armor went on
+  // earlier in this reply. Then it names the old piece, already replaced.
+  const precedes = (a, b) => ((a.source === 'scene-card') - (b.source === 'scene-card') || a.start - b.start || a.sourceIndex - b.sourceIndex) < 0
+  const newArmorBefore = event => accepted.some(other => other.kind === 'wardrobe' && other.ref === event.ref &&
+    ['wear', 'observe'].includes(other.operation) && other.items.some(wardrobeTorsoArmor) && precedes(other, event))
+  for (const event of accepted) if (event.kind === 'wardrobe' && event.operation === 'remove' &&
+      event.items.some(wardrobeTorsoArmor) && !newArmorBefore(event)) event.removesWornBodyArmor = true
+  // An unsure removal under another name asks about the saved body armor, but
+  // not once new armor has gone on: then it names the piece already replaced.
+  const core = item => normalizeIdentityText(scxGarmentCore(item) || item)
+  for (const event of [...withheld]) if (event.unresolvedOperation === 'remove' && event.items.every(wardrobeTorsoArmor) &&
+      !event.items.some(item => (event.proposedItems || []).some(named => core(named) === core(item))) && newArmorBefore(event)) {
+    withheld.splice(withheld.indexOf(event), 1)
+    diagnostics.disputes = diagnostics.disputes.filter(dispute => dispute !== event.dispute)
+  }
   const events = scxSort([...accepted, ...withheld])
   const after = reduceStoryContinuityEvents(before, events, profiles)
   if (withheld.length) diagnostics.withheldUnresolved = withheld.map(event => ({ ref: event.ref, items: event.items, eventId: event.id }))
