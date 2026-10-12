@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.8.1'
+  const EXTENSION_VERSION = '1.8.2'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1211,6 +1211,7 @@ the diner = diner, booth seating, formica table, neon sign | aliases: the diner,
           </div>
           <div class="ld-persona-editor ld-card" style="display:none">
             <div class="ld-subtitle ld-lib-ed-title">Persona library editor</div>
+            <div class="ld-row" style="margin-top:6px;align-items:center;gap:8px"><button class="ld-btn ld-compact" data-act="fill-lumicast">Fill from LumiCast</button><span class="ld-hint">Copies LumiCast’s latest character sheet into the fields below. Nothing is saved until you save.</span></div>
             <span class="ld-label">Library name</span><input class="ld-persona-ed-name" placeholder="Eric" />
             <div class="ld-profile-grid" style="margin-top:7px">
               <div><span class="ld-label">Anchor / name</span><input class="ld-persona-ed-anchor" placeholder="Eric" /></div>
@@ -7262,6 +7263,38 @@ ${entry.prompt || ''}`.trim()
 
   $('[data-act="new-persona"]').addEventListener('click', () => openPersonaEditor(null, 'persona'))
   $('[data-act="new-character"]').addEventListener('click', () => openPersonaEditor(null, 'character'))
+  // Fills only fields LumiCast has a value for, so an empty LumiCast field never wipes your own entry.
+  $('[data-act="fill-lumicast"]').addEventListener('click', async () => {
+    try {
+      const got = await call('lumicast_latest', {}, 15000)
+      const fields = [
+        ['.ld-persona-ed-count', got.sheet.countTag, 'count tag'], ['.ld-persona-ed-subject', got.sheet.subject, 'subject phrase'],
+        ['.ld-persona-ed-identity', got.sheet.always, 'always include'], ['.ld-persona-ed-tags', got.sheet.appearance, 'appearance'],
+        ['.ld-persona-ed-outfit', got.sheet.outfit, 'outfit'], ['.ld-persona-ed-anatomy', got.sheet.anatomy, 'anatomy'],
+      ]
+      const filled = []
+      for (const [selector, value, label] of fields) {
+        const node = $(selector)
+        if (!node || !value || !value.trim()) continue
+        node.value = value
+        node.dispatchEvent(new Event('input', { bubbles: true }))
+        filled.push(label)
+      }
+      // A name is offered only to empty name boxes; LumiCast guesses it from the description's first line.
+      if (got.name) for (const selector of ['.ld-persona-ed-name', '.ld-persona-ed-anchor']) {
+        const node = $(selector)
+        if (node && !node.value.trim()) { node.value = got.name; node.dispatchEvent(new Event('input', { bubbles: true })) }
+      }
+      const minutes = got.updatedAt ? Math.round((Date.now() - got.updatedAt) / 60000) : null
+      const when = minutes === null ? '' : minutes < 1 ? 'just now' : `${minutes} min ago`
+      const about = [got.title ? `“${got.title}”` : '', when].filter(Boolean).join(', ')
+      setStatus('.ld-persona-ed-status', filled.length
+        ? `Filled ${filled.join(', ')} from LumiCast${about ? ` (${about})` : ''}. Check them, then save.`
+        : 'LumiCast’s latest sheet is empty. Translate a character there first.', filled.length ? 'ok' : 'err')
+    } catch (error) {
+      setStatus('.ld-persona-ed-status', error.message, 'err')
+    }
+  })
   $('[data-act="persona-cancel"]').addEventListener('click', () => {
     $('.ld-persona-editor').style.display = 'none'
     personaEditorId = null

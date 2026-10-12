@@ -18483,6 +18483,36 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      // LumiCast publishes its latest character sheet through Lumiverse's shared RPC pool.
+      // Reading it changes nothing here: the panel fills the open editor and the user saves.
+      case 'lumicast_latest': {
+        if (!spindle.rpcPool || typeof spindle.rpcPool.read !== 'function') {
+          throw new Error('This Lumiverse version cannot share data between extensions. Copy the fields from LumiCast by hand.')
+        }
+        let shared
+        try {
+          shared = await spindle.rpcPool.read('lumicast.sheet.latest')
+        } catch (error) {
+          throw new Error('Nothing to fill from yet. Translate a character in LumiCast 0.7.0 or newer first; after Lumiverse restarts, translate again.')
+        }
+        const sheet = shared && shared.sheet
+        if (!shared || shared.version !== 1 || !sheet || typeof sheet !== 'object') {
+          throw new Error('LumiCast shared a format this Lumi Studio does not understand. Update both extensions.')
+        }
+        if (shared.userId && userId && shared.userId !== userId) {
+          throw new Error('The latest LumiCast character belongs to another Lumiverse user.')
+        }
+        const text = (value, max = 4000) => typeof value === 'string' ? value.slice(0, max) : ''
+        reply = ok(payload, requestId, {
+          sheet: {
+            countTag: text(sheet.countTag, 40), subject: text(sheet.subject, 200), always: text(sheet.always),
+            appearance: text(sheet.appearance), outfit: text(sheet.outfit), anatomy: text(sheet.anatomy),
+          },
+          name: text(shared.name, 80), title: text(shared.title, 120), updatedAt: Number(shared.updatedAt) || 0,
+        })
+        break
+      }
+
       case 'jev_status': {
         reply = ok(payload, requestId, await jevStatus(userId))
         break
