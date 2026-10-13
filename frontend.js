@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.9.0'
+  const EXTENSION_VERSION = '1.9.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1055,11 +1055,11 @@ function realSetup(ctx) {
           <div class="ld-card">
             <div class="ld-subtitle">Illustration mode</div>
             <select class="ld-mode">
-              <option value="off">Off — no story illustrations</option>
-              <option value="inline">Inline — story model requests images</option>
-              <option value="parser-manual">Parser — manual scans only</option>
+              <option value="off">Off — no story pictures</option>
+              <option value="inline">Inline — the story model asks for pictures</option>
+              <option value="parser-manual">Parser — only when I press Scan</option>
               <option value="parser-auto">Parser — automatic after replies</option>
-              <option value="direct-manual">Direct — manual scans only</option>
+              <option value="direct-manual">Direct — only when I press Scan</option>
               <option value="direct-auto">Direct — automatic after replies</option>
             </select>
             <div class="ld-mode-note ld-help">Manual uses the Scan buttons; automatic counts new replies while enabled, with no catch-up for replies written while off. Scan latest bypasses the wait.</div>
@@ -1154,9 +1154,9 @@ function realSetup(ctx) {
             <div style="margin-top:9px">
               <span class="ld-label">Maximum characters per image (Direct mode)</span>
               <select class="ld-maxsubjects">
-                <option value="2">2 — spatial pair (recommended)</option>
-                <option value="3">3 — spatial group mode</option>
-                <option value="4">4 — experimental spatial group</option>
+                <option value="2">2 people (recommended)</option>
+                <option value="3">3 people</option>
+                <option value="4">4 people (less reliable)</option>
               </select>
               <div class="ld-help" style="margin-top:3px">Two to four people use the spatial format: one introduction per character and short positional references. Your saved adult age descriptions are preserved. This controls the maximum number of people, not the number of images.</div>
             </div>
@@ -1720,6 +1720,12 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       .ld-reset-library-note{margin-bottom:1px}
       .ld-reset-hidden-legacy{display:none!important}
       .ld-reset-save-note{font-size:11px;color:var(--lumiverse-text-muted,#a2a5b4);margin-top:7px}
+      .ld-check{display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;margin-top:6px}
+      .ld-check input{width:auto!important;flex:0 0 auto}
+      .ld-hint{font-size:11px;line-height:1.45;color:var(--lumiverse-text-muted,#a2a5b4);margin-top:5px}
+      label.ld-label{display:block;margin-top:8px}
+      label.ld-label>input,label.ld-label>select,label.ld-label>textarea{margin-top:4px}
+      .ld-simple-memory-box{border-top:1px solid var(--lumiverse-border,#3d4050);padding-top:10px}
       @media(max-width:700px){
         .ld-reset-grid{grid-template-columns:1fr}
         .ld-reset-hero{grid-template-columns:1fr}
@@ -1792,156 +1798,57 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     }
     const oldStudioPresetCard = controls.presetSelect ? controls.presetSelect.closest('.ld-card') : null
 
-    // ---------- STORY
+    // ---------- STORY · 1.9 layout
+    // One scroll, ordered by how often you touch it. Rarely-changed things live in
+    // Settings; everything only the 1.8 pipeline needs is grouped under Settings →
+    // Old pipeline (1.8). Existing nodes are MOVED, never recreated, so every
+    // handler that was bound to them keeps working.
     const storyForm = storyView.querySelector('.ld-form-view')
-    const storyRail = rail([
-      ['setup', 'Setup'],
-      ['cast', 'Cast & wardrobe'],
-      ['parser', 'Parser'],
-      ['prompting', 'Prompting'],
-      ['debug', 'Debug'],
-    ], 'lumidraw.storySection.v2', 'setup')
-    const setup = section('setup')
-    const cast = section('cast')
-    const parser = section('parser')
-    const prompting = section('prompting')
-    const debug = section('debug')
 
+    // 1. Make a picture now
     const hero = card()
     hero.classList.add('ld-reset-hero')
     const heroText = make('div')
-    heroText.appendChild(make('div', 'ld-subtitle', 'Story illustrations'))
+    heroText.appendChild(make('div', 'ld-subtitle', 'Story pictures'))
     const currentLine = make('div', 'ld-reset-preset-line')
-    currentLine.appendChild(document.createTextNode('Generation preset: '))
+    currentLine.appendChild(document.createTextNode('Image preset: '))
     currentLine.appendChild(make('strong', 'ld-story-preset-name', 'None'))
     heroText.appendChild(currentLine)
-    addHelp(heroText, 'Story decides who, where, and what to prompt. The generation preset chooses the renderer (Draw Things or SwarmUI) and its image settings.')
     const heroActions = inline(controls.scan, controls.scanOld, controls.cancelScan)
     hero.append(heroText, heroActions)
-    setup.appendChild(hero)
-
-    const behavior = card('Illustration behavior')
-    if (controls.presetSelect) {
-      behavior.appendChild(field('Generation preset', controls.presetSelect, 'Renderer, model, sampler, steps, dimensions, LoRAs, and renderer-specific settings only.'))
-    }
-    behavior.appendChild(field('Behavior', controls.mode,
-      'Choose the prompt pipeline and trigger together. Manual uses the Scan buttons; automatic follows your image frequency below. Off means no story illustrations.'))
-    // Kept in the DOM only as a compatibility mirror for the backend's saved
-    // `autoScan` field. It is no longer a second user-facing control.
-    if (controls.autoScan) behavior.appendChild(controls.autoScan)
-    behavior.appendChild(field('Automatic image frequency', controls.autoInterval,
-      'Default: every 5 new assistant story replies. Rerolls do not advance the counter. Story continuity keeps running; Scan latest generates now without waiting.'))
-    behavior.appendChild(checkbox(controls.charTags, 'Use chat character image tags as a fallback'))
-    behavior.appendChild(checkbox(controls.strip, 'Hide image-request directives from the story model',
-      'Keeps dead image-request markup from teaching the story model to repeat it. Stored messages are not changed.'))
-    const imageCount = make('div', 'ld-reset-grid')
-    imageCount.appendChild(field('Minimum images', controls.minImages, '0 lets the model decide.'))
-    imageCount.appendChild(field('Maximum images', controls.maxImages))
-    behavior.appendChild(imageCount)
-    behavior.appendChild(field('Maximum characters per image (Direct mode)', controls.maxSubjects,
-      'Two to four people use one introduction per character with short positional references. Saved adult age descriptions are preserved.'))
-    setup.appendChild(behavior)
-
-    const display = card('Chat image display')
-    display.appendChild(checkbox(controls.sizeImages, 'Set a custom image width',
-      'Applies to native Lumi Studio images generated with v1.3.3 or newer. Older inline images are left entirely to Lumiverse.'))
-    if (controls.sizeRow) display.appendChild(controls.sizeRow)
-    display.appendChild(checkbox(controls.optimizedPreviews, 'Use optimized previews (recommended)',
-      'History uses Lumiverse’s small cached tier and chat/current images use its large tier. The original stays available for the viewer, regeneration, and download.'))
-    display.appendChild(checkbox(controls.deleteChatImages, 'Delete unshared Lumi Studio images with a deleted chat',
-      'Removes the Lumi Studio upload and its cached previews only when no other chat uses it. Draw Things keeps its own generated copy.'))
-    setup.appendChild(display)
     if (controls.lastStatus) {
       controls.lastStatus.classList.add('ld-reset-status')
-      setup.appendChild(controls.lastStatus)
+      controls.lastStatus.style.gridColumn = '1 / -1'
+      hero.appendChild(controls.lastStatus)
     }
 
-    const castCard = card('Cast for this chat', 'Characters and personas belong to the story, not to the generation preset.')
+    // 2. This chat: who is in it, and what Lumi Studio remembers about them
+    const castCard = card('This chat', 'Who is in this story. Saved characters and personas come from your Library.')
     const castTop = make('div', 'ld-reset-grid')
     castTop.appendChild(field('Cast', inline(controls.castPick, controls.castCopy)))
     castTop.appendChild(field('Playing as', controls.chatPersona, 'Remembered for this chat.'))
     castCard.appendChild(castTop)
-    castCard.appendChild(checkbox(controls.chatLeads, 'Use this chat’s character and persona as the two leads',
-      'Supporting characters still come from the selected cast.'))
-    castCard.appendChild(checkbox(controls.fantasy, 'Fantasy setting — do not treat fantasy species as mistakes'))
+    castCard.appendChild(field('Add a saved character', inline(controls.wardrobeAdd, controls.wardrobeAddButton)))
+    castCard.appendChild(checkbox(controls.chatLeads, 'Use this chat’s character and persona as the main two',
+      'Other characters still come from the cast.'))
+    castCard.appendChild(checkbox(controls.fantasy, 'Fantasy story — elves, orcs and other species are expected'))
     if (controls.castSummary) castCard.appendChild(controls.castSummary)
     if (controls.castStatus) castCard.appendChild(controls.castStatus)
-    cast.appendChild(castCard)
 
-    const wardrobeCard = card('Automatic clothing tracking', 'With the active Jev planner, the whole message updates story clothing automatically, even if the pictured moment is earlier or image generation fails. Hidden layers and shoes stay remembered. Use “Fix this image…” for image-only corrections. Save is a one-time story correction, not a lock. Refresh reloads the display. Sync and Review wardrobe are optional recovery tools; normal tracking needs neither. Review reads a bounded recent history with one extra parser call and lets you choose what is current before applying anything.')
-    wardrobeCard.appendChild(inline(make('span', 'ld-label', 'Complete current outfit'), controls.wardrobeRefresh, controls.wardrobeSync, controls.wardrobeReview))
-    if (controls.wardrobeRows) wardrobeCard.appendChild(controls.wardrobeRows)
-    wardrobeCard.appendChild(field('Add a saved character to this chat', inline(controls.wardrobeAdd, controls.wardrobeAddButton)))
-    if (controls.wardrobeStatus) wardrobeCard.appendChild(controls.wardrobeStatus)
-    wardrobeCard.appendChild(make('div', 'ld-help ld-wardrobe-disputes'))
-    const wardrobeReviewPanel = make('div', 'ld-wardrobe-review-panel')
-    wardrobeReviewPanel.hidden = true
-    wardrobeReviewPanel.setAttribute('aria-live', 'polite')
-    wardrobeCard.appendChild(wardrobeReviewPanel)
-    const wardrobeDiagnostics = make('div', 'ld-wardrobe-diagnostics')
-    wardrobeDiagnostics.hidden = true
-    wardrobeCard.appendChild(wardrobeDiagnostics)
-    const trackedClothing = make('details', 'ld-tracked-clothing')
-    trackedClothing.appendChild(make('summary', 'ld-label', 'Tracked clothing — diagnostics'))
-    trackedClothing.appendChild(wardrobeCard)
-    cast.appendChild(trackedClothing)
-
-    const parserBinding = card('Prompt parser')
-    parserBinding.classList.add('ld-parser-binding-controls')
-    const parserEngineField = field('Engine', controls.parserEngine)
-    parserEngineField.classList.add('ld-parser-engine-field')
-    parserBinding.appendChild(parserEngineField)
-    if (controls.parserEngineNote) parserBinding.appendChild(controls.parserEngineNote)
-    const parserSourceGrid = make('div', 'ld-reset-grid')
-    parserSourceGrid.appendChild(field('Connection', inline(controls.parserConnection, controls.refreshParserSources)))
-    parserSourceGrid.appendChild(field('Model override', inline(controls.parserModel, controls.clearModelOverride), 'Leave empty to use the selected connection’s model.'))
-    parserSourceGrid.appendChild(field('Temperature', controls.parserTemperature, 'Sampling temperature for the parser model. Some models/providers require or strongly prefer a particular value.'))
-    parserBinding.appendChild(parserSourceGrid)
-    if (controls.modelOverrideNote) parserBinding.appendChild(controls.modelOverrideNote)
-    // Direct is a first-class illustration mode now, not a hidden Parser toggle.
-    // The old checkbox stays only in the legacy source markup; it is detached by
-    // the UI reset and no longer controls saved settings.
-    const animaContext = make('div', 'ld-anima-context-controls')
-    animaContext.style.marginTop = '9px'
-    const contextGrid = make('div', 'ld-reset-grid')
-    contextGrid.appendChild(field('Reference context', controls.parserContext))
-    contextGrid.appendChild(checkbox(controls.loom, 'Use latest <loomledger> as continuity reference'))
-    animaContext.appendChild(contextGrid)
-    addHelp(animaContext, 'Reference context resolves continuity; only the current story message supplies the illustrated moment.')
-    parserBinding.appendChild(animaContext)
-
-    const parserAdvanced = details('Advanced parser settings', 'Normally you should not need these.')
-    const parserInstructionLabel = make('span', 'ld-label ld-parser-instruction-label', 'Parser instruction')
-    parserAdvanced.body.appendChild(parserInstructionLabel)
-    if (controls.parserInstruction) parserAdvanced.body.appendChild(controls.parserInstruction)
-    if (controls.resetParser) parserAdvanced.body.appendChild(controls.resetParser)
-    const advancedGrid = make('div', 'ld-reset-grid')
-    advancedGrid.style.marginTop = '9px'
-    advancedGrid.appendChild(field('Maximum output tokens', controls.parserMaxTokens))
-    parserAdvanced.body.appendChild(advancedGrid)
-    parserAdvanced.body.appendChild(field('Parser request overrides (JSON)', controls.parserOverrides,
-      'Provider-specific escape hatch. Leave empty unless you know you need it.'))
-    parserBinding.appendChild(parserAdvanced.el)
-    parser.appendChild(parserBinding)
-
-    // 1.9 simple pipeline: one parser call, then a plain prompt builder.
-    const simpleCard = card('Simple pipeline · 1.9',
-      'Direct mode only. One parser call reads the story, then Lumi Studio builds the prompt straight from it. No Jev checks and no extra review calls. Saved sheets still decide how saved characters look.')
-    const simpleToggle = document.createElement('input')
-    simpleToggle.type = 'checkbox'
-    simpleToggle.className = 'ld-simple-pipeline'
-    simpleCard.appendChild(checkbox(simpleToggle, 'Use the simple pipeline'))
-    addHelp(simpleCard, 'On: people without a sheet get a body description, and everyone\'s clothes carry over from picture to picture until the story changes them. Off: the older scene core and Jev settings below are used instead.')
+    const memoryBox = make('div', 'ld-simple-memory-box')
+    memoryBox.style.marginTop = '12px'
+    memoryBox.appendChild(make('div', 'ld-label', 'What Lumi Studio remembers in this chat'))
+    addHelp(memoryBox, 'Looks of people without a sheet, everyone’s current clothes, and the last place. Updated after each picture. Used by the simple pipeline.')
     const simpleList = make('div', 'ld-help ld-simple-memory')
     simpleList.style.whiteSpace = 'pre-wrap'
-    simpleList.style.marginTop = '8px'
+    simpleList.style.marginTop = '6px'
     const simpleStatus = make('div', 'ld-help ld-simple-memory-status')
-    const simpleRefresh = make('button', 'ld-btn', 'Show what this chat remembers')
-    const simpleForget = make('button', 'ld-btn', 'Forget this chat')
+    const simpleRefresh = make('button', 'ld-btn ld-compact', 'Refresh')
+    const simpleForget = make('button', 'ld-btn ld-compact', 'Forget this chat')
     simpleRefresh.type = 'button'; simpleForget.type = 'button'
     const renderSimpleMemory = async () => {
       const chatId = String(activeChatIdFromCtx() || '')
-      if (!chatId) { simpleStatus.textContent = 'Open a chat first.'; simpleList.textContent = ''; return }
+      if (!chatId) { simpleStatus.textContent = 'Open a chat to see what is remembered.'; simpleList.textContent = ''; return }
       simpleStatus.textContent = 'Loading…'
       try {
         const got = await call('simple_memory_get', { chatId }, 15000)
@@ -1974,31 +1881,44 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         simpleStatus.textContent = error.message
       }
     })
-    simpleCard.appendChild(inline(simpleRefresh, simpleForget))
-    simpleCard.appendChild(simpleStatus)
-    simpleCard.appendChild(simpleList)
-    addHelp(simpleCard, 'If someone without a sheet came out wrong the first time, press Forget this chat and make the picture again — their look is kept from the first good picture onward.')
-    parser.appendChild(simpleCard)
+    memoryBox.appendChild(inline(simpleRefresh, simpleForget))
+    memoryBox.appendChild(simpleStatus)
+    memoryBox.appendChild(simpleList)
+    addHelp(memoryBox, 'If someone without a sheet came out wrong, press Forget this chat and make the picture again.')
+    castCard.appendChild(memoryBox)
+    const storyMainTab = $('.ld-main-tab[data-tab="story"]')
+    if (storyMainTab) storyMainTab.addEventListener('click', () => { renderSimpleMemory() })
 
-    const coreCard = card('Experimental scene core · based on 1.3.35',
-      'Direct mode only. Keeps your existing parser format. Opens with the action and named identities, then describes each character, clothing layers, and location. The optional coordinated planner below adds bounded Jev checks.')
-    const coreToggle = document.createElement('input')
-    coreToggle.type = 'checkbox'
-    coreToggle.className = 'ld-experimental-scene-core'
-    coreCard.appendChild(checkbox(coreToggle, 'Try the new scene core'))
-    addHelp(coreCard, 'Off by default. Turn off to use the 1.3.35 formatter again. Story wardrobe updates remain in memory; switching off does not rewind them. Unknown clothing is flagged in Debug, not filled in with guessed garments.')
-    const plannerToggle = document.createElement('input')
-    plannerToggle.type = 'checkbox'
-    plannerToggle.className = 'ld-experimental-jev-planner'
-    coreCard.appendChild(checkbox(plannerToggle, 'Coordinated Jev planner · experimental 1.5'))
-    const knownCastToggle = document.createElement('input')
-    knownCastToggle.type = 'checkbox'
-    knownCastToggle.className = 'ld-prefer-known-cast-moments'
-    coreCard.appendChild(checkbox(knownCastToggle, 'Prefer moments without ungendered incidental characters'))
-    addHelp(coreCard, 'Planner is enabled in this experimental build, but applies changes only with Jev enabled in Active mode and Scene Core on. Disable this planner to return to jev.6 processing. Saved characters using 1other are never excluded by the incidental-character preference. Earlier releases remain separate fallbacks; switching modes does not undo saved continuity.')
-    addHelp(coreCard, 'Automatic story memory is separate from images. It reads the complete message, so later outfit/location changes are remembered without changing an earlier illustration. It also runs in Direct manual-image mode. Cost: one extra story-reading parser call plus one Jev verification per processed message revision; unchanged revisions are reused. Initial setup or catch-up can process up to three recent messages, each with those calls. Off mode disables this path. Sync is only a recovery tool.')
-    parser.appendChild(coreCard)
+    // 3. When to draw
+    const behavior = card('When to draw')
+    if (controls.presetSelect) {
+      behavior.appendChild(field('Image preset', controls.presetSelect, 'Which image app and model to use. Edit presets in Library.'))
+    }
+    behavior.appendChild(field('Mode', controls.mode,
+      'Manual: only when you press Scan. Automatic: after story replies, as often as set below. Off: no story pictures.'))
+    // Kept in the DOM only as a compatibility mirror for the backend's saved
+    // `autoScan` field. It is no longer a second user-facing control.
+    if (controls.autoScan) behavior.appendChild(controls.autoScan)
+    behavior.appendChild(field('How often (automatic mode)', controls.autoInterval,
+      'Rerolls do not count. Scan latest makes a picture right away.'))
+    const simpleToggle = document.createElement('input')
+    simpleToggle.type = 'checkbox'
+    simpleToggle.className = 'ld-simple-pipeline'
+    behavior.appendChild(checkbox(simpleToggle, 'Use the simple pipeline (1.9)',
+      'One parser call, then the prompt is built straight from it. Turn off to use the old 1.8 pipeline; its settings are in Settings → Old pipeline.'))
+    const imageCount = make('div', 'ld-reset-grid')
+    imageCount.style.marginTop = '8px'
+    imageCount.appendChild(field('Most pictures per reply', controls.maxImages))
+    imageCount.appendChild(field('Fewest pictures per reply', controls.minImages, '0 lets the parser decide.'))
+    behavior.appendChild(imageCount)
+    behavior.appendChild(field('Most people in one picture', controls.maxSubjects))
+    const behaviorMore = details('More options')
+    behaviorMore.body.appendChild(checkbox(controls.charTags, 'Use the chat character’s image tags if there is no saved sheet'))
+    behaviorMore.body.appendChild(checkbox(controls.strip, 'Hide old image requests from the story model',
+      'Stops the story model from copying them. Your saved messages are not changed.'))
+    behavior.appendChild(behaviorMore.el)
 
+    // 4. Prompt
     const storyQuality = document.createElement('textarea')
     storyQuality.className = 'ld-story-quality'
     storyQuality.rows = 2
@@ -2006,7 +1926,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const storyPrefix = document.createElement('textarea')
     storyPrefix.className = 'ld-story-prefix'
     storyPrefix.rows = 2
-    storyPrefix.placeholder = 'Optional text/tags added before the compiled scene'
+    storyPrefix.placeholder = 'Optional text/tags added before the scene'
     const storyNegative = document.createElement('textarea')
     storyNegative.className = 'ld-story-negative'
     storyNegative.rows = 2
@@ -2014,33 +1934,25 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const storyBanned = document.createElement('textarea')
     storyBanned.className = 'ld-story-banned'
     storyBanned.rows = 2
-    storyBanned.placeholder = 'Tags the compiler should remove or avoid'
+    storyBanned.placeholder = 'Tags that must never be used'
     const storyAnchor = document.createElement('textarea')
     storyAnchor.className = 'ld-story-scene-anchor'
     storyAnchor.rows = 2
-    storyAnchor.placeholder = 'Optional starting location / recurring setting tags'
+    storyAnchor.placeholder = 'Optional starting place, e.g. tavern, night'
     const storyBreak = document.createElement('input')
     storyBreak.type = 'checkbox'
     storyBreak.className = 'ld-story-break'
 
-    const promptCard = card('Story prompt defaults',
-      'These belong to Story now. Switching image models no longer swaps your characters or story prompt rules.')
-    promptCard.appendChild(field('Always include / quality tags', storyQuality))
-    promptCard.appendChild(field('Prompt prefix', storyPrefix))
-    promptCard.appendChild(field('Negative prompt', storyNegative))
-    promptCard.appendChild(field('Banned tags', storyBanned))
-    promptCard.appendChild(field('Scene anchor', storyAnchor, 'Starting/fallback location. Lumi Studio can still update its scene memory as the story moves.'))
-    promptCard.appendChild(checkbox(storyBreak, 'Use BREAK separators when compiling supported prompts'))
-    prompting.appendChild(promptCard)
-
-    const inlineGuide = details('Inline mode guidance', 'Instructions given to the story model when Inline mode is active.')
-    if (controls.protocol) inlineGuide.body.appendChild(controls.protocol)
-    if (controls.resetProtocol) inlineGuide.body.appendChild(controls.resetProtocol)
-    prompting.appendChild(inlineGuide.el)
-
-    // The artist vocabulary was embedded in the old preset editor even though it is
-    // model/tooling knowledge rather than preset data. Move the existing nodes so
-    // their event handlers still bind to exactly the same elements.
+    const promptCard = card('Prompt', 'Added to every story picture, whatever image preset you use.')
+    const promptGrid = make('div', 'ld-reset-grid')
+    promptGrid.appendChild(field('Quality tags (always included)', storyQuality))
+    promptGrid.appendChild(field('Negative prompt', storyNegative))
+    promptGrid.appendChild(field('Prompt prefix', storyPrefix))
+    promptGrid.appendChild(field('Banned tags', storyBanned))
+    promptCard.appendChild(promptGrid)
+    promptCard.appendChild(field('Starting place', storyAnchor, 'Used until the story says where everyone is.'))
+    // The artist vocabulary is prompt knowledge; move the existing nodes so their
+    // handlers still bind to exactly the same elements.
     const artistInput = $('.ld-artist-index')
     if (artistInput) {
       const artistStatus = $('.ld-artist-status')
@@ -2049,53 +1961,149 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         $('[data-act="artist-check"]'),
         $('[data-act="artist-clear"]'),
       ].filter(Boolean)
-      const artist = details('Anima artist index', 'Optional vocabulary checker for @artist tags.')
+      const artist = details('Anima artist list', 'Optional. Checks that your @artist tags are names Anima knows.')
       artist.body.appendChild(artistInput)
       artist.body.appendChild(inline(...artistButtons))
       if (artistStatus) artist.body.appendChild(artistStatus)
-      prompting.appendChild(artist.el)
+      promptCard.appendChild(artist.el)
     }
 
+    // 5. Last picture
     const debugCard = card()
     if (controls.debugTitle) debugCard.appendChild(controls.debugTitle)
-    else debugCard.appendChild(make('div', 'ld-subtitle ld-parser-debug-title', 'Last parser result'))
-    addHelp(debugCard, 'Raw parser/compiler output lives here so the normal Story setup stays readable.')
-    debugCard.appendChild(field('Final image prompt', controls.finalPrompt))
-    const parsedDetails = details('Parsed scene / parser reply')
+    else debugCard.appendChild(make('div', 'ld-subtitle ld-parser-debug-title', 'Last picture'))
+    debugCard.appendChild(field('Prompt sent to the image app', controls.finalPrompt))
+    const parsedDetails = details('What the parser returned')
     if (controls.parsedScene) parsedDetails.body.appendChild(controls.parsedScene)
     debugCard.appendChild(parsedDetails.el)
-    debug.appendChild(debugCard)
-    const coreSummaryCard = card('Resolved scene snapshot · experimental',
-      'What this exact candidate used. Full details remain in the parser/debug report.')
-    coreSummaryCard.className += ' ld-core-summary-card'
+    const reportButton = make('button', 'ld-btn', 'Troubleshooting report…')
+    reportButton.type = 'button'
+    reportButton.addEventListener('click', () => {
+      const real = $('[data-act="troubleshooting"]')
+      if (real) real.click()
+    })
+    debugCard.appendChild(inline(reportButton))
+    addHelp(debugCard, 'The report shows where each person’s look and clothes came from. More reports are in Settings → Help & reports.')
+
+    storyForm.replaceChildren(hero, castCard, behavior, promptCard, debugCard)
+
+    // ---------- Parts of the old Story tab that now live in Settings.
+    const display = card('Pictures in the chat')
+    display.appendChild(checkbox(controls.sizeImages, 'Set my own picture width',
+      'Only for pictures made with Lumi Studio 1.3.3 or newer.'))
+    if (controls.sizeRow) display.appendChild(controls.sizeRow)
+    display.appendChild(checkbox(controls.optimizedPreviews, 'Use smaller previews (recommended)',
+      'Faster to load. The full-size original is still used for viewing, redoing and downloading.'))
+    display.appendChild(checkbox(controls.deleteChatImages, 'Delete Lumi Studio pictures when their chat is deleted',
+      'Only pictures no other chat uses. Draw Things keeps its own copy.'))
+
+    const parserBinding = card('Parser', 'The language model that reads the story and describes the scene for the prompt.')
+    parserBinding.classList.add('ld-parser-binding-controls')
+    const parserEngineField = field('Engine', controls.parserEngine)
+    parserEngineField.classList.add('ld-parser-engine-field')
+    parserBinding.appendChild(parserEngineField)
+    if (controls.parserEngineNote) parserBinding.appendChild(controls.parserEngineNote)
+    const parserSourceGrid = make('div', 'ld-reset-grid')
+    parserSourceGrid.appendChild(field('Connection', inline(controls.parserConnection, controls.refreshParserSources)))
+    parserSourceGrid.appendChild(field('Model', inline(controls.parserModel, controls.clearModelOverride), 'Leave empty to use the connection’s own model.'))
+    parserSourceGrid.appendChild(field('Temperature', controls.parserTemperature, 'Lower is steadier. Some models need a set value.'))
+    parserBinding.appendChild(parserSourceGrid)
+    if (controls.modelOverrideNote) parserBinding.appendChild(controls.modelOverrideNote)
+    const animaContext = make('div', 'ld-anima-context-controls')
+    animaContext.style.marginTop = '9px'
+    const contextGrid = make('div', 'ld-reset-grid')
+    contextGrid.appendChild(field('Earlier messages to read', controls.parserContext))
+    contextGrid.appendChild(checkbox(controls.loom, 'Also read the latest <loomledger>'))
+    animaContext.appendChild(contextGrid)
+    addHelp(animaContext, 'Earlier messages help with names, clothes and place. Only the current message decides what is drawn.')
+    parserBinding.appendChild(animaContext)
+    const parserAdvanced = details('Advanced', 'You should not normally need these.')
+    const parserInstructionLabel = make('span', 'ld-label ld-parser-instruction-label', 'Parser instruction')
+    parserAdvanced.body.appendChild(parserInstructionLabel)
+    if (controls.parserInstruction) parserAdvanced.body.appendChild(controls.parserInstruction)
+    if (controls.resetParser) parserAdvanced.body.appendChild(controls.resetParser)
+    const advancedGrid = make('div', 'ld-reset-grid')
+    advancedGrid.style.marginTop = '9px'
+    advancedGrid.appendChild(field('Most output tokens', controls.parserMaxTokens))
+    parserAdvanced.body.appendChild(advancedGrid)
+    parserAdvanced.body.appendChild(field('Extra request settings (JSON)', controls.parserOverrides,
+      'For provider-specific options. Leave empty unless you know you need it.'))
+    parserBinding.appendChild(parserAdvanced.el)
+
+    // Old pipeline (1.8): everything that only matters with the simple pipeline off.
+    const oldIntro = card('Old pipeline (1.8)',
+      'Only used when “Use the simple pipeline” is off (Story → When to draw). Kept together here so the two can be compared.')
+    const continuityStatus = make('div', 'ld-status ld-reset-status ld-story-continuity')
+    continuityStatus.setAttribute('role', 'status')
+    continuityStatus.setAttribute('aria-live', 'polite')
+    continuityStatus.textContent = lumidrawContinuityStatus(null).text
+    oldIntro.appendChild(continuityStatus)
+
+    const coreCard = card('Scene core and Jev planner')
+    const coreToggle = document.createElement('input')
+    coreToggle.type = 'checkbox'
+    coreToggle.className = 'ld-experimental-scene-core'
+    coreCard.appendChild(checkbox(coreToggle, 'Use the scene core (based on 1.3.35)',
+      'Direct mode only. Opens with the action and names, then each character, clothes and place.'))
+    const plannerToggle = document.createElement('input')
+    plannerToggle.type = 'checkbox'
+    plannerToggle.className = 'ld-experimental-jev-planner'
+    coreCard.appendChild(checkbox(plannerToggle, 'Use the Jev planner (1.5)',
+      'Only works with Jev turned on below in Active mode and the scene core on.'))
+    const knownCastToggle = document.createElement('input')
+    knownCastToggle.type = 'checkbox'
+    knownCastToggle.className = 'ld-prefer-known-cast-moments'
+    coreCard.appendChild(checkbox(knownCastToggle, 'Prefer moments without unsaved people of unknown gender'))
+    coreCard.appendChild(checkbox(storyBreak, 'Use BREAK separators in prompts that support them'))
+    addHelp(coreCard, 'Story memory (old pipeline only) reads each new message with one extra parser call and one Jev check, and remembers clothes and place.')
+
+    const jevCard = $('.ld-jev-enabled') ? $('.ld-jev-enabled').closest('.ld-card') : null
+    if (jevCard) {
+      jevCard.removeAttribute('data-settings-section')
+      const title = jevCard.querySelector('.ld-subtitle')
+      if (title) title.textContent = 'Jev (TypeSafe paid API)'
+    }
+
+    const wardrobeCard = card('', 'Story memory updates clothes after each message. Sync and Review are only for fixing mistakes; Review uses one extra parser call and lets you choose before anything changes.')
+    wardrobeCard.appendChild(inline(make('span', 'ld-label', 'Current outfits'), controls.wardrobeRefresh, controls.wardrobeSync, controls.wardrobeReview))
+    if (controls.wardrobeRows) wardrobeCard.appendChild(controls.wardrobeRows)
+    if (controls.wardrobeStatus) wardrobeCard.appendChild(controls.wardrobeStatus)
+    wardrobeCard.appendChild(make('div', 'ld-help ld-wardrobe-disputes'))
+    const wardrobeReviewPanel = make('div', 'ld-wardrobe-review-panel')
+    wardrobeReviewPanel.hidden = true
+    wardrobeReviewPanel.setAttribute('aria-live', 'polite')
+    wardrobeCard.appendChild(wardrobeReviewPanel)
+    const wardrobeDiagnostics = make('div', 'ld-wardrobe-diagnostics')
+    wardrobeDiagnostics.hidden = true
+    wardrobeCard.appendChild(wardrobeDiagnostics)
+    // Kept as a <details> with this class: other code opens it to show diagnostics.
+    const trackedClothing = make('details', 'ld-tracked-clothing ld-reset-details')
+    trackedClothing.open = true
+    trackedClothing.appendChild(make('summary', '', 'Clothing tracking'))
+    trackedClothing.appendChild(wardrobeCard)
+
+    const oldDebug = card('Old pipeline details')
+    const coreSummaryCard = make('div', 'ld-core-summary-card')
     coreSummaryCard.style.display = 'none'
+    coreSummaryCard.appendChild(make('span', 'ld-label', 'Resolved scene snapshot'))
     const coreSummary = document.createElement('textarea')
     coreSummary.className = 'ld-core-summary'
     coreSummary.rows = 12
     coreSummary.readOnly = true
     coreSummaryCard.appendChild(coreSummary)
-    debug.appendChild(coreSummaryCard)
-    const dtCompat = details('Draw Things API compatibility', 'If Draw Things rejects a generation setting, Lumi Studio remembers it here and omits it on later requests.')
-    dtCompat.body.appendChild(field('Rejected settings', inline(controls.rejectedKeys, controls.clearRejectedKeys)))
-    debug.appendChild(dtCompat.el)
-
-    const continuityStatus = make('div', 'ld-status ld-reset-status ld-story-continuity')
-    continuityStatus.setAttribute('role', 'status')
-    continuityStatus.setAttribute('aria-live', 'polite')
-    continuityStatus.textContent = lumidrawContinuityStatus(null).text
-    const continuityDetails = details('Story memory — automatic continuity diagnostics', 'Separate from the pictured moment. No generated image can silently replace the current story outfit.')
+    oldDebug.appendChild(coreSummaryCard)
+    const continuityDetails = details('Story memory report')
     const continuityReport = document.createElement('textarea')
     continuityReport.className = 'ld-story-continuity-report'
     continuityReport.readOnly = true
     continuityReport.rows = 12
-    continuityReport.setAttribute('aria-label', 'Automatic story continuity report')
+    continuityReport.setAttribute('aria-label', 'Story memory report')
     continuityDetails.body.appendChild(continuityReport)
-    debug.appendChild(continuityDetails.el)
-    storyForm.replaceChildren(continuityStatus, storyRail, setup, cast, parser, prompting, debug)
-
-    let savedStoryTab = 'setup'
-    try { savedStoryTab = localStorage.getItem('lumidraw.storySection.v2') || 'setup' } catch { /* best effort */ }
-    storyRail._setResetTab(savedStoryTab)
+    oldDebug.appendChild(continuityDetails.el)
+    const inlineGuide = details('Inline mode instructions', 'What the story model is told when the mode is Inline.')
+    if (controls.protocol) inlineGuide.body.appendChild(controls.protocol)
+    if (controls.resetProtocol) inlineGuide.body.appendChild(controls.resetProtocol)
+    oldDebug.appendChild(inlineGuide.el)
 
     // The preset selector used to live in Studio. Remove the card it came from.
     if (oldStudioPresetCard) oldStudioPresetCard.remove()
@@ -2201,21 +2209,67 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     try { savedLibraryTab = localStorage.getItem('lumidraw.librarySection.v2') || 'presets' } catch { /* best effort */ }
     libRail._setResetTab(savedLibraryTab)
 
-    // ---------- SETTINGS: infrastructure only.
-    const parserTab = $('.ld-settings-tab[data-settings-tab="parser"]')
-    if (parserTab) parserTab.remove()
-    const connectionTab = $('.ld-settings-tab[data-settings-tab="connection"]')
-    if (connectionTab) connectionTab.textContent = 'Connections'
-    const advancedTab = $('.ld-settings-tab[data-settings-tab="advanced"]')
-    if (advancedTab) advancedTab.textContent = 'Cloud & diagnostics'
-    const parserSettingsCard = $('.ld-card[data-settings-section="parser"]')
-    if (parserSettingsCard) parserSettingsCard.remove()
+    // ---------- SETTINGS · 1.9 layout
+    // Things you set once. Cards are moved, not rebuilt, and lose their old
+    // data-settings-section tag so the 1.8 tab switcher cannot hide them.
+    const settingsView = $('.ld-view[data-view="settings"]')
+    const settingsForm = settingsView ? settingsView.querySelector('.ld-form-view') : null
+    if (settingsForm) {
+      const oldSettingsRail = settingsView.querySelector('.ld-settings-rail')
+      if (oldSettingsRail) oldSettingsRail.remove()
+      const cardOf = (selector) => { const node = $(selector); return node ? node.closest('.ld-card') : null }
+      const swarmCard = cardOf('.ld-swarm-url')
+      const drawThingsCard = cardOf('.ld-host')
+      const bridgeCard = cardOf('.ld-bridge-host')
+      const cloudCard = cardOf('.ld-cloud-enabled')
+      const helpCard = cardOf('[data-act="diagnose"]')
+      const settingsStatus = $('.ld-settings-status')
+      if (drawThingsCard) {
+        const dtCompat = details('Settings Draw Things refused', 'If Draw Things rejects a setting, Lumi Studio leaves it out of later requests. Clear this after updating Draw Things.')
+        dtCompat.body.appendChild(inline(controls.rejectedKeys, controls.clearRejectedKeys))
+        dtCompat.el.style.marginTop = '9px'
+        drawThingsCard.appendChild(dtCompat.el)
+      }
+      if (cloudCard) {
+        const title = cloudCard.querySelector('.ld-subtitle')
+        if (title) title.textContent = 'Draw Things cloud'
+      }
+      if (helpCard) {
+        const title = helpCard.querySelector('.ld-subtitle')
+        if (title) title.textContent = 'Help & reports'
+      }
+      const parserSettingsCard = $('.ld-card[data-settings-section="parser"]')
+      if (parserSettingsCard) parserSettingsCard.remove()
+      for (const node of settingsForm.querySelectorAll('[data-settings-section]')) node.removeAttribute('data-settings-section')
+
+      const settingsRail = rail([
+        ['apps', 'Image apps'],
+        ['parser', 'Parser'],
+        ['chat', 'Chat pictures'],
+        ['help', 'Help & reports'],
+        ['old', 'Old pipeline (1.8)'],
+      ], 'lumidraw.settingsSection.v3', 'apps')
+      const apps = section('apps')
+      const parserSection = section('parser')
+      const chat = section('chat')
+      const help = section('help')
+      const old = section('old')
+      for (const node of [swarmCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
+      parserSection.appendChild(parserBinding)
+      chat.appendChild(display)
+      if (helpCard) help.appendChild(helpCard)
+      for (const node of [oldIntro, coreCard, jevCard, trackedClothing, oldDebug]) if (node) old.appendChild(node)
+      settingsForm.replaceChildren(settingsRail, apps, parserSection, chat, help, old, ...(settingsStatus ? [settingsStatus] : []))
+      let savedSettingsTab = 'apps'
+      try { savedSettingsTab = localStorage.getItem('lumidraw.settingsSection.v3') || 'apps' } catch { /* best effort */ }
+      settingsRail._setResetTab(savedSettingsTab)
+    }
     const saveConnections = $('[data-act="save-settings"]')
     if (saveConnections) {
       saveConnections.style.display = 'none'
       const row = saveConnections.closest('.ld-section-actions')
       if (row && !row.querySelector('.ld-reset-save-note')) {
-        row.appendChild(make('span', 'ld-reset-save-note', 'Connection changes save automatically.'))
+        row.appendChild(make('span', 'ld-reset-save-note', 'Changes save automatically.'))
       }
     }
   }
@@ -7861,7 +7915,7 @@ ${entry.prompt || ''}`.trim()
     const resetInstruction = $('[data-act="reset-parser"]')
     if (engineField) engineField.style.display = direct ? 'none' : ''
     if (note) note.textContent = direct
-      ? 'Direct mode uses the built-in parser format. Story continuity and SimTracker supply reference facts; the parser proposes scenes, Jev reviews them when active, and Lumi Studio compiles the final prompt while preserving saved character identities.'
+      ? 'Direct mode uses Lumi Studio’s built-in parser instruction, so the engine and instruction boxes are not used.'
       : engine === 'anima'
         ? 'Structured JSON uses the current message plus optional reference context and Loom continuity, then Lumi Studio compiles the final prompt.'
         : 'Legacy fallback: instruction-only parsing. The returned tag prompt goes to the selected renderer without identity JSON or the Anima compiler.'
@@ -7872,7 +7926,7 @@ ${entry.prompt || ''}`.trim()
     if (instruction) instruction.style.display = direct ? 'none' : ''
     if (resetInstruction) resetInstruction.style.display = direct ? 'none' : ''
     if (title) title.textContent = direct
-      ? 'Last Direct prompt'
+      ? 'Last picture'
       : engine === 'anima' ? 'Last Anima hybrid compile' : 'Last legacy parser result'
     const contextControls = $('.ld-anima-context-controls')
     if (contextControls) contextControls.style.display = (direct || engine === 'anima') ? '' : 'none'
@@ -7904,7 +7958,8 @@ ${entry.prompt || ''}`.trim()
         : 'Old-message rescanning is available in Parser or Direct mode'
     }
     const bindingControls = $('.ld-parser-binding-controls')
-    if (bindingControls) bindingControls.style.display = parserDriven ? '' : 'none'
+    // Lives in Settings now; always visible so it is never mysteriously missing.
+    if (bindingControls) bindingControls.style.display = ''
     updateParserEngineUI()
   }
 
