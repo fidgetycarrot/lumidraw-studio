@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.9.2'
+  const EXTENSION_VERSION = '1.9.3'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -514,6 +514,16 @@ function realSetup(ctx) {
     .ld-launcher-progress { position:absolute; bottom:3px; left:6px; width:calc(100% - 12px); height:4px; accent-color:#b8b6ff; pointer-events:none; }
     .ld-launcher.ld-preview-error { border-color:#e69494; }
     .ld-launcher.ld-preview-error .ld-launcher-status { color:#ffd4d4; }
+    .ld-drawnow { position:fixed; z-index:2147482000; width:32px; height:32px; padding:0; border-radius:999px;
+      display:flex; align-items:center; justify-content:center; cursor:pointer;
+      background:#3f4458; color:#fff; border:1px solid var(--lumiverse-border, #3d4050); box-shadow:0 2px 8px rgba(0,0,0,.35); }
+    .ld-drawnow:hover:not(:disabled) { background:#4b5169; }
+    .ld-drawnow:disabled { cursor:default; opacity:.85; }
+    .ld-drawnow.ld-busy svg { animation:ld-rot 1.1s linear infinite; }
+    .ld-drawnow.ld-off { opacity:.55; }
+    .ld-drawnow-note { position:fixed; z-index:2147482000; max-width:250px; padding:7px 10px; border-radius:9px;
+      background:rgba(12,14,20,.94); color:#fff; font:500 12px/1.4 system-ui,sans-serif; box-shadow:0 2px 10px rgba(0,0,0,.35); pointer-events:none; }
+    .ld-drawnow-note[hidden] { display:none; }
     .ld-panel {
       position: fixed; right: 16px; bottom: 140px; z-index: 2147482001;
       width: min(1180px, calc(100vw - 24px)); max-width: calc(100vw - 24px);
@@ -894,6 +904,12 @@ function realSetup(ctx) {
       <span class="ld-launcher-status" hidden></span>
       <progress class="ld-launcher-progress" max="100" aria-label="SwarmUI generation progress" hidden></progress>
     </button>
+    <button class="ld-drawnow" type="button" title="Draw now" aria-label="Draw a picture of the latest story message now">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="M19 16v4M17 18h4"></path>
+      </svg>
+    </button>
+    <div class="ld-drawnow-note" role="status" aria-live="polite" hidden></div>
     <div class="ld-panel">
       <div class="ld-head">
         <span class="ld-head-title">Lumi Studio <small class="ld-version" style="font-weight:400;opacity:.65"></small></span>
@@ -4045,8 +4061,26 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (retiredScanIds.size > 16) retiredScanIds.delete(retiredScanIds.values().next().value)
   }
 
+  function syncDrawNow() {
+    const button = document.querySelector('.ld-drawnow')
+    if (!button) return
+    const scan = liveScanStatus
+    const active = !!(scan && !['done', 'cancelled', 'error', 'connection_lost'].includes(scan.stage))
+    const mode = selectedStoryMode()
+    button.disabled = active
+    button.classList.toggle('ld-busy', active)
+    button.classList.toggle('ld-off', !(mode === 'parser' || mode === 'direct'))
+    button.title = active ? 'Drawing… (open Lumi Studio to follow or cancel)' : 'Draw now — uses your current Story mode and pipeline'
+    if (!active && button.dataset.started === '1' && scan && scan.endedAt) {
+      button.dataset.started = ''
+      const ok = scan.stage === 'done'
+      showDrawNowNote((ok ? '' : 'Could not draw: ') + (scan.note || (ok ? 'Done.' : 'Something went wrong.')), ok ? 6000 : 12000)
+    }
+  }
+
   function renderLiveScanStatus() {
     renderLauncherPreview()
+    syncDrawNow()
     const cancelButton = $('[data-act="cancel-scan"]')
     const scanButton = $('[data-act="scan"]')
     const oldButton = $('[data-act="scan-old"]')
@@ -5348,6 +5382,72 @@ ${entry.prompt || ''}`.trim()
     drag = null
   })
   launcher.addEventListener('pointercancel', () => { drag = null })
+  // ---------- Draw now (the small button on the widget)
+  // It calls runStoryScan — the exact function behind Story → Scan latest — so it
+  // always uses the selected mode and pipeline (simple or 1.8, Direct or Parser).
+  // There is deliberately no second generate path to fall out of step.
+  function placeDrawNow() {
+    const button = $('.ld-drawnow')
+    if (!button) return
+    const r = launcher.getBoundingClientRect()
+    if (!r.width) { button.style.display = 'none'; return }
+    button.style.display = ''
+    const size = button.offsetWidth || 32
+    button.style.left = clamp(r.left - size / 2 + 4, 2, window.innerWidth - size - 2) + 'px'
+    button.style.top = clamp(r.top - size / 2 + 4, 2, window.innerHeight - size - 2) + 'px'
+    const note = $('.ld-drawnow-note')
+    if (note && !note.hidden) placeDrawNowNote()
+  }
+  function placeDrawNowNote() {
+    const note = $('.ld-drawnow-note')
+    if (!note) return
+    const r = launcher.getBoundingClientRect()
+    const w = note.offsetWidth || 220
+    const h = note.offsetHeight || 32
+    let y = r.top - h - 10
+    if (y < 4) y = r.bottom + 10
+    note.style.left = clamp(r.right - w, 4, window.innerWidth - w - 4) + 'px'
+    note.style.top = clamp(y, 4, window.innerHeight - h - 4) + 'px'
+  }
+  let drawNowNoteTimer = null
+  function showDrawNowNote(text, ms = 6000) {
+    const note = $('.ld-drawnow-note')
+    if (!note) return
+    note.textContent = String(text || '').slice(0, 220)
+    note.hidden = false
+    placeDrawNowNote()
+    if (drawNowNoteTimer) clearTimeout(drawNowNoteTimer)
+    drawNowNoteTimer = setTimeout(() => { note.hidden = true; drawNowNoteTimer = null }, ms)
+  }
+  function drawNowModeProblem() {
+    const mode = selectedStoryMode()
+    if (mode === 'parser' || mode === 'direct') return ''
+    if (mode === 'inline') return 'Inline mode: the story model asks for pictures itself. Switch the mode to Direct or Parser (Story → When to draw) to draw on demand.'
+    return 'Story pictures are off. Pick a mode in Story → When to draw.'
+  }
+  const drawNowButton = $('.ld-drawnow')
+  if (drawNowButton) {
+    drawNowButton.addEventListener('click', async (event) => {
+      event.stopPropagation()
+      if (drawNowButton.disabled) return
+      if (!initialized) {
+        showDrawNowNote('Loading Lumi Studio…', 3000)
+        if (!(await tryInit())) { showDrawNowNote('Lumi Studio is still loading. Try again in a moment.'); return }
+      }
+      const problem = drawNowModeProblem()
+      if (problem) { showDrawNowNote(problem, 7000); return }
+      drawNowButton.dataset.started = '1'
+      showDrawNowNote('Drawing the latest story message…', 4000)
+      // force: a button press always makes a new picture, even for a message
+      // that already has one.
+      runStoryScan(null, 'the latest story message', true)
+    })
+    window.addEventListener('resize', placeDrawNow)
+    if (typeof ResizeObserver === 'function') new ResizeObserver(placeDrawNow).observe(launcher)
+    new MutationObserver(placeDrawNow).observe(launcher, { attributes: true, attributeFilter: ['style', 'class'] })
+    requestAnimationFrame(placeDrawNow)
+  }
+
   // Pointer taps are handled above; keyboard activation has no pointerdown.
   launcher.addEventListener('click', (event) => {
     if (event.detail !== 0) return
@@ -8785,6 +8885,8 @@ ${entry.prompt || ''}`.trim()
     if (typeof rescanInputActionUnsub === 'function') rescanInputActionUnsub()
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
     window.removeEventListener('keydown', onStoryPickerKeyDown)
+    window.removeEventListener('resize', placeDrawNow)
+    if (drawNowNoteTimer) clearTimeout(drawNowNoteTimer)
     window.removeEventListener('resize', syncTextEditorViewport)
     if (textEditorViewport) {
       textEditorViewport.removeEventListener('resize', syncTextEditorViewport)
