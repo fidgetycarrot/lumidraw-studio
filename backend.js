@@ -24577,6 +24577,9 @@ CLOTHING — this is how outfits stay consistent.
   CURRENT PASSAGE changes. Silence means unchanged.
 - Keep colour, material and state: "open moss-green robe", "unfastened pants",
   "torn white shirt". One garment per item. Shoes separate.
+- A vaguer word is not a change. If CURRENT OUTFIT says "leather armor" and the
+  passage or scene card just says "armor", write "leather armor". Only replace a
+  garment when the story describes a different one.
 - Clothing that came off is gone: write the remaining items, or ["nude"].
 - Never invent garments the story has not given them; never borrow another
   person's clothes.
@@ -24872,7 +24875,9 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
       out.outfit = []
       out.sources.outfit = 'included in the saved look'
     } else if (raw.outfit.length) {
-      out.outfit = raw.outfit; out.sources.outfit = 'story (parser)'
+      const specific = simpleKeepSpecific(raw.outfit, remembered.outfit || [], simpleTags(profile.defaultOutfit || []))
+      out.outfit = specific.tags; out.sources.outfit = 'story (parser)'
+      for (const item of specific.kept) notes.push(`${out.displayName}: kept “${item.to}” — the story only said “${item.from}”.`)
     } else {
       const fallback = simpleOutfitFor(profile, key, memory, card, profiles)
       out.outfit = fallback.tags; out.sources.outfit = fallback.source || 'none known'
@@ -24892,7 +24897,11 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
     if (explicit) out.identity = out.identity.filter(tag => !directGroupYouthCoded(tag))
     out.anatomy = applyBannedToList(simpleTags((remembered.anatomy || []).length ? remembered.anatomy : raw.anatomy, 6), banned)
     out.phrase = simpleAdultPhrase(remembered.subject || raw.subject, count)
-    if (raw.outfit.length) { out.outfit = raw.outfit; out.sources.outfit = 'story (parser)' }
+    if (raw.outfit.length) {
+      const specific = simpleKeepSpecific(raw.outfit, remembered.outfit || [])
+      out.outfit = specific.tags; out.sources.outfit = 'story (parser)'
+      for (const item of specific.kept) notes.push(`${raw.name}: kept “${item.to}” — the story only said “${item.from}”.`)
+    }
     else if ((remembered.outfit || []).length) { out.outfit = remembered.outfit; out.sources.outfit = 'remembered' }
     else {
       const fromCard = simpleCardAttireFor(card, null, raw.name, profiles)
@@ -24904,6 +24913,49 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
   out.pose = applyBannedToList(raw.pose, banned)
   out.expression = applyBannedToList(raw.expression, banned)
   return out
+}
+
+// "armor" after "road-worn leather armor" is the same garment said vaguely, not
+// a change of clothes. Keep the specific version Lumi Studio already knows, minus
+// any old state words ("unfastened"), so a real state change still comes through.
+const SIMPLE_STATE_WORDS = new Set(['open', 'opened', 'unfastened', 'fastened', 'undone', 'unbuttoned', 'buttoned',
+  'unzipped', 'zipped', 'untied', 'tied', 'loosened', 'loose', 'torn', 'ripped', 'wet', 'soaked', 'damp', 'pulled',
+  'down', 'up', 'lifted', 'hiked', 'removed', 'half', 'off', 'around', 'tangled', 'hanging', 'bared', 'baring',
+  'disheveled', 'rumpled', 'hastily', 'partly', 'partially', 'askew', 'slipping', 'falling', 'front', 'waist'])
+function simpleWords(tag) {
+  return normalizeIdentityText(tag).split(' ').filter(Boolean)
+}
+function simpleKeepSpecific(tags, ...knownGroups) {
+  // knownGroups are tried in order (remembered outfit first, then the sheet's
+  // default), so what this chat last saw wins over the sheet.
+  const kept = []
+  const out = tags.map(tag => {
+    const words = simpleWords(tag)
+    if (!words.length || words.length > 3) return tag
+    const head = words[words.length - 1]
+    for (const group of knownGroups) {
+      const candidates = []
+      for (const item of group || []) {
+        const tokens = String(item).trim().split(/\s+/).filter(token => !SIMPLE_STATE_WORDS.has(normalizeIdentityText(token)))
+        const base = tokens.flatMap(token => simpleWords(token))
+        if (base.length > words.length && base[base.length - 1] === head && words.every(word => base.includes(word))) {
+          candidates.push({ text: tokens.join(' ').toLowerCase(), base })
+        }
+      }
+      if (!candidates.length) continue
+      // Several matches are fine when they are the same garment said with more or
+      // fewer words ("leather armor" inside "road-worn leather armor"); take the
+      // fullest. Two different garments ("leather armor", "plate armor") are a real
+      // ambiguity, so the story's word stays.
+      candidates.sort((x, y) => y.base.length - x.base.length)
+      const fullest = candidates[0]
+      if (!candidates.every(c => c.base.every(word => fullest.base.includes(word)))) return tag
+      kept.push({ from: tag, to: fullest.text })
+      return fullest.text
+    }
+    return tag
+  })
+  return { tags: uniqueStrings(out), kept }
 }
 
 function simpleSubjectAnatomy(subject, image) {
