@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.9.3'
+  const EXTENSION_VERSION = '1.9.4'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -519,7 +519,12 @@ function realSetup(ctx) {
       background:#3f4458; color:#fff; border:1px solid var(--lumiverse-border, #3d4050); box-shadow:0 2px 8px rgba(0,0,0,.35); }
     .ld-drawnow:hover:not(:disabled) { background:#4b5169; }
     .ld-drawnow:disabled { cursor:default; opacity:.85; }
-    .ld-drawnow.ld-busy svg { animation:ld-rot 1.1s linear infinite; }
+    .ld-drawnow svg path { transform-box:fill-box; transform-origin:center; }
+    .ld-drawnow.ld-busy .ld-spark-big { animation:ld-twinkle-big 1.6s ease-in-out infinite; }
+    .ld-drawnow.ld-busy .ld-spark-small { animation:ld-twinkle-small 1.6s ease-in-out infinite; }
+    @keyframes ld-twinkle-big { 0%,100% { transform:scale(1); opacity:1; } 50% { transform:scale(.62); opacity:.75; } }
+    @keyframes ld-twinkle-small { 0%,100% { transform:scale(.4); opacity:.15; } 50% { transform:scale(1.15); opacity:1; } }
+    @media (prefers-reduced-motion: reduce) { .ld-drawnow.ld-busy .ld-spark-big, .ld-drawnow.ld-busy .ld-spark-small { animation:none; } }
     .ld-drawnow.ld-off { opacity:.55; }
     .ld-drawnow-note { position:fixed; z-index:2147482000; max-width:250px; padding:7px 10px; border-radius:9px;
       background:rgba(12,14,20,.94); color:#fff; font:500 12px/1.4 system-ui,sans-serif; box-shadow:0 2px 10px rgba(0,0,0,.35); pointer-events:none; }
@@ -906,7 +911,7 @@ function realSetup(ctx) {
     </button>
     <button class="ld-drawnow" type="button" title="Draw now" aria-label="Draw a picture of the latest story message now">
       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="M19 16v4M17 18h4"></path>
+        <path class="ld-spark-big" d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path class="ld-spark-small" d="M19 16v4M17 18h4"></path>
       </svg>
     </button>
     <div class="ld-drawnow-note" role="status" aria-live="polite" hidden></div>

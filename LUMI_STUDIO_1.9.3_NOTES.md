@@ -25,3 +25,9 @@ Checked in headless Chromium against a stand-in backend: one press sends one
 note shows; the panel stays closed; Off mode sends nothing and explains; the
 button follows a drag; and it stays on screen at 390 px. There were no page
 errors.
+
+## 1.9.4: twinkle instead of spin
+While a picture is being drawn, the Draw now button no longer spins. The big
+sparkle gently shrinks and grows back, and the small one fades in and out half a
+beat later, in a 1.6-second loop. If your device asks for reduced motion, the
+button stays still.
