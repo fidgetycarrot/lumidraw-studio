@@ -4579,7 +4579,11 @@ async function locateStoryMessage(userId, options = {}) {
       // Some frontend tag callbacks arrive before messageId is available. The
       // saved trigger is a safer candidate than blindly illustrating the prior
       // assistant message. GENERATION_ENDED normally supplies the exact ID.
-      if (!target && !requestedMessageId) {
+      // Automatic scans only. A manual Scan latest / Draw now means the newest
+      // reply. Old trigger tags stay in messages written while automatic mode was
+      // on, so in "only when I press Scan" mode this search used to find an older
+      // tagged reply and redraw it instead of the one on screen.
+      if (!target && !requestedMessageId && isAuto) {
         for (let i = messages.length - 1; i >= 0; i--) {
           const bits = messageBits(messages[i])
           if (!bits.isAssistant || !bits.contentKey || typeof bits.content !== 'string') continue
@@ -24677,7 +24681,7 @@ function simpleContext(profiles, memory, card, { banned = '', fantasy = false } 
     .filter(([key, person]) => !sheetKeys.has(key) && person && !person.ref)
     .sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0)).slice(0, 8)
   for (const [, person] of remembered) {
-    const lines = [`${person.name} — REMEMBERED PERSON (no sheet; copy these exactly if they appear)`]
+    const lines = [`${person.name} — REMEMBERED PERSON (no sheet; only draw them if they are physically in the CURRENT PASSAGE, and then copy these exactly)`]
     if (person.count) lines.push('  count: ' + person.count)
     if (person.subject) lines.push('  subject: ' + person.subject)
     if ((person.appearance || []).length) lines.push('  appearance: ' + person.appearance.join(', '))
