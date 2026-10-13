@@ -24916,6 +24916,16 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
   out.outfit = applyBannedToList(out.outfit, banned)
   out.pose = applyBannedToList(raw.pose, banned)
   out.expression = applyBannedToList(raw.expression, banned)
+  // One gaze per face. "looking ahead" in pose plus "looking down" in expression
+  // asks Anima for two eye directions at once.
+  const gaze = /^(?:looking|gaze|gazing|staring|glancing|eye contact|eyes closed|closed eyes|averting)\b/i
+  const gazes = [...out.expression, ...out.pose].filter(tag => gaze.test(tag))
+  if (gazes.length > 1) {
+    const keep = out.expression.find(tag => gaze.test(tag)) || gazes[0]
+    out.pose = out.pose.filter(tag => !gaze.test(tag) || tag === keep)
+    out.expression = out.expression.filter(tag => !gaze.test(tag) || tag === keep)
+    if (out.pose.includes(keep) && out.expression.includes(keep)) out.pose = out.pose.filter(tag => tag !== keep)
+  }
   return out
 }
 
@@ -25063,6 +25073,15 @@ function compileSimpleImage(image, ctx) {
   // Anatomy defences: same as 1.8, but they see unsaved people's anatomy too.
   const positive = []
   const negatives = []
+  // Anima turns "armor" into plate whenever it can (big man, shield, dungeon),
+  // even with "leather" in the phrase. If leather is all anyone wears, say so in
+  // the negative too.
+  const worn = subjects.flatMap(subject => subject.outfit).join(' | ')
+  if (/\bleather\b[^|]*\barmou?r\b/i.test(worn) &&
+    !/\b(?:plate|full armou?r|steel|metal|chainmail|chain mail|breastplate|knight)\b/i.test(worn)) {
+    negatives.push('plate armor', 'full armor')
+    notes.push('Added “plate armor, full armor” to the negative prompt, since the armor in this scene is leather.')
+  }
   if (['nsfw', 'explicit'].includes(image.rating)) {
     negatives.push('child', 'underage', 'teenager', 'preteen', 'toddler', 'shota', 'loli')
     if (shownAnatomy.length) {
