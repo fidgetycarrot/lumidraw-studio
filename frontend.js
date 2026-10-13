@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.9.1'
+  const EXTENSION_VERSION = '1.9.2'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1720,6 +1720,26 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       .ld-reset-library-note{margin-bottom:1px}
       .ld-reset-hidden-legacy{display:none!important}
       .ld-reset-save-note{font-size:11px;color:var(--lumiverse-text-muted,#a2a5b4);margin-top:7px}
+      .ld-lib-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:10px}
+      .ld-lib-toolbar .ld-lib-search{flex:1 1 220px;min-width:0}
+      .ld-lib-toolbar .ld-lib-sort{flex:0 0 auto;width:auto}
+      .ld-lib-toggle{display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;white-space:nowrap}
+      .ld-lib-toggle input{width:auto!important}
+      .ld-lib-count{margin-left:auto;font-size:11px;color:var(--lumiverse-text-muted,#a2a5b4);white-space:nowrap}
+      .ld-lib-grid{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin-top:9px!important}
+      .ld-lib-grid>.ld-status{grid-column:1/-1}
+      .ld-lib-item{flex-direction:column;align-items:stretch;gap:8px;min-width:0}
+      .ld-lib-main{cursor:pointer;min-width:0;display:flex;flex-direction:column;gap:3px;outline:none}
+      .ld-lib-main:focus-visible{box-shadow:0 0 0 2px var(--lumiverse-text-muted,#a2a5b4);border-radius:6px}
+      .ld-lib-name{display:flex;align-items:center;flex-wrap:wrap;gap:5px;font-weight:650;font-size:13px;min-width:0}
+      .ld-lib-name-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+      .ld-lib-badge{font-size:10px;font-weight:500;padding:1px 6px;border-radius:999px;border:1px solid var(--lumiverse-border,#3d4050);color:var(--lumiverse-text-muted,#a2a5b4);white-space:nowrap}
+      .ld-lib-sub{font-size:11px;color:var(--lumiverse-text-muted,#a2a5b4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .ld-lib-tags{font-size:11px;line-height:1.4;color:var(--lumiverse-text-muted,#a2a5b4);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+      .ld-lib-actions{display:flex;gap:6px;justify-content:flex-end;margin-top:auto}
+      .ld-lib-actions .ld-btn{width:auto}
+      .ld-lib-editing .ld-lib-list-card{display:none!important}
+      .ld-lib-back{margin-bottom:8px;width:auto}
       .ld-check{display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;margin-top:6px}
       .ld-check input{width:auto!important;flex:0 0 auto}
       .ld-hint{font-size:11px;line-height:1.45;color:var(--lumiverse-text-muted,#a2a5b4);margin-top:5px}
@@ -2205,6 +2225,30 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     for (const button of libRail.querySelectorAll('.ld-reset-tab')) {
       button.addEventListener('click', () => { if (sharedEditor) sharedEditor.style.display = 'none' })
     }
+    // While an editor is open, hide the list it came from so there is nothing to
+    // scroll past; a Back button closes the editor the same way Cancel does.
+    const watchLibraryEditor = (editor, host, cancelSelector) => {
+      if (!editor || !host) return
+      if (!editor.querySelector('.ld-lib-back')) {
+        const back = make('button', 'ld-btn ld-compact ld-lib-back', '← Back to the list')
+        back.type = 'button'
+        back.addEventListener('click', () => { const cancel = $(cancelSelector); if (cancel) cancel.click() })
+        editor.insertBefore(back, editor.firstChild)
+      }
+      let wasOpen = false
+      const sync = () => {
+        const open = editor.style.display !== 'none'
+        host.classList.toggle('ld-lib-editing', open)
+        // Start at the top of the editor, not wherever the list was scrolled to.
+        if (open && !wasOpen && editor.scrollIntoView) requestAnimationFrame(() => editor.scrollIntoView({ block: 'start' }))
+        wasOpen = open
+      }
+      new MutationObserver(sync).observe(editor, { attributes: true, attributeFilter: ['style'] })
+      sync()
+    }
+    if (presetManager) presetManager.classList.add('ld-lib-list-card')
+    watchLibraryEditor(sharedEditor, libraryForm, '[data-act="persona-cancel"]')
+    watchLibraryEditor(presetEditor, libPresets, '[data-act="ed-cancel"]')
     let savedLibraryTab = 'presets'
     try { savedLibraryTab = localStorage.getItem('lumidraw.librarySection.v2') || 'presets' } catch { /* best effort */ }
     libRail._setResetTab(savedLibraryTab)
@@ -4601,59 +4645,212 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     setStatus('.ld-persona-ed-status', entry
       ? `Editing reusable ${libEditorKind}.`
       : `Create a reusable ${libEditorKind} that can be linked into multiple presets.`)
-    if ($('.ld-persona-editor').scrollIntoView) $('.ld-persona-editor').scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    if ($('.ld-persona-editor').scrollIntoView) $('.ld-persona-editor').scrollIntoView({ block: 'start' })
+  }
+
+  // ---------- Library lists · 1.9.2
+  // Search, sort and a compact card grid. Only the drawing changed: every item
+  // still opens, selects and deletes through the same calls as before.
+  const LIB_FILTER_KEY = 'lumidraw.libraryFilters.v1'
+  const libFilters = (() => {
+    try { return JSON.parse(localStorage.getItem(LIB_FILTER_KEY) || '{}') || {} } catch { return {} }
+  })()
+  function libFilterFor(kind) {
+    const saved = libFilters[kind] || {}
+    libFilters[kind] = { q: saved.q || '', sort: saved.sort || 'az', hideStory: !!saved.hideStory }
+    return libFilters[kind]
+  }
+  function saveLibFilters() {
+    try {
+      const keep = {}
+      for (const [kind, value] of Object.entries(libFilters)) keep[kind] = { sort: value.sort, hideStory: value.hideStory }
+      localStorage.setItem(LIB_FILTER_KEY, JSON.stringify(keep))
+    } catch { /* best effort */ }
+  }
+  function libTagText(value) {
+    if (Array.isArray(value)) return value.join(', ')
+    return String(value || '')
+  }
+  function libProfileText(profile) {
+    const p = profile || {}
+    const looks = (p.alternateAppearances && p.alternateAppearances.variants || []).map(v => [v.label, libTagText(v.tags)].join(' '))
+    return [p.anchor, p.promptName, p.subject, p.countTag, libTagText(p.identityTags), libTagText(p.appearanceTags),
+      libTagText(p.appearance), libTagText(p.defaultOutfitTags), ...looks].join(' ')
+  }
+  function libVisible(kind, items, { nameOf, textOf, isStory = () => false }) {
+    const filter = libFilterFor(kind)
+    const words = filter.q.toLowerCase().split(/\s+/).filter(Boolean)
+    let rows = items.map((item, index) => ({ item, index }))
+    if (filter.hideStory) rows = rows.filter(row => !isStory(row.item))
+    if (words.length) rows = rows.filter(row => {
+      const text = (nameOf(row.item) + ' ' + textOf(row.item)).toLowerCase()
+      return words.every(word => text.includes(word))
+    })
+    if (filter.sort === 'az') rows.sort((a, b) => nameOf(a.item).localeCompare(nameOf(b.item), undefined, { sensitivity: 'base' }))
+    else if (filter.sort === 'newest') rows.sort((a, b) => b.index - a.index)
+    return rows.map(row => row.item)
+  }
+  function libToolbar(kind, list, rerender, { noun, storyToggle = false } = {}) {
+    const card = list.closest('.ld-card')
+    if (card) card.classList.add('ld-lib-list-card')
+    else list.classList.add('ld-lib-list-card')
+    list.classList.add('ld-lib-grid')
+    let bar = list.parentNode ? list.parentNode.querySelector(`.ld-lib-toolbar[data-kind="${kind}"]`) : null
+    if (bar) return bar
+    const filter = libFilterFor(kind)
+    bar = document.createElement('div')
+    bar.className = 'ld-lib-toolbar' + (card ? '' : ' ld-lib-list-card')
+    bar.dataset.kind = kind
+    const search = document.createElement('input')
+    search.type = 'search'
+    search.className = 'ld-lib-search'
+    search.placeholder = `Search ${noun}s by name or tag`
+    search.setAttribute('aria-label', `Search ${noun}s`)
+    search.value = filter.q
+    search.addEventListener('input', () => { libFilterFor(kind).q = search.value; rerender() })
+    const sort = document.createElement('select')
+    sort.className = 'ld-lib-sort'
+    sort.setAttribute('aria-label', 'Sort')
+    for (const [value, label] of [['az', 'A to Z'], ['newest', 'Newest first'], ['oldest', 'Oldest first']]) {
+      const option = document.createElement('option')
+      option.value = value; option.textContent = label
+      sort.appendChild(option)
+    }
+    sort.value = filter.sort
+    sort.addEventListener('change', () => { libFilterFor(kind).sort = sort.value; saveLibFilters(); rerender() })
+    bar.append(search, sort)
+    if (storyToggle) {
+      const label = document.createElement('label')
+      label.className = 'ld-lib-toggle'
+      const box = document.createElement('input')
+      box.type = 'checkbox'
+      box.checked = filter.hideStory
+      box.addEventListener('change', () => { libFilterFor(kind).hideStory = box.checked; saveLibFilters(); rerender() })
+      label.append(box, document.createTextNode(' Hide ones a story made'))
+      bar.appendChild(label)
+    }
+    const count = document.createElement('span')
+    count.className = 'ld-lib-count'
+    bar.appendChild(count)
+    list.parentNode.insertBefore(bar, list)
+    return bar
+  }
+  function libCount(bar, shown, total, noun) {
+    const count = bar && bar.querySelector('.ld-lib-count')
+    if (!count) return
+    count.textContent = shown === total ? `${total} ${noun}${total === 1 ? '' : 's'}` : `${shown} of ${total} ${noun}s`
+  }
+  function libEmptyMatch(list, noun) {
+    const empty = document.createElement('div')
+    empty.className = 'ld-status ld-lib-empty'
+    empty.textContent = `No ${noun}s match. Try fewer words, or clear the search.`
+    list.appendChild(empty)
+  }
+  function libItem({ name, badges = [], sub = '', tags = '', active = false, faded = false, onOpen, onEdit, onDelete, editLabel = 'Edit', deleteTitle = 'Delete' }) {
+    const item = document.createElement('div')
+    item.className = 'ld-preset-item ld-lib-item' + (active ? ' ld-active' : '')
+    const main = document.createElement('div')
+    main.className = 'ld-lib-main'
+    main.tabIndex = 0
+    const title = document.createElement('div')
+    title.className = 'ld-lib-name'
+    const text = document.createElement('span')
+    text.className = 'ld-lib-name-text'
+    text.textContent = name
+    if (faded) text.style.opacity = '.72'
+    title.appendChild(text)
+    for (const badge of badges.filter(Boolean)) {
+      const chip = document.createElement('span')
+      chip.className = 'ld-lib-badge'
+      chip.textContent = badge
+      title.appendChild(chip)
+    }
+    main.appendChild(title)
+    if (sub) {
+      const line = document.createElement('div')
+      line.className = 'ld-lib-sub'
+      line.textContent = sub
+      main.appendChild(line)
+    }
+    if (tags) {
+      const line = document.createElement('div')
+      line.className = 'ld-lib-tags'
+      line.textContent = tags
+      line.title = tags
+      main.appendChild(line)
+    }
+    main.addEventListener('click', onOpen)
+    main.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } })
+    const actions = document.createElement('div')
+    actions.className = 'ld-lib-actions'
+    const edit = document.createElement('button')
+    edit.className = 'ld-btn ld-compact'
+    edit.type = 'button'
+    edit.textContent = editLabel
+    edit.addEventListener('click', (event) => { event.stopPropagation(); onEdit() })
+    const del = document.createElement('button')
+    del.className = 'ld-btn ld-compact ld-lib-delete'
+    del.type = 'button'
+    del.textContent = 'Delete'
+    del.title = deleteTitle
+    del.addEventListener('click', (event) => { event.stopPropagation(); onDelete() })
+    actions.append(edit, del)
+    item.append(main, actions)
+    return item
+  }
+  function libLooksBadge(profile) {
+    const formCount = Array.isArray(profile.appearanceStates) ? profile.appearanceStates.length
+      : (String(profile.appearanceStates || '').trim() ? String(profile.appearanceStates).split(/\r?\n/).filter(Boolean).length : 0)
+    const alternateCount = profile.alternateAppearances?.variants?.length || 0
+    if (alternateCount) return `${alternateCount} look${alternateCount === 1 ? '' : 's'}${profile.alternateAppearances.enabled ? '' : ' (off)'}`
+    return formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''
+  }
+  function libFirstTags(profile, limit = 8) {
+    const raw = [libTagText(profile.identityTags), libTagText(profile.appearanceTags), libTagText(profile.appearance)].join(',')
+    const seen = new Set()
+    return raw.split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).slice(0, limit).join(', ')
   }
 
   function renderCharacterList() {
     const list = $('.ld-charlib-list')
     if (!list) return
+    const bar = libToolbar('character', list, renderCharacterList, { noun: 'character', storyToggle: true })
     list.innerHTML = ''
     if (!characters.length) {
-      list.innerHTML = '<div class="ld-status">No reusable characters yet.</div>'
+      list.innerHTML = '<div class="ld-status">No saved characters yet. Use “＋ New” above, or Fill from LumiCast in the editor.</div>'
+      libCount(bar, 0, 0, 'character')
       renderCharacterLinkSelect($('.ld-ed-char-link') ? $('.ld-ed-char-link').value : '')
       renderCastEditor()
       return
     }
-    for (const character of characters) {
-      const item = document.createElement('div')
-      item.className = 'ld-preset-item'
-      const name = document.createElement('span')
-      name.className = 'ld-preset-name'
-      name.textContent = character.name || 'Unnamed character'
-      const detail = document.createElement('span')
-      detail.className = 'ld-preset-model'
+    const shown = libVisible('character', characters, {
+      nameOf: (c) => c.name || '', textOf: (c) => libProfileText(c.profile), isStory: (c) => !!(c.profile && c.profile.declaredByStory) })
+    libCount(bar, shown.length, characters.length, 'character')
+    if (!shown.length) libEmptyMatch(list, 'character')
+    for (const character of shown) {
       const profile = character.profile || {}
-      const formCount = Array.isArray(profile.appearanceStates) ? profile.appearanceStates.length : (String(profile.appearanceStates || '').trim() ? String(profile.appearanceStates).split(/\r?\n/).filter(Boolean).length : 0)
-      const alternateCount = profile.alternateAppearances?.variants?.length || 0
-      // TELLING TWO "FANNY PRICE"S APART. A story can invent somebody you already
-      // have, and this list showed a name and an anchor — which are identical for
-      // both — so the wrong one got edited and the right one looked broken. Say
-      // which the story invented, and show the tags, because the tags are the
-      // whole difference between them.
-      const story = profile.declaredByStory ? 'invented by a story' : ''
-      const someTags = String(profile.appearanceTags || '').split(',').map((t) => t.trim()).filter(Boolean).slice(0, 4).join(', ')
-      detail.textContent = [profile.anchor || '', story, someTags,
-        alternateCount ? `${alternateCount} alternate appearance${alternateCount === 1 ? '' : 's'}${profile.alternateAppearances.enabled ? '' : ' (off)'}` : formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
-      if (story) { name.style.opacity = '.72'; name.title = 'This one was written by a story, not by you. Its tags are a guess.' }
-      name.appendChild(detail)
-      name.addEventListener('click', () => openPersonaEditor(character.id, 'character'))
-      const edit = document.createElement('button')
-      edit.className = 'ld-append'; edit.textContent = 'Edit'; edit.style.flex = '0 0 auto'; edit.style.width = 'auto'; edit.style.padding = '3px 8px'
-      edit.addEventListener('click', (event) => { event.stopPropagation(); openPersonaEditor(character.id, 'character') })
-      const del = document.createElement('button')
-      del.className = 'ld-x'; del.textContent = '✕'; del.title = 'Delete reusable character'
-      del.addEventListener('click', async (event) => {
-        event.stopPropagation()
-        if (!confirm(`Delete reusable character “${character.name}”? Presets linked to it will fall back to their stored local copy, and it will leave any casts that include it.`)) return
-        try {
-          const result = await call('delete_character', { id: character.id })
-          characters = result.characters || []
-          renderCharacterList()
-          setStatus('.ld-charlib-status', `Deleted “${character.name}”.`, 'good')
-        } catch (error) { setStatus('.ld-charlib-status', error.message, 'err') }
-      })
-      item.appendChild(name); item.appendChild(edit); item.appendChild(del)
-      list.appendChild(item)
+      // TELLING TWO "FANNY PRICE"S APART: say which one a story made, and show
+      // tags, because the tags are the whole difference between them.
+      const story = !!profile.declaredByStory
+      list.appendChild(libItem({
+        name: character.name || 'Unnamed character',
+        badges: [story ? 'story-made' : '', profile.countTag || '', libLooksBadge(profile)],
+        sub: [profile.anchor && profile.anchor !== character.name ? profile.anchor : '', profile.subject || ''].filter(Boolean).join(' · '),
+        tags: libFirstTags(profile),
+        faded: story,
+        onOpen: () => openPersonaEditor(character.id, 'character'),
+        onEdit: () => openPersonaEditor(character.id, 'character'),
+        deleteTitle: 'Delete this saved character',
+        onDelete: async () => {
+          if (!confirm(`Delete saved character “${character.name}”? Presets linked to it fall back to their own stored copy, and it leaves any casts that include it.`)) return
+          try {
+            const result = await call('delete_character', { id: character.id })
+            characters = result.characters || []
+            renderCharacterList()
+            setStatus('.ld-charlib-status', `Deleted “${character.name}”.`, 'good')
+          } catch (error) { setStatus('.ld-charlib-status', error.message, 'err') }
+        },
+      }))
     }
     renderCharacterLinkSelect($('.ld-ed-char-link') ? $('.ld-ed-char-link').value : '')
     renderCastEditor()
@@ -4662,43 +4859,37 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   function renderPersonaList() {
     const list = $('.ld-persona-list')
     if (!list) return
+    const bar = libToolbar('persona', list, renderPersonaList, { noun: 'persona' })
     list.innerHTML = ''
     if (!personas.length) {
-      list.innerHTML = '<div class="ld-status">No reusable personas yet.</div>'
+      list.innerHTML = '<div class="ld-status">No saved personas yet.</div>'
+      libCount(bar, 0, 0, 'persona')
       renderPersonaLinkSelect($('.ld-ed-persona-link') ? $('.ld-ed-persona-link').value : '')
       return
     }
-    for (const persona of personas) {
-      const item = document.createElement('div')
-      item.className = 'ld-preset-item'
-      const name = document.createElement('span')
-      name.className = 'ld-preset-name'
-      name.textContent = persona.name || 'Unnamed persona'
-      const detail = document.createElement('span')
-      detail.className = 'ld-preset-model'
+    const shown = libVisible('persona', personas, { nameOf: (p) => p.name || '', textOf: (p) => libProfileText(p.profile) })
+    libCount(bar, shown.length, personas.length, 'persona')
+    if (!shown.length) libEmptyMatch(list, 'persona')
+    for (const persona of shown) {
       const profile = persona.profile || {}
-      const formCount = Array.isArray(profile.appearanceStates) ? profile.appearanceStates.length : (String(profile.appearanceStates || '').trim() ? String(profile.appearanceStates).split(/\r?\n/).filter(Boolean).length : 0)
-      const alternateCount = profile.alternateAppearances?.variants?.length || 0
-      detail.textContent = [profile.anchor || '', alternateCount ? `${alternateCount} alternate appearance${alternateCount === 1 ? '' : 's'}${profile.alternateAppearances.enabled ? '' : ' (off)'}` : formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
-      name.appendChild(detail)
-      name.addEventListener('click', () => openPersonaEditor(persona.id))
-      const edit = document.createElement('button')
-      edit.className = 'ld-append'; edit.textContent = 'Edit'; edit.style.flex = '0 0 auto'; edit.style.width = 'auto'; edit.style.padding = '3px 8px'
-      edit.addEventListener('click', (event) => { event.stopPropagation(); openPersonaEditor(persona.id) })
-      const del = document.createElement('button')
-      del.className = 'ld-x'; del.textContent = '✕'; del.title = 'Delete reusable persona'
-      del.addEventListener('click', async (event) => {
-        event.stopPropagation()
-        if (!confirm(`Delete reusable persona “${persona.name}”? Presets linked to it will fall back to their stored local persona copy.`)) return
-        try {
-          const result = await call('delete_persona', { id: persona.id })
-          personas = result.personas || []
-          renderPersonaList()
-          setStatus('.ld-persona-status', `Deleted “${persona.name}”.`, 'good')
-        } catch (error) { setStatus('.ld-persona-status', error.message, 'err') }
-      })
-      item.appendChild(name); item.appendChild(edit); item.appendChild(del)
-      list.appendChild(item)
+      list.appendChild(libItem({
+        name: persona.name || 'Unnamed persona',
+        badges: [profile.countTag || '', libLooksBadge(profile)],
+        sub: [profile.anchor && profile.anchor !== persona.name ? profile.anchor : '', profile.subject || ''].filter(Boolean).join(' · '),
+        tags: libFirstTags(profile),
+        onOpen: () => openPersonaEditor(persona.id),
+        onEdit: () => openPersonaEditor(persona.id),
+        deleteTitle: 'Delete this saved persona',
+        onDelete: async () => {
+          if (!confirm(`Delete saved persona “${persona.name}”? Presets linked to it fall back to their own stored copy.`)) return
+          try {
+            const result = await call('delete_persona', { id: persona.id })
+            personas = result.personas || []
+            renderPersonaList()
+            setStatus('.ld-persona-status', `Deleted “${persona.name}”.`, 'good')
+          } catch (error) { setStatus('.ld-persona-status', error.message, 'err') }
+        },
+      }))
     }
     renderPersonaLinkSelect($('.ld-ed-persona-link') ? $('.ld-ed-persona-link').value : '')
   }
@@ -4706,45 +4897,42 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   function renderPresetList() {
     const list = $('.ld-preset-list')
     if (!list) return
+    const bar = libToolbar('preset', list, renderPresetList, { noun: 'preset' })
     list.innerHTML = ''
     if (!presets.length) {
       list.innerHTML = '<div class="ld-status">No presets yet.</div>'
+      libCount(bar, 0, 0, 'preset')
       return
     }
-    for (const p of presets) {
-      const item = document.createElement('div')
-      item.className = 'ld-preset-item' + (p.name === activePreset ? ' ld-active' : '')
-      const name = document.createElement('span')
-      name.className = 'ld-preset-name'
-      name.textContent = p.name
-      const model = document.createElement('span')
-      model.className = 'ld-preset-model'
-      model.textContent = (p.config && p.config.model) || ''
-      name.appendChild(model)
-      name.addEventListener('click', () => selectPreset(p.name))
-      const ed = document.createElement('button')
-      ed.className = 'ld-append'
-      ed.textContent = 'Edit'
-      ed.style.flex = '0 0 auto'
-      ed.style.width = 'auto'
-      ed.style.padding = '3px 8px'
-      ed.addEventListener('click', (ev) => { ev.stopPropagation(); openEditor(p.name) })
-      const del = document.createElement('button')
-      del.className = 'ld-x'
-      del.textContent = '✕'
-      del.title = `Delete "${p.name}"`
-      del.addEventListener('click', async () => {
-        try {
-          const res = await call('delete_preset', { name: p.name })
-          presets = res.presets
-          if (activePreset === p.name) { activePreset = null }
-          renderPresetList(); renderPresetSelect()
-        } catch (e) { setStatus('.ld-preset-status', e.message, 'err') }
-      })
-      item.appendChild(name)
-      item.appendChild(ed)
-      item.appendChild(del)
-      list.appendChild(item)
+    const shown = libVisible('preset', presets, {
+      nameOf: (p) => p.name || '',
+      textOf: (p) => { const c = p.config || {}; return [c.model, c.sampler, usesSwarm(c) ? 'swarmui' : 'draw things', (c.loras || []).map(l => l.file || l.name || '').join(' ')].join(' ') },
+    })
+    libCount(bar, shown.length, presets.length, 'preset')
+    if (!shown.length) libEmptyMatch(list, 'preset')
+    for (const p of shown) {
+      const c = p.config || {}
+      const size = c.width && c.height ? `${c.width}×${c.height}` : ''
+      const loras = (c.loras || []).length
+      list.appendChild(libItem({
+        name: p.name,
+        badges: [p.name === activePreset ? 'in use' : '', usesSwarm(c) ? 'SwarmUI' : 'Draw Things'],
+        sub: c.model || '',
+        tags: [c.sampler, c.steps ? `${c.steps} steps` : '', size, loras ? `${loras} LoRA${loras === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · '),
+        active: p.name === activePreset,
+        onOpen: () => selectPreset(p.name),
+        onEdit: () => openEditor(p.name),
+        deleteTitle: `Delete "${p.name}"`,
+        onDelete: async () => {
+          if (!confirm(`Delete preset “${p.name}”?`)) return
+          try {
+            const res = await call('delete_preset', { name: p.name })
+            presets = res.presets
+            if (activePreset === p.name) { activePreset = null }
+            renderPresetList(); renderPresetSelect()
+          } catch (e) { setStatus('.ld-preset-status', e.message, 'err') }
+        },
+      }))
     }
   }
 
