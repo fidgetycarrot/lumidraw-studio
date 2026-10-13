@@ -61,6 +61,9 @@ const CHAT_PERSONA_FILE = 'chat_persona.json'
 const ARTIST_INDEX_FILE = 'artist_index.json'
 
 const DEFAULT_SETTINGS = {
+  // 1.9: one parser call + plain compiler + per-chat cast memory. Direct mode only.
+  // Turn off to get the 1.8 scene core / Jev path back unchanged.
+  simplePipeline: true,
   experimentalSceneCore: false,
   experimentalJevPlanner: true,
   preferKnownCastMoments: true,
@@ -16767,6 +16770,7 @@ async function wardrobeBetweenImagesCurrent(userId, chatId, messages, targetInde
 async function trackWardrobeBetweenImages(userId, chatId, messages, targetIndex, preset, settings, { includeTarget = true, scan = null } = {}) {
   if (!preset || !Array.isArray(messages) || !Number.isInteger(targetIndex) || targetIndex < 0) return []
   if (!(settings.parserEngine === 'anima' || settings.mode === 'direct' || settings.directMode === true)) return []
+  if (simplePipelineOn(settings)) return []
   if (await storyContinuityEnabled(userId, settings)) return []
   const target = messageBits(messages[targetIndex])
   if (!target.isAssistant) return []
@@ -17205,6 +17209,9 @@ async function scanStoryCore(userId, options = {}) {
     const usingCustom = !!(settings.parserInstruction && settings.parserInstruction.trim())
     const passage = clipParserPassage(target.content)
 
+    if (simplePipelineOn(settings)) {
+      return await runSimpleStoryScan({ userId, settings, preset, messages, targetIndex, target, chatId, scan, storyDebugMeta })
+    }
     if (settings.parserEngine === 'anima' || settings.mode === 'direct') {
       // Hand the parser the location outright rather than hoping it survives
       // inside the recency window.
@@ -17949,6 +17956,9 @@ async function reparseSourceMessage(userId, imageUrl, overrides = {}) {
   }
   const target = messageBits(messages[targetIndex])
   if (!target.content) throw new Error('The source message has no readable text.')
+  if (simplePipelineOn(settings)) {
+    return await runSimpleReparse({ userId, settings, preset, messages, targetIndex, target, chatId, origin, messageId, source, overrides })
+  }
 
   const passage = clipParserPassage(target.content)
   const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
@@ -18337,7 +18347,7 @@ function troubleshootingClean(value, depth = 0) {
 
 function troubleshootingSettings(settings) {
   const out = {}
-  for (const key of ['mode', 'directMode', 'parserEngine', 'parserModel', 'experimentalSceneCore', 'experimentalJevPlanner', 'preferKnownCastMoments',
+  for (const key of ['mode', 'directMode', 'parserEngine', 'parserModel', 'simplePipeline', 'experimentalSceneCore', 'experimentalJevPlanner', 'preferKnownCastMoments',
     'activePreset', 'parserContextMessages', 'maxImages', 'autoGenerate', 'parserInstruction']) {
     if (settings[key] !== undefined) out[key] = settings[key]
   }
@@ -18357,6 +18367,11 @@ function troubleshootingSummary(report) {
   const omissions = core.compilation && core.compilation.omissions || []
   const clarity = scene.finalClarityReview || core.finalClarityReview || entry.finalClarityReview || null
   const highlights = []
+  const simple = scene.simplePipeline || entry.simplePipeline || null
+  if (simple) {
+    highlights.push('Simple pipeline: one parser call, no Jev or evidence checks.')
+    for (const note of simple.notes || []) highlights.push(note)
+  }
   if (clarity) {
     highlights.push('Final wording review: ' + (clarity.status || 'not recorded') + ' · ' +
       (clarity.mode || 'unknown mode') + '; ' + (clarity.changesApplied ? 'wording alternative applied' : 'outgoing wording retained') + '.')
@@ -18485,6 +18500,22 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
       // LumiCast publishes its latest character sheet through Lumiverse's shared RPC pool.
       // Reading it changes nothing here: the panel fills the open editor and the user saves.
+      case 'simple_memory_get': {
+        const chatId = String(payload.chatId || '')
+        if (!chatId) throw new Error('Open a chat first.')
+        const memory = await readSimpleCast(chatId)
+        reply = ok(payload, requestId, { chatId, setting: memory.setting, updatedAt: memory.updatedAt,
+          people: Object.entries(memory.people).map(([key, person]) => ({ key, ...person }))
+            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)) })
+        break
+      }
+      case 'simple_memory_clear': {
+        const chatId = String(payload.chatId || '')
+        if (!chatId) throw new Error('Open a chat first.')
+        await clearSimpleCast(chatId, String(payload.key || ''))
+        reply = ok(payload, requestId, { cleared: true })
+        break
+      }
       case 'lumicast_latest': {
         if (!spindle.rpcPool || typeof spindle.rpcPool.read !== 'function') {
           throw new Error('This Lumiverse version cannot share data between extensions. Copy the fields from LumiCast by hand.')
@@ -18542,6 +18573,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.cloudFallback !== undefined) settings.cloudFallback = !!payload.cloudFallback
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         if (payload.autoImageEvery !== undefined) settings.autoImageEvery = Number(payload.autoImageEvery) === 1 ? 1 : 5
+        if (payload.simplePipeline !== undefined) settings.simplePipeline = !!payload.simplePipeline
         if (payload.experimentalSceneCore !== undefined) settings.experimentalSceneCore = !!payload.experimentalSceneCore
         if (payload.experimentalJevPlanner !== undefined) settings.experimentalJevPlanner = !!payload.experimentalJevPlanner
         if (payload.preferKnownCastMoments !== undefined) settings.preferKnownCastMoments = !!payload.preferKnownCastMoments
@@ -23483,6 +23515,7 @@ async function removeStoryContinuityChat(userId, chatId) {
 
 // Story state is a journal of narrated facts, never a derivative of images.
 async function storyContinuityEnabled(userId, settings) {
+  if (simplePipelineOn(settings)) return false
   return !!(settings && settings.experimentalJevPlanner !== false && await jevActiveFor(userId, settings))
 }
 
@@ -24286,3 +24319,896 @@ async function wardrobeReviewApply165(userId, payload = {}) {
   storyContinuityChats.set(queueKey, task)
   try { return scCopy(await task) } finally { if (storyContinuityChats.get(queueKey) === task) storyContinuityChats.delete(queueKey) }
 }
+
+// BEGIN SIMPLE PIPELINE 1.9
+// ---------------------------------------------------------------------------
+// One parser call, then a plain compiler. Nothing in between deletes facts.
+//
+// Why this exists. The 1.8 Direct path ran the parser's answer through evidence
+// quote checks, Jev verification at 85% confidence, story memory, the sim
+// tracker, a wardrobe review and a final wording review. Each layer removed
+// whatever it could not prove. For an image prompt a missing fact is not a safe
+// default: Anima fills the gap with the most salient thing it was given. That
+// is how an unsaved goddess became "1person" with no body and rendered as a
+// second copy of the persona, and how the scene card's "breeches undone" lost
+// to a saved default outfit.
+//
+// The rules here are short on purpose:
+//   - Saved sheets are the truth for saved people (body, count, anatomy).
+//   - The parser LLM is the truth for what the story says right now
+//     (who is in frame, clothes, pose, setting, and the look of people who
+//     have no sheet).
+//   - Per chat, Lumi Studio remembers every person's last outfit and every
+//     unsaved person's look, and hands that back to the parser next time, so
+//     clothes and faces stay the same until the story changes them.
+//   - The prompt keeps the 1.8 layout: header + counts, Scene, Setting, one
+//     paragraph per person (name, adult noun, position: body. Clothing. Pose
+//     and expression.), then interaction lines.
+// ---------------------------------------------------------------------------
+
+const SIMPLE_CAST_FILE = 'simple_cast.json'
+const SIMPLE_VERSION = 1
+const SIMPLE_COUNT_RE = /^1(?:girl|boy|other)$/
+const SIMPLE_PERSONA_WORDS = new Set(['you', 'user', '{{user}}', 'me', 'i', 'persona', 'player'])
+const SIMPLE_COMPOSITIONS = ['missionary', 'cowgirl position', 'reverse cowgirl position', 'doggystyle', 'mating press',
+  'spooning', 'standing sex', 'girl on top', 'sitting on lap', 'prone bone', 'full nelson', 'suspended congress', '69']
+
+function simplePipelineOn(settings) {
+  return !!settings && settings.simplePipeline !== false && (settings.mode === 'direct' || settings.directMode === true)
+}
+
+// ---------- tag helpers ----------------------------------------------------
+
+function simpleTags(value, limit = 40) {
+  const raw = (Array.isArray(value) ? value.flat(3) : [value]).filter(item => typeof item === 'string')
+  const out = []
+  const seen = new Set()
+  for (const item of raw) {
+    for (let piece of item.split(/[,;\n]+/)) {
+      piece = piece.replace(/\s+/g, ' ').replace(/^[\s.]+|[\s.]+$/g, '').trim()
+      if (!piece || piece.length > 120) continue
+      const key = normalizeIdentityText(piece)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      out.push(piece)
+    }
+  }
+  return out.slice(0, limit)
+}
+
+function simpleCount(value) {
+  const text = String(value || '').trim().toLowerCase().replace(/\s+/g, '')
+  if (SIMPLE_COUNT_RE.test(text)) return text
+  if (/^1(?:woman|female)$/.test(text)) return '1girl'
+  if (/^1(?:man|male)$/.test(text)) return '1boy'
+  if (/^1(?:person|people)$/.test(text)) return '1other'
+  return ''
+}
+
+function simpleCountFromWords(text) {
+  const value = ' ' + normalizeIdentityText(text) + ' '
+  const female = /\s(?:woman|girl|female|lady|goddess|queen|princess|priestess|witch|mother|wife|sister|daughter|futanari|she|her)\s/.test(value)
+  const male = /\s(?:man|boy|male|guy|god|king|prince|priest|father|husband|brother|son|he|his)\s/.test(value)
+  if (female && !male) return '1girl'
+  if (male && !female) return '1boy'
+  return ''
+}
+
+function simpleAdultPhrase(phrase, count) {
+  let text = neutralizeDirectGroupYouthText(String(phrase || '').replace(/[.,;:]+$/g, '').trim()).toLowerCase()
+  if (!text) text = count === '1girl' ? 'woman' : count === '1boy' ? 'man' : 'person'
+  if (!/\b(?:adult|mature|middle-aged|middle aged|elderly|old|aged)\b/.test(text)) text = 'adult ' + text
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function simpleKey(name) {
+  return normalizeIdentityText(name)
+}
+
+function simpleNameUsable(name) {
+  const text = String(name || '').trim()
+  if (!text || text.length > 40) return ''
+  if (!/^[A-Z][\p{L}'’-]*(?:\s+[A-Z][\p{L}'’-]*){0,2}$/u.test(text)) return ''
+  if (nameReadsAsTag(text)) return ''
+  return text
+}
+
+function simpleProfileFor(name, profiles) {
+  const wanted = normalizeIdentityText(name)
+  if (!wanted) return null
+  if (SIMPLE_PERSONA_WORDS.has(wanted) && profiles && profiles.persona) return profiles.persona
+  const exact = directProfileForPresenceName(name, profiles)
+  if (exact) return exact
+  const first = wanted.split(' ')[0]
+  const hits = allKnownProfiles(profiles).filter(profile => [profile.anchor, profile.promptName]
+    .filter(Boolean).some(form => normalizeIdentityText(form).split(' ')[0] === first))
+  return hits.length === 1 ? hits[0] : null
+}
+
+function simpleProfileKey(profile) {
+  return 'ref:' + String(profile.ref || profile.anchor || '')
+}
+
+// ---------- per-chat memory ------------------------------------------------
+
+async function readSimpleCastAll() {
+  const value = await spindle.storage.getJson(SIMPLE_CAST_FILE, { fallback: {} })
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+async function readSimpleCast(chatId) {
+  const all = await readSimpleCastAll()
+  const entry = all[String(chatId || '')]
+  const value = entry && typeof entry === 'object' ? entry : {}
+  return { version: SIMPLE_VERSION, setting: simpleTags(value.setting || [], 12),
+    people: value.people && typeof value.people === 'object' ? value.people : {}, updatedAt: value.updatedAt || 0 }
+}
+
+async function writeSimpleCast(chatId, memory) {
+  const key = String(chatId || '')
+  if (!key) return
+  const all = await readSimpleCastAll()
+  all[key] = { ...memory, version: SIMPLE_VERSION, updatedAt: Date.now() }
+  await spindle.storage.setJson(SIMPLE_CAST_FILE, all, { indent: 2 })
+}
+
+async function clearSimpleCast(chatId, personKey = '') {
+  const key = String(chatId || '')
+  const all = await readSimpleCastAll()
+  if (!all[key]) return
+  if (personKey) {
+    if (all[key].people) delete all[key].people[personKey]
+  } else delete all[key]
+  await spindle.storage.setJson(SIMPLE_CAST_FILE, all, { indent: 2 })
+}
+
+function simpleMemoryFor(memory, key) {
+  return (memory && memory.people && memory.people[key]) || null
+}
+
+// ---------- scene card -----------------------------------------------------
+
+function simpleSceneCard(content) {
+  const blocks = [...String(content || '').matchAll(/<scenecard\b[^>]*>[\s\S]*?<\/scenecard>/gi)]
+  if (!blocks.length) return null
+  const block = blocks[blocks.length - 1][0]
+  const scene = (/<sc-scene\b[^>]*>[\s\S]*?<\/sc-scene>/i.exec(block) || [''])[0]
+  const user = (/<sc-user\b[^>]*>[\s\S]*?<\/sc-user>/i.exec(block) || [''])[0]
+  const cast = [...block.matchAll(/<sc-char\b[^>]*>[\s\S]*?<\/sc-char>/gi)].map(match => match[0])
+  const person = (part) => ({ name: sceneCardField(part, 'name'), role: sceneCardField(part, 'role'),
+    attire: sceneCardField(part, 'attire'), place: sceneCardField(part, 'place'), doing: sceneCardField(part, 'doing') })
+  const card = {
+    location: sceneCardField(scene, 'location'), time: sceneCardField(scene, 'time'),
+    user: user ? person(user) : null,
+    cast: cast.map(person).filter(item => item.name),
+  }
+  return card.location || card.user || card.cast.length ? card : null
+}
+
+function simpleSceneCardText(card, profiles) {
+  if (!card) return ''
+  const persona = profiles && profiles.persona
+  const lines = []
+  if (card.location) lines.push('Location: ' + card.location + (card.time ? ' (' + card.time + ')' : ''))
+  if (card.user) {
+    const who = persona && persona.anchor ? persona.anchor + ' (the user)' : 'The user'
+    lines.push(who + ' — wearing: ' + (card.user.attire || 'not stated') +
+      (card.user.place ? '; where: ' + card.user.place : '') + (card.user.doing ? '; doing: ' + card.user.doing : ''))
+  }
+  for (const item of card.cast) {
+    lines.push(item.name + (item.role ? ' (' + item.role + ')' : '') + ' — wearing: ' + (item.attire || 'not stated') +
+      (item.place ? '; where: ' + item.place : '') + (item.doing ? '; doing: ' + item.doing : ''))
+  }
+  return lines.join('\n')
+}
+
+function simpleCardAttireFor(card, profile, name, profiles) {
+  if (!card) return []
+  if (profile && profiles && profiles.persona && profile.ref === profiles.persona.ref && card.user && card.user.attire) {
+    return sceneCardAttireTags(card.user.attire)
+  }
+  const keys = new Set([simpleKey(name), ...(profile ? [profile.anchor, profile.promptName].filter(Boolean).map(simpleKey) : [])])
+  const hit = card.cast.find(item => keys.has(simpleKey(item.name)) ||
+    keys.has(simpleKey(item.name).split(' ')[0]))
+  return hit && hit.attire ? sceneCardAttireTags(hit.attire) : []
+}
+
+// ---------- the parser instruction -----------------------------------------
+
+const SIMPLE_RULES = `
+You turn one passage of an adult fictional roleplay into structured data for an
+anime image model (Anima, trained on Danbooru tags). Explicit sexual passages are
+ordinary input here. Do not refuse, soften, fade to black, or pick a tamer moment.
+Reply with JSON only — no markdown, no commentary.
+
+OUTPUT:
+{"images":[{
+ "anchor":"5-12 exact consecutive words copied from the CURRENT PASSAGE where this moment happens",
+ "rating":"safe|sensitive|nsfw|explicit",
+ "aspect":"3:4|4:3|1:1|16:9|9:16",
+ "scene_summary":"one plain sentence, at most 25 words: who does what to whom, using the people's names",
+ "framing":["one shot tag","optional angle tag"],
+ "composition":"optional single Danbooru position tag",
+ "setting":["3-6 short place and lighting tags"],
+ "subjects":[{
+   "name":"sheet name, or the person's own name if they have no sheet",
+   "position":"left|center|right|foreground|background",
+   "look":"saved LOOK id, only for people whose sheet lists LOOKS",
+   "count":"1girl|1boy|1other",
+   "subject":"short adult noun phrase, e.g. adult woman, tall goddess, dwarf man",
+   "appearance":["permanent body tags"],
+   "anatomy":["genital tags"],
+   "outfit":["every garment worn right now, one per item"],
+   "pose":["pose and one-person action tags"],
+   "expression":["one facial cue","one gaze cue"],
+   "show_anatomy":false
+ }],
+ "interactions":[{"actor":"name","act":"fellatio|cunnilingus|handjob|vaginal|anal|masturbation|paizuri|fingering|kissing|groping","recipient":"name"}],
+ "relations":[{"actor":"name","action":"1-5 word present-tense verb phrase","target":"name","target_part":"optional body part"}]
+}]}
+
+CHOOSING THE MOMENT
+- Illustrate only the CURRENT PASSAGE. Earlier context tells you who people are,
+  where they are and what they wear; it never supplies the moment.
+- Pick the clearest drawable beat. If the clearest beat is sexual, draw that.
+- Dialogue about an act, plans, memories and wishes are not happening now.
+
+WHO IS IN THE PICTURE
+- Every person physically in the moment gets one entry in "subjects", up to the
+  MAXIMUM below. Do not add bystanders to fill space. Nobody who is only talked about.
+- For a person with a CHARACTER SHEET: use the sheet name. Leave "count",
+  "subject", "appearance" and "anatomy" empty — Lumi Studio adds them from the sheet.
+- For a person WITHOUT a sheet you MUST fill "count", "subject" and "appearance",
+  because nothing else will describe their body. If a REMEMBERED PERSON entry
+  exists for them, copy its count, subject, appearance and anatomy exactly so they
+  look the same in every picture. Otherwise build them from everything the story
+  has said: sex (1girl for a woman, 1boy for a man; a woman with a penis is 1girl
+  with anatomy "futanari, penis"), hair colour and length, eye colour, skin,
+  build, height, species traits (pointy ears, horns, tail), notable marks.
+  6-12 real Danbooru tags. Use 1other only for creatures that are not human-like.
+- "anatomy" is only for people without a sheet and only for what the story
+  establishes (penis, futanari, testicles, pussy, large breasts belongs in appearance).
+- "show_anatomy" is true only when that person's genitals are visible in this
+  picture.
+
+CLOTHING — this is how outfits stay consistent.
+- "outfit" is the complete set of clothes worn at this moment, not just what
+  changed. Start from CURRENT OUTFIT (or the scene card), then apply what the
+  CURRENT PASSAGE changes. Silence means unchanged.
+- Keep colour, material and state: "open moss-green robe", "unfastened pants",
+  "torn white shirt". One garment per item. Shoes separate.
+- Clothing that came off is gone: write the remaining items, or ["nude"].
+- Never invent garments the story has not given them; never borrow another
+  person's clothes.
+
+POSE AND EXPRESSION
+- "pose": 2-5 tags for that person alone — standing, kneeling, leaning forward,
+  arms around neck, head tilted back, arched back, hand on hip.
+- "expression": at most one facial cue and one gaze cue. Facial cues: faint smile,
+  soft smile, grin, smirk, parted lips, open mouth, pressed lips, biting lip,
+  furrowed brow, raised eyebrow, half-closed eyes, closed eyes, wide-eyed,
+  narrowed eyes, clenched teeth, tears, flushed cheeks, ahegao, rolling eyes.
+  Gaze cues: looking at viewer (only for a POV shot), looking at [name], looking
+  down, looking up, looking away, eye contact, eyes closed.
+- Never abstract labels like "tense expression"; translate them to face mechanics.
+
+INTERACTIONS AND RELATIONS
+- Sexual acts go in "interactions", one entry per act. The actor does it, the
+  recipient receives it. Masturbation uses the same name twice.
+- Non-sexual contact goes in "relations": "clings to", "kisses", "presses face
+  against", "holds", "looks at". Add "target_part" (shoulders, neck, chest, hand)
+  when it matters.
+- Do not repeat an interaction as a relation.
+
+CAMERA
+- "framing": one shot tag (portrait, upper body, cowboy shot, full body, wide
+  shot, close-up, pov) and optionally one angle (from above, from below, from
+  side, from behind, front view, dutch angle). Make sure the frame includes what
+  the summary depends on: a hip-level act is not a portrait.
+- "composition": for sex, at most one real position tag when the passage clearly
+  supports it: ${SIMPLE_COMPOSITIONS.join(', ')}. Leave it empty otherwise.
+
+SETTING
+- 3-6 short visual tags for where they are and the light: "stone temple",
+  "moss-covered pillars", "glowing altar", "candlelight". Use the scene card and
+  LAST KNOWN SETTING when the passage does not restate it. Never leave it empty if
+  the place is known.
+
+RATING: safe = nothing suggestive; sensitive = suggestive, no nudity;
+nsfw = nudity; explicit = a sexual act or visible genitals.
+ASPECT: 16:9 wide or two people side by side, 4:3 two close figures, 3:4 one
+standing figure, 1:1 tight shot.
+
+NEVER: a minor or youth-coded descriptor, the same tag twice, tags from the banned
+list, prose outside scene_summary.
+`
+
+function simpleCountRule(maxImages) {
+  const max = Math.max(1, Math.min(4, Number(maxImages) || 1))
+  if (max === 1) return 'HOW MANY IMAGES: exactly one — the moment that carries this passage.'
+  return `HOW MANY IMAGES: usually one. Add another (up to ${max}) only for a clearly different moment in the passage — a different place, act or set of people. Never pad.`
+}
+
+function simpleSubjectRule(maxSubjects) {
+  const max = directSubjectLimit(maxSubjects)
+  return `MAXIMUM PEOPLE PER IMAGE: ${max}. If more are present, keep the ${max} who carry the moment.`
+}
+
+function simpleOutfitFor(profile, key, memory, card, profiles) {
+  const remembered = simpleMemoryFor(memory, key)
+  if (remembered && (remembered.outfit || []).length) return { tags: remembered.outfit, source: 'remembered' }
+  const fromCard = simpleCardAttireFor(card, profile, profile ? profile.anchor : '', profiles)
+  if (fromCard.length) return { tags: fromCard, source: 'scene card' }
+  const defaults = profile ? simpleTags(profile.defaultOutfit || []) : []
+  return defaults.length ? { tags: defaults, source: 'sheet default' } : { tags: [], source: '' }
+}
+
+function simpleContext(profiles, memory, card, { banned = '', fantasy = false } = {}) {
+  const blocks = []
+  const sheetKeys = new Set()
+  for (const profile of allKnownProfiles(profiles)) {
+    if (!profile) continue
+    const key = simpleProfileKey(profile)
+    sheetKeys.add(key)
+    const name = directSentenceName(profile) || profile.anchor || profile.ref
+    const lines = [`${name} — CHARACTER SHEET (Lumi Studio adds this person's body; do not fill count/subject/appearance)`]
+    if (profiles.persona && profile.ref === profiles.persona.ref) lines.push('  This is the user\'s character. "you" in the story usually means them.')
+    if (profiles.character && profile.ref === profiles.character.ref) lines.push('  This is the chat\'s main character.')
+    if (profile.countTag) lines.push('  COUNT: ' + animaTag(profile.countTag))
+    const config = altAppearanceConfig(profile)
+    if (config) {
+      lines.push('  LOOKS (pick one id for "look" from what the story says right now): ' +
+        config.variants.map(item => `${item.id} = ${item.label} (when: ${item.when})`).join(' | '))
+      const remembered = simpleMemoryFor(memory, key)
+      if (remembered && remembered.look) lines.push('  CURRENT LOOK: ' + remembered.look)
+    } else {
+      const body = directAnchorFor(profile)
+      if (body.length) lines.push('  BODY (reference only, already handled): ' + body.join(', '))
+    }
+    if ((profile.anatomy || []).length) lines.push('  ANATOMY (reference only, already handled): ' + animaTagList(profile.anatomy).join(', '))
+    const outfit = simpleOutfitFor(profile, key, memory, card, profiles)
+    if (outfit.tags.length) lines.push(`  CURRENT OUTFIT (${outfit.source}; keep unless the story changes it): ` + outfit.tags.join(', '))
+    blocks.push(lines.join('\n'))
+  }
+  const remembered = Object.entries((memory && memory.people) || {})
+    .filter(([key, person]) => !sheetKeys.has(key) && person && !person.ref)
+    .sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0)).slice(0, 8)
+  for (const [, person] of remembered) {
+    const lines = [`${person.name} — REMEMBERED PERSON (no sheet; copy these exactly if they appear)`]
+    if (person.count) lines.push('  count: ' + person.count)
+    if (person.subject) lines.push('  subject: ' + person.subject)
+    if ((person.appearance || []).length) lines.push('  appearance: ' + person.appearance.join(', '))
+    if ((person.anatomy || []).length) lines.push('  anatomy: ' + person.anatomy.join(', '))
+    if ((person.outfit || []).length) lines.push('  CURRENT OUTFIT (keep unless the story changes it): ' + person.outfit.join(', '))
+    blocks.push(lines.join('\n'))
+  }
+  const cardText = simpleSceneCardText(card, profiles)
+  return [
+    'PEOPLE THIS STORY KNOWS (not everyone here is in the picture):',
+    chatRoleGuidance(profiles),
+    ...blocks,
+    memory && memory.setting && memory.setting.length ? 'LAST KNOWN SETTING: ' + memory.setting.join(', ') : '',
+    cardText ? 'SCENE CARD — the story model\'s own note of where everyone is and what they are wearing at the END of the current passage. Trust it for clothes and place unless the moment you draw is earlier and the passage says otherwise:\n' + cardText : '',
+    banned ? 'BANNED TAGS — never use: ' + banned : '',
+    fantasy ? 'This is a fantasy setting. Non-human species are correct.' : '',
+  ].filter(Boolean).join('\n')
+}
+
+function buildSimpleInstruction(profiles, memory, card, options = {}) {
+  return [SIMPLE_RULES.trim(), '', simpleCountRule(options.maxImages), simpleSubjectRule(options.maxSubjects), '',
+    simpleContext(profiles, memory, card, options)].join('\n')
+}
+
+// ---------- reading the parser reply ---------------------------------------
+
+function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
+  const text = extractParserText(raw)
+  let parsed = null
+  try { parsed = JSON.parse(sanitizeJsonText(text)) } catch { /* fall through */ }
+  if (!parsed) {
+    const match = /\{[\s\S]*\}/.exec(text || '')
+    if (match) { try { parsed = JSON.parse(sanitizeJsonText(match[0])) } catch { /* fall through */ } }
+  }
+  if (!parsed) {
+    const recovered = recoverDirectImageObjects(text)
+    if (recovered.length) parsed = { images: recovered }
+  }
+  if (!parsed || !Array.isArray(parsed.images)) {
+    const prose = String(text || '').trim()
+    if (prose.length > 40 && !prose.includes('{')) {
+      return { images: [], refused: true, error: 'The parser model answered in prose instead of JSON — it may have declined this passage. It said: "' +
+        prose.replace(/\s+/g, ' ').slice(0, 220) + (prose.length > 220 ? '…' : '') + '"' }
+    }
+    return { images: [], error: 'The parser reply was not usable JSON. Try again, or pick a different parser model.' }
+  }
+  const limit = directSubjectLimit(maxSubjects)
+  const images = []
+  for (const item of parsed.images.slice(0, Math.max(1, Math.min(4, Number(maxImages) || 1)))) {
+    if (!item || typeof item !== 'object') continue
+    // Accept the 1.8 shape too, so an older custom model still produces something.
+    const legacyOutfits = item.outfits && typeof item.outfits === 'object' ? item.outfits : {}
+    const rawSubjects = Array.isArray(item.subjects) ? item.subjects
+      : Array.isArray(item.group_subjects) ? item.group_subjects.map(s => {
+        const details = simpleTags(s.details || [])
+        const worn = simpleTags(legacyOutfits[s.name] || details.filter(directWardrobeTag))
+        const wornKeys = new Set(worn.map(normalizeIdentityText))
+        const rest = details.filter(tag => !directWardrobeTag(tag) && !wornKeys.has(normalizeIdentityText(tag)))
+        return { ...s, outfit: worn, pose: rest.filter(tag => !directExpressionKind(tag)), expression: rest.filter(tag => directExpressionKind(tag)) }
+      }) : []
+    const subjects = rawSubjects.filter(s => s && typeof s === 'object' && String(s.name || '').trim()).slice(0, limit)
+      .map(s => ({
+        name: String(s.name).trim().slice(0, 60),
+        position: String(s.position || '').trim(),
+        look: String(s.look || '').trim(),
+        count: simpleCount(s.count),
+        subject: String(s.subject || '').trim().slice(0, 60),
+        appearance: simpleTags(s.appearance, 16),
+        anatomy: simpleTags(s.anatomy, 6),
+        outfit: simpleTags(s.outfit, 14),
+        pose: simpleTags(s.pose, 6),
+        expression: simpleTags(s.expression, 2),
+        showAnatomy: s.show_anatomy === true || s.include_saved_anatomy === true,
+      }))
+    if (!subjects.length) continue
+    // 1.8-shape replies carry sex only in prose such as "the tall woman on the left".
+    if (!Array.isArray(item.subjects)) {
+      const clause = String(item.spatial_relation || '') + ' ' + String(item.group_scene || '')
+      for (const subject of subjects) {
+        if (subject.count) continue
+        const at = new RegExp('\\b([a-z-]+)\\s+(?:on|at|in)\\s+the\\s+' + escapeRegExp(String(subject.position || '').replace(/-/g, ' ')) + '\\b', 'i').exec(clause)
+        subject.count = at ? simpleCountFromWords(at[1]) : ''
+        if (at && !subject.subject) subject.subject = at[1].toLowerCase()
+      }
+    }
+    const names = new Set(subjects.map(s => simpleKey(s.name)))
+    const known = name => names.has(simpleKey(name))
+    images.push({
+      anchor: String(item.anchor || '').trim(),
+      rating: ANIMA_SAFETY_TAGS.includes(String(item.rating || '').toLowerCase()) ? String(item.rating).toLowerCase() : 'sensitive',
+      aspect: String(item.aspect || '').trim(),
+      scene_summary: String(item.scene_summary || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+      framing: simpleTags(item.framing, 3),
+      composition: SIMPLE_COMPOSITIONS.includes(String(item.composition || '').trim().toLowerCase()) ? String(item.composition).trim().toLowerCase() : '',
+      setting: simpleTags(item.setting, 8),
+      subjects,
+      interactions: (Array.isArray(item.interactions) ? item.interactions : Array.isArray(item.group_interactions) ? item.group_interactions : [])
+        .filter(x => x && known(x.actor) && known(x.recipient) && String(x.act || '').trim())
+        .map(x => ({ actor: String(x.actor), act: String(x.act).trim().toLowerCase(), recipient: String(x.recipient) })).slice(0, 4),
+      relations: (Array.isArray(item.relations) ? item.relations : Array.isArray(item.group_relations) ? item.group_relations : [])
+        .filter(x => x && known(x.actor) && known(x.target) && String(x.action || '').trim())
+        .map(x => ({ actor: String(x.actor), action: String(x.action).trim().replace(/[.]+$/, '').split(/\s+/).slice(0, 6).join(' '),
+          target: String(x.target), targetPart: String(x.target_part || '').trim() })).slice(0, 3),
+    })
+  }
+  if (!images.length) return { images: [], error: 'The parser found no one to draw in this passage.' }
+  return { images }
+}
+
+// ---------- compiling one prompt -------------------------------------------
+
+const SIMPLE_ACT_ANATOMY = {
+  fellatio: { recipient: ['penis'] }, handjob: { recipient: ['penis'] }, paizuri: { recipient: ['penis'] },
+  cunnilingus: { recipient: ['vulva'] }, fingering: { recipient: ['vulva'] },
+  vaginal: { actor: ['penis'], recipient: ['vulva'] }, anal: { actor: ['penis'], recipient: ['anus'] },
+  masturbation: { actor: ['penis', 'vulva'] },
+}
+
+function simpleActSentence(act, actor, recipient) {
+  const A = upperFirst(actor)
+  switch (act) {
+    case 'fellatio': return `${A} is performing fellatio on ${recipient}.`
+    case 'cunnilingus': return `${A} is performing cunnilingus on ${recipient}.`
+    case 'handjob': return `${A} is giving ${recipient} a handjob.`
+    case 'paizuri': return `${A} is giving ${recipient} paizuri.`
+    case 'fingering': return `${A} is fingering ${recipient}.`
+    case 'vaginal': return `${A} is penetrating ${recipient} vaginally.`
+    case 'anal': return `${A} is penetrating ${recipient} anally.`
+    case 'masturbation': return actor === recipient ? `${A} is masturbating.` : ''
+    case 'kissing': return `${A} is kissing ${recipient}.`
+    case 'groping': return `${A} is groping ${recipient}.`
+    default: return `${A} and ${recipient}: ${act}.`
+  }
+}
+
+function simplePossessive(label) {
+  return /s$/i.test(label) ? label + "'" : label + "'s"
+}
+
+function simpleResolveSubject(raw, index, total, image, ctx, notes) {
+  const { profiles, memory, card } = ctx
+  const banned = (ctx.preset && ctx.preset.bannedTags) || ''
+  const profile = simpleProfileFor(raw.name, profiles)
+  const key = profile ? simpleProfileKey(profile) : 'npc:' + simpleKey(raw.name)
+  const remembered = simpleMemoryFor(memory, key) || {}
+  const position = total > 1 ? normalizeDirectGroupPosition(raw.position, index, total) : ''
+  const explicit = ['nsfw', 'explicit'].includes(image.rating)
+  const out = { key, raw, profile, position, sources: {} }
+
+  if (profile) {
+    out.name = directSentenceName(profile) || ''
+    out.displayName = profile.anchor || raw.name
+    const config = altAppearanceConfig(profile)
+    let identityTags = []
+    let phrase = profile.subject || ''
+    let anatomy = animaTagList(profile.anatomy || [])
+    let lookIncludesClothes = false
+    if (config) {
+      const want = [raw.look, remembered.look, config.startingId].map(v => String(v || '').trim().toLowerCase()).filter(Boolean)
+      let variant = null
+      for (const id of want) {
+        variant = config.variants.find(item => item.id.toLowerCase() === id || item.label.toLowerCase() === id)
+        if (variant) break
+      }
+      variant = variant || config.variants[0]
+      out.look = variant.id
+      identityTags = variant.tags.slice()
+      phrase = variant.subject || phrase
+      lookIncludesClothes = variant.clothingMode === 'included'
+      if (lookIncludesClothes) anatomy = []
+      out.sources.look = raw.look && variant.id.toLowerCase() === raw.look.toLowerCase() ? 'parser' : remembered.look ? 'remembered' : 'starting look'
+    } else {
+      try {
+        const identity = coreIdentityFor(profile, { name: raw.name }, banned)
+        identityTags = identity.tags
+        phrase = identity.introduction
+      } catch (error) {
+        identityTags = applyBannedToList(directAnchorFor(profile), banned)
+        notes.push(`${out.displayName}: some saved tags are on the banned list and were left out.`)
+      }
+    }
+    if (explicit) identityTags = identityTags.filter(tag => !directGroupYouthCoded(tag))
+    let count = ''
+    try { count = coreSavedCount(profile).resolved } catch { count = '' }
+    if (!count) {
+      count = simpleCount(raw.count) || simpleCountFromWords(phrase) || '1other'
+      notes.push(`${out.displayName}: the sheet's count tag is not 1girl/1boy/1other, so ${count} was used. Check the sheet.`)
+    }
+    out.count = count
+    out.phrase = simpleAdultPhrase(phrase, count)
+    out.identity = identityTags.filter(tag => normalizeIdentityText(tag) !== normalizeIdentityText(out.phrase))
+    out.anatomy = anatomy
+    out.sources.body = 'saved sheet'
+    if (lookIncludesClothes) {
+      out.outfit = []
+      out.sources.outfit = 'included in the saved look'
+    } else if (raw.outfit.length) {
+      out.outfit = raw.outfit; out.sources.outfit = 'story (parser)'
+    } else {
+      const fallback = simpleOutfitFor(profile, key, memory, card, profiles)
+      out.outfit = fallback.tags; out.sources.outfit = fallback.source || 'none known'
+    }
+  } else {
+    out.displayName = raw.name
+    out.name = simpleNameUsable(raw.name)
+    const rememberedCount = simpleCount(remembered.count)
+    const count = (rememberedCount && rememberedCount !== '1other' ? rememberedCount : '') ||
+      raw.count || rememberedCount ||
+      simpleCountFromWords([raw.subject, ...(raw.appearance || []), ...(raw.anatomy || [])].join(' ')) || '1other'
+    out.count = count
+    out.sources.count = rememberedCount && count === rememberedCount ? 'remembered' : raw.count ? 'parser' : 'guessed from description'
+    const appearance = (remembered.appearance || []).length ? remembered.appearance : raw.appearance
+    out.sources.body = (remembered.appearance || []).length ? 'remembered from an earlier image' : raw.appearance.length ? 'story (parser), first time — now remembered' : 'nothing known'
+    out.identity = applyBannedToList(simpleTags(appearance, 16), banned)
+    if (explicit) out.identity = out.identity.filter(tag => !directGroupYouthCoded(tag))
+    out.anatomy = applyBannedToList(simpleTags((remembered.anatomy || []).length ? remembered.anatomy : raw.anatomy, 6), banned)
+    out.phrase = simpleAdultPhrase(remembered.subject || raw.subject, count)
+    if (raw.outfit.length) { out.outfit = raw.outfit; out.sources.outfit = 'story (parser)' }
+    else if ((remembered.outfit || []).length) { out.outfit = remembered.outfit; out.sources.outfit = 'remembered' }
+    else {
+      const fromCard = simpleCardAttireFor(card, null, raw.name, profiles)
+      out.outfit = fromCard; out.sources.outfit = fromCard.length ? 'scene card' : 'none known'
+    }
+    if (!out.identity.length) notes.push(`${raw.name}: no sheet and the parser gave no body description — they may come out generic. Save a sheet or try again.`)
+  }
+  out.outfit = applyBannedToList(out.outfit, banned)
+  out.pose = applyBannedToList(raw.pose, banned)
+  out.expression = applyBannedToList(raw.expression, banned)
+  return out
+}
+
+function simpleSubjectAnatomy(subject, image) {
+  if (!['nsfw', 'explicit'].includes(image.rating) || !subject.anatomy.length) return []
+  const naked = subject.outfit.some(tag => /\b(?:nude|naked|bottomless|no pants|no underwear|undone|unfastened|open fly|pulled down|exposed)\b/i.test(tag))
+  if (subject.raw.showAnatomy || (naked && image.rating === 'explicit')) return subject.anatomy.slice()
+  const needed = new Set()
+  for (const act of image.interactions || []) {
+    const rule = SIMPLE_ACT_ANATOMY[act.act]
+    if (!rule) continue
+    if (simpleKey(act.actor) === simpleKey(subject.raw.name)) for (const family of rule.actor || []) needed.add(family)
+    if (simpleKey(act.recipient) === simpleKey(subject.raw.name)) for (const family of rule.recipient || []) needed.add(family)
+  }
+  if (!needed.size) return []
+  return subject.anatomy.filter(tag => {
+    const family = directAnatomyTagFamily(tag)
+    return !family || needed.has(family)
+  })
+}
+
+function simpleCountLine(subjects) {
+  const counts = { girl: 0, boy: 0, other: 0 }
+  for (const subject of subjects) counts[subject.count.replace(/^1/, '')] = (counts[subject.count.replace(/^1/, '')] || 0) + 1
+  return [['girl', 'girls'], ['boy', 'boys'], ['other', 'others']]
+    .filter(([kind]) => counts[kind] > 0)
+    .map(([kind, plural]) => counts[kind] + (counts[kind] === 1 ? kind : plural))
+}
+
+function compileSimpleImage(image, ctx) {
+  const { preset, profiles, memory, card } = ctx
+  const prefix = ctx.prefix || ''
+  const banned = preset.bannedTags || ''
+  const notes = []
+  const total = image.subjects.length
+  const subjects = image.subjects.map((raw, index) => simpleResolveSubject(raw, index, total, image, ctx, notes))
+
+  // Two people must never share one label.
+  const used = new Map()
+  for (const subject of subjects) {
+    const key = normalizeIdentityText(subject.name)
+    if (!key) continue
+    if (used.has(key)) { subject.name = ''; used.get(key).name = '' }
+    else used.set(key, subject)
+  }
+  for (const subject of subjects) {
+    const where = subject.position ? ' ' + directGroupPositionPhrase(subject.position) : ''
+    subject.label = subject.name || ('the ' + subject.phrase.replace(/^(?:adult|mature|middle-aged)\s+/, '') + where)
+    subject.introduction = subject.name
+      ? `${subject.name}, ${articleFor(subject.phrase)} ${subject.phrase}${subject.position ? ', ' + directGroupPositionPhrase(subject.position) : ''}`
+      : `The ${subject.phrase}${where}`
+  }
+  const labelFor = name => {
+    const hit = subjects.find(subject => simpleKey(subject.raw.name) === simpleKey(name))
+    return hit ? hit.label : name
+  }
+
+  // Scene sentence: the parser's words, with sheet names swapped for safe prompt names.
+  let summary = image.scene_summary
+  for (const subject of subjects) {
+    const forms = uniqueStrings([subject.raw.name, subject.profile && subject.profile.anchor].filter(Boolean))
+      .sort((a, b) => b.length - a.length)
+    for (const form of forms) {
+      if (!form || normalizeIdentityText(form) === normalizeIdentityText(subject.label)) continue
+      summary = summary.replace(new RegExp('\\b' + escapeRegExp(form) + '\\b', 'g'), subject.label)
+    }
+  }
+  summary = upperFirst(summary.replace(/[.]+$/, ''))
+
+  // Setting: parser, else remembered, else scene card, else preset anchor.
+  let setting = applyBannedToList(image.setting, banned)
+  let settingSource = 'story (parser)'
+  if (!setting.length && (memory.setting || []).length) { setting = memory.setting.slice(); settingSource = 'remembered' }
+  if (!setting.length && card && card.location) { setting = simpleTags(card.location, 4); settingSource = 'scene card' }
+  if (!setting.length && (ctx.anchorTags || []).length) { setting = ctx.anchorTags.slice(); settingSource = 'preset scene anchor' }
+  if (!setting.length) settingSource = 'unknown'
+  setting = simpleTags(setting, 8)
+
+  const framing = simpleTags(applyBannedToList(image.framing, banned), 3)
+  const counts = simpleCountLine(subjects)
+  const shownAnatomy = []
+  const paragraphs = subjects.map(subject => {
+    const anatomy = applyBannedToList(simpleSubjectAnatomy(subject, image), banned)
+    shownAnatomy.push(...anatomy)
+    subject.shownAnatomy = anatomy
+    const body = uniqueStrings([...subject.identity, ...anatomy])
+    const pose = uniqueStrings([...subject.pose, ...subject.expression])
+    return [body.length ? `${subject.introduction}: ${body.join(', ')}.` : `${subject.introduction}.`,
+      subject.outfit.length ? `Clothing: ${subject.outfit.join(', ')}.` : '',
+      pose.length ? `Pose and expression: ${pose.join(', ')}.` : ''].filter(Boolean).join(' ')
+  })
+  const summaryKey = normalizeIdentityText(summary)
+  const actionLines = uniqueStrings([
+    ...(image.interactions || []).map(act => simpleActSentence(act.act, labelFor(act.actor), labelFor(act.recipient))),
+    ...(image.relations || []).map(rel => {
+      const target = labelFor(rel.target)
+      const line = `${upperFirst(labelFor(rel.actor))} ${rel.action} ${rel.targetPart ? simplePossessive(target) + ' ' + rel.targetPart : target}.`
+      return summaryKey.includes(normalizeIdentityText(line)) ? '' : line
+    }),
+  ].filter(Boolean))
+
+  // Anatomy defences: same as 1.8, but they see unsaved people's anatomy too.
+  const positive = []
+  const negatives = []
+  if (['nsfw', 'explicit'].includes(image.rating)) {
+    negatives.push('child', 'underage', 'teenager', 'preteen', 'toddler', 'shota', 'loli')
+    if (shownAnatomy.length) {
+      positive.push(UNCENSORED_TAG)
+      negatives.push(...CENSOR_NEGATIVES)
+      // Negate female genitals only when nobody in frame could have them: every
+      // person is a man or has penis-family anatomy, and none lists a vulva.
+      const allPenis = subjects.every(s => s.count === '1boy' ||
+        s.anatomy.some(tag => PENIS_ANATOMY_RE.test(tag) || /futanari/i.test(tag)))
+      const anyFemale = subjects.some(s => s.anatomy.some(tag => FEMALE_ANATOMY_RE.test(tag)))
+      if (allPenis && !anyFemale) negatives.push(...FEMALE_GENITAL_NEGATIVES)
+    }
+  }
+
+  const header = reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), image.rating).split(/\bBREAK\b/)
+    .map(part => part.replace(/^[\s,.]+|[\s,.]+$/g, '')).filter(Boolean).join(', ')
+  const headerLine = joinPromptParts([header, image.rating, ...positive, ...counts, image.composition])
+  const sceneLine = [summary ? `Scene: ${summary}.` : '', framing.length ? framing.join(', ') + '.' : ''].filter(Boolean).join(' ')
+  const settingLine = setting.length ? `Setting: ${setting.join(', ')}.` : ''
+  const prompt = [headerLine, sceneLine, settingLine, ...paragraphs, actionLines.join(' ')].filter(Boolean).join('\n\n')
+  const negativePrompt = negativeWith(directRosterNegative(preset.negativePrompt), uniqueStrings(negatives))
+
+  if (settingSource === 'unknown') notes.push('No setting was known, so none was added.')
+  else if (settingSource !== 'story (parser)') notes.push('Setting from ' + settingSource + '.')
+  for (const subject of subjects) {
+    const bits = [`body: ${subject.sources.body}`]
+    if (subject.sources.count) bits.push(`${subject.count}: ${subject.sources.count}`)
+    if (subject.sources.look) bits.push(`look ${subject.look}: ${subject.sources.look}`)
+    bits.push(`clothes: ${subject.sources.outfit}`)
+    notes.push(`${subject.displayName} — ${bits.join('; ')}.`)
+  }
+  const debug = {
+    version: SIMPLE_VERSION,
+    notes,
+    setting: { tags: setting, source: settingSource },
+    subjects: subjects.map(subject => ({ name: subject.displayName, saved: !!subject.profile, ref: subject.profile ? subject.profile.ref : '',
+      count: subject.count, phrase: subject.phrase, identity: subject.identity, anatomy: subject.anatomy, shownAnatomy: subject.shownAnatomy,
+      outfit: subject.outfit, pose: subject.pose, expression: subject.expression, look: subject.look || '', sources: subject.sources })),
+    parsed: JSON.parse(JSON.stringify(image)),
+  }
+  return { prompt, negativePrompt, subjects, setting, debug }
+}
+
+// What one finished image teaches the chat's memory. Saved people: outfit and
+// look only. Unsaved people: their look is locked the first time it is known.
+function simpleRemember(memory, compiled, messageId) {
+  const next = { setting: memory.setting.slice(), people: JSON.parse(JSON.stringify(memory.people || {})) }
+  if (compiled.debug.setting.source === 'story (parser)' && compiled.setting.length) next.setting = compiled.setting.slice()
+  for (const subject of compiled.subjects) {
+    const before = next.people[subject.key] || {}
+    const entry = { ...before, name: subject.displayName, ref: subject.profile ? String(subject.profile.ref || '') : '',
+      updatedAt: Date.now(), messageId: String(messageId || '') }
+    if (subject.outfit.length && subject.sources.outfit !== 'included in the saved look') entry.outfit = subject.outfit.slice()
+    if (subject.look) entry.look = subject.look
+    if (!subject.profile) {
+      if (!(before.appearance || []).length && subject.identity.length) entry.appearance = subject.identity.slice()
+      if (!(before.anatomy || []).length && subject.anatomy.length) entry.anatomy = subject.anatomy.slice()
+      if (!before.subject || /^adult (?:person|woman|man)$/.test(before.subject)) entry.subject = subject.phrase
+      if (!simpleCount(before.count) || before.count === '1other') entry.count = subject.count
+    }
+    next.people[subject.key] = entry
+  }
+  return next
+}
+
+// ---------- shared front half: build input, call the parser ----------------
+
+async function simpleParse({ userId, settings, preset, messages, targetIndex, target, chatId, scan = null, retry = null, outfitOverrides = null }) {
+  const profiles = await getStoryProfiles(preset, settings, userId, chatId)
+  const profilesForPrompt = gateDirectProfiles(profiles, directEvidenceFor(messages, targetIndex, settings))
+  const memory = await readSimpleCast(chatId)
+  if (outfitOverrides) {
+    for (const [ref, outfit] of Object.entries(outfitOverrides)) {
+      const key = 'ref:' + ref
+      memory.people[key] = { ...(memory.people[key] || {}), outfit: simpleTags(outfit) }
+    }
+  }
+  const card = simpleSceneCard(target.content)
+  const anchorTags = tagsFrom(preset.sceneAnchor || '', 8)
+  const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, {
+    setting: memory.setting.length ? memory.setting : anchorTags, lighting: [], outfits: [], clothingDigest: [], simTracker: null })
+  let instruction = buildSimpleInstruction(profilesForPrompt, memory, card, {
+    maxImages: settings.maxImages || 2, maxSubjects: settings.maxSubjects || 2,
+    banned: preset.bannedTags || '', fantasy: !!profiles.fantasySetting })
+  if (retry) {
+    instruction += `\n\nRETRY ${retry.attempt}: the user rejected this prompt. Pick a meaningfully different moment or framing if the passage supports one:\n${retry.previousPrompt.slice(0, 1500)}`
+  }
+  const report = {}
+  const startedAt = Date.now()
+  const raw = await quietLLM(instruction, parserInput.input, settings, userId, true, scan, report)
+  const parsed = parseSimpleImages(raw, settings.maxImages || 2, settings.maxSubjects || 2)
+  const images = orderScenesByPassage(parsed.images, parserInput.currentPassage)
+  return { profiles, memory, card, anchorTags, parserInput, instruction, raw, parsed, images, report, parserMs: Date.now() - startedAt }
+}
+
+function simpleTroubleshooting({ target, profiles, settings, chatId, raw, parserInput, entry, report, parserMs, startedAt, source }) {
+  return { passage: target.content, profiles, settings: troubleshootingSettings(settings), parserDebug: {
+    mode: 'direct', parserEngine: 'simple', pipeline: 'simple', sourceChatId: String(chatId || ''),
+    sourceMessageId: String(target.id || ''), sourceSwipeId: Number.isInteger(target.swipeId) ? target.swipeId : null,
+    rawReply: raw, model: report && report.model || settings.parserModel, provider: report && report.provider,
+    parserMs, runStartedAt: startedAt, debugSource: source,
+    contextPreview: parserInput.contextPreview || '', contextMessageCount: parserInput.contextMessageCount || 0,
+    entries: [entry], selectedEntryIndex: 1 } }
+}
+
+// ---------- story scan -----------------------------------------------------
+
+async function runSimpleStoryScan({ userId, settings, preset, messages, targetIndex, target, chatId, scan, storyDebugMeta = {} }) {
+  const startedAt = Number((scan && scan.startedAt) || Date.now())
+  setStoryScanStage(scan, 'parsing', 'Waiting for the parser model (simple pipeline).')
+  const run = await simpleParse({ userId, settings, preset, messages, targetIndex, target, chatId, scan })
+  assertStoryScanActive(scan)
+  const { profiles, card, parserInput, raw, parsed, images, report, parserMs } = run
+  let memory = run.memory
+  const debugBase = { ...storyDebugMeta, mode: 'direct', parserEngine: 'simple', pipeline: 'simple',
+    sourceChatId: String(chatId || ''), sourceMessageId: String(target.id || ''), runStartedAt: startedAt,
+    sourceSwipeId: Number.isInteger(target.swipeId) ? target.swipeId : null,
+    sourceSwipeCount: Number(target.swipeCount || 0), sourceContentSource: String(target.contentSource || ''),
+    rawReply: raw, error: '', parserMs, contextPreview: parserInput.contextPreview || '',
+    contextMessageCount: parserInput.contextMessageCount || 0 }
+  if (!images.length) {
+    await saveStoryDebug({ ...debugBase, error: parsed.error || 'No usable image.', entries: [], selectedEntryIndex: null, lastCompiledPrompt: '' }, userId)
+    throw new Error(parsed.refused ? parsed.error : 'Simple pipeline: ' + (parsed.error || 'the parser returned nothing to draw.'))
+  }
+  setStoryScanStage(scan, 'compiling', 'Building the Anima prompt.')
+  const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
+  await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
+  // Each image sees the memory as the previous image left it, so two pictures
+  // from one message agree with each other.
+  const prepared = []
+  for (const image of images) {
+    const compiled = compileSimpleImage(image, { preset, profiles, memory, card, prefix, anchorTags: run.anchorTags })
+    prepared.push({ image, compiled })
+    memory = { ...memory, ...simpleRemember(memory, compiled, target.id) }
+  }
+  const entries = prepared.map(({ image, compiled }) => ({ anchor: image.anchor, prompt: compiled.prompt,
+    sceneStatement: image.scene_summary, simplePipeline: compiled.debug }))
+  await saveStoryDebug({ ...debugBase, debugSource: 'simple pipeline · parsed', entries,
+    selectedEntryIndex: entries.length, lastCompiledPrompt: entries[entries.length - 1].prompt }, userId)
+
+  const origin = { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '' }
+  const results = []
+  for (let index = 0; index < prepared.length; index++) {
+    assertStoryScanActive(scan)
+    const { image, compiled } = prepared[index]
+    setStoryScanStage(scan, 'generating', `Sending image ${index + 1} of ${prepared.length} to ${imageRenderer(preset.config) === 'swarmui' ? 'SwarmUI' : 'Draw Things'}.`)
+    const dims = aspectDims(preset.config, image.aspect)
+    const scene = { direct: true, simple: true, anchor: image.anchor, sceneSummary: image.scene_summary, rating: image.rating,
+      aspect: image.aspect, simplePipeline: compiled.debug }
+    const entry = await generateAndUpload({
+      prompt: compiled.prompt, negativePrompt: compiled.negativePrompt, config: preset.config, extra: preset.extra, dims,
+      progressContext: { imageIndex: index + 1, imageTotal: prepared.length },
+      origin: { ...origin, mode: 'direct', alt: storyImageAltText(compiled.prompt), swipeId: target.swipeId },
+      debug: { trace: compiled.debug.notes.map(note => ({ label: 'simple pipeline', status: 'applied', detail: note })), scene,
+        troubleshooting: simpleTroubleshooting({ target, profiles, settings, chatId, raw, parserInput, report, parserMs, startedAt,
+          source: 'story scan', entry: { prompt: compiled.prompt, scene } }) },
+    }, userId, scan)
+    results.push({ ok: true, entry, anchor: image.anchor, prompt: compiled.prompt, sceneStatement: image.scene_summary })
+    if (entry && entry.images && entry.images[0] && target.id) {
+      await placeGeneratedStoryImage(userId, { chatId, messageId: String(target.id), entry, alt: compiled.prompt,
+        dims, anchor: image.anchor, source: 'direct', target })
+    }
+  }
+  try { await writeSimpleCast(chatId, memory) }
+  catch (error) { spindle.log.warn('[lumidraw] simple pipeline · could not save chat memory: ' + error.message) }
+  setStoryScanStage(scan, 'inserting', 'Mounting generated images in the story message.')
+  if (target.id) await markProcessed(target.id, target.content)
+  const storyDebug = await saveStoryDebug({ ...debugBase, debugSource: 'simple pipeline · generated', entries,
+    selectedEntryIndex: results.length || null, lastCompiledPrompt: results.length ? results[results.length - 1].prompt : '' }, userId)
+  spindle.log.info(`[lumidraw] simple pipeline produced ${results.length} image(s)`)
+  return { mode: 'direct', processed: results.length, results, messageId: target.id, storyDebug }
+}
+
+// ---------- re-parse from the image viewer ---------------------------------
+
+async function runSimpleReparse({ userId, settings, preset, messages, targetIndex, target, chatId, origin, messageId, source, overrides = {} }) {
+  const startedAt = Date.now()
+  const retry = source && source.prompt ? { previousPrompt: String(source.prompt), attempt: Math.max(1, Number(overrides.attempt) || 1) } : null
+  const profilesForCorrections = await getStoryProfiles(preset, settings, userId, chatId)
+  const corrections = imageOutfitCorrections(source, overrides.outfitCorrections, profilesForCorrections)
+  const run = await simpleParse({ userId, settings, preset, messages, targetIndex, target, chatId, retry,
+    outfitOverrides: Object.keys(corrections || {}).length ? corrections : null })
+  const { profiles, memory, card, parserInput, raw, parsed, images, report, parserMs } = run
+  const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
+  const results = []
+  let working = memory
+  for (const image of images) {
+    const compiled = compileSimpleImage(image, { preset, profiles, memory: working, card, prefix, anchorTags: run.anchorTags })
+    working = { ...working, ...simpleRemember(working, compiled, target.id) }
+    const scene = { direct: true, simple: true, anchor: image.anchor, sceneSummary: image.scene_summary, rating: image.rating,
+      aspect: image.aspect, simplePipeline: compiled.debug }
+    const trace = compiled.debug.notes.map(note => ({ label: 'simple pipeline', status: 'applied', detail: note }))
+    const result = { ok: true, anchor: image.anchor, sceneStatement: image.scene_summary, prompt: compiled.prompt,
+      negativePrompt: compiled.negativePrompt, aspect: image.aspect, rating: image.rating, trace,
+      debug: { trace, scene } }
+    result.debug.troubleshooting = troubleshootingClean(simpleTroubleshooting({ target, profiles, settings, chatId, raw, parserInput,
+      report, parserMs, startedAt, source: 'image reparse', entry: { prompt: compiled.prompt, scene } }))
+    results.push(result)
+  }
+  return { origin, messageId, chatId, preset, settings, results, report, parserMs, raw,
+    parseError: images.length ? '' : (parsed.error || 'The parser returned nothing to draw.'),
+    runStartedAt: startedAt, sourceSwipeId: Number.isInteger(target.swipeId) ? target.swipeId : null,
+    sourceSwipeCount: Number(target.swipeCount || 0), sourceContentSource: String(target.contentSource || '') }
+}
+// END SIMPLE PIPELINE 1.9

@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.8.2'
+  const EXTENSION_VERSION = '1.9.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1923,6 +1923,62 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       'Provider-specific escape hatch. Leave empty unless you know you need it.'))
     parserBinding.appendChild(parserAdvanced.el)
     parser.appendChild(parserBinding)
+
+    // 1.9 simple pipeline: one parser call, then a plain prompt builder.
+    const simpleCard = card('Simple pipeline · 1.9',
+      'Direct mode only. One parser call reads the story, then Lumi Studio builds the prompt straight from it. No Jev checks and no extra review calls. Saved sheets still decide how saved characters look.')
+    const simpleToggle = document.createElement('input')
+    simpleToggle.type = 'checkbox'
+    simpleToggle.className = 'ld-simple-pipeline'
+    simpleCard.appendChild(checkbox(simpleToggle, 'Use the simple pipeline'))
+    addHelp(simpleCard, 'On: people without a sheet get a body description, and everyone\'s clothes carry over from picture to picture until the story changes them. Off: the older scene core and Jev settings below are used instead.')
+    const simpleList = make('div', 'ld-help ld-simple-memory')
+    simpleList.style.whiteSpace = 'pre-wrap'
+    simpleList.style.marginTop = '8px'
+    const simpleStatus = make('div', 'ld-help ld-simple-memory-status')
+    const simpleRefresh = make('button', 'ld-btn', 'Show what this chat remembers')
+    const simpleForget = make('button', 'ld-btn', 'Forget this chat')
+    simpleRefresh.type = 'button'; simpleForget.type = 'button'
+    const renderSimpleMemory = async () => {
+      const chatId = String(activeChatIdFromCtx() || '')
+      if (!chatId) { simpleStatus.textContent = 'Open a chat first.'; simpleList.textContent = ''; return }
+      simpleStatus.textContent = 'Loading…'
+      try {
+        const got = await call('simple_memory_get', { chatId }, 15000)
+        const lines = []
+        if ((got.setting || []).length) lines.push('Place: ' + got.setting.join(', '))
+        for (const person of got.people || []) {
+          lines.push('')
+          lines.push(person.name + (person.ref ? ' (saved sheet)' : ' (no sheet)'))
+          if (!person.ref && person.count) lines.push('  ' + person.count + (person.subject ? ', ' + person.subject : ''))
+          if ((person.appearance || []).length) lines.push('  Looks: ' + person.appearance.join(', '))
+          if ((person.anatomy || []).length) lines.push('  Body: ' + person.anatomy.join(', '))
+          if (person.look) lines.push('  Saved look: ' + person.look)
+          if ((person.outfit || []).length) lines.push('  Wearing: ' + person.outfit.join(', '))
+        }
+        simpleList.textContent = lines.length ? lines.join('\n') : 'Nothing yet. It fills in after the first picture in this chat.'
+        simpleStatus.textContent = ''
+      } catch (error) {
+        simpleStatus.textContent = error.message
+      }
+    }
+    simpleRefresh.addEventListener('click', renderSimpleMemory)
+    simpleForget.addEventListener('click', async () => {
+      const chatId = String(activeChatIdFromCtx() || '')
+      if (!chatId) { simpleStatus.textContent = 'Open a chat first.'; return }
+      try {
+        await call('simple_memory_clear', { chatId }, 15000)
+        simpleStatus.textContent = 'Forgotten. The next picture starts fresh from the story and your sheets.'
+        simpleList.textContent = ''
+      } catch (error) {
+        simpleStatus.textContent = error.message
+      }
+    })
+    simpleCard.appendChild(inline(simpleRefresh, simpleForget))
+    simpleCard.appendChild(simpleStatus)
+    simpleCard.appendChild(simpleList)
+    addHelp(simpleCard, 'If someone without a sheet came out wrong the first time, press Forget this chat and make the picture again — their look is kept from the first good picture onward.')
+    parser.appendChild(simpleCard)
 
     const coreCard = card('Experimental scene core · based on 1.3.35',
       'Direct mode only. Keeps your existing parser format. Opens with the action and named identities, then describes each character, clothing layers, and location. The optional coordinated planner below adds bounded Jev checks.')
@@ -7747,6 +7803,7 @@ ${entry.prompt || ''}`.trim()
       cloudModel: $('.ld-cloud-model').value,
       cloudFallback: $('.ld-cloud-fallback').checked,
       mode: storyMode,
+      simplePipeline: $('.ld-simple-pipeline') ? $('.ld-simple-pipeline').checked : true,
       experimentalSceneCore: $('.ld-experimental-scene-core') ? $('.ld-experimental-scene-core').checked : false,
       experimentalJevPlanner: $('.ld-experimental-jev-planner') ? $('.ld-experimental-jev-planner').checked : true,
       preferKnownCastMoments: $('.ld-prefer-known-cast-moments') ? $('.ld-prefer-known-cast-moments').checked : true,
@@ -7921,7 +7978,7 @@ ${entry.prompt || ''}`.trim()
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-auto-interval', '.ld-maximg', '.ld-minimg', '.ld-maxsubjects', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break', '.ld-experimental-scene-core', '.ld-experimental-jev-planner', '.ld-prefer-known-cast-moments']) {
+  for (const sel of ['.ld-mode', '.ld-auto-interval', '.ld-maximg', '.ld-minimg', '.ld-maxsubjects', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break', '.ld-simple-pipeline', '.ld-experimental-scene-core', '.ld-experimental-jev-planner', '.ld-prefer-known-cast-moments']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-mode') {
@@ -8346,6 +8403,7 @@ ${entry.prompt || ''}`.trim()
       if (bootDisposed) return false
       $('.ld-parser-conn').value = settings.parserConnection || ''
       $('.ld-parser-model').value = settings.parserModel || ''
+      if ($('.ld-simple-pipeline')) $('.ld-simple-pipeline').checked = settings.simplePipeline !== false
       if ($('.ld-experimental-scene-core')) $('.ld-experimental-scene-core').checked = !!settings.experimentalSceneCore
       if ($('.ld-experimental-jev-planner')) $('.ld-experimental-jev-planner').checked = settings.experimentalJevPlanner !== false
       if ($('.ld-prefer-known-cast-moments')) $('.ld-prefer-known-cast-moments').checked = settings.preferKnownCastMoments !== false
