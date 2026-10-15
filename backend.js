@@ -1982,6 +1982,59 @@ async function saveStoryDebug(debug, userId = '') {
 }
 
 // ---------------------------------------------------------------------------
+// Network: every HTTP request goes through Lumiverse's proxy
+// ---------------------------------------------------------------------------
+// Lumiverse refuses to load an extension whose backend uses the fetch API directly
+// ("blocked backend capabilities: direct fetch API usage"). spindle.cors is the
+// sanctioned route (permission: cors_proxy) and still reaches loopback and LAN
+// servers such as Draw Things, SwarmUI, the Bridge and the cloud relay.
+// It cannot be cancelled, so a timeout only stops waiting for the answer.
+function hostBytes(raw) {
+  if (raw == null) return Buffer.alloc(0)
+  if (typeof raw === 'string') return Buffer.from(raw, 'base64')
+  if (Buffer.isBuffer(raw)) return raw
+  if (raw instanceof ArrayBuffer) return Buffer.from(new Uint8Array(raw))
+  if (ArrayBuffer.isView(raw)) return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength)
+  if (Array.isArray(raw)) return Buffer.from(raw)
+  if (raw && typeof raw === 'object' && Array.isArray(raw.data)) return Buffer.from(raw.data)
+  throw new Error('the proxy returned binary data in an unknown form')
+}
+
+async function hostRequest(url, { method = 'GET', headers = {}, body, timeoutMs = 15000, binary = false } = {}) {
+  if (typeof spindle === 'undefined' || !spindle || typeof spindle.cors !== 'function') {
+    throw new Error('this Lumiverse has no network proxy for extensions. Update Lumiverse and allow Lumi Studio the CORS proxy permission in Extensions')
+  }
+  const init = { method, headers: { ...(headers || {}) } }
+  if (body !== undefined && body !== null) init.body = typeof body === 'string' ? body : JSON.stringify(body)
+  if (binary) { init.responseType = 'arraybuffer'; init.mediaType = 'image' }
+  let timer = null
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`)
+      error.name = 'AbortError'
+      reject(error)
+    }, timeoutMs)
+  })
+  try {
+    const res = await Promise.race([Promise.resolve().then(() => spindle.cors(url, init)), timeout])
+    const status = Number(res && res.status) || 0
+    const out = { ok: status >= 200 && status < 300, status, headers: (res && res.headers) || {} }
+    const raw = res ? res.body : ''
+    if (binary) {
+      out.bytes = hostBytes(raw)
+    } else {
+      out.text = typeof raw === 'string' ? raw : raw == null ? '' : (typeof raw === 'object' ? JSON.stringify(raw) : String(raw))
+      out.json = null
+      if (raw && typeof raw === 'object' && !ArrayBuffer.isView(raw)) out.json = raw
+      else { try { out.json = JSON.parse(out.text) } catch { /* non-JSON body */ } }
+    }
+    return out
+  } finally {
+    if (timer !== null) clearTimeout(timer)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Draw Things client
 // ---------------------------------------------------------------------------
 
@@ -1991,22 +2044,13 @@ function baseUrl(settings) {
 
 async function dtFetch(settings, path, options = {}, timeoutMs = 15000) {
   const url = `${baseUrl(settings)}${path}`
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal })
-    const text = await res.text()
-    let json = null
-    try { json = JSON.parse(text) } catch { /* non-JSON body */ }
-    return { ok: res.ok, status: res.status, json, text }
+    const res = await hostRequest(url, { ...options, timeoutMs })
+    return { ok: res.ok, status: res.status, json: res.json, text: res.text }
   } catch (err) {
-    const reason = err && err.name === 'AbortError'
-      ? `timed out after ${timeoutMs / 1000}s`
-      : (err && err.message) || String(err)
+    const reason = (err && err.message) || String(err)
     throw new Error(`Could not reach Draw Things at ${url} (${reason}). ` +
       'Check that the API Server is enabled (HTTP protocol) and the port matches.')
-  } finally {
-    clearTimeout(timer)
   }
 }
 
@@ -2492,23 +2536,14 @@ function cloudRequestFrom(payload, model) {
 // wants cloud — so it must read as "fall back", not as a failure.
 async function cloudRelayFetch(settings, path, options = {}, timeoutMs = 12000) {
   const url = `${cloudRelayBaseUrl(settings)}${path}`
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal })
-    const text = await res.text()
-    let json = null
-    try { json = JSON.parse(text) } catch { /* non-JSON body */ }
-    return { ok: res.ok, status: res.status, json, text }
+    const res = await hostRequest(url, { ...options, timeoutMs })
+    return { ok: res.ok, status: res.status, json: res.json, text: res.text }
   } catch (err) {
-    const reason = err && err.name === 'AbortError'
-      ? `timed out after ${Math.round(timeoutMs / 1000)}s`
-      : (err && err.message) || String(err)
+    const reason = (err && err.message) || String(err)
     const error = new Error(`Could not reach the LumiDraw cloud relay at ${url} (${reason}).`)
     error.relayUnreachable = true
     throw error
-  } finally {
-    clearTimeout(timer)
   }
 }
 
@@ -2592,22 +2627,19 @@ function swarmBaseUrl(settings) {
 }
 
 async function swarmPost(settings, route, body, timeoutMs = 20000) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const response = await fetch(swarmBaseUrl(settings) + '/API/' + route, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), signal: controller.signal, redirect: 'error',
+    const response = await hostRequest(swarmBaseUrl(settings) + '/API/' + route, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), timeoutMs,
     })
     if (!response.ok) throw new Error('SwarmUI returned HTTP ' + response.status + '. This release connects to local SwarmUI without account authentication.')
-    let result
-    try { result = await response.json() } catch { throw new Error('SwarmUI returned a non-JSON response. Check its address and API availability.') }
-    if (!result || typeof result !== 'object') throw new Error('SwarmUI returned an empty API response.')
+    const result = response.json
+    if (!result) throw new Error('SwarmUI returned a non-JSON response. Check its address and API availability.')
+    if (typeof result !== 'object') throw new Error('SwarmUI returned an empty API response.')
     return result
   } catch (error) {
     if (error.name === 'AbortError') throw new Error('SwarmUI request timed out. Check SwarmUI before retrying; a render may still be running. No automatic retry was sent.')
     throw error
-  } finally { clearTimeout(timer) }
+  }
 }
 
 async function swarmSession(settings) {
@@ -2700,22 +2732,12 @@ async function swarmImage(settings, location) {
   } else {
     const base = swarmBaseUrl(settings) + '/', url = new URL(location, base), root = new URL(base)
     if (url.origin !== root.origin || !url.pathname.startsWith(root.pathname + 'View/') || url.username || url.password) throw new Error('SwarmUI returned an image outside its own output folder.')
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60000)
-    try {
-      const res = await fetch(url.href, { signal: controller.signal, redirect: 'error' })
-      if (!res.ok) throw new Error('SwarmUI rendered the image, but downloading it failed (HTTP ' + res.status + '). Check SwarmUI history before retrying.')
-      if (Number(res.headers.get('content-length')) > 32 * 1024 * 1024) throw new Error('SwarmUI image exceeds the transfer limit.')
-      const reader = res.body.getReader(), chunks = []; let length = 0
-      try {
-        while (true) {
-          const { done, value } = await reader.read(); if (done) break
-          length += value.length
-          if (length > 32 * 1024 * 1024) { await reader.cancel(); throw new Error('SwarmUI image exceeds the transfer limit.') }
-          chunks.push(Buffer.from(value))
-        }
-      } finally { reader.releaseLock() }
-      bytes = Buffer.concat(chunks)
-    } finally { clearTimeout(timer) }
+    let res
+    try { res = await hostRequest(url.href, { timeoutMs: 60000, binary: true }) }
+    catch (error) { throw new Error('SwarmUI rendered the image, but downloading it failed (' + error.message + '). Check SwarmUI history before retrying.') }
+    if (!res.ok) throw new Error('SwarmUI rendered the image, but downloading it failed (HTTP ' + res.status + '). Check SwarmUI history before retrying.')
+    bytes = res.bytes
+    if (bytes.length > 32 * 1024 * 1024) throw new Error('SwarmUI image exceeds the transfer limit.')
   }
   if (bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new Error('SwarmUI output was not a PNG image. No invalid file was added to your library.')
   return bytes.toString('base64')
@@ -2905,13 +2927,9 @@ function bridgeBaseUrl(settings) {
 
 async function bridgeFetch(settings, path, options = {}, timeoutMs = 12000) {
   const url = `${bridgeBaseUrl(settings)}${path}`
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal })
-    const text = await res.text()
-    let json = null
-    try { json = JSON.parse(text) } catch { /* non-JSON body */ }
+    const res = await hostRequest(url, { ...options, timeoutMs })
+    const json = res.json, text = res.text
     if (!res.ok) {
       const detail = json && (json.error || json.message)
       throw new Error(detail || text || `HTTP ${res.status}`)
@@ -2919,12 +2937,8 @@ async function bridgeFetch(settings, path, options = {}, timeoutMs = 12000) {
     if (!json) throw new Error('Bridge returned a non-JSON response.')
     return json
   } catch (err) {
-    const reason = err && err.name === 'AbortError'
-      ? `timed out after ${timeoutMs / 1000}s`
-      : ((err && err.message) || String(err))
+    const reason = (err && err.message) || String(err)
     throw new Error(`Could not reach LumiDraw Bridge at ${url} (${reason})`)
-  } finally {
-    clearTimeout(timer)
   }
 }
 
