@@ -25319,7 +25319,7 @@ async function runSimpleReparse({ userId, settings, preset, messages, targetInde
 // resolved people/setting are reused; its prompt text is thrown away here.
 // ---------------------------------------------------------------------------
 
-const MOSS_DEFAULT_STYLE = 'A colorful 2D cartoon illustration in a modern animated-film style, with clean outlines, expressive faces and soft cel shading.'
+const MOSS_DEFAULT_STYLE = 'A polished digital painting with semi-realistic proportions, soft painterly shading, rich cinematic lighting and detailed textures.'
 const MOSS_DEFAULT_NEGATIVE = 'worst quality, bad anatomy, watermark, jpeg artifact'
 
 function presetPromptStyle(preset) {

@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.10.0'
+  const EXTENSION_VERSION = '1.10.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2228,7 +2228,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           const mossBox = make('div', 'ld-ed-moss-box')
           const mossStyle = document.createElement('textarea')
           mossStyle.className = 'ld-ed-moss-style'; mossStyle.rows = 2
-          mossStyle.placeholder = 'A colorful 2D cartoon illustration in a modern animated-film style, with clean outlines, expressive faces and soft cel shading.'
+          mossStyle.placeholder = 'A polished digital painting with semi-realistic proportions, soft painterly shading, rich cinematic lighting and detailed textures.'
           mossBox.appendChild(field('Picture style (one sentence)', mossStyle, 'Opens every MOSS prompt. Leave empty to use the example shown.'))
           const mossNegative = document.createElement('textarea')
           mossNegative.className = 'ld-ed-moss-negative'; mossNegative.rows = 2
