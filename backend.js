@@ -25327,7 +25327,7 @@ function presetPromptStyle(preset) {
 }
 
 // Booru shorthand a language model will not read the way Anima does.
-const MOSS_DROP_RE = /^(?:score_\d+(?:_up)?|masterpiece|masterwork|best quality|high quality|very aesthetic|highres|absurdres|newest|uncensored|male focus|female focus|solo|solo focus|\d+(?:girl|boy|other)s?|safe|sensitive|nsfw|explicit|@.*)$/i
+const MOSS_DROP_RE = /^(?:score[_ ]\d+(?:[_ ]up)?|masterpiece|masterwork|best quality|high quality|very aesthetic|highres|absurdres|newest|uncensored|male focus|female focus|solo|solo focus|\d+(?:girl|boy|other)s?|safe|sensitive|nsfw|explicit|@.*)$/i
 const MOSS_WORDS = {
   tareme: 'droopy eyes', tsurime: 'sharp upturned eyes', jitome: 'half-lidded eyes', ahoge: 'a stray cowlick',
   otokonoko: 'feminine-looking', trap: 'feminine-looking', femboy: 'feminine-looking', 'muscular male': 'muscular',
@@ -25339,10 +25339,27 @@ const MOSS_WORDS = {
   'three-quarter view': 'three-quarter view',
 }
 
+// Anima/SD prompt syntax means nothing to MOSS's language-model encoder and
+// shows up as code in the prompt: weights "(tag:1.2)", emphasis brackets,
+// <lora:...> / <embed:...> tags, BREAK, escaped parentheses.
+function mossPlain(value) {
+  return String(value || '')
+    .replace(/<[^<>]*>/g, ' ')
+    .replace(/\\([()[\]{}])/g, '$1')
+    .replace(/\(([^()]*?):\s*-?\d+(?:\.\d+)?\)/g, '$1')
+    .replace(/\[([^\[\]]*?):\s*-?\d+(?:\.\d+)?\]/g, '$1')
+    .replace(/[()[\]{}]/g, ' ')
+    .replace(/\bBREAK\b/g, ' ')
+    .replace(/:\s*-?\d+(?:\.\d+)?\s*$/, '')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function mossWords(tags, { keepDuplicates = false } = {}) {
   const out = []
   for (const raw of tags || []) {
-    const tag = String(raw || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim()
+    const tag = mossPlain(raw)
     if (!tag || MOSS_DROP_RE.test(tag)) continue
     const mapped = MOSS_WORDS[tag.toLowerCase()] || tag
     out.push(mapped)
@@ -25438,10 +25455,10 @@ function compileMossImage(image, ctx) {
   const sceneText = parts.summary || String(image.scene_summary || '')
   const setting = mossWords(base.setting)
   const people = base.subjects.map(mossPersonParagraph)
-  const actions = [...(parts.actionLines || [])]
+  const actions = (parts.actionLines || []).map(mossPlain).filter(Boolean)
   if (image.composition) actions.push(`Position: ${image.composition}.`)
 
-  const opening = [mossSentence(style), mossSentence(sceneText), framing.length ? mossSentence(framing.join(', ')) : ''].filter(Boolean).join(' ')
+  const opening = [mossSentence(mossPlain(style)), mossSentence(mossPlain(sceneText)), framing.length ? mossSentence(framing.join(', ')) : ''].filter(Boolean).join(' ')
   const settingLine = setting.length ? `The setting: ${mossList(setting)}.` : ''
   const useLayout = preset.mossLayout === true && base.subjects.length >= 1
   let prompt

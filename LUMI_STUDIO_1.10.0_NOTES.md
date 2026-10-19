@@ -58,3 +58,13 @@ Other one-sentence styles to paste into **Picture style**:
 - `A still from a modern 3D animated feature film, with stylized proportions, soft global lighting and detailed textures.`
 - `A graphic novel illustration with confident ink lines, rich colors and dramatic lighting.`
 - `Fantasy concept art in a painterly style, with dramatic lighting, atmospheric depth and rich colors.`
+
+## 1.10.2: no code-like syntax in MOSS prompts
+Anima/SD prompt syntax from character sheets, Story settings or the parser is
+now cleaned out of MOSS prompts: weights `(tag:1.2)` / `[tag:0.8]`, extra
+brackets `(( ))` `{ }`, `<lora:…>` and other `< >` tags, `BREAK`, escaped
+parentheses, underscores and `score_9`-style tags. Anima prompts are
+unchanged.
+
+If "Give each person their own box" is ticked, the MOSS prompt is JSON on
+purpose (MOSS's layout format). Untick it for plain English.
