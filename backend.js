@@ -18966,6 +18966,11 @@ spindle.onFrontendMessage(async (payload, userId) => {
           extra: payload.extra || null,
           updatedAt: Date.now(),
         }
+        // Prompt style is per preset: the model decides how it wants to be prompted.
+        if (payload.promptStyle !== undefined) preset.promptStyle = payload.promptStyle === 'moss' ? 'moss' : 'anima'
+        if (payload.mossStyle !== undefined) preset.mossStyle = String(payload.mossStyle || '').slice(0, 1200)
+        if (payload.mossNegative !== undefined) preset.mossNegative = String(payload.mossNegative || '').slice(0, 1200)
+        if (payload.mossLayout !== undefined) preset.mossLayout = payload.mossLayout === true
         try { await rememberModels(preset.config || {}) } catch { /* best-effort */ }
         const idx = presets.findIndex((p) => p.name === name)
         if (idx >= 0) presets[idx] = preset
@@ -25136,7 +25141,8 @@ function compileSimpleImage(image, ctx) {
       outfit: subject.outfit, pose: subject.pose, expression: subject.expression, look: subject.look || '', sources: subject.sources })),
     parsed: JSON.parse(JSON.stringify(image)),
   }
-  return { prompt, negativePrompt, subjects, setting, debug }
+  // parts: the same pieces, for other prompt builders (MOSS). Not used here.
+  return { prompt, negativePrompt, subjects, setting, debug, parts: { summary, framing, actionLines } }
 }
 
 // What one finished image teaches the chat's memory. Saved people: outfit and
@@ -25227,7 +25233,7 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
   // from one message agree with each other.
   const prepared = []
   for (const image of images) {
-    const compiled = compileSimpleImage(image, { preset, profiles, memory, card, prefix, anchorTags: run.anchorTags })
+    const compiled = compileStoryImage(image, { preset, profiles, memory, card, prefix, anchorTags: run.anchorTags })
     prepared.push({ image, compiled })
     memory = { ...memory, ...simpleRemember(memory, compiled, target.id) }
   }
@@ -25283,7 +25289,7 @@ async function runSimpleReparse({ userId, settings, preset, messages, targetInde
   const results = []
   let working = memory
   for (const image of images) {
-    const compiled = compileSimpleImage(image, { preset, profiles, memory: working, card, prefix, anchorTags: run.anchorTags })
+    const compiled = compileStoryImage(image, { preset, profiles, memory: working, card, prefix, anchorTags: run.anchorTags })
     working = { ...working, ...simpleRemember(working, compiled, target.id) }
     const scene = { direct: true, simple: true, anchor: image.anchor, sceneSummary: image.scene_summary, rating: image.rating,
       aspect: image.aspect, simplePipeline: compiled.debug }
@@ -25301,3 +25307,174 @@ async function runSimpleReparse({ userId, settings, preset, messages, targetInde
     sourceSwipeCount: Number(target.swipeCount || 0), sourceContentSource: String(target.contentSource || '') }
 }
 // END SIMPLE PIPELINE 1.9
+
+// BEGIN MOSS IMAGE PROMPTS (experiment)
+// ---------------------------------------------------------------------------
+// A second prompt builder for presets set to "MOSS Image". It shares the same
+// single parser call, character sheets and per-chat memory as the Anima path,
+// then writes for MOSS instead: MOSS reads prompts with a language-model text
+// encoder (Qwen3.5), so it gets plain English paragraphs rather than booru tag
+// soup, with an optional experimental layout (one box per person).
+// The Anima builder (compileSimpleImage) is called unchanged and only its
+// resolved people/setting are reused; its prompt text is thrown away here.
+// ---------------------------------------------------------------------------
+
+const MOSS_DEFAULT_STYLE = 'A colorful 2D cartoon illustration in a modern animated-film style, with clean outlines, expressive faces and soft cel shading.'
+const MOSS_DEFAULT_NEGATIVE = 'worst quality, bad anatomy, watermark, jpeg artifact'
+
+function presetPromptStyle(preset) {
+  return preset && preset.promptStyle === 'moss' ? 'moss' : 'anima'
+}
+
+// Booru shorthand a language model will not read the way Anima does.
+const MOSS_DROP_RE = /^(?:score_\d+(?:_up)?|masterpiece|masterwork|best quality|high quality|very aesthetic|highres|absurdres|newest|uncensored|male focus|female focus|solo|solo focus|\d+(?:girl|boy|other)s?|safe|sensitive|nsfw|explicit|@.*)$/i
+const MOSS_WORDS = {
+  tareme: 'droopy eyes', tsurime: 'sharp upturned eyes', jitome: 'half-lidded eyes', ahoge: 'a stray cowlick',
+  otokonoko: 'feminine-looking', trap: 'feminine-looking', femboy: 'feminine-looking', 'muscular male': 'muscular',
+  'muscular female': 'muscular', 'large man': 'large', 'large woman': 'large', 'tall male': 'tall', 'tall female': 'tall',
+  'cowboy shot': 'framed from mid-thigh up', 'upper body': 'upper-body shot', 'full body': 'full-body shot',
+  portrait: 'portrait framing', 'wide shot': 'wide shot', 'close-up': 'close-up', pov: 'first-person view',
+  'from side': 'seen from the side', 'from above': 'seen from above', 'from below': 'seen from below',
+  'from behind': 'seen from behind', 'front view': 'seen from the front', 'dutch angle': 'tilted camera angle',
+  'three-quarter view': 'three-quarter view',
+}
+
+function mossWords(tags, { keepDuplicates = false } = {}) {
+  const out = []
+  for (const raw of tags || []) {
+    const tag = String(raw || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim()
+    if (!tag || MOSS_DROP_RE.test(tag)) continue
+    const mapped = MOSS_WORDS[tag.toLowerCase()] || tag
+    out.push(mapped)
+  }
+  return keepDuplicates ? out : uniqueStrings(out)
+}
+
+function mossList(items) {
+  const values = uniqueStrings(items.filter(Boolean))
+  if (values.length <= 1) return values.join('')
+  return values.slice(0, -1).join(', ') + ' and ' + values[values.length - 1]
+}
+
+function mossPronouns(count) {
+  if (count === '1girl') return { subject: 'She', possessive: 'Her', be: 'is', wear: 'wears' }
+  if (count === '1boy') return { subject: 'He', possessive: 'His', be: 'is', wear: 'wears' }
+  return { subject: 'They', possessive: 'Their', be: 'are', wear: 'wear' }
+}
+
+function mossSentence(text) {
+  const value = String(text || '').trim().replace(/[.\s]+$/, '')
+  return value ? upperFirst(value) + '.' : ''
+}
+
+const MOSS_PLACES = {
+  left: 'On the left', right: 'On the right', center: 'In the center', 'center-left': 'Left of center',
+  'center-right': 'Right of center', foreground: 'In the foreground', midground: 'In the middle distance',
+  background: 'In the background',
+}
+
+// Words that name a body part or feature go after "with"; single describing
+// words ("muscular", "slim") go before the noun, as people write it.
+const MOSS_FEATURE_RE = /\b(?:hair|bangs|ponytail|braids?|eyes?|eyelashes|eyebrows|skin|lips|mouth|nose|ears?|breasts?|nipples|belly|stomach|abs|hips|thighs|shoulders|waist|beard|stubble|mustache|scars?|tattoos?|horns?|tail|wings?|teeth|fangs|freckles|build|rear|ass|butt|arms|legs|face|chin|jaw|muscles|collarbone|undertone|body|frame|figure|hands|feet|claws|scales|fur|markings|piercings?|glasses)\b/i
+
+function mossPersonParagraph(subject) {
+  const p = mossPronouns(subject.count)
+  const phrase = String(subject.phrase || 'adult person')
+  const phraseKey = normalizeIdentityText(phrase)
+  const body = mossWords(subject.identity)
+  const describing = body.filter(tag => !MOSS_FEATURE_RE.test(tag) && tag.split(' ').length <= 2 && !phraseKey.includes(normalizeIdentityText(tag)))
+  const features = body.filter(tag => MOSS_FEATURE_RE.test(tag) || tag.split(' ').length > 2)
+  const noun = [describing.join(', '), phrase].filter(Boolean).join(' ')
+  const who = subject.name ? `${subject.name}, ${articleFor(noun)} ${noun}` : `${articleFor(noun)} ${noun}`
+  const place = MOSS_PLACES[subject.position] || ''
+  const lines = []
+  lines.push(`${place ? place + ' is ' + who : upperFirst(who)}${features.length ? ' with ' + mossList(features) : ''}.`)
+  const clothes = mossWords(subject.outfit)
+  if (clothes.length) {
+    lines.push(clothes.length === 1 && /^(?:nude|naked)$/i.test(clothes[0])
+      ? `${p.subject} ${p.be} nude.` : `${p.subject} ${p.wear} ${mossList(clothes)}.`)
+  }
+  const anatomy = mossWords(subject.shownAnatomy || []).filter(tag => !phraseKey.includes(normalizeIdentityText(tag)))
+  if (anatomy.length) lines.push(`Visible: ${mossList(anatomy)}.`)
+  const pose = mossWords(subject.pose)
+  if (pose.length) lines.push(`${p.subject} ${p.be} ${mossList(pose)}.`)
+  const face = mossWords(subject.expression)
+  if (face.length) lines.push(`Expression: ${face.join(', ')}.`)
+  return lines.join(' ')
+}
+
+// Boxes in MOSS's layout space: absolute pixels, canvas centre is (0, 0),
+// order [y_min, x_min, y_max, x_max]. People may overlap a little, since
+// close scenes need it.
+function mossBoxes(subjects, width, height) {
+  const W = width / 2, H = height / 2, m = Math.round(Math.min(width, height) * 0.03)
+  const slots = {
+    left: [-H + m, -W + m, H - m, Math.round(width * 0.08)],
+    right: [-H + m, -Math.round(width * 0.08), H - m, W - m],
+    center: [-H + m, -Math.round(width * 0.3), H - m, Math.round(width * 0.3)],
+    'center-left': [-H + m, -Math.round(width * 0.3), H - m, Math.round(width * 0.05)],
+    'center-right': [-H + m, -Math.round(width * 0.05), H - m, Math.round(width * 0.3)],
+    foreground: [-Math.round(height * 0.2), -W + m, H - m, W - m],
+    midground: [-Math.round(height * 0.3), -Math.round(width * 0.3), Math.round(height * 0.3), Math.round(width * 0.3)],
+    background: [-H + m, -Math.round(width * 0.2), Math.round(height * 0.1), Math.round(width * 0.2)],
+  }
+  const positions = subjects.map(subject => subject.position)
+  const distinct = new Set(positions).size === positions.length && positions.every(position => slots[position])
+  if (subjects.length === 1) return [[-H + m, -Math.round(width * 0.35), H - m, Math.round(width * 0.35)]]
+  if (distinct) return positions.map(position => slots[position])
+  // Missing or repeated positions: split the width evenly, left to right.
+  const step = (width - 2 * m) / subjects.length, overlap = Math.round(step * 0.08)
+  return subjects.map((_, index) => [-H + m, Math.round(-W + m + index * step - (index ? overlap : 0)),
+    H - m, Math.round(-W + m + (index + 1) * step + (index < subjects.length - 1 ? overlap : 0))])
+}
+
+function compileMossImage(image, ctx) {
+  // Same people, clothes, setting and memory decisions as the Anima path.
+  const base = compileSimpleImage(image, ctx)
+  const { preset } = ctx
+  const style = String(preset.mossStyle || '').trim() || MOSS_DEFAULT_STYLE
+  const parts = base.parts || {}
+  const framing = mossWords(parts.framing || image.framing)
+  const sceneText = parts.summary || String(image.scene_summary || '')
+  const setting = mossWords(base.setting)
+  const people = base.subjects.map(mossPersonParagraph)
+  const actions = [...(parts.actionLines || [])]
+  if (image.composition) actions.push(`Position: ${image.composition}.`)
+
+  const opening = [mossSentence(style), mossSentence(sceneText), framing.length ? mossSentence(framing.join(', ')) : ''].filter(Boolean).join(' ')
+  const settingLine = setting.length ? `The setting: ${mossList(setting)}.` : ''
+  const useLayout = preset.mossLayout === true && base.subjects.length >= 1
+  let prompt
+  if (useLayout) {
+    const dims = aspectDims(preset.config || {}, image.aspect)
+    const boxes = mossBoxes(base.subjects, dims.width, dims.height)
+    prompt = JSON.stringify({
+      summary: { meta: ['illustration'], canvas: 'single',
+        caption: [opening, settingLine, ...actions].filter(Boolean).join(' ') },
+      items: base.subjects.map((subject, index) => ({ label: 'person', caption: mossPersonParagraph(subject), bbox: boxes[index] })),
+      bbox_coord_space: 'abs_centralized',
+      bbox_format: 'yxyx',
+    })
+  } else {
+    prompt = [opening, settingLine, ...people, actions.join(' ')].filter(Boolean).join('\n\n')
+  }
+
+  const negatives = [MOSS_DEFAULT_NEGATIVE]
+  if (String(preset.mossNegative || '').trim()) negatives.splice(0, 1, String(preset.mossNegative).trim())
+  if (/\bplate armor\b/.test(base.negativePrompt) && !/\bplate armor\b/.test(String(preset.negativePrompt || ''))) negatives.push('plate armor, full armor')
+  if (['nsfw', 'explicit'].includes(image.rating)) {
+    negatives.push('child, underage, teenager, preteen, toddler')
+    if (base.subjects.some(subject => (subject.shownAnatomy || []).length)) negatives.push('censored, mosaic censoring')
+  }
+  const negativePrompt = uniqueStrings(negatives.join(', ').split(',').map(tag => tag.trim()).filter(Boolean)).join(', ')
+
+  const debug = { ...base.debug,
+    notes: [`MOSS Image prompt (${useLayout ? 'layout with one box per person' : 'plain English'}). The Anima prompt was not used.`, ...base.debug.notes],
+    moss: { style, layout: useLayout, animaPrompt: base.prompt } }
+  return { ...base, prompt, negativePrompt, debug }
+}
+
+function compileStoryImage(image, ctx) {
+  return presetPromptStyle(ctx.preset) === 'moss' ? compileMossImage(image, ctx) : compileSimpleImage(image, ctx)
+}
+// END MOSS IMAGE PROMPTS

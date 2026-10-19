@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.9.8'
+  const EXTENSION_VERSION = '1.10.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2213,6 +2213,36 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           const note = make('div', 'ld-help ld-reset-generation-note',
             'Generation-only preset. Story prompting, cast, characters, personas, and places are managed outside this editor.')
           presetEditor.insertBefore(note, saveRow)
+        }
+        // Prompt style (MOSS experiment). Anima stays the default and is unchanged.
+        if (!presetEditor.querySelector('.ld-ed-prompt-style')) {
+          const box = make('div', 'ld-ed-prompt-style-box')
+          box.style.marginTop = '10px'
+          const styleSelect = document.createElement('select')
+          styleSelect.className = 'ld-ed-prompt-style'
+          for (const [value, label] of [['anima', 'Anima (tags) — default'], ['moss', 'MOSS Image (plain English) — experiment']]) {
+            const option = document.createElement('option'); option.value = value; option.textContent = label; styleSelect.appendChild(option)
+          }
+          box.appendChild(field('Prompt style for story pictures', styleSelect,
+            'Pick the one that matches this preset’s model. Only used by the simple pipeline.'))
+          const mossBox = make('div', 'ld-ed-moss-box')
+          const mossStyle = document.createElement('textarea')
+          mossStyle.className = 'ld-ed-moss-style'; mossStyle.rows = 2
+          mossStyle.placeholder = 'A colorful 2D cartoon illustration in a modern animated-film style, with clean outlines, expressive faces and soft cel shading.'
+          mossBox.appendChild(field('Picture style (one sentence)', mossStyle, 'Opens every MOSS prompt. Leave empty to use the example shown.'))
+          const mossNegative = document.createElement('textarea')
+          mossNegative.className = 'ld-ed-moss-negative'; mossNegative.rows = 2
+          mossNegative.placeholder = 'worst quality, bad anatomy, watermark, jpeg artifact'
+          mossBox.appendChild(field('Negative prompt for MOSS', mossNegative, 'Leave empty to use the example shown. Your Story negative prompt is written for Anima, so it is not used here.'))
+          const mossLayout = document.createElement('input')
+          mossLayout.type = 'checkbox'; mossLayout.className = 'ld-ed-moss-layout'
+          mossBox.appendChild(checkbox(mossLayout, 'Give each person their own box in the picture (MOSS layout, experimental)',
+            'Can help keep each person’s looks on the right body. Turn off if SwarmUI shows the prompt as text or the picture looks wrong.'))
+          box.appendChild(mossBox)
+          const syncMoss = () => { mossBox.style.display = styleSelect.value === 'moss' ? '' : 'none' }
+          styleSelect.addEventListener('change', syncMoss)
+          syncMoss()
+          presetEditor.insertBefore(box, saveRow)
         }
       }
     }
@@ -4955,7 +4985,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const loras = (c.loras || []).length
       list.appendChild(libItem({
         name: p.name,
-        badges: [p.name === activePreset ? 'in use' : '', usesSwarm(c) ? 'SwarmUI' : 'Draw Things'],
+        badges: [p.name === activePreset ? 'in use' : '', usesSwarm(c) ? 'SwarmUI' : 'Draw Things', p.promptStyle === 'moss' ? 'MOSS prompts' : ''],
         sub: c.model || '',
         tags: [c.sampler, c.steps ? `${c.steps} steps` : '', size, loras ? `${loras} LoRA${loras === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · '),
         active: p.name === activePreset,
@@ -7425,6 +7455,13 @@ ${entry.prompt || ''}`.trim()
     populateDatalist('ld-model-catalog-ed', rendererCatalog(c).models.map(m => m.file))
     writeSwarmParams('ed', c)
     $('.ld-ed-name').value = p ? p.name : ''
+    if ($('.ld-ed-prompt-style')) {
+      $('.ld-ed-prompt-style').value = p && p.promptStyle === 'moss' ? 'moss' : 'anima'
+      $('.ld-ed-moss-style').value = (p && p.mossStyle) || ''
+      $('.ld-ed-moss-negative').value = (p && p.mossNegative) || ''
+      $('.ld-ed-moss-layout').checked = !!(p && p.mossLayout)
+      $('.ld-ed-prompt-style').dispatchEvent(new Event('change'))
+    }
     $('.ld-ed-model').value = c.model || ''
     populateSelect($('.ld-ed-sampler'), rendererCatalog(c).samplers, c.sampler || '', '— choose sampler —')
     $('.ld-ed-steps').value = c.steps !== undefined ? c.steps : ''
@@ -7882,6 +7919,12 @@ ${entry.prompt || ''}`.trim()
         name,
         config,
         extra: editorExtra,
+        ...($('.ld-ed-prompt-style') ? {
+          promptStyle: $('.ld-ed-prompt-style').value,
+          mossStyle: $('.ld-ed-moss-style').value,
+          mossNegative: $('.ld-ed-moss-negative').value,
+          mossLayout: $('.ld-ed-moss-layout').checked,
+        } : {}),
       })
       presets = res.presets
       if (editorOriginalName && editorOriginalName !== name) {
