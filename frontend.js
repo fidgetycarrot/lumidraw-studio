@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.8.3'
+  const EXTENSION_VERSION = '1.8.4'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -783,6 +783,11 @@ function realSetup(ctx) {
     .ld-lightbox-zoom-level { min-width:60px !important; font-variant-numeric:tabular-nums; }
     .ld-lightbox-meta { flex:1; min-width:0; font-size:11px; line-height:1.35; color:var(--lumiverse-text-muted, #a2a5b4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .ld-lightbox-actions { display:flex; flex-wrap:wrap; gap:7px; flex:0 0 auto; }
+    .ld-lightbox-delete { color:#ff9c9c; }
+    .ld-lightbox-delete.ld-armed { background:#7a2430; border-color:#b8434f; color:#fff; }
+    .ld-lightbox.ld-lightbox-orphan .ld-lightbox-report, .ld-lightbox.ld-lightbox-orphan .ld-lightbox-fix,
+    .ld-lightbox.ld-lightbox-orphan .ld-lightbox-insert, .ld-lightbox.ld-lightbox-orphan .ld-lightbox-regen,
+    .ld-lightbox.ld-lightbox-orphan .ld-lightbox-prev, .ld-lightbox.ld-lightbox-orphan .ld-lightbox-next { display:none !important; }
     .ld-lightbox-regen { flex:0 0 auto; max-height:46%; overflow-y:auto; padding:10px 12px; border-top:1px solid var(--lumiverse-border, #3d4050); background:#15161c; }
     .ld-lightbox-regen textarea { width:100%; box-sizing:border-box; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; line-height:1.4; }
     .ld-dt-field { display:flex; flex-direction:column; gap:3px; margin-top:7px; }
@@ -1515,6 +1520,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         <div class="ld-lightbox-foot">
           <div class="ld-lightbox-meta"></div>
           <div class="ld-lightbox-actions">
+            <button class="ld-btn ld-lightbox-remove" title="Take this picture out of the chat. It stays in your history and library.">Remove from chat</button>
+            <button class="ld-btn ld-lightbox-delete" title="Delete this picture everywhere: the chat, your history and the image library.">Delete</button>
             <button class="ld-btn ld-lightbox-report">Troubleshooting…</button>
             <button class="ld-btn ld-lightbox-fix">Fix this image…</button>
             <button class="ld-btn ld-lightbox-insert" title="Adds a SECOND copy of this image at the top of the latest story message. Not needed after a regeneration — that already replaced the image in place.">Add copy to chat</button>
@@ -2608,12 +2615,18 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (!item) { closeLightbox(); return }
     const { image, entry } = item
     resetLightboxZoom()
+    resetLightboxDelete()
+    lightbox.classList.toggle('ld-lightbox-orphan', !!entry.orphan)
     lightboxImage.src = image.url
     lightboxImage.alt = (entry.prompt || 'Generated image').slice(0, 180)
     lightboxTitle.textContent = `Image ${lightboxIndex + 1} of ${lightboxItems.length}`
     const details = [entry.model, entry.seed !== undefined ? `seed ${entry.seed}` : '', entry.durationMs ? `${(entry.durationMs / 1000).toFixed(1)}s` : '', entry.prompt || ''].filter(Boolean)
-    lightboxMeta.textContent = details.join(' · ')
-    lightboxMeta.title = details.join(' · ')
+    lightboxMeta.textContent = entry.orphan
+      ? 'This picture is no longer in your history (it keeps the newest 80), so it can only be removed or deleted here.'
+      : details.join(' · ')
+    lightboxMeta.title = lightboxMeta.textContent
+    const removeButton = $('.ld-lightbox-remove')
+    if (removeButton) { removeButton.disabled = false; removeButton.textContent = 'Remove from chat' }
     $('.ld-lightbox-prev').disabled = lightboxItems.length < 2
     $('.ld-lightbox-next').disabled = lightboxItems.length < 2
     // Moving to another image abandons an open edit rather than silently
@@ -2694,7 +2707,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   function openRegenPanel() {
     const item = lightboxItems[lightboxIndex]
-    if (!item) return
+    if (!item || item.entry.orphan) return
     const { entry } = item
     const box = $('.ld-lightbox-regen')
     if (!box) return
@@ -2767,7 +2780,31 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     return true
   }
 
+  // A Lumi Studio picture in the chat that has dropped out of history. The
+  // viewer opens with only Remove and Delete, so it can still be cleaned up.
+  function openLightboxForChatOnly(imageUrl) {
+    if (!imageUrl) return false
+    lightboxItems = [{ image: { url: imageUrl, id: '' }, entry: { orphan: true, prompt: '' } }]
+    lightboxIndex = 0
+    renderLightbox()
+    lightbox.classList.add('ld-open')
+    lightbox.setAttribute('aria-hidden', 'false')
+    document.body.classList.add('ld-fullscreen-lock')
+    return true
+  }
+
+  let lightboxDeleteTimer = 0
+  function resetLightboxDelete() {
+    clearTimeout(lightboxDeleteTimer)
+    const button = $('.ld-lightbox-delete')
+    if (!button) return
+    button.classList.remove('ld-armed')
+    button.disabled = false
+    button.textContent = 'Delete'
+  }
+
   function closeLightbox() {
+    lightbox.classList.remove('ld-lightbox-orphan')
     clickedChatImageUrl = ''
     clickedChatPlacementId = ''
     lightbox.classList.remove('ld-open')
@@ -5189,6 +5226,52 @@ ${entry.prompt || ''}`.trim()
     event.preventDefault()
     toggleLightboxZoom(event.clientX, event.clientY)
   })
+  $('.ld-lightbox-remove').addEventListener('click', async () => {
+    const item = lightboxItems[lightboxIndex]
+    if (!item) return
+    const button = $('.ld-lightbox-remove')
+    button.disabled = true
+    button.textContent = 'Removing…'
+    try {
+      await call('remove_from_chat', { imageUrl: clickedChatImageUrl || item.image.url, placementId: clickedChatPlacementId || '' })
+      refreshImageVisibilityForEvent({})
+      closeLightbox()
+    } catch (error) {
+      button.disabled = false
+      button.textContent = 'Remove from chat'
+      lightboxMeta.textContent = /not found/i.test(error.message)
+        ? 'This picture isn’t in the open chat. Open the chat it belongs to and try again.'
+        : error.message
+    }
+  })
+  $('.ld-lightbox-delete').addEventListener('click', async () => {
+    const item = lightboxItems[lightboxIndex]
+    if (!item) return
+    const button = $('.ld-lightbox-delete')
+    // Two taps: the first one asks, so a stray tap can't destroy a picture.
+    if (!button.classList.contains('ld-armed')) {
+      button.classList.add('ld-armed')
+      button.textContent = 'Tap again to delete'
+      clearTimeout(lightboxDeleteTimer)
+      lightboxDeleteTimer = setTimeout(resetLightboxDelete, 4000)
+      return
+    }
+    clearTimeout(lightboxDeleteTimer)
+    button.disabled = true
+    button.textContent = 'Deleting…'
+    try {
+      const res = await call('delete_image', { imageUrl: item.image.url, imageId: item.image.id || '' })
+      if (clickedChatImageUrl && clickedChatImageUrl !== item.image.url) {
+        try { await call('remove_from_chat', { imageUrl: clickedChatImageUrl, placementId: clickedChatPlacementId || '' }) } catch { /* already gone */ }
+      }
+      if (Array.isArray(res && res.history)) { history = res.history; renderHistory() }
+      refreshImageVisibilityForEvent({})
+      closeLightbox()
+    } catch (error) {
+      resetLightboxDelete()
+      lightboxMeta.textContent = error.message
+    }
+  })
   $('.ld-lightbox-insert').addEventListener('click', () => {
     const item = lightboxItems[lightboxIndex]
     if (item) appendToChat(item.image, item.entry)
@@ -6856,7 +6939,20 @@ ${entry.prompt || ''}`.trim()
     if (!target || target.tagName !== 'IMG') return
     if (panel.contains(target) || lightbox.contains(target)) return
     const found = findHistoryImageForChatImage(target)
-    if (!found) return
+    if (!found) {
+      // Not in history any more, but still one of ours: offer Remove/Delete.
+      const ours = target.getAttribute('data-lumidraw-image') === '1' || target.closest('[data-lumidraw-placement-id]')
+      if (!ours) return
+      event.preventDefault()
+      event.stopPropagation()
+      const host = target.closest('[data-lumidraw-placement-id]')
+      const url = target.getAttribute('data-lumidraw-original-url') || target.getAttribute('src') || ''
+      if (openLightboxForChatOnly(url)) {
+        clickedChatImageUrl = url
+        clickedChatPlacementId = target.getAttribute('data-lumidraw-placement-id') || (host && host.getAttribute('data-lumidraw-placement-id')) || ''
+      }
+      return
+    }
     event.preventDefault()
     event.stopPropagation()
     // Remember the URL the chat is actually displaying. It is the only exact
