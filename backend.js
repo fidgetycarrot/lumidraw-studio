@@ -24633,6 +24633,8 @@ CAMERA
   the summary depends on: a hip-level act is not a portrait.
 - "composition": for sex, at most one real position tag when the passage clearly
   supports it: ${SIMPLE_COMPOSITIONS.join(', ')}. Leave it empty otherwise.
+- "position": with two or more people, give each a different place. With three
+  or more side by side, use left, center and right for them.
 
 SETTING
 - 3-6 short visual tags for where they are and the light: "stone temple",
@@ -25079,6 +25081,17 @@ function compileSimpleImage(image, ctx) {
       subject.outfit.length ? `Clothing: ${subject.outfit.join(', ')}.` : '',
       pose.length ? `Pose and expression: ${pose.join(', ')}.` : ''].filter(Boolean).join(' ')
   })
+  // Three or more people: one "From left to right:" line keeps them in order
+  // (a tip from Anima multi-character testing). Only people the parser placed
+  // left, center or right are listed; nobody is given a spot they weren't.
+  const LEFT_TO_RIGHT = { left: 0, 'center-left': 1, center: 2, 'center-right': 3, right: 4 }
+  const lined = subjects.map((subject, index) => ({ subject, index, rank: LEFT_TO_RIGHT[subject.position] }))
+    .filter(item => item.rank !== undefined)
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+  const orderLine = subjects.length >= 3 && lined.length >= 3
+    ? `From left to right: ${lined.map(({ subject }) => subject.name || 'the ' + subject.phrase.replace(/^(?:adult|mature|middle-aged)\s+/, '')).join(', ')}.`
+    : ''
+  if (orderLine) notes.push('Added a “From left to right” line so the people stay in order.')
   const summaryKey = normalizeIdentityText(summary)
   const actionLines = uniqueStrings([
     ...(image.interactions || []).map(act => simpleActSentence(act.act, labelFor(act.actor), labelFor(act.recipient))),
@@ -25101,6 +25114,15 @@ function compileSimpleImage(image, ctx) {
     negatives.push('plate armor', 'full armor')
     notes.push('Added “plate armor, full armor” to the negative prompt, since the armor in this scene is leather.')
   }
+  // Two or more people: the Anima team's own advice against clones and merged
+  // bodies. Skipped when the story is actually about twins.
+  if (subjects.length >= 2) {
+    const storyText = [image.scene_summary, ...subjects.map(subject => [subject.phrase, subject.displayName].join(' '))].join(' ')
+    if (!/\btwins?\b/i.test(storyText)) {
+      negatives.push('duplicate', 'twins')
+      notes.push('Added “duplicate, twins” to the negative prompt, since there is more than one person.')
+    }
+  }
   if (['nsfw', 'explicit'].includes(image.rating)) {
     negatives.push('child', 'underage', 'teenager', 'preteen', 'toddler', 'shota', 'loli')
     if (shownAnatomy.length) {
@@ -25120,7 +25142,7 @@ function compileSimpleImage(image, ctx) {
   const headerLine = joinPromptParts([header, image.rating, ...positive, ...counts, image.composition])
   const sceneLine = [summary ? `Scene: ${summary}.` : '', framing.length ? framing.join(', ') + '.' : ''].filter(Boolean).join(' ')
   const settingLine = setting.length ? `Setting: ${setting.join(', ')}.` : ''
-  const prompt = [headerLine, sceneLine, settingLine, ...paragraphs, actionLines.join(' ')].filter(Boolean).join('\n\n')
+  const prompt = [headerLine, sceneLine, settingLine, orderLine, ...paragraphs, actionLines.join(' ')].filter(Boolean).join('\n\n')
   const negativePrompt = negativeWith(directRosterNegative(preset.negativePrompt), uniqueStrings(negatives))
 
   if (settingSource === 'unknown') notes.push('No setting was known, so none was added.')
