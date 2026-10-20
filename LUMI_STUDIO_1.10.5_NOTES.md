@@ -1,0 +1,8 @@
+# Lumi Studio 1.10.5: Tweak in LumiCast
+
+This is the change from main 1.8.5 (commit 8581c0f), brought onto staging. LUMI_STUDIO_1.8.5_NOTES.md has the full details.
+
+- **Tweak in LumiCast** sits next to Fill from LumiCast in the character and persona editor. It sends the character as it is in the editor, unsaved edits included, to LumiCast's Get from Lumi Studio (LumiCast 0.11.0 or newer). When you're done there, come back to the same character, choose Fill from LumiCast, then save.
+- Fill only fills fields LumiCast has something for, so it never wipes your own entries. If Refine empties a field completely, clear that field here by hand.
+
+Everything in 1.10.4 is unchanged. Don't update Lumi Studio from GitHub main over this staging build, or you'd go back to 1.8.x.
