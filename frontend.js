@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.8.5'
+  const EXTENSION_VERSION = '1.8.6'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -7369,7 +7369,7 @@ ${entry.prompt || ''}`.trim()
       }
       if (!Object.values(sheet).some(v => v.trim())) throw new Error('This character has no tags to send yet.')
       await call('lumicast_send', { sheet, name: value('.ld-persona-ed-name'), anchor: value('.ld-persona-ed-anchor') }, 15000)
-      setStatus('.ld-persona-ed-status', 'Sent to LumiCast. Open LumiCast and choose Get from Lumi Studio. When you are done there, come back to this character, choose Fill from LumiCast, then save.', 'ok')
+      setStatus('.ld-persona-ed-status', 'Sent to LumiCast. Open LumiCast (0.11.1 or newer) and it loads there by itself. When you are done there, come back to this character, choose Fill from LumiCast, then save.', 'ok')
     } catch (error) {
       setStatus('.ld-persona-ed-status', error.message, 'err')
     }
