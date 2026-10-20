@@ -3167,7 +3167,7 @@ function sceneCardField(block, tag) {
 // Card attire is allowed to be partial: "sweatshirt off one shoulder" says
 // something new about the top and says nothing at all about the bottom. It must
 // never be interpreted as "sweatshirt and otherwise undressed".
-function sceneCardAttireTags(value) {
+function sceneCardAttireTags(value, { keepAll = false } = {}) {
   const tags = []
   for (const piece of wardrobeTagList(value)) {
     let text = decodeBasicHtmlEntities(piece).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
@@ -3200,14 +3200,15 @@ function sceneCardAttireTags(value) {
     // "Sweatshirt off one shoulder" is a garment plus a visible worn state.
     // Reorder it into a compact image tag while retaining the garment head so
     // the ordinary top/bottom slot merger can identify its zone.
-    if (garmentZone(text) === 'top' && /\boff (?:one |the |her |his )?shoulder\b/i.test(normalized)) {
+    if (garmentZone(text) === 'top' && /\boff (?:one |the |her |his )?shoulder\b/i.test(text)) {
       const garment = text.replace(/\b(?:hanging |slipping )?off (?:one |the |her |his )?shoulder\b.*$/i, '').trim()
       text = `off-shoulder ${garment || 'top'}`
     }
 
     const tag = animaTag(text)
     if (!tag) continue
-    if (garmentZone(tag) || GARMENT_RE.test(tag)) tags.push(tag)
+    // A story's own wardrobe list is all clothing and gear, so nothing is filtered.
+    if (keepAll || garmentZone(tag) || GARMENT_RE.test(tag)) tags.push(tag)
   }
   return uniqueStrings(tags).slice(0, 12)
 }
@@ -24494,8 +24495,11 @@ async function readSimpleCast(chatId) {
   const all = await readSimpleCastAll()
   const entry = all[String(chatId || '')]
   const value = entry && typeof entry === 'object' ? entry : {}
-  return { version: SIMPLE_VERSION, setting: simpleTags(value.setting || [], 12),
-    people: value.people && typeof value.people === 'object' ? value.people : {}, updatedAt: value.updatedAt || 0 }
+  const people = value.people && typeof value.people === 'object' ? JSON.parse(JSON.stringify(value.people)) : {}
+  for (const person of Object.values(people)) {
+    if (person && Array.isArray(person.outfit)) person.outfit = simpleSteadyOutfit(person.outfit)
+  }
+  return { version: SIMPLE_VERSION, setting: simpleTags(value.setting || [], 12), people, updatedAt: value.updatedAt || 0 }
 }
 
 async function writeSimpleCast(chatId, memory) {
@@ -24516,15 +24520,68 @@ async function clearSimpleCast(chatId, personKey = '') {
   await spindle.storage.setJson(SIMPLE_CAST_FILE, all, { indent: 2 })
 }
 
+// Clothing states that belong to one moment. Remembering them made a sex
+// scene's "shorts pulled down to knees" or a fight's "ichor-stained wet leather
+// armor" follow a character into every later picture.
+const SIMPLE_MOMENT_STATE_RE = new RegExp([
+  String.raw`\b(?:wet|damp|moist|soaked|drenched|dripping|sweaty|sopping|bloodied|bloody|muddy|dusty|grimy|filthy|wiped|cleaned|freshly|hastily)\b(?!-)`,
+  String.raw`\b[a-z]+-(?:soaked|stained|caked|dusted|splattered|spattered|smeared|slicked|drenched|streaked)\b`,
+  String.raw`\b(?:sweat|blood|cum|ichor|wine|mud|salt)\s+(?:soaked|stained|caked|dusted|splattered|smeared)\b`,
+  String.raw`\b(?:unbuckled|unlaced|unfastened|unbuttoned|unzipped|untied|undone|loosened|buckled|fastened|zipped|askew|disheveled|dishevelled|rumpled|open|opened|parted|slipping|sliding|falling)\b(?!-)`,
+  String.raw`\b(?:pulled|pushed|hiked|tugged|yanked|shoved|slid|bunched|hanging|hobbled|rucked|gathered|draped|rolled)(?:\s+(?:up|down|aside|off|open|back|around|under|over|at|to|past|below|above|across))+(?:\s+(?:the|his|her|their|one))?(?:\s+(?:knees?|ankles?|thighs?|waist|hips?|chest|shoulders?|elbows?|feet|floor|belly|stomach))?`,
+  String.raw`\b(?:around|to|at)\s+(?:the\s+|his\s+|her\s+|their\s+)?(?:knees|ankles|thighs)\b`,
+  String.raw`\b(?:off|down)\s+(?:to|around)\b`,
+].join('|'), 'gi')
+
+function simpleSteadyGarment(tag) {
+  return String(tag || '').replace(SIMPLE_MOMENT_STATE_RE, ' ').replace(/\s*&\s*$/, '')
+    .replace(/\s+/g, ' ').replace(/^[\s,&/-]+|[\s,&/-]+$/g, '').replace(/^(?:and|with)\s+/i, '').trim()
+}
+
+function simpleSteadyOutfit(tags) {
+  const out = []
+  for (const tag of tags || []) {
+    if (/^(?:nude|naked|barefoot|topless|bottomless|no shoes)$/i.test(String(tag).trim())) continue
+    const steady = simpleSteadyGarment(tag)
+    if (steady.length >= 3) out.push(steady)
+  }
+  return uniqueStrings(out)
+}
+
 function simpleMemoryFor(memory, key) {
   return (memory && memory.people && memory.people[key]) || null
 }
 
 // ---------- scene card -----------------------------------------------------
 
+// Some story presets keep their own wardrobe list per person:
+//   Siarn · Wardrobe:
+//   Layers: Eerodet's dark woven choker / Tart Street leather chest-straps / High-cut shorts & pouch / Boots
+// It is the story's complete, current record for that person.
+function simpleWardrobeBlocks(content) {
+  const found = new Map()
+  const re = /^[ \t>*_]*([^\n·<>:*]{1,60}?)[ \t*_]*·[ \t]*Wardrobe[ \t]*:?[ \t*_]*\r?\n[ \t>*_]*Layers[ \t]*:[ \t*_]*([^\n]+)/gmi
+  for (const match of String(content || '').matchAll(re)) {
+    const name = match[1].replace(/[*_]/g, '').trim()
+    const items = []
+    for (const layer of match[2].split(/\s+\/\s+/)) {
+      // "High-cut shorts & pouch" is two items; "Unbuckled & unlaced breeches" is one.
+      const parts = layer.split(/\s*&\s*/)
+      for (let i = 0; i < parts.length; i++) {
+        if (/^\s*[a-z-]+ed\s*$/i.test(parts[i]) && i + 1 < parts.length) { parts[i + 1] = parts[i].trim() + ' ' + parts[i + 1]; continue }
+        const item = parts[i].replace(/\([^)]*\)/g, ' ').replace(/^[A-Z][\w-]*(?:\s+[A-Z][\w-]*)?['’]s\s+/, '').replace(/[*_]/g, '').replace(/\s+/g, ' ').trim()
+        if (item) items.push(item)
+      }
+    }
+    if (name && items.length) found.set(simpleKey(name), { name, attire: items.join(', '), full: true })
+  }
+  return [...found.values()]
+}
+
 function simpleSceneCard(content) {
   const blocks = [...String(content || '').matchAll(/<scenecard\b[^>]*>[\s\S]*?<\/scenecard>/gi)]
-  if (!blocks.length) return null
+  const wardrobe = simpleWardrobeBlocks(content)
+  if (!blocks.length) return wardrobe.length ? { location: '', time: '', user: null, cast: wardrobe } : null
   const block = blocks[blocks.length - 1][0]
   const scene = (/<sc-scene\b[^>]*>[\s\S]*?<\/sc-scene>/i.exec(block) || [''])[0]
   const user = (/<sc-user\b[^>]*>[\s\S]*?<\/sc-user>/i.exec(block) || [''])[0]
@@ -24535,6 +24592,13 @@ function simpleSceneCard(content) {
     location: sceneCardField(scene, 'location'), time: sceneCardField(scene, 'time'),
     user: user ? person(user) : null,
     cast: cast.map(person).filter(item => item.name),
+  }
+  // A wardrobe list is complete, so it replaces the card's one-line summary.
+  for (const entry of wardrobe) {
+    const same = card.cast.find(item => simpleKey(item.name) === simpleKey(entry.name) ||
+      simpleKey(item.name).split(' ')[0] === simpleKey(entry.name).split(' ')[0])
+    if (same) Object.assign(same, { attire: entry.attire, full: true })
+    else card.cast.push(entry)
   }
   return card.location || card.user || card.cast.length ? card : null
 }
@@ -24556,15 +24620,19 @@ function simpleSceneCardText(card, profiles) {
   return lines.join('\n')
 }
 
+function simpleCardEntryFor(card, profile, name, profiles) {
+  if (!card) return null
+  const keys = new Set([simpleKey(name), ...(profile ? [profile.anchor, profile.promptName].filter(Boolean).map(simpleKey) : [])].filter(Boolean))
+  const hit = card.cast.find(item => item.attire && (keys.has(simpleKey(item.name)) || keys.has(simpleKey(item.name).split(' ')[0])))
+  // A complete wardrobe list for the user's character beats the card's one-line summary.
+  if (hit && hit.full) return hit
+  if (profile && profiles && profiles.persona && profile.ref === profiles.persona.ref && card.user && card.user.attire) return card.user
+  return hit || null
+}
+
 function simpleCardAttireFor(card, profile, name, profiles) {
-  if (!card) return []
-  if (profile && profiles && profiles.persona && profile.ref === profiles.persona.ref && card.user && card.user.attire) {
-    return sceneCardAttireTags(card.user.attire)
-  }
-  const keys = new Set([simpleKey(name), ...(profile ? [profile.anchor, profile.promptName].filter(Boolean).map(simpleKey) : [])])
-  const hit = card.cast.find(item => keys.has(simpleKey(item.name)) ||
-    keys.has(simpleKey(item.name).split(' ')[0]))
-  return hit && hit.attire ? sceneCardAttireTags(hit.attire) : []
+  const hit = simpleCardEntryFor(card, profile, name, profiles)
+  return hit && hit.attire ? sceneCardAttireTags(hit.attire, { keepAll: !!hit.full }) : []
 }
 
 // ---------- the parser instruction -----------------------------------------
@@ -24605,6 +24673,9 @@ CHOOSING THE MOMENT
 - Illustrate only the CURRENT PASSAGE. Earlier context tells you who people are,
   where they are and what they wear; it never supplies the moment.
 - Pick the clearest drawable beat. If the clearest beat is sexual, draw that.
+- "scene_summary" never names clothing or armor that nobody in the picture is
+  wearing (carried, dropped, on a rack). The image model dresses someone in it.
+  Say "a bundle of gear" instead.
 - Dialogue about an act, plans, memories and wishes are not happening now.
 
 WHO IS IN THE PICTURE
@@ -24627,10 +24698,16 @@ WHO IS IN THE PICTURE
 
 CLOTHING — this is how outfits stay consistent.
 - "outfit" is the complete set of clothes worn at this moment, not just what
-  changed. Start from CURRENT OUTFIT (or the scene card), then apply what the
-  CURRENT PASSAGE changes. Silence means unchanged.
-- Keep colour, material and state: "open moss-green robe", "unfastened pants",
-  "torn white shirt". One garment per item. Shoes separate.
+  changed. Start from CURRENT OUTFIT, then apply what the CURRENT PASSAGE
+  changes. Silence means unchanged.
+- The story's wardrobe list is its own record for this passage: follow it. A
+  scene card line is a summary: keep shoes and small items from EARLIER DETAIL
+  unless the passage says they came off. Use EARLIER DETAIL only for the colour
+  and material of garments that are still worn.
+- Keep colour and material: "moss-green robe", "torn white shirt". States such
+  as wet, stained, unbuckled, pulled down or open belong to one moment: write
+  them only when the CURRENT PASSAGE shows them now. One garment per item. Shoes
+  separate.
 - A vaguer word is not a change. If CURRENT OUTFIT says "leather armor" and the
   passage or scene card just says "armor", write "leather armor". Only replace a
   garment when the story describes a different one.
@@ -24693,13 +24770,28 @@ function simpleSubjectRule(maxSubjects) {
   return `MAXIMUM PEOPLE PER IMAGE: ${max}. If more are present, keep the ${max} who carry the moment.`
 }
 
-function simpleOutfitFor(profile, key, memory, card, profiles) {
+// The passage's own wardrobe or scene card is newer than anything remembered,
+// so it comes first; the remembered outfit is offered only as detail.
+function simpleOutfitFor(profile, key, memory, card, profiles, name = '') {
   const remembered = simpleMemoryFor(memory, key)
-  if (remembered && (remembered.outfit || []).length) return { tags: remembered.outfit, source: 'remembered' }
-  const fromCard = simpleCardAttireFor(card, profile, profile ? profile.anchor : '', profiles)
-  if (fromCard.length) return { tags: fromCard, source: 'scene card' }
+  const earlier = simpleSteadyOutfit((remembered && remembered.outfit) || [])
+  const entry = simpleCardEntryFor(card, profile, profile ? profile.anchor : name, profiles)
+  const fromCard = entry && entry.attire ? sceneCardAttireTags(entry.attire, { keepAll: !!entry.full }) : []
+  if (fromCard.length) return { tags: fromCard, source: entry.full ? 'story wardrobe' : 'scene card', earlier }
+  if (earlier.length) return { tags: earlier, source: 'remembered', earlier: [] }
   const defaults = profile ? simpleTags(profile.defaultOutfit || []) : []
-  return defaults.length ? { tags: defaults, source: 'sheet default' } : { tags: [], source: '' }
+  return defaults.length ? { tags: defaults, source: 'sheet default', earlier: [] } : { tags: [], source: '', earlier: [] }
+}
+
+function simpleOutfitLines(outfit) {
+  const lines = []
+  if (!outfit.tags.length) return lines
+  const label = outfit.source === 'story wardrobe' ? "the story's wardrobe for this passage — complete"
+    : outfit.source === 'scene card' ? 'scene card summary — may leave out shoes and small items'
+      : outfit.source + '; keep unless the story changes it'
+  lines.push(`  CURRENT OUTFIT (${label}): ` + outfit.tags.join(', '))
+  if ((outfit.earlier || []).length) lines.push('  EARLIER DETAIL (remembered; only for colour and material of garments still worn): ' + outfit.earlier.join(', '))
+  return lines
 }
 
 function simpleContext(profiles, memory, card, { banned = '', fantasy = false } = {}) {
@@ -24725,20 +24817,19 @@ function simpleContext(profiles, memory, card, { banned = '', fantasy = false } 
       if (body.length) lines.push('  BODY (reference only, already handled): ' + body.join(', '))
     }
     if ((profile.anatomy || []).length) lines.push('  ANATOMY (reference only, already handled): ' + animaTagList(profile.anatomy).join(', '))
-    const outfit = simpleOutfitFor(profile, key, memory, card, profiles)
-    if (outfit.tags.length) lines.push(`  CURRENT OUTFIT (${outfit.source}; keep unless the story changes it): ` + outfit.tags.join(', '))
+    lines.push(...simpleOutfitLines(simpleOutfitFor(profile, key, memory, card, profiles)))
     blocks.push(lines.join('\n'))
   }
   const remembered = Object.entries((memory && memory.people) || {})
     .filter(([key, person]) => !sheetKeys.has(key) && person && !person.ref)
     .sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0)).slice(0, 8)
-  for (const [, person] of remembered) {
+  for (const [key, person] of remembered) {
     const lines = [`${person.name} — REMEMBERED PERSON (no sheet; only draw them if they are physically in the CURRENT PASSAGE, and then copy these exactly)`]
     if (person.count) lines.push('  count: ' + person.count)
     if (person.subject) lines.push('  subject: ' + person.subject)
     if ((person.appearance || []).length) lines.push('  appearance: ' + person.appearance.join(', '))
     if ((person.anatomy || []).length) lines.push('  anatomy: ' + person.anatomy.join(', '))
-    if ((person.outfit || []).length) lines.push('  CURRENT OUTFIT (keep unless the story changes it): ' + person.outfit.join(', '))
+    lines.push(...simpleOutfitLines(simpleOutfitFor(null, key, memory, card, profiles, person.name)))
     blocks.push(lines.join('\n'))
   }
   const cardText = simpleSceneCardText(card, profiles)
@@ -24958,10 +25049,9 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
       out.outfit = specific.tags; out.sources.outfit = 'story (parser)'
       for (const item of specific.kept) notes.push(`${raw.name}: kept “${item.to}” — the story only said “${item.from}”.`)
     }
-    else if ((remembered.outfit || []).length) { out.outfit = remembered.outfit; out.sources.outfit = 'remembered' }
     else {
-      const fromCard = simpleCardAttireFor(card, null, raw.name, profiles)
-      out.outfit = fromCard; out.sources.outfit = fromCard.length ? 'scene card' : 'none known'
+      const fallback = simpleOutfitFor(null, key, memory, card, profiles, raw.name)
+      out.outfit = fallback.tags; out.sources.outfit = fallback.source || 'none known'
     }
     if (!out.identity.length) notes.push(`${raw.name}: no sheet and the parser gave no body description — they may come out generic. Save a sheet or try again.`)
   }
@@ -25066,6 +25156,17 @@ function compileSimpleImage(image, ctx) {
     if (used.has(key)) { subject.name = ''; used.get(key).name = '' }
     else used.set(key, subject)
   }
+  // Two people joined in a sex act overlap. Putting one "on the left" and the
+  // other "in the center" pulled them apart and let a third person take the role.
+  const joined = new Set()
+  for (const act of image.interactions || []) {
+    if (!['vaginal', 'anal'].includes(act.act) || simpleKey(act.actor) === simpleKey(act.recipient)) continue
+    for (const who of [act.actor, act.recipient]) {
+      const subject = subjects.find(item => simpleKey(item.raw.name) === simpleKey(who))
+      if (subject && ['left', 'center-left', 'center', 'center-right', 'right'].includes(subject.position)) { subject.position = ''; joined.add(subject.displayName) }
+    }
+  }
+  if (joined.size) notes.push(`Left out left/center/right for ${[...joined].join(' and ')}, since they are joined in the act.`)
   for (const subject of subjects) {
     const where = subject.position ? ' ' + directGroupPositionPhrase(subject.position) : ''
     subject.label = subject.name || ('the ' + subject.phrase.replace(/^(?:adult|mature|middle-aged)\s+/, '') + where)
@@ -25139,11 +25240,16 @@ function compileSimpleImage(image, ctx) {
   // Anima turns "armor" into plate whenever it can (big man, shield, dungeon),
   // even with "leather" in the phrase. If leather is all anyone wears, say so in
   // the negative too.
-  const worn = subjects.flatMap(subject => subject.outfit).join(' | ')
-  if (/\bleather\b[^|]*\barmou?r\b/i.test(worn) &&
-    !/\b(?:plate|full armou?r|steel|metal|chainmail|chain mail|breastplate|knight)\b/i.test(worn)) {
-    negatives.push('plate armor', 'full armor')
-    notes.push('Added “plate armor, full armor” to the negative prompt, since the armor in this scene is leather.')
+  const wornItems = subjects.flatMap(subject => subject.outfit)
+  const ARMOR_PIECE = /\b(?:armou?r|chestplate|breastplate|cuirass|pauldrons?|vambraces?|bracers|gorget|greaves|gauntlets?)\b/i
+  const leatherArmor = wornItems.some(item => /\bleather\b/i.test(item) && ARMOR_PIECE.test(item))
+  const metalArmor = wornItems.some(item => !/\bleather\b/i.test(item) &&
+    (ARMOR_PIECE.test(item) || /\b(?:plate armou?r|full armou?r|chainmail|chain mail|mail shirt|hauberk|knight)\b/i.test(item)))
+  if (leatherArmor && !metalArmor) {
+    const added = ['plate armor', 'full armor', 'breastplate', 'metal armor']
+    if (!wornItems.some(item => /\b(?:pauldrons?|shoulder armou?r|spaulders?)\b/i.test(item))) added.push('shoulder armor')
+    negatives.push(...added)
+    notes.push(`Added “${added.join(', ')}” to the negative prompt, since the armor in this scene is leather.`)
   }
   // Two or more people: the Anima team's own advice against clones and merged
   // bodies. Skipped when the story is actually about twins.
@@ -25207,7 +25313,10 @@ function simpleRemember(memory, compiled, messageId) {
     const before = next.people[subject.key] || {}
     const entry = { ...before, name: subject.displayName, ref: subject.profile ? String(subject.profile.ref || '') : '',
       updatedAt: Date.now(), messageId: String(messageId || '') }
-    if (subject.outfit.length && subject.sources.outfit !== 'included in the saved look') entry.outfit = subject.outfit.slice()
+    if (subject.outfit.length && subject.sources.outfit !== 'included in the saved look') {
+      const steady = simpleSteadyOutfit(subject.outfit)
+      if (steady.length) entry.outfit = steady
+    }
     if (subject.look) entry.look = subject.look
     if (!subject.profile) {
       if (!(before.appearance || []).length && subject.identity.length) entry.appearance = subject.identity.slice()
