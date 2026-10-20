@@ -1,0 +1,25 @@
+# Lumi Studio 1.11.0: one version again
+
+Staging and main are joined. Main now has everything that was built on staging, and everything that went to main in the meantime. Install from **main** from now on.
+
+## What main gains
+
+- **The new pipeline** (1.9 → 1.10): one parser call, prompts in the Anima layout, and per-chat memory of how people look and what they wear. It's on by default. The old 1.8 pipeline is still under Settings → Old pipeline (1.8), in case a scene needs it.
+- The reorganised panels, library search, the **Draw now** button, and twinkling stars instead of the spinner.
+- Fixes from the reports: wardrobes follow the story's own wardrobe list, temporary clothing states aren't remembered, the leather-armor guard, one moment per picture, "duplicate, twins" for group shots, and the left-to-right line for three or more people.
+- **Pick the size for each picture** in the preset editor.
+- The MOSS Image prompt builder, parked. A preset only uses it when its prompt style is set to MOSS.
+
+## What staging gains from main
+
+- 1.8.7, from the LC thread: **LumiCast can save a tweaked character back.** Tweak in LumiCast now sends the saved character's id. LC 0.12's Update in Lumi Studio writes the six sheet fields into that one entry and nothing else, and only LumiCast is allowed to do it. The read-back check from 1.10.6 is kept, so the message still says how many fields went over.
+- Notes for 1.8.4–1.8.7.
+
+Everything else that went to main (the fetch fix, removing and deleting from the viewer, Tweak in LumiCast) was already on staging.
+
+## Checked
+
+- Syntax check on both files.
+- A full story scan and a re-parse on the stub host.
+- The handoff and save-back through Lumiverse's own shared-RPC code: the tweak is sent and read back, LC syncs `tweak.result`, `lumicast.apply` saves "round eyewear" and "grey sweater" into the right entry and tells the panel, and any other extension is refused.
+- Tweak in LumiCast, viewer delete and Draw now in headless Chromium.

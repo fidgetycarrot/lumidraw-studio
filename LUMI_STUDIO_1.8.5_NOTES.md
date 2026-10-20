@@ -24,3 +24,7 @@ Fill from LumiCast only fills fields that LumiCast has a value for, so it never 
 ## Checked
 
 Syntax-checked both files. The backend case was run against a fake host: it published the sheet with text fields cleaned (a non-text outfit became empty) and replied `ok`. Not tried in a live Lumiverse.
+
+## 1.8.6: no button to press in LumiCast
+
+LumiCast 0.11.1 loads a character sent with Tweak in LumiCast by itself when its panel is open. If loading would replace work in LumiCast, it asks first with Load it / Not now. The message after sending now says "Open LumiCast" instead of pointing to a Get from Lumi Studio button.
