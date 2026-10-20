@@ -30,3 +30,18 @@ Eric sent six troubleshooting reports. Each fix below is tied to the note on its
 
 - These pictures are 832×512 or 768×576 at 12 steps. Anima is trained around 1024×1024, so at this size faces in wide shots blur together (the "faceless" man in the inn yard) and backgrounds turn to mush.
 - Riley's sheet has many near-duplicate tags (three eyewear tags, two piercing sets, two hair-tip tags). Long reference-style tag lists can push the model toward a character-sheet layout, which looks like the "double Riley" panels. Trimming the sheet in LumiCast would help.
+
+## 1.10.9: Pick the size for each picture
+
+A new checkbox in the preset editor, under Width and Height. When it's on, width × height becomes the most LS will use, and each picture gets a share of it based on what's in it:
+
+| Picture | Share of the preset's pixels |
+|---|---|
+| One person, close-up, portrait, upper body or POV | 55% |
+| One person, other framing | 70% |
+| One person, full body or wide shot | 80% |
+| Two people, close | 75% |
+| Two people | 85% |
+| Two people in a wide shot, or three or more people | 100% |
+
+The parser's aspect ratio still decides the shape. With 1024×1024 that means, for example: a 3:4 close-up comes out 640×896, two people side by side 1088×832, and three people 1152×896. Drawing time roughly follows the pixel count, so a one-person close-up takes about half as long. Picture details shows the size used and why. It's off by default, and only the new pipeline uses it. Regenerating a picture keeps that picture's size.

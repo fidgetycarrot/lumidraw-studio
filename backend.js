@@ -4163,13 +4163,15 @@ async function markProcessed(messageId, content) {
   await spindle.storage.setJson(PROCESSED_FILE, pruned.slice(-50), { indent: 0 })
 }
 
-function aspectDims(config, aspectStr) {
+// scale < 1 uses that share of the preset's pixel count (Pick the size for each picture).
+function aspectDims(config, aspectStr, scale = 1) {
   const bw = Number(config.width) || 768
   const bh = Number(config.height) || 768
   const m = /^(\d+)\s*[:x]\s*(\d+)$/.exec(String(aspectStr || '').trim())
-  if (!m) return { width: bw, height: bh }
-  const ratio = Number(m[1]) / Number(m[2])
-  const area = bw * bh
+  const share = Math.min(1, Math.max(0.3, Number(scale) || 1))
+  if (!m && share === 1) return { width: bw, height: bh }
+  const ratio = m ? Number(m[1]) / Number(m[2]) : bw / bh
+  const area = bw * bh * share
   const r64 = (v) => Math.max(256, Math.round(v / 64) * 64)
   return { width: r64(Math.sqrt(area * ratio)), height: r64(Math.sqrt(area / ratio)) }
 }
@@ -19003,6 +19005,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.mossStyle !== undefined) preset.mossStyle = String(payload.mossStyle || '').slice(0, 1200)
         if (payload.mossNegative !== undefined) preset.mossNegative = String(payload.mossNegative || '').slice(0, 1200)
         if (payload.mossLayout !== undefined) preset.mossLayout = payload.mossLayout === true
+        if (payload.smartSize !== undefined) preset.smartSize = payload.smartSize === true
         try { await rememberModels(preset.config || {}) } catch { /* best-effort */ }
         const idx = presets.findIndex((p) => p.name === name)
         if (idx >= 0) presets[idx] = preset
@@ -25306,6 +25309,25 @@ function compileSimpleImage(image, ctx) {
 
 // What one finished image teaches the chat's memory. Saved people: outfit and
 // look only. Unsaved people: their look is locked the first time it is known.
+// Pick the size for each picture: the preset's width × height is the most.
+// Detail matters where things are small on the canvas — several people, wide
+// shots — so those get the full size; a close-up of one face does not need it.
+function simpleSizeShare(image, compiled) {
+  const people = Math.max(1, (compiled.subjects || []).length)
+  const framing = (image.framing || []).join(' ').toLowerCase()
+  const close = /\b(?:close-up|portrait|upper body|pov)\b/.test(framing)
+  const wide = /\b(?:wide shot|very wide shot|full body)\b/.test(framing)
+  if (people >= 3) return { share: 1, why: `${people} people` }
+  if (people === 2) {
+    if (wide) return { share: 1, why: 'two people in a wide shot' }
+    if (close) return { share: 0.75, why: 'two people, close' }
+    return { share: 0.85, why: 'two people' }
+  }
+  if (wide) return { share: 0.8, why: 'one person in a wide shot' }
+  if (close) return { share: 0.55, why: 'one person, close' }
+  return { share: 0.7, why: 'one person' }
+}
+
 function simpleRemember(memory, compiled, messageId) {
   const next = { setting: memory.setting.slice(), people: JSON.parse(JSON.stringify(memory.people || {})) }
   if (compiled.debug.setting.source === 'story (parser)' && compiled.setting.length) next.setting = compiled.setting.slice()
@@ -25410,7 +25432,9 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
     assertStoryScanActive(scan)
     const { image, compiled } = prepared[index]
     setStoryScanStage(scan, 'generating', `Sending image ${index + 1} of ${prepared.length} to ${imageRenderer(preset.config) === 'swarmui' ? 'SwarmUI' : 'Draw Things'}.`)
-    const dims = aspectDims(preset.config, image.aspect)
+    const size = preset.smartSize === true ? simpleSizeShare(image, compiled) : null
+    const dims = aspectDims(preset.config, image.aspect, size ? size.share : 1)
+    if (size) compiled.debug.notes.push(`Size ${dims.width}×${dims.height}: ${size.why}, so ${Math.round(size.share * 100)}% of the preset's size.`)
     const scene = { direct: true, simple: true, anchor: image.anchor, sceneSummary: image.scene_summary, rating: image.rating,
       aspect: image.aspect, simplePipeline: compiled.debug }
     const entry = await generateAndUpload({

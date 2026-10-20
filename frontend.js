@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.10.8'
+  const EXTENSION_VERSION = '1.10.9'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1291,6 +1291,8 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
               <div><span class="ld-label">Width</span><input class="ld-ed-w" type="number" step="64" min="256" /></div>
               <div><span class="ld-label">Height</span><input class="ld-ed-h" type="number" step="64" min="256" /></div>
             </div>
+            <label class="ld-check" style="margin-top:7px"><input type="checkbox" class="ld-ed-smart-size" /> Pick the size for each picture</label>
+            <div class="ld-hint">Width × height becomes the most it will use. A close-up of one person gets about half the pixels and draws faster; three or more people or a wide shot get the full size. New pipeline only.</div>
             <span class="ld-label" style="margin-top:9px">LoRAs</span>
             <div class="ld-ed-loras" style="display:flex;flex-direction:column;gap:5px"></div>
             <button class="ld-btn ld-compact" data-act="ed-addlora" style="margin-top:5px">＋ LoRA</button>
@@ -7563,6 +7565,7 @@ ${entry.prompt || ''}`.trim()
     $('.ld-ed-steps').value = c.steps !== undefined ? c.steps : ''
     $('.ld-ed-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''
     $('.ld-ed-w').value = c.width || ''
+    if ($('.ld-ed-smart-size')) $('.ld-ed-smart-size').checked = !!(p && p.smartSize)
     $('.ld-ed-h').value = c.height || ''
     const lbox = $('.ld-ed-loras')
     lbox.innerHTML = ''
@@ -8033,6 +8036,7 @@ ${entry.prompt || ''}`.trim()
         name,
         config,
         extra: editorExtra,
+        ...($('.ld-ed-smart-size') ? { smartSize: $('.ld-ed-smart-size').checked } : {}),
         ...($('.ld-ed-prompt-style') ? {
           promptStyle: $('.ld-ed-prompt-style').value,
           mossStyle: $('.ld-ed-moss-style').value,
