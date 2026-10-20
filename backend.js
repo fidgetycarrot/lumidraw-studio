@@ -18575,8 +18575,21 @@ spindle.onFrontendMessage(async (payload, userId) => {
           countTag: text(given.countTag, 40), subject: text(given.subject, 200), always: text(given.always),
           appearance: text(given.appearance), outfit: text(given.outfit), anatomy: text(given.anatomy),
         }
-        spindle.rpcPool.sync('lumicast.tweak', { version: 1, sheet, name: text(input.name, 80), anchor: text(input.anchor, 80), userId: userId || '', sentAt: Date.now() }, { requires: [] })
-        reply = ok(payload, requestId, { sent: true })
+        const sentAt = Date.now()
+        const endpoint = spindle.rpcPool.sync('lumicast.tweak', { version: 1, sheet, name: text(input.name, 80), anchor: text(input.anchor, 80), userId: userId || '', sentAt }, { requires: [] })
+        // Read it back the way LumiCast will, so a failed handoff shows up here
+        // instead of as an empty LumiCast.
+        let checked = false, checkError = ''
+        if (typeof spindle.rpcPool.read === 'function') {
+          try {
+            const back = await spindle.rpcPool.read('lumidraw_studio.lumicast.tweak')
+            checked = !!back && back.sentAt === sentAt
+            if (!checked) checkError = 'LumiCast would read an older or empty copy.'
+          } catch (error) { checkError = error && error.message ? error.message : String(error) }
+        }
+        spindle.log.info(`[lumidraw] lumicast_send published ${endpoint}; read-back ${checked ? 'ok' : 'failed: ' + checkError}`)
+        reply = ok(payload, requestId, { sent: true, endpoint, checked, checkError,
+          filled: Object.entries(sheet).filter(([, value]) => value.trim()).map(([key]) => key) })
         break
       }
 

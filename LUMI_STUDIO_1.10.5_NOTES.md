@@ -6,3 +6,9 @@ This is the change from main 1.8.5 (commit 8581c0f), brought onto staging. LUMI_
 - Fill only fills fields LumiCast has something for, so it never wipes your own entries. If Refine empties a field completely, clear that field here by hand.
 
 Everything in 1.10.4 is unchanged. Don't update Lumi Studio from GitHub main over this staging build, or you'd go back to 1.8.x.
+
+## 1.10.6: Tweak checks its own handoff
+
+After sending, Lumi Studio reads the character back the same way LumiCast does. The message under the editor now says which character went over, how many fields it had, and that the check passed. If the check fails, the message shows the error instead of saying "sent". The server log gets a line too: `lumicast_send published lumidraw_studio.lumicast.tweak; read-back ok`.
+
+In LumiCast, Get from Lumi Studio puts the tags in "04 / Lumi Studio character sheet", not in the description box. The description box fills only when this chat's Cast lorebook has an entry for that character.

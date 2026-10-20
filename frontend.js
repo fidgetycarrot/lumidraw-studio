@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.10.5'
+  const EXTENSION_VERSION = '1.10.6'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -7808,8 +7808,11 @@ ${entry.prompt || ''}`.trim()
         appearance: value('.ld-persona-ed-tags'), outfit: value('.ld-persona-ed-outfit'), anatomy: value('.ld-persona-ed-anatomy'),
       }
       if (!Object.values(sheet).some(v => v.trim())) throw new Error('This character has no tags to send yet.')
-      await call('lumicast_send', { sheet, name: value('.ld-persona-ed-name'), anchor: value('.ld-persona-ed-anchor') }, 15000)
-      setStatus('.ld-persona-ed-status', 'Sent to LumiCast. Open LumiCast and choose Get from Lumi Studio. When you are done there, come back to this character, choose Fill from LumiCast, then save.', 'ok')
+      const name = value('.ld-persona-ed-name') || value('.ld-persona-ed-anchor') || 'This character'
+      const res = await call('lumicast_send', { sheet, name: value('.ld-persona-ed-name'), anchor: value('.ld-persona-ed-anchor') }, 15000)
+      if (res && res.checkError) throw new Error(`Sent, but the check failed: ${res.checkError} (${res.endpoint || 'no endpoint'})`)
+      const fields = res && Array.isArray(res.filled) ? res.filled.length : 0
+      setStatus('.ld-persona-ed-status', `${name} sent to LumiCast (${fields} field${fields === 1 ? '' : 's'}${res && res.checked ? ', checked' : ''}). In LumiCast press Get from Lumi Studio; the tags land in “04 / Lumi Studio character sheet”. When you are done there, come back here, choose Fill from LumiCast, then save.`, 'ok')
     } catch (error) {
       setStatus('.ld-persona-ed-status', error.message, 'err')
     }
