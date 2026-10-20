@@ -18527,6 +18527,24 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      // The reverse of lumicast_latest: the open character, for LumiCast's Get from Lumi Studio. In memory
+      // only, replaced by the next send, and cleared when Lumiverse restarts.
+      case 'lumicast_send': {
+        if (!spindle.rpcPool || typeof spindle.rpcPool.sync !== 'function') {
+          throw new Error('This Lumiverse version cannot share data between extensions. Copy the fields into LumiCast by hand.')
+        }
+        const input = payload && typeof payload === 'object' ? payload : {}
+        const given = input.sheet && typeof input.sheet === 'object' ? input.sheet : {}
+        const text = (value, max = 4000) => typeof value === 'string' ? value.slice(0, max) : ''
+        const sheet = {
+          countTag: text(given.countTag, 40), subject: text(given.subject, 200), always: text(given.always),
+          appearance: text(given.appearance), outfit: text(given.outfit), anatomy: text(given.anatomy),
+        }
+        spindle.rpcPool.sync('lumicast.tweak', { version: 1, sheet, name: text(input.name, 80), anchor: text(input.anchor, 80), userId: userId || '', sentAt: Date.now() }, { requires: [] })
+        reply = ok(payload, requestId, { sent: true })
+        break
+      }
+
       case 'jev_status': {
         reply = ok(payload, requestId, await jevStatus(userId))
         break

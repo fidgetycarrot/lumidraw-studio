@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.8.4'
+  const EXTENSION_VERSION = '1.8.5'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1216,7 +1216,7 @@ the diner = diner, booth seating, formica table, neon sign | aliases: the diner,
           </div>
           <div class="ld-persona-editor ld-card" style="display:none">
             <div class="ld-subtitle ld-lib-ed-title">Persona library editor</div>
-            <div class="ld-row" style="margin-top:6px;align-items:center;gap:8px"><button class="ld-btn ld-compact" data-act="fill-lumicast">Fill from LumiCast</button><span class="ld-hint">Copies LumiCast’s latest character sheet into the fields below. Nothing is saved until you save.</span></div>
+            <div class="ld-row" style="margin-top:6px;align-items:center;gap:8px"><button class="ld-btn ld-compact" data-act="fill-lumicast">Fill from LumiCast</button><button class="ld-btn ld-compact" data-act="send-lumicast">Tweak in LumiCast</button><span class="ld-hint">Fill copies LumiCast’s latest character sheet into the fields below; nothing is saved until you save. Tweak sends this character to LumiCast to fix with Refine.</span></div>
             <span class="ld-label">Library name</span><input class="ld-persona-ed-name" placeholder="Eric" />
             <div class="ld-profile-grid" style="margin-top:7px">
               <div><span class="ld-label">Anchor / name</span><input class="ld-persona-ed-anchor" placeholder="Eric" /></div>
@@ -7359,6 +7359,21 @@ ${entry.prompt || ''}`.trim()
 
   $('[data-act="new-persona"]').addEventListener('click', () => openPersonaEditor(null, 'persona'))
   $('[data-act="new-character"]').addEventListener('click', () => openPersonaEditor(null, 'character'))
+  // Sends the character as it is in the editor, unsaved edits included, for LumiCast's Get from Lumi Studio.
+  $('[data-act="send-lumicast"]').addEventListener('click', async () => {
+    try {
+      const value = selector => $(selector) ? $(selector).value : ''
+      const sheet = {
+        countTag: value('.ld-persona-ed-count'), subject: value('.ld-persona-ed-subject'), always: value('.ld-persona-ed-identity'),
+        appearance: value('.ld-persona-ed-tags'), outfit: value('.ld-persona-ed-outfit'), anatomy: value('.ld-persona-ed-anatomy'),
+      }
+      if (!Object.values(sheet).some(v => v.trim())) throw new Error('This character has no tags to send yet.')
+      await call('lumicast_send', { sheet, name: value('.ld-persona-ed-name'), anchor: value('.ld-persona-ed-anchor') }, 15000)
+      setStatus('.ld-persona-ed-status', 'Sent to LumiCast. Open LumiCast and choose Get from Lumi Studio. When you are done there, come back to this character, choose Fill from LumiCast, then save.', 'ok')
+    } catch (error) {
+      setStatus('.ld-persona-ed-status', error.message, 'err')
+    }
+  })
   // Fills only fields LumiCast has a value for, so an empty LumiCast field never wipes your own entry.
   $('[data-act="fill-lumicast"]').addEventListener('click', async () => {
     try {
