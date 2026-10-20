@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.10.6'
+  const EXTENSION_VERSION = '1.10.7'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -7812,7 +7812,7 @@ ${entry.prompt || ''}`.trim()
       const res = await call('lumicast_send', { sheet, name: value('.ld-persona-ed-name'), anchor: value('.ld-persona-ed-anchor') }, 15000)
       if (res && res.checkError) throw new Error(`Sent, but the check failed: ${res.checkError} (${res.endpoint || 'no endpoint'})`)
       const fields = res && Array.isArray(res.filled) ? res.filled.length : 0
-      setStatus('.ld-persona-ed-status', `${name} sent to LumiCast (${fields} field${fields === 1 ? '' : 's'}${res && res.checked ? ', checked' : ''}). In LumiCast press Get from Lumi Studio; the tags land in “04 / Lumi Studio character sheet”. When you are done there, come back here, choose Fill from LumiCast, then save.`, 'ok')
+      setStatus('.ld-persona-ed-status', `${name} sent to LumiCast (${fields} field${fields === 1 ? '' : 's'}${res && res.checked ? ', checked' : ''}). Open LumiCast (0.11.1 or newer) and it loads there by itself. When you are done there, come back here, choose Fill from LumiCast, then save.`, 'ok')
     } catch (error) {
       setStatus('.ld-persona-ed-status', error.message, 'err')
     }

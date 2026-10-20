@@ -12,3 +12,7 @@ Everything in 1.10.4 is unchanged. Don't update Lumi Studio from GitHub main ove
 After sending, Lumi Studio reads the character back the same way LumiCast does. The message under the editor now says which character went over, how many fields it had, and that the check passed. If the check fails, the message shows the error instead of saying "sent". The server log gets a line too: `lumicast_send published lumidraw_studio.lumicast.tweak; read-back ok`.
 
 In LumiCast, Get from Lumi Studio puts the tags in "04 / Lumi Studio character sheet", not in the description box. The description box fills only when this chat's Cast lorebook has an entry for that character.
+
+## 1.10.7: no button to press in LumiCast
+
+LumiCast 0.11.1 loads a character sent with Tweak in LumiCast by itself when its panel is open. If loading would replace work in LumiCast, it asks first with Load it / Not now. The message here now says "Open LumiCast" instead of pointing to a Get from Lumi Studio button.
