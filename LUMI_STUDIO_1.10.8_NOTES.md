@@ -45,3 +45,9 @@ A new checkbox in the preset editor, under Width and Height. When it's on, width
 | Two people in a wide shot, or three or more people | 100% |
 
 The parser's aspect ratio still decides the shape. With 1024×1024 that means, for example: a 3:4 close-up comes out 640×896, two people side by side 1088×832, and three people 1152×896. Drawing time roughly follows the pixel count, so a one-person close-up takes about half as long. Picture details shows the size used and why. It's off by default, and only the new pipeline uses it. Regenerating a picture keeps that picture's size.
+
+## 1.10.10: one moment per picture
+
+- **"Double Riley":** the prompt had Riley doing two things at once. The scene line said he "shoulders open the service door and hauls Eric by the belt", and his pose mixed "shoulder against door, pulling" with "walking, holding sketchbook, looking back". The picture drew one Riley for each. The parser is now told to pick one instant, and that every pose tag has to be true at that same instant.
+- **Action lines read as sentences.** "Riley pulls by the belt Eric's belt." is now "Riley pulls Eric by the belt.", "Bruenor grips hair Siarn's hair." is now "Bruenor grips Siarn's hair.", and "Siarn holds eye contact Bruenor." is now "…eye contact with Bruenor." The parser is also told to write actions that way.
+- Correction to the 1.10.8 note: the guess that Riley's long sheet caused the side-by-side wasn't backed by the prompt. None of the known triggers (multiple views, reference sheet, turnaround) were in it.

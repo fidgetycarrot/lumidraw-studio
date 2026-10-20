@@ -24676,6 +24676,12 @@ CHOOSING THE MOMENT
 - Illustrate only the CURRENT PASSAGE. Earlier context tells you who people are,
   where they are and what they wear; it never supplies the moment.
 - Pick the clearest drawable beat. If the clearest beat is sexual, draw that.
+- One instant, not a sequence. If the passage does one thing and then another
+  (shoulders the door open, then hauls him down the corridor), pick one.
+  "scene_summary" and every person's pose describe that same instant. Never mix
+  tags from before and after: someone pressing a door with their shoulder is not
+  also walking away looking back. The image model draws a second copy of the
+  person to fit both.
 - "scene_summary" never names clothing or armor that nobody in the picture is
   wearing (carried, dropped, on a rack). The image model dresses someone in it.
   Say "a bundle of gear" instead.
@@ -24720,7 +24726,8 @@ CLOTHING — this is how outfits stay consistent.
 
 POSE AND EXPRESSION
 - "pose": 2-5 tags for that person alone — standing, kneeling, leaning forward,
-  arms around neck, head tilted back, arched back, hand on hip.
+  arms around neck, head tilted back, arched back, hand on hip. All of them must
+  be true at the same instant.
 - "expression": at most one facial cue and one gaze cue. Facial cues: faint smile,
   soft smile, grin, smirk, parted lips, open mouth, pressed lips, biting lip,
   furrowed brow, raised eyebrow, half-closed eyes, closed eyes, wide-eyed,
@@ -24734,7 +24741,8 @@ INTERACTIONS AND RELATIONS
   recipient receives it. Masturbation uses the same name twice.
 - Non-sexual contact goes in "relations": "clings to", "kisses", "presses face
   against", "holds", "looks at". Add "target_part" (shoulders, neck, chest, hand)
-  when it matters.
+  when it matters. "action" must read as a sentence with the target right after
+  it ("pulls", "grips", "holds eye contact with"), and never repeats the body part.
 - Do not repeat an interaction as a relation.
 
 CAMERA
@@ -25231,8 +25239,7 @@ function compileSimpleImage(image, ctx) {
   const actionLines = uniqueStrings([
     ...(image.interactions || []).map(act => simpleActSentence(act.act, labelFor(act.actor), labelFor(act.recipient))),
     ...(image.relations || []).map(rel => {
-      const target = labelFor(rel.target)
-      const line = `${upperFirst(labelFor(rel.actor))} ${rel.action} ${rel.targetPart ? simplePossessive(target) + ' ' + rel.targetPart : target}.`
+      const line = simpleRelationSentence(labelFor(rel.actor), rel.action, labelFor(rel.target), rel.targetPart)
       return summaryKey.includes(normalizeIdentityText(line)) ? '' : line
     }),
   ].filter(Boolean))
@@ -25326,6 +25333,27 @@ function simpleSizeShare(image, compiled) {
   if (wide) return { share: 0.8, why: 'one person in a wide shot' }
   if (close) return { share: 0.55, why: 'one person, close' }
   return { share: 0.7, why: 'one person' }
+}
+
+// "<actor> <action> <target>" as a sentence. The parser sometimes puts the body
+// part inside the action too ("pulls by the belt" + belt, "grips hair" + hair),
+// which read "Riley pulls by the belt Eric's belt."
+function simpleRelationSentence(actor, action, target, part) {
+  let act = String(action || '').trim().replace(/[.\s]+$/, '')
+  const piece = String(part || '').trim().toLowerCase()
+  const actorText = upperFirst(actor)
+  if (piece) {
+    const partRe = escapeRegExp(piece)
+    const byPart = new RegExp(`\\s+(by|on|at|around)\\s+(?:the|his|her|their)\\s+${partRe}$`, 'i').exec(act)
+    if (byPart && byPart[1].toLowerCase() === 'by') return `${actorText} ${act.slice(0, byPart.index)} ${target} by the ${piece}.`
+    if (byPart) return `${actorText} ${act.slice(0, byPart.index)} ${byPart[1]} ${simplePossessive(target)} ${piece}.`
+    const endsPart = new RegExp(`\\s+(?:(?:the|his|her|their)\\s+)?${partRe}$`, 'i').exec(act)
+    if (endsPart) act = act.slice(0, endsPart.index)
+    return `${actorText} ${act} ${simplePossessive(target)} ${piece}.`
+  }
+  // "holds eye contact" + Bruenor needs a "with".
+  if (/\b(?:contact|eyes|glances|words|a look)$/i.test(act)) act += ' with'
+  return `${actorText} ${act} ${target}.`
 }
 
 function simpleRemember(memory, compiled, messageId) {
