@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.8.6'
+  const EXTENSION_VERSION = '1.8.7'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -414,6 +414,26 @@ function realSetup(ctx) {
       if (ids.size) imagePlacements = imagePlacements.filter((item) => !ids.has(String(item && item.placementId || '')))
       for (const messageId of affected) renderImagesIntoMessage(messageId)
       refreshImageVisibilityForEvent(payload)
+      return
+    }
+    // LumiCast's Update in Lumi Studio saved new sheet fields into a library entry. Show them, and put them
+    // into the editor if that entry is open, so a later Save there cannot write the old tags back.
+    if (payload.type === 'lumicast_applied') {
+      const entry = payload.entry
+      if (!entry || !entry.id) return
+      const kind = payload.kind === 'persona' ? 'persona' : 'character'
+      if (kind === 'character') { characters = Array.isArray(payload.characters) ? payload.characters : characters; renderCharacterList() }
+      else { personas = Array.isArray(payload.personas) ? payload.personas : personas; renderPersonaList() }
+      const open = $('.ld-persona-editor') && $('.ld-persona-editor').style.display !== 'none' && personaEditorId === entry.id && libEditorKind === kind
+      if (open) {
+        const profile = entry.profile || {}
+        const fields = [['.ld-persona-ed-count', profile.countTag], ['.ld-persona-ed-subject', profile.subject], ['.ld-persona-ed-identity', profile.identityTags],
+          ['.ld-persona-ed-tags', profile.appearanceTags], ['.ld-persona-ed-outfit', profile.defaultOutfitTags], ['.ld-persona-ed-anatomy', profile.anatomyTags]]
+        for (const [selector, value] of fields) { const node = $(selector); if (node) node.value = value || '' }
+        setStatus('.ld-persona-ed-status', `Updated from LumiCast and saved: “${entry.name || 'this character'}”.`, 'good')
+      }
+      const linkSelect = kind === 'character' ? $('.ld-ed-char-link') : $('.ld-ed-persona-link')
+      if (linkSelect && linkSelect.value === entry.id) (kind === 'character' ? applyCharacterLink : applyPersonaLink)(entry.id)
       return
     }
     if (payload.type === 'history_updated') {
@@ -7368,8 +7388,11 @@ ${entry.prompt || ''}`.trim()
         appearance: value('.ld-persona-ed-tags'), outfit: value('.ld-persona-ed-outfit'), anatomy: value('.ld-persona-ed-anatomy'),
       }
       if (!Object.values(sheet).some(v => v.trim())) throw new Error('This character has no tags to send yet.')
-      await call('lumicast_send', { sheet, name: value('.ld-persona-ed-name'), anchor: value('.ld-persona-ed-anchor') }, 15000)
-      setStatus('.ld-persona-ed-status', 'Sent to LumiCast. Open LumiCast (0.11.1 or newer) and it loads there by itself. When you are done there, come back to this character, choose Fill from LumiCast, then save.', 'ok')
+      // The saved entry's id lets LumiCast send the revised sheet back to this character, and only to it.
+      await call('lumicast_send', { sheet, name: value('.ld-persona-ed-name'), anchor: value('.ld-persona-ed-anchor'), id: personaEditorId || '', kind: libEditorKind === 'character' ? 'character' : 'persona' }, 15000)
+      setStatus('.ld-persona-ed-status', personaEditorId
+        ? 'Sent to LumiCast. Open LumiCast (0.11.1 or newer) and it loads there by itself. When you are done there, press Update in Lumi Studio (LumiCast 0.12.0 or newer) and this character is saved with the new tags, or come back here, choose Fill from LumiCast, then save.'
+        : 'Sent to LumiCast. This character is not saved yet, so LumiCast cannot update it here. Save it first, or use Fill from LumiCast when you are done.', 'ok')
     } catch (error) {
       setStatus('.ld-persona-ed-status', error.message, 'err')
     }

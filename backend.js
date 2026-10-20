@@ -1228,6 +1228,9 @@ async function migratePresetsToCasts() {
   return { created, skipped }
 }
 
+// The last character sent with Tweak in LumiCast, so LumiCast's update can only land on that one. Memory only.
+let lastLumiCastSend = null
+
 async function getCharacters() {
   const value = await spindle.storage.getJson(CHARACTERS_FILE, { fallback: [] })
   return Array.isArray(value) ? value : []
@@ -18540,7 +18543,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
           countTag: text(given.countTag, 40), subject: text(given.subject, 200), always: text(given.always),
           appearance: text(given.appearance), outfit: text(given.outfit), anatomy: text(given.anatomy),
         }
-        spindle.rpcPool.sync('lumicast.tweak', { version: 1, sheet, name: text(input.name, 80), anchor: text(input.anchor, 80), userId: userId || '', sentAt: Date.now() }, { requires: [] })
+        const id = text(input.id, 120); const kind = input.kind === 'persona' ? 'persona' : 'character'; const sentAt = Date.now()
+        // Remembered so an update from LumiCast is only accepted for the character that was actually sent.
+        lastLumiCastSend = id ? { id, kind, sentAt, userId: userId || '' } : null
+        spindle.rpcPool.sync('lumicast.tweak', { version: 1, sheet, name: text(input.name, 80), anchor: text(input.anchor, 80), id, kind, userId: userId || '', sentAt }, { requires: [] })
         reply = ok(payload, requestId, { sent: true })
         break
       }
@@ -20126,6 +20132,40 @@ if (typeof spindle.registerInterceptor === 'function') {
 })()
 
 spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(', '))
+// LumiCast's "Update in Lumi Studio": it publishes the revised sheet at lumicast.tweak.result, then reads this
+// endpoint, which saves those six fields into the library entry that Tweak in LumiCast sent. Only that entry,
+// only from LumiCast, and only for the latest send; everything else in the entry stays as it was.
+async function applyFromLumiCast(requesterExtensionId) {
+  if (requesterExtensionId !== 'lumicast') throw new Error('Only LumiCast can update characters this way.')
+  const sent = lastLumiCastSend
+  if (!sent) throw new Error('Lumi Studio has no record of sending this character (it may have restarted). Press Tweak in LumiCast on it again.')
+  let result
+  try { result = await spindle.rpcPool.read('lumicast.tweak.result') } catch (error) { throw new Error('LumiCast has not shared a sheet to save.') }
+  if (!result || result.version !== 1 || !result.sheet || typeof result.sheet !== 'object') throw new Error('LumiCast sent a format this Lumi Studio does not understand. Update both extensions.')
+  if (result.id !== sent.id || result.kind !== sent.kind || Number(result.sentAt) !== sent.sentAt) throw new Error('That sheet is for a different send. Press Tweak in LumiCast on the character again.')
+  if (sent.userId && result.userId && result.userId !== sent.userId) throw new Error('That sheet belongs to another Lumiverse user.')
+  const text = (value, max = 4000) => typeof value === 'string' ? value.slice(0, max).trim() : ''
+  const list = sent.kind === 'character' ? await getCharacters() : await getPersonas()
+  const index = list.findIndex((item) => item && item.id === sent.id)
+  if (index < 0) throw new Error('That character is no longer in Lumi Studio.')
+  const entry = list[index]
+  const profile = { ...(entry.profile || {}) }
+  const sheet = result.sheet
+  // Empty fields are written too: the revised sheet replaces the old one.
+  profile.countTag = text(sheet.countTag, 40); profile.subject = text(sheet.subject, 200); profile.identityTags = text(sheet.always)
+  profile.appearanceTags = text(sheet.appearance); profile.defaultOutfitTags = text(sheet.outfit); profile.anatomyTags = text(sheet.anatomy)
+  normalizeProfile(profile, profile.appearanceTags || '', sent.kind)
+  const updated = { ...entry, profile, updatedAt: Date.now() }
+  list[index] = updated
+  if (sent.kind === 'character') await saveCharacters(list); else await savePersonas(list)
+  spindle.sendToFrontend({ type: 'lumicast_applied', kind: sent.kind, entry: updated, [sent.kind === 'character' ? 'characters' : 'personas']: list }, sent.userId || undefined)
+  spindle.log.info(`[lumidraw] LumiCast updated ${sent.kind} ${sent.id}`)
+  return { ok: true, name: String(updated.name || ''), kind: sent.kind }
+}
+if (spindle.rpcPool && typeof spindle.rpcPool.handle === 'function') {
+  try { spindle.rpcPool.handle('lumicast.apply', ({ requesterExtensionId }) => applyFromLumiCast(requesterExtensionId), { requires: [] }) }
+  catch (error) { spindle.log.warn('[lumidraw] could not offer LumiCast updates: ' + (error && error.message)) }
+}
 spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || 'unknown — no manifest'))
 
 // BEGIN COORDINATED JEV SCENE PLANNER 1.5
