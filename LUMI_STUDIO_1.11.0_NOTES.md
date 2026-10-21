@@ -32,3 +32,11 @@ When someone with no sheet shows up in a picture, LS remembers their look and ou
 - Their remembered outfit carries over to the sheet once, so they don't suddenly change clothes.
 - The parser sees them once, as a sheet. Before, they also appeared as a separate "remembered person", which could confuse it.
 - The old remembered entry is removed after their first picture with the sheet.
+
+## 1.11.2: the elevator kiss
+
+Report: "Riley facing the wall. Should be grabbing Eric and looking at him." What actually happened: the picture split into two panels, Eric on the left and Riley on the right, and Riley was kissing his own reflection in the elevator mirror.
+
+- **No mirrors unless the moment is about one.** The setting had "mirrored walls" and the scene line had "mirrored corner". Those are now left out, and "mirror, reflection" goes into the negative prompt. A mirror stays when the scene line itself is about a mirror.
+- **Kissing pairs aren't placed left and right any more**, the same as sex acts since 1.10.8. Both also get "facing another".
+- **"Riley pins against wall Eric."** now reads "Riley pins Eric against the wall."

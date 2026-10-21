@@ -25209,14 +25209,17 @@ function compileSimpleImage(image, ctx) {
     if (used.has(key)) { subject.name = ''; used.get(key).name = '' }
     else used.set(key, subject)
   }
-  // Two people joined in a sex act overlap. Putting one "on the left" and the
-  // other "in the center" pulled them apart and let a third person take the role.
+  // Two people joined in a sex act or a kiss overlap. Putting one "on the left"
+  // and the other "in the center" pulled them apart: a third person took the
+  // role, or the picture split into two panels with a kiss against a mirror.
   const joined = new Set()
   for (const act of image.interactions || []) {
-    if (!['vaginal', 'anal'].includes(act.act) || simpleKey(act.actor) === simpleKey(act.recipient)) continue
+    if (!['vaginal', 'anal', 'kissing'].includes(act.act) || simpleKey(act.actor) === simpleKey(act.recipient)) continue
     for (const who of [act.actor, act.recipient]) {
       const subject = subjects.find(item => simpleKey(item.raw.name) === simpleKey(who))
-      if (subject && ['left', 'center-left', 'center', 'center-right', 'right'].includes(subject.position)) { subject.position = ''; joined.add(subject.displayName) }
+      if (!subject) continue
+      if (['left', 'center-left', 'center', 'center-right', 'right'].includes(subject.position)) { subject.position = ''; joined.add(subject.displayName) }
+      if (act.act === 'kissing' && !subject.pose.some(tag => /\b(?:facing (?:another|each other)|face-to-face|from behind)\b/i.test(tag))) subject.pose = [...subject.pose, 'facing another']
     }
   }
   if (joined.size) notes.push(`Left out left/center/right for ${[...joined].join(' and ')}, since they are joined in the act.`)
@@ -25245,6 +25248,7 @@ function compileSimpleImage(image, ctx) {
   summary = upperFirst(summary.replace(/[.]+$/, ''))
 
   // Setting: parser, else remembered, else scene card, else preset anchor.
+  const negatives0 = []
   let setting = applyBannedToList(image.setting, banned)
   let settingSource = 'story (parser)'
   if (!setting.length && (memory.setting || []).length) { setting = memory.setting.slice(); settingSource = 'remembered' }
@@ -25252,6 +25256,15 @@ function compileSimpleImage(image, ctx) {
   if (!setting.length && (ctx.anchorTags || []).length) { setting = ctx.anchorTags.slice(); settingSource = 'preset scene anchor' }
   if (!setting.length) settingSource = 'unknown'
   setting = simpleTags(setting, 8)
+  // Mirrors give the model a second copy of everyone to work with; in the
+  // elevator it had Riley kiss his own reflection. Keep them only when the
+  // moment is about a mirror.
+  if (subjects.length && !/\bmirror\b/i.test(summary) && setting.some(tag => /\b(?:mirror(?:ed|s)?|reflective|reflections?)\b/i.test(tag))) {
+    setting = setting.filter(tag => !/\b(?:mirror(?:ed|s)?|reflective|reflections?)\b/i.test(tag))
+    negatives0.push('mirror', 'reflection')
+    notes.push('Left mirrors out of the setting and added “mirror, reflection” to the negative prompt, so nobody gets a reflected double.')
+  }
+  if (subjects.length && /\bmirrored\s+/i.test(summary)) summary = summary.replace(/\bmirrored\s+/gi, '')
 
   const framing = simpleTags(applyBannedToList(image.framing, banned), 3)
   const counts = simpleCountLine(subjects)
@@ -25288,7 +25301,7 @@ function compileSimpleImage(image, ctx) {
 
   // Anatomy defences: same as 1.8, but they see unsaved people's anatomy too.
   const positive = []
-  const negatives = []
+  const negatives = [...negatives0]
   // Anima turns "armor" into plate whenever it can (big man, shield, dungeon),
   // even with "leather" in the phrase. If leather is all anyone wears, say so in
   // the negative too.
@@ -25392,6 +25405,12 @@ function simpleRelationSentence(actor, action, target, part) {
     const endsPart = new RegExp(`\\s+(?:(?:the|his|her|their)\\s+)?${partRe}$`, 'i').exec(act)
     if (endsPart) act = act.slice(0, endsPart.index)
     return `${actorText} ${act} ${simplePossessive(target)} ${piece}.`
+  }
+  // "pins against wall" + Eric reads "pins Eric against the wall".
+  const verbFirst = /^(\S+)\s+((?:against|into|onto|to|on|in|toward|towards|through|across|over|under|up)\s+\S.*)$/i.exec(act)
+  if (verbFirst && !/^(?:looks|stares|glares|gazes|smiles|nods|leans|turns|whispers|talks|speaks|calls|waves|points|reaches|walks|runs|crawls|moves|steps|clings|holds)$/i.test(verbFirst[1])) {
+    const rest = verbFirst[2].replace(/^(against|into|onto|to|on|in|through|across|over|under)\s+(?!the\b|a\b|an\b|his\b|her\b|their\b)/i, '$1 the ')
+    return `${actorText} ${verbFirst[1]} ${target} ${rest}.`
   }
   // "holds eye contact" + Bruenor needs a "with".
   if (/\b(?:contact|eyes|glances|words|a look)$/i.test(act)) act += ' with'
