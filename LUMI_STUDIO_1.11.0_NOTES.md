@@ -23,3 +23,12 @@ Everything else that went to main (the fetch fix, removing and deleting from the
 - A full story scan and a re-parse on the stub host.
 - The handoff and save-back through Lumiverse's own shared-RPC code: the tweak is sent and read back, LC syncs `tweak.result`, `lumicast.apply` saves "round eyewear" and "grey sweater" into the right entry and tells the panel, and any other extension is refused.
 - Tweak in LumiCast, viewer delete and Draw now in headless Chromium.
+
+## 1.11.1: a new sheet for someone LS already remembers
+
+When someone with no sheet shows up in a picture, LS remembers their look and outfit for that chat (Jean White's emerald gown, say). When you later make a sheet for them:
+
+- The sheet decides the body from then on. The look LS remembered is never mixed in.
+- Their remembered outfit carries over to the sheet once, so they don't suddenly change clothes.
+- The parser sees them once, as a sheet. Before, they also appeared as a separate "remembered person", which could confuse it.
+- The old remembered entry is removed after their first picture with the sheet.

@@ -24823,7 +24823,8 @@ function simpleSubjectRule(maxSubjects) {
 // The passage's own wardrobe or scene card is newer than anything remembered,
 // so it comes first; the remembered outfit is offered only as detail.
 function simpleOutfitFor(profile, key, memory, card, profiles, name = '') {
-  const remembered = simpleMemoryFor(memory, key)
+  const remembered = simpleMemoryFor(memory, key) ||
+    (profile ? simpleMemoryFor(memory, 'npc:' + simpleKey(profile.anchor || name)) : null)
   const earlier = simpleSteadyOutfit((remembered && remembered.outfit) || [])
   const entry = simpleCardEntryFor(card, profile, profile ? profile.anchor : name, profiles)
   const fromCard = entry && entry.attire ? sceneCardAttireTags(entry.attire, { keepAll: !!entry.full }) : []
@@ -24871,7 +24872,7 @@ function simpleContext(profiles, memory, card, { banned = '', fantasy = false } 
     blocks.push(lines.join('\n'))
   }
   const remembered = Object.entries((memory && memory.people) || {})
-    .filter(([key, person]) => !sheetKeys.has(key) && person && !person.ref)
+    .filter(([key, person]) => !sheetKeys.has(key) && person && !person.ref && !simpleProfileFor(person.name, profiles))
     .sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0)).slice(0, 8)
   for (const [key, person] of remembered) {
     const lines = [`${person.name} — REMEMBERED PERSON (no sheet; only draw them if they are physically in the CURRENT PASSAGE, and then copy these exactly)`]
@@ -25019,7 +25020,9 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
   const banned = (ctx.preset && ctx.preset.bannedTags) || ''
   const profile = simpleProfileFor(raw.name, profiles)
   const key = profile ? simpleProfileKey(profile) : 'npc:' + simpleKey(raw.name)
-  const remembered = simpleMemoryFor(memory, key) || {}
+  // Someone drawn before they had a sheet: their remembered outfit carries over
+  // to the new sheet once. The sheet always decides the body.
+  const remembered = simpleMemoryFor(memory, key) || (profile ? simpleMemoryFor(memory, 'npc:' + simpleKey(raw.name)) : null) || {}
   const position = total > 1 ? normalizeDirectGroupPosition(raw.position, index, total) : ''
   const explicit = ['nsfw', 'explicit'].includes(image.rating)
   const out = { key, raw, profile, position, sources: {} }
@@ -25414,6 +25417,13 @@ function simpleRemember(memory, compiled, messageId) {
       if (!simpleCount(before.count) || before.count === '1other') entry.count = subject.count
     }
     next.people[subject.key] = entry
+    // A sheet replaces the look remembered before it existed.
+    if (subject.profile) {
+      for (const name of [subject.raw && subject.raw.name, subject.displayName]) {
+        const old = 'npc:' + simpleKey(name || '')
+        if (old !== subject.key) delete next.people[old]
+      }
+    }
   }
   return next
 }
