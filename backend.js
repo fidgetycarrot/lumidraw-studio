@@ -25191,10 +25191,16 @@ function simpleSubjectAnatomy(subject, image) {
       subject.addedAnatomy.push(...simpleDefaultAnatomy(family, subject.count))
     }
   }
+  const naked = subject.outfit.some(tag => /\b(?:nude|naked|bottomless|no pants|no underwear|undone|unfastened|open fly|pulled down|exposed)\b/i.test(tag))
+  const showing = subject.raw.showAnatomy || (naked && image.rating === 'explicit')
+  // Shown with no act and nothing on the sheet: the ordinary default for their
+  // count. Anything the sheet lists (futa, size, details) is used as it is.
+  if (showing && !subject.anatomy.length && !subject.addedAnatomy.length) {
+    subject.addedAnatomy.push(...(subject.count === '1boy' ? ['penis'] : subject.count === '1girl' ? ['pussy'] : []))
+  }
   if (subject.addedAnatomy.length) subject.anatomy = uniqueStrings([...subject.anatomy, ...subject.addedAnatomy])
   if (!subject.anatomy.length) return []
-  const naked = subject.outfit.some(tag => /\b(?:nude|naked|bottomless|no pants|no underwear|undone|unfastened|open fly|pulled down|exposed)\b/i.test(tag))
-  if (subject.raw.showAnatomy || (naked && image.rating === 'explicit')) return subject.anatomy.slice()
+  if (showing) return subject.anatomy.slice()
   const needed = new Set()
   for (const act of image.interactions || []) {
     const rule = SIMPLE_ACT_ANATOMY[act.act]
@@ -25309,7 +25315,7 @@ function compileSimpleImage(image, ctx) {
   const shownAnatomy = []
   const paragraphs = subjects.map(subject => {
     const anatomy = applyBannedToList(simpleSubjectAnatomy(subject, image), banned)
-    if ((subject.addedAnatomy || []).length) notes.push(`${subject.displayName}: added “${subject.addedAnatomy.join(', ')}” for their part in the act — their sheet lists no anatomy. Add it to the sheet to choose the words yourself.`)
+    if ((subject.addedAnatomy || []).length) notes.push(`${subject.displayName}: added “${subject.addedAnatomy.join(', ')}” — their sheet lists none for what this picture shows. Fill the sheet's anatomy field only for anything unusual.`)
     shownAnatomy.push(...anatomy)
     subject.shownAnatomy = anatomy
     const body = uniqueStrings([...subject.identity, ...anatomy])

@@ -48,3 +48,9 @@ Report: "Riley should be receiving fellatio from Eric." The picture swapped them
 - **Riley's sheet has no anatomy listed,** so the prompt never said Riley had a penis. The only penis was in Eric's paragraph ("hand on penis"), and the model went with the usual femboy-gives pairing. Now, when someone's part in an act needs anatomy their sheet doesn't list, LS adds it for that picture only. That's "penis" for the receiver of fellatio, a handjob or paizuri, "pussy" for a woman receiving cunnilingus, and so on. Picture details says what was added, so it can go on the sheet. It isn't remembered as theirs.
 - **Each person's paragraph now says their part:** "giving fellatio" and "receiving fellatio" (also cunnilingus, handjobs and paizuri). Before, the act was only in the last line.
 - **In the giver's pose, "hand on penis" becomes "hand on another's penis".**
+
+## 1.11.4: sheets without anatomy work everywhere
+
+- When someone's genitals are showing but no act is going on (nude and shown, or nude in an explicit picture), and their sheet lists no anatomy, LS uses the ordinary default: "penis" for 1boy, "pussy" for 1girl. Nothing is added for 1other.
+- **Anything listed on the sheet always wins.** A futa sheet ("futanari, large penis") is used as it is. Only an act that needs something the sheet doesn't have adds more: for example, "pussy" for a futa receiving vaginal.
+- So the sheet's anatomy field is only needed for the unusual: futa, size, or details you want worded your way.
