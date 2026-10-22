@@ -40,3 +40,11 @@ Report: "Riley facing the wall. Should be grabbing Eric and looking at him." Wha
 - **No mirrors unless the moment is about one.** The setting had "mirrored walls" and the scene line had "mirrored corner". Those are now left out, and "mirror, reflection" goes into the negative prompt. A mirror stays when the scene line itself is about a mirror.
 - **Kissing pairs aren't placed left and right any more**, the same as sex acts since 1.10.8. Both also get "facing another".
 - **"Riley pins against wall Eric."** now reads "Riley pins Eric against the wall."
+
+## 1.11.3: who gives and who receives
+
+Report: "Riley should be receiving fellatio from Eric." The picture swapped them.
+
+- **Riley's sheet has no anatomy listed,** so the prompt never said Riley had a penis. The only penis was in Eric's paragraph ("hand on penis"), and the model went with the usual femboy-gives pairing. Now, when someone's part in an act needs anatomy their sheet doesn't list, LS adds it for that picture only. That's "penis" for the receiver of fellatio, a handjob or paizuri, "pussy" for a woman receiving cunnilingus, and so on. Picture details says what was added, so it can go on the sheet. It isn't remembered as theirs.
+- **Each person's paragraph now says their part:** "giving fellatio" and "receiving fellatio" (also cunnilingus, handjobs and paizuri). Before, the act was only in the last line.
+- **In the giver's pose, "hand on penis" becomes "hand on another's penis".**

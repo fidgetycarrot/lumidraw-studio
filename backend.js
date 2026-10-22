@@ -25167,8 +25167,32 @@ function simpleKeepSpecific(tags, ...knownGroups) {
   return { tags: uniqueStrings(out), kept }
 }
 
+// Default tags for someone whose part in an act needs anatomy their sheet does
+// not list. Riley's sheet had none, so "Eric is performing fellatio on Riley"
+// came with no penis on Riley at all, and the picture swapped them.
+function simpleDefaultAnatomy(family, count) {
+  if (family === 'penis') return count === '1girl' ? ['futanari', 'penis'] : ['penis']
+  if (family === 'vulva') return count === '1girl' ? ['pussy'] : []
+  if (family === 'anus') return ['anus']
+  return []
+}
+
 function simpleSubjectAnatomy(subject, image) {
-  if (!['nsfw', 'explicit'].includes(image.rating) || !subject.anatomy.length) return []
+  if (!['nsfw', 'explicit'].includes(image.rating)) return []
+  subject.addedAnatomy = []
+  for (const act of image.interactions || []) {
+    if (act.act === 'masturbation' || simpleKey(act.actor) === simpleKey(act.recipient)) continue
+    const rule = SIMPLE_ACT_ANATOMY[act.act]
+    if (!rule) continue
+    const families = [...(simpleKey(act.actor) === simpleKey(subject.raw.name) ? rule.actor || [] : []),
+      ...(simpleKey(act.recipient) === simpleKey(subject.raw.name) ? rule.recipient || [] : [])]
+    for (const family of families) {
+      if ([...subject.anatomy, ...subject.addedAnatomy].some(tag => directAnatomyTagFamily(tag) === family)) continue
+      subject.addedAnatomy.push(...simpleDefaultAnatomy(family, subject.count))
+    }
+  }
+  if (subject.addedAnatomy.length) subject.anatomy = uniqueStrings([...subject.anatomy, ...subject.addedAnatomy])
+  if (!subject.anatomy.length) return []
   const naked = subject.outfit.some(tag => /\b(?:nude|naked|bottomless|no pants|no underwear|undone|unfastened|open fly|pulled down|exposed)\b/i.test(tag))
   if (subject.raw.showAnatomy || (naked && image.rating === 'explicit')) return subject.anatomy.slice()
   const needed = new Set()
@@ -25222,6 +25246,20 @@ function compileSimpleImage(image, ctx) {
       if (act.act === 'kissing' && !subject.pose.some(tag => /\b(?:facing (?:another|each other)|face-to-face|from behind)\b/i.test(tag))) subject.pose = [...subject.pose, 'facing another']
     }
   }
+  // Say who gives and who receives inside each person's own paragraph, and make
+  // "hand on penis" in the giver's pose point at the other person. In the hotel
+  // picture "hand on penis" in Eric's paragraph gave Eric the penis.
+  const ACT_ROLES = { fellatio: ['giving fellatio', 'receiving fellatio'], cunnilingus: ['giving cunnilingus', 'receiving cunnilingus'],
+    handjob: ['giving a handjob', 'receiving a handjob'], paizuri: ['giving paizuri', 'receiving paizuri'] }
+  for (const act of image.interactions || []) {
+    const roles = ACT_ROLES[act.act]
+    if (!roles || simpleKey(act.actor) === simpleKey(act.recipient)) continue
+    const actor = subjects.find(item => simpleKey(item.raw.name) === simpleKey(act.actor))
+    const recipient = subjects.find(item => simpleKey(item.raw.name) === simpleKey(act.recipient))
+    if (!actor || !recipient) continue
+    actor.pose = uniqueStrings([roles[0], ...actor.pose.map(tag => tag.replace(/\b(hand on|hands on|holding|grabbing|stroking|licking|gripping)\s+(?:the\s+)?(penis|cock|shaft|breasts?|pussy)\b/i, "$1 another's $2"))])
+    recipient.pose = uniqueStrings([roles[1], ...recipient.pose])
+  }
   if (joined.size) notes.push(`Left out left/center/right for ${[...joined].join(' and ')}, since they are joined in the act.`)
   for (const subject of subjects) {
     const where = subject.position ? ' ' + directGroupPositionPhrase(subject.position) : ''
@@ -25271,6 +25309,7 @@ function compileSimpleImage(image, ctx) {
   const shownAnatomy = []
   const paragraphs = subjects.map(subject => {
     const anatomy = applyBannedToList(simpleSubjectAnatomy(subject, image), banned)
+    if ((subject.addedAnatomy || []).length) notes.push(`${subject.displayName}: added “${subject.addedAnatomy.join(', ')}” for their part in the act — their sheet lists no anatomy. Add it to the sheet to choose the words yourself.`)
     shownAnatomy.push(...anatomy)
     subject.shownAnatomy = anatomy
     const body = uniqueStrings([...subject.identity, ...anatomy])
@@ -25431,7 +25470,9 @@ function simpleRemember(memory, compiled, messageId) {
     if (subject.look) entry.look = subject.look
     if (!subject.profile) {
       if (!(before.appearance || []).length && subject.identity.length) entry.appearance = subject.identity.slice()
-      if (!(before.anatomy || []).length && subject.anatomy.length) entry.anatomy = subject.anatomy.slice()
+      // Anatomy added only to fit this picture's act is not remembered as theirs.
+      const ownAnatomy = subject.anatomy.filter(tag => !(subject.addedAnatomy || []).includes(tag))
+      if (!(before.anatomy || []).length && ownAnatomy.length) entry.anatomy = ownAnatomy
       if (!before.subject || /^adult (?:person|woman|man)$/.test(before.subject)) entry.subject = subject.phrase
       if (!simpleCount(before.count) || before.count === '1other') entry.count = subject.count
     }
