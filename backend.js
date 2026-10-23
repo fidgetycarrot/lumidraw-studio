@@ -25370,6 +25370,13 @@ function compileSimpleImage(image, ctx) {
       notes.push('Added “duplicate, twins” to the negative prompt, since there is more than one person.')
     }
   }
+  // Sexual scenes with only men in them are tagged "yaoi" on the boorus Anima
+  // learned from; saying so keeps both bodies male and keeps women out.
+  if (['nsfw', 'explicit'].includes(image.rating) && subjects.length >= 2 && subjects.every(subject => subject.count === '1boy') &&
+    applyBannedToList(['yaoi'], banned).length > 0 && !/\byaoi\b/i.test(joinPromptParts([preset.qualityTags, prefix]))) {
+    positive.push('yaoi')
+    notes.push('Added “yaoi”: a sexual scene with only men in it.')
+  }
   if (['nsfw', 'explicit'].includes(image.rating)) {
     negatives.push('child', 'underage', 'teenager', 'preteen', 'toddler', 'shota', 'loli')
     if (shownAnatomy.length) {
