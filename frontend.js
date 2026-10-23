@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.11.5'
+  const EXTENSION_VERSION = '1.11.6'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -434,6 +434,7 @@ function realSetup(ctx) {
       }
       const linkSelect = kind === 'character' ? $('.ld-ed-char-link') : $('.ld-ed-persona-link')
       if (linkSelect && linkSelect.value === entry.id) (kind === 'character' ? applyCharacterLink : applyPersonaLink)(entry.id)
+      refreshCastAddList()
       return
     }
     if (payload.type === 'history_updated') {
@@ -3070,6 +3071,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (persist) {
       try { localStorage.setItem(MAIN_VIEW_KEY, next) } catch { /* best effort */ }
     }
+    // A character saved elsewhere (or in another window) shows up in the cast list.
+    if (next === 'story' && typeof refreshCastAddList === 'function') refreshCastAddList()
     flushHistoryViews()
   }
 
@@ -4973,6 +4976,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           if (!confirm(`Delete saved character “${character.name}”? Presets linked to it fall back to their own stored copy, and it leaves any casts that include it.`)) return
           try {
             const result = await call('delete_character', { id: character.id })
+            refreshCastAddList()
             characters = result.characters || []
             renderCharacterList()
             setStatus('.ld-charlib-status', `Deleted “${character.name}”.`, 'good')
@@ -5012,6 +5016,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           if (!confirm(`Delete saved persona “${persona.name}”? Presets linked to it fall back to their own stored copy.`)) return
           try {
             const result = await call('delete_persona', { id: persona.id })
+            refreshCastAddList()
             personas = result.personas || []
             renderPersonaList()
             setStatus('.ld-persona-status', `Deleted “${persona.name}”.`, 'good')
@@ -7040,6 +7045,16 @@ ${entry.prompt || ''}`.trim()
     }
   }
 
+  // The "Add a saved character" list only knew the library from when the chat
+  // loaded, so a character made a minute ago (LumiCast → Fill → Save) needed a
+  // full reload to show up. Reload it whenever the library changes or Story opens.
+  var castAddRefreshTimer = 0
+  function refreshCastAddList() {
+    if (!$('.ld-wardrobe-add')) return
+    clearTimeout(castAddRefreshTimer)
+    castAddRefreshTimer = setTimeout(() => { loadWardrobe(true, false).catch(() => {}) }, 150)
+  }
+
   function renderWardrobeAdd(rows) {
     const select = $('.ld-wardrobe-add')
     if (!select) return
@@ -7899,6 +7914,7 @@ ${entry.prompt || ''}`.trim()
         const selected = $('.ld-ed-char-link') ? $('.ld-ed-char-link').value : ''
         if (selected && selected === personaEditorId) applyCharacterLink(selected)
         setStatus('.ld-persona-ed-status', `Saved reusable character “${name}”.`, 'good')
+        refreshCastAddList()
         setStatus('.ld-charlib-status', `Character library updated · ${characters.length} saved.`, 'good')
       } else {
         personas = result.personas || []
@@ -7906,6 +7922,7 @@ ${entry.prompt || ''}`.trim()
         const selected = $('.ld-ed-persona-link') ? $('.ld-ed-persona-link').value : ''
         if (selected && selected === personaEditorId) applyPersonaLink(selected)
         setStatus('.ld-persona-ed-status', `Saved reusable persona “${name}”.`, 'good')
+        refreshCastAddList()
         setStatus('.ld-persona-status', `Persona library updated · ${personas.length} saved.`, 'good')
       }
     } catch (error) { setStatus('.ld-persona-ed-status', error.message, 'err') }

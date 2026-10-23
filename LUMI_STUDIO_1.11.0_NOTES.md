@@ -54,3 +54,7 @@ Report: "Riley should be receiving fellatio from Eric." The picture swapped them
 - When someone's genitals are showing but no act is going on (nude and shown, or nude in an explicit picture), and their sheet lists no anatomy, LS uses the ordinary default: "penis" for 1boy, "pussy" for 1girl. Nothing is added for 1other.
 - **Anything listed on the sheet always wins.** A futa sheet ("futanari, large penis") is used as it is. Only an act that needs something the sheet doesn't have adds more: for example, "pussy" for a futa receiving vaginal.
 - So the sheet's anatomy field is only needed for the unusual: futa, size, or details you want worded your way.
+
+## 1.11.6: new characters show up in "Add a saved character" right away
+
+That list (Story → This chat) only knew the library from when the chat was opened, so a character you'd just made (LumiCast → Fill from LumiCast → Save) wasn't in it until you reloaded the app. It now reloads by itself when you save or delete a character or persona, when LumiCast updates one, and when you open the Story tab.
