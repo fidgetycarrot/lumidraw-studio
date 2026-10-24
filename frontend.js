@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.11.6'
+  const EXTENSION_VERSION = '1.12.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -518,28 +518,22 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ styles
   const removeStyle = dom.addStyle(`
-    .ld-launcher {
+    /* The widget: one bar with Draw now, This chat's pictures and Open Studio. */
+    .ld-dock {
       position: fixed; right: 16px; bottom: 88px; z-index: 2147482000;
-      width: 58px; height: 58px; border-radius: 16px;
-      display: flex; align-items: center; justify-content: center;
+      display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 18px;
       background: var(--lumiverse-fill, #262833); border: 1px solid var(--lumiverse-border, #3d4050);
-      color: var(--lumiverse-text, #eceef4); cursor: grab; touch-action: none;
-      box-shadow: 0 2px 10px rgba(0,0,0,.28); user-select: none;
+      color: var(--lumiverse-text, #eceef4); cursor: grab; touch-action: none; user-select: none;
+      box-shadow: 0 4px 16px rgba(0,0,0,.32);
     }
-    .ld-launcher:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
-    .ld-launcher.ld-preview-active { width:96px; height:96px; padding:0; overflow:hidden; }
-    .ld-launcher-preview { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#101116; pointer-events:none; }
-    .ld-launcher-preview[hidden], .ld-launcher-status[hidden], .ld-launcher-progress[hidden] { display:none; }
-    .ld-launcher.ld-has-preview > svg { visibility:hidden; }
-    .ld-launcher-status { position:absolute; bottom:10px; left:0; right:0; padding:4px 3px; background:rgba(12,14,20,.86); color:#fff; font:600 11px/1.25 system-ui,sans-serif; text-align:center; pointer-events:none; }
-    .ld-launcher-progress { position:absolute; bottom:3px; left:6px; width:calc(100% - 12px); height:4px; accent-color:#b8b6ff; pointer-events:none; }
-    .ld-launcher.ld-preview-error { border-color:#e69494; }
-    .ld-launcher.ld-preview-error .ld-launcher-status { color:#ffd4d4; }
-    .ld-drawnow { position:fixed; z-index:2147482000; width:32px; height:32px; padding:0; border-radius:999px;
-      display:flex; align-items:center; justify-content:center; cursor:pointer;
-      background:#3f4458; color:#fff; border:1px solid var(--lumiverse-border, #3d4050); box-shadow:0 2px 8px rgba(0,0,0,.35); }
-    .ld-drawnow:hover:not(:disabled) { background:#4b5169; }
-    .ld-drawnow:disabled { cursor:default; opacity:.85; }
+    .ld-dock-btn { width: 40px; height: 40px; padding: 0; border: 0; border-radius: 14px; background: transparent;
+      color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+    .ld-dock-btn:hover:not(:disabled) { background: var(--lumiverse-fill-subtle, #1a1b22); }
+    .ld-dock-btn:focus-visible { outline: 2px solid #b8b6ff; outline-offset: 1px; }
+    .ld-dock-btn svg { width: 21px; height: 21px; }
+    .ld-dock-btn.ld-drawnow { background: #3f4458; color: #fff; }
+    .ld-dock-btn.ld-drawnow:hover:not(:disabled) { background: #4b5169; }
+    .ld-drawnow:disabled { cursor: default; opacity: .9; }
     .ld-drawnow svg path { transform-box:fill-box; transform-origin:center; }
     .ld-drawnow.ld-busy .ld-spark-big { animation:ld-twinkle-big 1.6s ease-in-out infinite; }
     .ld-drawnow.ld-busy .ld-spark-small { animation:ld-twinkle-small 1.6s ease-in-out infinite; }
@@ -547,6 +541,41 @@ function realSetup(ctx) {
     @keyframes ld-twinkle-small { 0%,100% { transform:scale(.4); opacity:.15; } 50% { transform:scale(1.15); opacity:1; } }
     @media (prefers-reduced-motion: reduce) { .ld-drawnow.ld-busy .ld-spark-big, .ld-drawnow.ld-busy .ld-spark-small { animation:none; } }
     .ld-drawnow.ld-off { opacity:.55; }
+    /* Live preview: a card that rises above the bar while a picture is drawn. */
+    .ld-dock-preview { position: fixed; z-index: 2147482000; width: 128px; height: 128px; padding: 0; overflow: hidden;
+      border-radius: 14px; background: #101116; border: 1px solid var(--lumiverse-border, #3d4050);
+      box-shadow: 0 4px 16px rgba(0,0,0,.35); cursor: pointer; color: #fff; }
+    .ld-dock-preview[hidden] { display: none; }
+    .ld-dock-preview.ld-preview-error { border-color:#e69494; }
+    .ld-dock-preview.ld-preview-error .ld-launcher-status { color:#ffd4d4; }
+    .ld-launcher-preview { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#101116; pointer-events:none; }
+    .ld-launcher-preview[hidden], .ld-launcher-status[hidden], .ld-launcher-progress[hidden] { display:none; }
+    .ld-launcher-status { position:absolute; bottom:10px; left:0; right:0; padding:4px 3px; background:rgba(12,14,20,.86); color:#fff; font:600 11px/1.25 system-ui,sans-serif; text-align:center; pointer-events:none; }
+    .ld-launcher-progress { position:absolute; bottom:3px; left:6px; width:calc(100% - 12px); height:4px; accent-color:#b8b6ff; pointer-events:none; }
+    /* This chat's pictures */
+    .ld-pics { position: fixed; z-index: 2147482002; width: min(440px, calc(100vw - 16px)); max-height: min(70vh, 640px);
+      display: flex; flex-direction: column; border-radius: 16px; overflow: hidden;
+      background: var(--lumiverse-bg, #17181f); border: 1px solid var(--lumiverse-border, #3d4050);
+      color: var(--lumiverse-text, #eceef4); box-shadow: 0 10px 34px rgba(0,0,0,.45); font: 13px/1.4 system-ui, sans-serif; }
+    .ld-pics[hidden] { display: none; }
+    .ld-pics-head { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
+    .ld-pics-head strong { font-size:14px; }
+    .ld-pics-count { color: var(--lumiverse-text-muted, #a2a5b4); font-size:12px; flex:1; }
+    .ld-pics-close { width:30px; height:30px; border:0; border-radius:9px; background:transparent; color:inherit; cursor:pointer; font-size:15px; }
+    .ld-pics-close:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
+    .ld-pics-body { overflow-y: auto; padding: 10px; }
+    .ld-pics-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap:10px; }
+    .ld-pics-tile { display:flex; flex-direction:column; gap:5px; }
+    .ld-pics-thumb { position:relative; padding:0; border:1px solid var(--lumiverse-border, #3d4050); border-radius:10px; overflow:hidden;
+      background:#101116; cursor:zoom-in; aspect-ratio: 1 / 1; }
+    .ld-pics-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+    .ld-pics-go { padding:5px 6px; border:1px solid var(--lumiverse-border, #3d4050); border-radius:8px; background: var(--lumiverse-fill, #262833);
+      color:inherit; font:500 12px system-ui, sans-serif; cursor:pointer; }
+    .ld-pics-go:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
+    .ld-pics-msg { color: var(--lumiverse-text-muted, #a2a5b4); font-size:11px; text-align:center; }
+    .ld-pics-empty { padding: 26px 14px; text-align:center; color: var(--lumiverse-text-muted, #a2a5b4); }
+    .ld-jump-flash { animation: ld-jump-flash 2.2s ease-out 1; border-radius: 10px; }
+    @keyframes ld-jump-flash { 0%, 30% { box-shadow: 0 0 0 3px #b8b6ff; } 100% { box-shadow: 0 0 0 3px transparent; } }
     .ld-drawnow-note { position:fixed; z-index:2147482000; max-width:250px; padding:7px 10px; border-radius:9px;
       background:rgba(12,14,20,.94); color:#fff; font:500 12px/1.4 system-ui,sans-serif; box-shadow:0 2px 10px rgba(0,0,0,.35); pointer-events:none; }
     .ld-drawnow-note[hidden] { display:none; }
@@ -925,21 +954,32 @@ function realSetup(ctx) {
 
   // ------------------------------------------------------------------ markup
   dom.inject('body', `
-    <button class="ld-launcher" title="Lumi Studio" aria-label="Lumi Studio">
-      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="3" width="18" height="18" rx="3"></rect>
-        <circle cx="9" cy="9" r="1.8"></circle>
-        <path d="M21 15.5l-4.2-4.2a1.6 1.6 0 0 0-2.3 0L6 20"></path>
-      </svg>
-      <img class="ld-launcher-preview" alt="SwarmUI image in progress" draggable="false" hidden />
+    <div class="ld-dock" role="toolbar" aria-label="Lumi Studio">
+      <button class="ld-dock-btn ld-drawnow" type="button" title="Draw now" aria-label="Draw a picture of the latest story message now">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path class="ld-spark-big" d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path class="ld-spark-small" d="M19 16v4M17 18h4"></path>
+        </svg>
+      </button>
+      <button class="ld-dock-btn ld-pics-btn" type="button" title="This chat's pictures" aria-label="This chat's pictures">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="4" y="4" width="7" height="7" rx="1.5"></rect><rect x="13" y="4" width="7" height="7" rx="1.5"></rect><rect x="4" y="13" width="7" height="7" rx="1.5"></rect><rect x="13" y="13" width="7" height="7" rx="1.5"></rect>
+        </svg>
+      </button>
+      <button class="ld-dock-btn ld-launcher" type="button" title="Lumi Studio" aria-label="Open Lumi Studio">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="9" cy="9" r="1.8"></circle><path d="M21 15.5l-4.2-4.2a1.6 1.6 0 0 0-2.3 0L6 20"></path>
+        </svg>
+      </button>
+    </div>
+    <button class="ld-dock-preview" type="button" title="Open Lumi Studio" hidden>
+      <img class="ld-launcher-preview" alt="Picture being drawn" draggable="false" hidden />
       <span class="ld-launcher-status" hidden></span>
-      <progress class="ld-launcher-progress" max="100" aria-label="SwarmUI generation progress" hidden></progress>
+      <progress class="ld-launcher-progress" max="100" aria-label="Drawing progress" hidden></progress>
     </button>
-    <button class="ld-drawnow" type="button" title="Draw now" aria-label="Draw a picture of the latest story message now">
-      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path class="ld-spark-big" d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path class="ld-spark-small" d="M19 16v4M17 18h4"></path>
-      </svg>
-    </button>
+    <div class="ld-pics" role="dialog" aria-label="This chat's pictures" hidden>
+      <div class="ld-pics-head"><strong>This chat's pictures</strong><span class="ld-pics-count"></span><button class="ld-pics-close" type="button" title="Close" aria-label="Close">✕</button></div>
+      <div class="ld-pics-body"><div class="ld-pics-grid"></div><div class="ld-pics-empty" hidden></div></div>
+    </div>
     <div class="ld-drawnow-note" role="status" aria-live="polite" hidden></div>
     <div class="ld-panel">
       <div class="ld-head">
@@ -2400,7 +2440,10 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
   applyUiResetV11()
 
-  const launcher = $('.ld-launcher')
+  // The whole bar moves together; ".ld-launcher" is its Open Studio button.
+  const launcher = $('.ld-dock')
+  const studioButton = $('.ld-launcher')
+  const previewCard = $('.ld-dock-preview')
   $('.ld-launcher-preview').addEventListener('error', () => {
     if (liveRendererPreview) liveRendererPreview.preview = ''
     renderLauncherPreview()
@@ -2537,7 +2580,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
   function renderLauncherPreview() {
     if (previewDisposed) return
-    const button = $('.ld-launcher'), img = $('.ld-launcher-preview')
+    const button = $('.ld-dock-preview'), img = $('.ld-launcher-preview')
     const status = $('.ld-launcher-status'), progress = $('.ld-launcher-progress')
     if (!button || !img || !status || !progress) return
     const scan = liveScanStatus
@@ -2595,11 +2638,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       }
       return
     }
-    const resized = button.classList.contains('ld-preview-active') !== active
-    // Only the active/idle transition changes launcher dimensions. A default
-    // CSS-anchored launcher already grows inward; only a dragged one needs a
-    // geometry read and clamp. Percent/frame updates must never force layout.
-    const previousRect = resized && button.style.left ? button.getBoundingClientRect() : null
+    const shown = button.hidden !== !active
+    if (button.hidden !== !active) button.hidden = !active
     for (const [name, enabled] of [['ld-preview-active', active], ['ld-has-preview', active && !!preview], ['ld-preview-error', active && failed]]) {
       if (button.classList.contains(name) !== enabled) button.classList.toggle(name, enabled)
     }
@@ -2622,8 +2662,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (pct === null) {
       if (progress.hasAttribute('value')) progress.removeAttribute('value')
     } else if (progress.getAttribute('value') !== String(pct)) progress.value = pct
-    // Growing the draggable button must not place it beyond a phone's edge.
-    if (previousRect) applyPos(previousRect.left, previousRect.top)
+    // The card only needs placing when it appears; frames never touch layout.
+    if (shown && active) placeDockExtras()
   }
 
   function onPreviewViewportChange() {
@@ -5447,10 +5487,23 @@ ${entry.prompt || ''}`.trim()
     panel.style.bottom = 'auto'
   }
 
+  function toggleStudioPanel() {
+    panel.classList.toggle('ld-open')
+    if (panel.classList.contains('ld-open')) {
+      closePicturesSheet()
+      placePanel()
+      document.body.classList.toggle('ld-fullscreen-lock', panel.classList.contains('ld-fullscreen'))
+      if (!initialized) tryInit()
+    } else {
+      document.body.classList.remove('ld-fullscreen-lock')
+    }
+  }
+
   let drag = null
   launcher.addEventListener('pointerdown', (e) => {
     const r = launcher.getBoundingClientRect()
-    drag = { sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false }
+    const hit = e.target && e.target.closest ? e.target.closest('.ld-dock-btn') : null
+    drag = { sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false, hit }
     if (launcher.setPointerCapture) { try { launcher.setPointerCapture(e.pointerId) } catch { /* ok */ } }
   })
   launcher.addEventListener('pointermove', (e) => {
@@ -5462,52 +5515,54 @@ ${entry.prompt || ''}`.trim()
       const p = applyPos(drag.ox + dx, drag.oy + dy)
       drag.last = p
       if (panel.classList.contains('ld-open')) placePanel()
+      placeDockExtras()
     }
   })
+  // A tap is decided by the button the finger went down on: pointer capture
+  // sends the click to the bar itself, so buttons never see pointer clicks.
   launcher.addEventListener('pointerup', () => {
     if (!drag) return
-    if (drag.moved) {
-      try { localStorage.setItem(POS_KEY, JSON.stringify(drag.last)) } catch { /* ok */ }
-    } else {
-      panel.classList.toggle('ld-open')
-      if (panel.classList.contains('ld-open')) {
-        placePanel()
-        document.body.classList.toggle('ld-fullscreen-lock', panel.classList.contains('ld-fullscreen'))
-        if (!initialized) tryInit()
-      } else {
-        document.body.classList.remove('ld-fullscreen-lock')
-      }
-    }
+    const { moved, hit, last } = drag
     drag = null
+    if (moved) {
+      try { localStorage.setItem(POS_KEY, JSON.stringify(last)) } catch { /* ok */ }
+      return
+    }
+    if (!hit || hit.disabled) return
+    if (hit.classList.contains('ld-launcher')) toggleStudioPanel()
+    else if (hit.classList.contains('ld-pics-btn')) togglePicturesSheet()
+    else if (hit.classList.contains('ld-drawnow')) startDrawNow()
   })
   launcher.addEventListener('pointercancel', () => { drag = null })
   // ---------- Draw now (the small button on the widget)
   // It calls runStoryScan — the exact function behind Story → Scan latest — so it
   // always uses the selected mode and pipeline (simple or 1.8, Direct or Parser).
   // There is deliberately no second generate path to fall out of step.
-  function placeDrawNow() {
-    const button = $('.ld-drawnow')
-    if (!button) return
+  // The preview card and the note sit above the bar (below it when the bar is
+  // near the top), right-aligned with it, the note beyond the card.
+  function placeDockExtras() {
     const r = launcher.getBoundingClientRect()
-    if (!r.width) { button.style.display = 'none'; return }
-    button.style.display = ''
-    const size = button.offsetWidth || 32
-    button.style.left = clamp(r.left - size / 2 + 4, 2, window.innerWidth - size - 2) + 'px'
-    button.style.top = clamp(r.top - size / 2 + 4, 2, window.innerHeight - size - 2) + 'px'
+    if (!r.width) return
+    const above = r.top > window.innerHeight / 2
+    let edge = above ? r.top - 8 : r.bottom + 8
+    const card = previewCard
+    if (card && !card.hidden) {
+      const w = card.offsetWidth || 128, h = card.offsetHeight || 128
+      card.style.left = clamp(r.right - w, 4, window.innerWidth - w - 4) + 'px'
+      const top = clamp(above ? edge - h : edge, 4, window.innerHeight - h - 4)
+      card.style.top = top + 'px'
+      edge = above ? top - 8 : top + h + 8
+    }
     const note = $('.ld-drawnow-note')
-    if (note && !note.hidden) placeDrawNowNote()
+    if (note && !note.hidden) {
+      const w = note.offsetWidth || 220, h = note.offsetHeight || 32
+      note.style.left = clamp(r.right - w, 4, window.innerWidth - w - 4) + 'px'
+      note.style.top = clamp(above ? edge - h : edge, 4, window.innerHeight - h - 4) + 'px'
+    }
+    if (typeof placePicturesSheet === 'function') placePicturesSheet()
   }
-  function placeDrawNowNote() {
-    const note = $('.ld-drawnow-note')
-    if (!note) return
-    const r = launcher.getBoundingClientRect()
-    const w = note.offsetWidth || 220
-    const h = note.offsetHeight || 32
-    let y = r.top - h - 10
-    if (y < 4) y = r.bottom + 10
-    note.style.left = clamp(r.right - w, 4, window.innerWidth - w - 4) + 'px'
-    note.style.top = clamp(y, 4, window.innerHeight - h - 4) + 'px'
-  }
+  const placeDrawNow = placeDockExtras
+  function placeDrawNowNote() { placeDockExtras() }
   let drawNowNoteTimer = null
   function showDrawNowNote(text, ms = 6000) {
     const note = $('.ld-drawnow-note')
@@ -5525,9 +5580,7 @@ ${entry.prompt || ''}`.trim()
     return 'Story pictures are off. Pick a mode in Story → When to draw.'
   }
   const drawNowButton = $('.ld-drawnow')
-  if (drawNowButton) {
-    drawNowButton.addEventListener('click', async (event) => {
-      event.stopPropagation()
+  async function startDrawNow() {
       if (drawNowButton.disabled) return
       if (!initialized) {
         showDrawNowNote('Loading Lumi Studio…', 3000)
@@ -5540,23 +5593,169 @@ ${entry.prompt || ''}`.trim()
       // force: a button press always makes a new picture, even for a message
       // that already has one.
       runStoryScan(null, 'the latest story message', true)
-    })
+  }
+  if (drawNowButton) {
+    drawNowButton.addEventListener('click', (event) => { if (event.detail === 0) startDrawNow() })
     window.addEventListener('resize', placeDrawNow)
     if (typeof ResizeObserver === 'function') new ResizeObserver(placeDrawNow).observe(launcher)
     new MutationObserver(placeDrawNow).observe(launcher, { attributes: true, attributeFilter: ['style', 'class'] })
     requestAnimationFrame(placeDrawNow)
   }
 
+  // ---------- This chat's pictures (the middle button on the widget)
+  // Every picture LS placed in the open chat that is still there, newest message
+  // first. "Go to message" closes LS and scrolls the chat to that message.
+  let picturesSeq = 0
+  let picturesOrder = []
+  function closePicturesSheet() {
+    const sheet = $('.ld-pics')
+    if (sheet && !sheet.hidden) { sheet.hidden = true; picturesSeq++ }
+  }
+  function placePicturesSheet() {
+    const sheet = $('.ld-pics')
+    if (!sheet || sheet.hidden) return
+    const r = launcher.getBoundingClientRect()
+    const w = sheet.offsetWidth || 440, h = sheet.offsetHeight || 400
+    const above = r.top > window.innerHeight / 2
+    sheet.style.left = clamp(r.right - w, 8, window.innerWidth - w - 8) + 'px'
+    sheet.style.top = clamp(above ? r.top - h - 10 : r.bottom + 10, 8, window.innerHeight - h - 8) + 'px'
+  }
+  async function togglePicturesSheet() {
+    const sheet = $('.ld-pics')
+    if (!sheet) return
+    if (!sheet.hidden) { closePicturesSheet(); return }
+    if (panel.classList.contains('ld-open')) toggleStudioPanel()
+    sheet.hidden = false
+    renderPictures(null, 'Loading this chat’s pictures…')
+    placePicturesSheet()
+    const seq = ++picturesSeq
+    if (!initialized && !(await tryInit())) {
+      if (seq === picturesSeq) renderPictures([], 'Lumi Studio is still loading. Try again in a moment.')
+      return
+    }
+    try {
+      const res = await call('chat_pictures', { chatId: activeChatIdFromCtx() || '' }, 30000)
+      if (seq !== picturesSeq || sheet.hidden) return
+      picturesOrder = Array.isArray(res.messageOrder) ? res.messageOrder.map(String) : []
+      renderPictures(Array.isArray(res.pictures) ? res.pictures : [], res.chatId ? 'No pictures in this chat yet.' : 'Open a chat first.')
+    } catch (error) {
+      if (seq === picturesSeq) renderPictures([], error.message)
+    }
+    placePicturesSheet()
+  }
+  function renderPictures(items, emptyText) {
+    const grid = $('.ld-pics-grid'), empty = $('.ld-pics-empty'), count = $('.ld-pics-count')
+    if (!grid || !empty || !count) return
+    grid.replaceChildren()
+    const list = items || []
+    count.textContent = items ? (list.length === 1 ? '1 picture' : `${list.length} pictures`) : ''
+    empty.hidden = list.length > 0
+    empty.textContent = emptyText || ''
+    for (const item of list) {
+      const tile = document.createElement('div')
+      tile.className = 'ld-pics-tile'
+      const thumb = document.createElement('button')
+      thumb.type = 'button'
+      thumb.className = 'ld-pics-thumb'
+      thumb.title = 'Open this picture'
+      const img = document.createElement('img')
+      img.alt = item.alt || 'Picture'
+      img.loading = 'lazy'
+      img.decoding = 'async'
+      img.src = previewUrl(item.url, 'sm')
+      thumb.appendChild(img)
+      thumb.addEventListener('click', () => openPictureFromSheet(item))
+      const go = document.createElement('button')
+      go.type = 'button'
+      go.className = 'ld-pics-go'
+      go.textContent = 'Go to message'
+      go.addEventListener('click', () => { goToPictureMessage(item) })
+      tile.append(thumb, go)
+      if (Number(item.index) >= 0) {
+        const label = document.createElement('div')
+        label.className = 'ld-pics-msg'
+        label.textContent = `Message ${Number(item.index) + 1}`
+        tile.appendChild(label)
+      }
+      grid.appendChild(tile)
+    }
+  }
+  function openPictureFromSheet(item) {
+    const opened = findHistoryImage(item.url) ? openLightbox(item.url) : openLightboxForChatOnly(item.url)
+    if (opened) {
+      clickedChatImageUrl = item.url
+      clickedChatPlacementId = String(item.placementId || '')
+    }
+  }
+  // The chat list only keeps messages near the screen in the page, so an older
+  // message has to be scrolled toward until it appears.
+  function chatScroller() {
+    const listed = ctx.dom && typeof ctx.dom.listMessageElements === 'function' ? ctx.dom.listMessageElements() : []
+    let node = (listed[0] && listed[0].element) || document.querySelector('[data-message-id]')
+    while (node && node !== document.body && node !== document.documentElement) {
+      const style = getComputedStyle(node)
+      if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 4) return node
+      node = node.parentElement
+    }
+    return null
+  }
+  function mountedMessageIndexes() {
+    const listed = ctx.dom && typeof ctx.dom.listMessageElements === 'function'
+      ? ctx.dom.listMessageElements().map(item => String(item.messageId || ''))
+      : [...document.querySelectorAll('[data-message-id]')].map(node => node.getAttribute('data-message-id'))
+    return listed.map(id => picturesOrder.indexOf(String(id))).filter(index => index >= 0)
+  }
+  async function scrollChatUntilMounted(messageId, targetIndex) {
+    const scroller = chatScroller()
+    if (!scroller) return null
+    let stuck = 0
+    for (let step = 0; step < 90; step++) {
+      const found = findMountedMessageElement(messageId)
+      if (found) return found
+      const shown = mountedMessageIndexes()
+      let direction = -1
+      if (targetIndex >= 0 && shown.length) {
+        if (targetIndex > Math.max(...shown)) direction = 1
+        else if (targetIndex >= Math.min(...shown)) direction = step % 2 ? 1 : -1
+      }
+      const before = scroller.scrollTop
+      scroller.scrollBy(0, direction * Math.max(200, scroller.clientHeight * 0.85))
+      await new Promise(resolve => setTimeout(resolve, 150))
+      stuck = Math.abs(scroller.scrollTop - before) < 2 ? stuck + 1 : 0
+      if (stuck >= 4) break
+    }
+    return findMountedMessageElement(messageId)
+  }
+  async function goToPictureMessage(item) {
+    closePicturesSheet()
+    if (lightbox.classList.contains('ld-open')) closeLightbox()
+    if (panel.classList.contains('ld-open')) toggleStudioPanel()
+    const id = String(item.messageId || '')
+    const element = findMountedMessageElement(id) || await scrollChatUntilMounted(id, Number(item.index))
+    if (!element) { showDrawNowNote('Couldn’t find that message on screen. It may be further up than the chat has loaded.', 7000); return }
+    const picture = item.placementId ? element.querySelector(`[data-lumidraw-placement-id="${CSS.escape(String(item.placementId))}"]`) : null
+    const target = picture || element
+    try { target.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch { target.scrollIntoView() }
+    target.classList.remove('ld-jump-flash')
+    void target.offsetWidth
+    target.classList.add('ld-jump-flash')
+    setTimeout(() => target.classList.remove('ld-jump-flash'), 2400)
+  }
+  $('.ld-pics-close').addEventListener('click', closePicturesSheet)
+  // A tap anywhere else closes the sheet, like a menu.
+  function onPicturesOutsidePointer(event) {
+    const sheet = $('.ld-pics')
+    if (!sheet || sheet.hidden) return
+    if (event.target && event.target.closest && event.target.closest('.ld-pics, .ld-dock, .ld-lightbox')) return
+    closePicturesSheet()
+  }
+  document.addEventListener('pointerdown', onPicturesOutsidePointer, true)
+
+
   // Pointer taps are handled above; keyboard activation has no pointerdown.
-  launcher.addEventListener('click', (event) => {
-    if (event.detail !== 0) return
-    panel.classList.toggle('ld-open')
-    if (panel.classList.contains('ld-open')) {
-      placePanel()
-      document.body.classList.toggle('ld-fullscreen-lock', panel.classList.contains('ld-fullscreen'))
-      if (!initialized) tryInit()
-    } else document.body.classList.remove('ld-fullscreen-lock')
-  })
+  studioButton.addEventListener('click', (event) => { if (event.detail === 0) toggleStudioPanel() })
+  $('.ld-pics-btn').addEventListener('click', (event) => { if (event.detail === 0) togglePicturesSheet() })
+  previewCard.addEventListener('click', () => { if (!panel.classList.contains('ld-open')) toggleStudioPanel() })
 
   // Settings was a flat scroll of five unrelated cards, where a cloud panel for a
   // feature Eric does not use sat as prominently as the Draw Things connection he
@@ -6439,7 +6638,7 @@ ${entry.prompt || ''}`.trim()
     if (imageRestoreDisposed) return
     const index = !document.hidden && imagePlacements.length ? placementMessageIndex() : null
     const affected = new Set()
-    const extensionUI = '.ld-panel, .ld-launcher, .ld-lightbox, [data-spindle-ext], [data-lumidraw="1"]'
+    const extensionUI = '.ld-panel, .ld-dock, .ld-dock-preview, .ld-pics, .ld-lightbox, [data-spindle-ext], [data-lumidraw="1"]'
     for (const record of records) {
       const target = record.target.nodeType === 1 ? record.target : record.target.parentElement
       // Our widget/gallery (and other extensions' widgets) are not chat mounts.
@@ -9093,6 +9292,7 @@ ${entry.prompt || ''}`.trim()
     if (rescanInputAction && typeof rescanInputAction.destroy === 'function') rescanInputAction.destroy()
     window.removeEventListener('keydown', onStoryPickerKeyDown)
     window.removeEventListener('resize', placeDrawNow)
+    document.removeEventListener('pointerdown', onPicturesOutsidePointer, true)
     if (drawNowNoteTimer) clearTimeout(drawNowNoteTimer)
     window.removeEventListener('resize', syncTextEditorViewport)
     if (textEditorViewport) {

@@ -19909,6 +19909,31 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }
 
 
+      // "This chat's pictures": every picture LS placed in the chat that is still
+      // there (current swipe only), newest message first, with each message's
+      // position so the panel can say "Message 42" and find its way back to it.
+      case 'chat_pictures': {
+        let chatId = String(payload.chatId || '').trim()
+        if (!chatId) chatId = String((await resolveActiveChatId(userId)) || '')
+        if (!chatId) { reply = ok(payload, requestId, { chatId: '', pictures: [], messageOrder: [] }); break }
+        const placements = await visibleImagePlacements(userId, chatId)
+        let messageOrder = []
+        try {
+          const { messages } = await fetchMessages(userId, chatId)
+          messageOrder = messages.map((message) => String(messageBits(message).id || ''))
+        } catch { /* positions are a nicety */ }
+        const position = new Map(messageOrder.map((id, index) => [id, index]))
+        const pictures = placements.map((item) => ({
+          placementId: String(item.placementId || ''), messageId: String(item.messageId || ''), url: String(item.url || ''),
+          imageId: String(item.imageId || ''), alt: String(item.alt || ''), width: item.width || 0, height: item.height || 0,
+          at: Number(item.at) || 0, order: Number(item.order) || 0,
+          index: position.has(String(item.messageId || '')) ? position.get(String(item.messageId || '')) : -1,
+        })).filter((item) => item.url)
+          .sort((a, b) => (b.index - a.index) || (a.order - b.order) || (b.at - a.at))
+        reply = ok(payload, requestId, { chatId, pictures, messageOrder })
+        break
+      }
+
       case 'get_image_mounts': {
         let chatId = String(payload.chatId || '').trim()
         if (!chatId) chatId = String((await resolveActiveChatId(userId)) || '')
