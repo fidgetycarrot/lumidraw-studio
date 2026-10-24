@@ -23,3 +23,15 @@ The middle button opens a panel over the chat with every picture LS placed in th
 ## Why not Lumiverse's own gallery
 
 Lumiverse's gallery belongs to the character card, not the chat, so it would mix pictures from every chat with that character. Extensions can also only read it, not add to it.
+
+## 1.12.1: Go to message uses Lumiverse's own Find
+
+On a long chat, 1.12.0 scrolled the chat upward in visible, choppy steps looking for the message, and gave up when Lumiverse hadn't loaded that far back. Lumiverse only keeps part of a long chat loaded, and extensions can't load more or scroll its list properly. Lumiverse's own **Find in chat** (Ctrl/⌘+F) can.
+
+- If the message is already on screen, LS just scrolls to the picture.
+- Otherwise LS opens Find, searches a few words that appear in that message (taken from the picture's anchor words, or the start of the message), and lets Lumiverse load the older history and glide there, then closes Find. If the words also match an earlier message, it steps to the next match.
+- A note says "Going to message N…". If it can't get there, the note points to Lumiverse's message list in the chat's top bar.
+
+You'll briefly see Lumiverse's Find bar open and close. On a phone, the keyboard may flash up for a moment.
+
+This relies on Lumiverse's Find bar working the way it does today. If a Lumiverse update changes it, Go to message falls back to that note.

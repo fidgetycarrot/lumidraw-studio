@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.12.0'
+  const EXTENSION_VERSION = '1.12.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -5606,7 +5606,6 @@ ${entry.prompt || ''}`.trim()
   // Every picture LS placed in the open chat that is still there, newest message
   // first. "Go to message" closes LS and scrolls the chat to that message.
   let picturesSeq = 0
-  let picturesOrder = []
   function closePicturesSheet() {
     const sheet = $('.ld-pics')
     if (sheet && !sheet.hidden) { sheet.hidden = true; picturesSeq++ }
@@ -5636,7 +5635,6 @@ ${entry.prompt || ''}`.trim()
     try {
       const res = await call('chat_pictures', { chatId: activeChatIdFromCtx() || '' }, 30000)
       if (seq !== picturesSeq || sheet.hidden) return
-      picturesOrder = Array.isArray(res.messageOrder) ? res.messageOrder.map(String) : []
       renderPictures(Array.isArray(res.pictures) ? res.pictures : [], res.chatId ? 'No pictures in this chat yet.' : 'Open a chat first.')
     } catch (error) {
       if (seq === picturesSeq) renderPictures([], error.message)
@@ -5687,52 +5685,63 @@ ${entry.prompt || ''}`.trim()
       clickedChatPlacementId = String(item.placementId || '')
     }
   }
-  // The chat list only keeps messages near the screen in the page, so an older
-  // message has to be scrolled toward until it appears.
-  function chatScroller() {
-    const listed = ctx.dom && typeof ctx.dom.listMessageElements === 'function' ? ctx.dom.listMessageElements() : []
-    let node = (listed[0] && listed[0].element) || document.querySelector('[data-message-id]')
-    while (node && node !== document.body && node !== document.documentElement) {
-      const style = getComputedStyle(node)
-      if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 4) return node
-      node = node.parentElement
+  // Lumiverse keeps only part of a long chat loaded, and extensions cannot load
+  // more or scroll its list. Its own Find in chat can: searching a few words that
+  // only that message contains loads the older history and glides there. So LS
+  // opens Find, searches those words, waits for the message, and closes Find.
+  const pause = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+  async function waitFor(check, ms) {
+    const until = Date.now() + ms
+    for (;;) {
+      const value = check()
+      if (value || Date.now() > until) return value || null
+      await pause(80)
     }
-    return null
   }
-  function mountedMessageIndexes() {
-    const listed = ctx.dom && typeof ctx.dom.listMessageElements === 'function'
-      ? ctx.dom.listMessageElements().map(item => String(item.messageId || ''))
-      : [...document.querySelectorAll('[data-message-id]')].map(node => node.getAttribute('data-message-id'))
-    return listed.map(id => picturesOrder.indexOf(String(id))).filter(index => index >= 0)
+  function findBarInput() {
+    return document.querySelector('[data-component="ChatFindBar"] input')
   }
-  async function scrollChatUntilMounted(messageId, targetIndex) {
-    const scroller = chatScroller()
-    if (!scroller) return null
-    let stuck = 0
-    for (let step = 0; step < 90; step++) {
-      const found = findMountedMessageElement(messageId)
-      if (found) return found
-      const shown = mountedMessageIndexes()
-      let direction = -1
-      if (targetIndex >= 0 && shown.length) {
-        if (targetIndex > Math.max(...shown)) direction = 1
-        else if (targetIndex >= Math.min(...shown)) direction = step % 2 ? 1 : -1
-      }
-      const before = scroller.scrollTop
-      scroller.scrollBy(0, direction * Math.max(200, scroller.clientHeight * 0.85))
-      await new Promise(resolve => setTimeout(resolve, 150))
-      stuck = Math.abs(scroller.scrollTop - before) < 2 ? stuck + 1 : 0
-      if (stuck >= 4) break
+  async function jumpWithLumiverseFind(messageId, words) {
+    if (!words) return null
+    let input = findBarInput()
+    if (!input) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', ctrlKey: true, bubbles: true, cancelable: true }))
+      input = await waitFor(findBarInput, 1500)
     }
-    return findMountedMessageElement(messageId)
+    if (!input) return null
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+    setValue.call(input, words)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    let element = await waitFor(() => findMountedMessageElement(messageId), 8000)
+    // The same words can turn up in an earlier message; Enter moves to the next match.
+    for (let step = 0; !element && step < 4 && findBarInput(); step++) {
+      findBarInput().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      element = await waitFor(() => findMountedMessageElement(messageId), 3000)
+    }
+    // Let Lumiverse finish its glide before Find closes.
+    await pause(900)
+    const bar = findBarInput()
+    if (bar) {
+      bar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      bar.blur()
+    }
+    return findMountedMessageElement(messageId) || element
   }
   async function goToPictureMessage(item) {
     closePicturesSheet()
     if (lightbox.classList.contains('ld-open')) closeLightbox()
     if (panel.classList.contains('ld-open')) toggleStudioPanel()
     const id = String(item.messageId || '')
-    const element = findMountedMessageElement(id) || await scrollChatUntilMounted(id, Number(item.index))
-    if (!element) { showDrawNowNote('Couldn’t find that message on screen. It may be further up than the chat has loaded.', 7000); return }
+    const label = Number(item.index) >= 0 ? `message ${Number(item.index) + 1}` : 'that message'
+    let element = findMountedMessageElement(id)
+    if (!element) {
+      showDrawNowNote(`Going to ${label}…`, 4000)
+      element = await jumpWithLumiverseFind(id, item.snippet)
+    }
+    if (!element) {
+      showDrawNowNote(`Couldn’t jump to ${label}. Lumiverse’s message list (in the chat’s top bar) can take you there.`, 9000)
+      return
+    }
     const picture = item.placementId ? element.querySelector(`[data-lumidraw-placement-id="${CSS.escape(String(item.placementId))}"]`) : null
     const target = picture || element
     try { target.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch { target.scrollIntoView() }

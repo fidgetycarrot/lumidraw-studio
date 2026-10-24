@@ -1401,6 +1401,27 @@ async function listImagePlacements(chatId) {
   return out.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0))
 }
 
+// A few words that appear exactly in the message, for Lumiverse's own Find in
+// chat to search for: it loads older history and scrolls there smoothly, which
+// an extension cannot do itself. The picture's anchor words come first.
+function chatPictureJumpSnippet(content, anchor) {
+  const raw = String(content || '')
+  if (!raw) return ''
+  const words = (text) => String(text || '').match(/[A-Za-z0-9][A-Za-z0-9'’-]*/g) || []
+  const anchorWords = words(anchor)
+  for (let size = Math.min(8, anchorWords.length); size >= 4; size--) {
+    for (let start = 0; start + size <= anchorWords.length; start++) {
+      const run = anchorWords.slice(start, start + size).join(' ')
+      if (raw.includes(run)) return run
+    }
+  }
+  const plain = raw.replace(/<[^>]*>/g, '\n')
+  for (const match of plain.matchAll(/[A-Za-z][A-Za-z'’]*(?:[ ]+[A-Za-z][A-Za-z'’]*){5,7}/g)) {
+    if (raw.includes(match[0])) return match[0]
+  }
+  return ''
+}
+
 async function visibleImagePlacements(userId, chatId) {
   if (!(await listImagePlacements(chatId)).length) return []
   const { messages } = await fetchMessages(userId, chatId)
@@ -19918,9 +19939,14 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (!chatId) { reply = ok(payload, requestId, { chatId: '', pictures: [], messageOrder: [] }); break }
         const placements = await visibleImagePlacements(userId, chatId)
         let messageOrder = []
+        const contentById = new Map()
         try {
           const { messages } = await fetchMessages(userId, chatId)
-          messageOrder = messages.map((message) => String(messageBits(message).id || ''))
+          for (const message of messages) {
+            const bits = messageBits(message)
+            messageOrder.push(String(bits.id || ''))
+            contentById.set(String(bits.id || ''), String(bits.content || ''))
+          }
         } catch { /* positions are a nicety */ }
         const position = new Map(messageOrder.map((id, index) => [id, index]))
         const pictures = placements.map((item) => ({
@@ -19928,6 +19954,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           imageId: String(item.imageId || ''), alt: String(item.alt || ''), width: item.width || 0, height: item.height || 0,
           at: Number(item.at) || 0, order: Number(item.order) || 0,
           index: position.has(String(item.messageId || '')) ? position.get(String(item.messageId || '')) : -1,
+          snippet: chatPictureJumpSnippet(contentById.get(String(item.messageId || '')), item.anchor),
         })).filter((item) => item.url)
           .sort((a, b) => (b.index - a.index) || (a.order - b.order) || (b.at - a.at))
         reply = ok(payload, requestId, { chatId, pictures, messageOrder })
