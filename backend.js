@@ -20275,6 +20275,42 @@ if (spindle.rpcPool && typeof spindle.rpcPool.handle === 'function') {
   try { spindle.rpcPool.handle('lumicast.apply', ({ requesterExtensionId }) => applyFromLumiCast(requesterExtensionId), { requires: [] }) }
   catch (error) { spindle.log.warn('[lumidraw] could not offer LumiCast updates: ' + (error && error.message)) }
 }
+// Paige's Make my card, through LumiCast: LumiCast translates each look and publishes the sheet at
+// lumicast.paige.sheet, then reads this endpoint. A character or persona with the same name gets its six sheet
+// fields replaced (everything else in it stays); otherwise a new reusable one is added. Only LumiCast may call it.
+async function addFromLumiCast(requesterExtensionId) {
+  if (requesterExtensionId !== 'lumicast') throw new Error('Only LumiCast can add characters this way.')
+  let shared
+  try { shared = await spindle.rpcPool.read('lumicast.paige.sheet') } catch (error) { throw new Error('LumiCast has not shared a sheet to add.') }
+  if (!shared || shared.version !== 1 || !shared.sheet || typeof shared.sheet !== 'object') throw new Error('LumiCast sent a format this Lumi Studio does not understand. Update both extensions.')
+  const text = (value, max = 4000) => typeof value === 'string' ? value.slice(0, max).trim() : ''
+  const name = text(shared.name, 80)
+  if (!name) throw new Error('The character from LumiCast has no name.')
+  const kind = shared.kind === 'persona' ? 'persona' : 'character'
+  const sheet = shared.sheet
+  const list = kind === 'character' ? await getCharacters() : await getPersonas()
+  const key = name.toLowerCase()
+  const index = list.findIndex((item) => item && String(item.name || '').trim().toLowerCase() === key)
+  const old = index >= 0 ? list[index] : null
+  const profile = { ...((old && old.profile) || {}) }
+  profile.countTag = text(sheet.countTag, 40); profile.subject = text(sheet.subject, 200); profile.identityTags = text(sheet.always)
+  profile.appearanceTags = text(sheet.appearance); profile.defaultOutfitTags = text(sheet.outfit); profile.anatomyTags = text(sheet.anatomy)
+  if (!String(profile.anchor || '').trim()) profile.anchor = name
+  normalizeProfile(profile, profile.appearanceTags || '', kind)
+  const entry = old ? { ...old, profile, updatedAt: Date.now() }
+    : { id: `${kind}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, name, profile, updatedAt: Date.now() }
+  if (old) list[index] = entry; else list.push(entry)
+  list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+  if (kind === 'character') await saveCharacters(list); else await savePersonas(list)
+  // The same message as LumiCast's update, so an open Lumi Studio panel shows the new or changed entry.
+  spindle.sendToFrontend({ type: 'lumicast_applied', kind, entry, [kind === 'character' ? 'characters' : 'personas']: list }, shared.userId || undefined)
+  spindle.log.info(`[lumidraw] ${old ? 'updated' : 'added'} ${kind} "${name}" from Paige through LumiCast`)
+  return { ok: true, updated: !!old, name, kind }
+}
+if (spindle.rpcPool && typeof spindle.rpcPool.handle === 'function') {
+  try { spindle.rpcPool.handle('lumicast.add', ({ requesterExtensionId }) => addFromLumiCast(requesterExtensionId), { requires: [] }) }
+  catch (error) { spindle.log.warn('[lumidraw] could not offer adding characters from LumiCast: ' + (error && error.message)) }
+}
 spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || 'unknown — no manifest'))
 
 // BEGIN COORDINATED JEV SCENE PLANNER 1.5
