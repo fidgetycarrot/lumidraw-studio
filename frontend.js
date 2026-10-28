@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.16.0'
+  const EXTENSION_VERSION = '1.17.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2388,7 +2388,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           mossStyle.addEventListener('ld-sync', syncPick)
           const mossNegative = document.createElement('textarea')
           mossNegative.className = 'ld-ed-moss-negative'; mossNegative.rows = 2
-          mossNegative.placeholder = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, jpeg artifacts'
+          mossNegative.placeholder = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, jpeg artifacts, 3d, doll, plastic skin'
           mossBox.appendChild(field('Negative prompt for MOSS', mossNegative, 'Leave empty to use the example shown. Your Story negative prompt is written for Anima, so it is not used here.'))
           const mossLayout = document.createElement('input')
           mossLayout.type = 'checkbox'; mossLayout.className = 'ld-ed-moss-layout'

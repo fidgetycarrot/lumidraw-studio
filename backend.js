@@ -26079,7 +26079,7 @@ async function finishPromptOnlyScan({ userId, preset, prepared, origin, target, 
       width: dims.width, height: dims.height,
       // What to set in the other app. MOSS's own recommended settings when the
       // preset leaves them empty.
-      steps: Number(config.steps) || (moss ? 50 : ''), cfg: Number(config.guidance_scale) || (moss ? 3 : ''),
+      steps: Number(config.steps) || (moss ? 50 : ''), cfg: Number(config.guidance_scale) || (moss ? 4 : ''),
       shift: moss ? 5 : '',
       presetName: preset.name || '', notes: compiled.debug.notes.slice(0, 12),
     })
@@ -26265,7 +26265,7 @@ const MOSS_STYLES = {
   comic: 'A Western comic-book illustration with bold inked lines, flat colors, strong shadows and a halftone texture.',
 }
 const MOSS_DEFAULT_STYLE = MOSS_STYLES.anime
-const MOSS_DEFAULT_NEGATIVE = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, jpeg artifacts'
+const MOSS_DEFAULT_NEGATIVE = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, jpeg artifacts, 3d, doll, plastic skin'
 
 function presetPromptStyle(preset) {
   return preset && preset.promptStyle === 'moss' ? 'moss' : 'anima'
@@ -26472,6 +26472,16 @@ function mossIsAdjective(tag) {
 }
 
 function mossPersonParagraph(subject) {
+  const parts = mossPersonParts(subject)
+  return [...parts.look, ...parts.doing].join(' ')
+}
+
+// Body-shape words for the opening tag line (one-person pictures only).
+const MOSS_SHAPE_TAG_RE = /\b(?:chest|waist|hips|thighs|shoulders|breasts|build|figure|frame|abs|legs)\b/i
+
+// One person, split in two: how they look (kept the same every picture) and
+// what they are doing, wearing and showing in this one.
+function mossPersonParts(subject) {
   const p = mossPronouns(subject.count)
   // Franchise words in the sheet's phrase ("adult man adeptus astartes") move
   // to the franchise sentence.
@@ -26518,6 +26528,12 @@ function mossPersonParagraph(subject) {
     }
     if (trimmed.length) lines.push(`${p.subject} ${p.have} ${mossList(trimmed.map(mossNoun))}.`)
   }
+  const lookCount = lines.length
+  const bodyTags = uniqueStrings([
+    ...(feminineMale ? ['otoko no ko', 'feminine face', 'flat chest'] : []),
+    ...build.filter(word => !['rugged', 'handsome', 'beautiful', 'pretty', 'cute', 'elegant'].includes(word)),
+    ...franchise.rest.filter(tag => MOSS_SHAPE_TAG_RE.test(tag) && tag.split(' ').length <= 3 && !(helmet && sealed)),
+  ]).slice(0, 9)
   if (outfit.length) {
     lines.push(outfit.length === 1 && /^(?:nude|naked|completely nude)$/i.test(outfit[0])
       ? `${p.subject} ${p.be} nude.` : `${p.subject} ${p.wear} ${mossList(outfit.map(item => mossNoun(mossOwnBody(item, p))))}.`)
@@ -26539,7 +26555,7 @@ function mossPersonParagraph(subject) {
     const doing = face.filter(tag => /^(?:looking|facing|turning)\b/i.test(tag))
     if (doing.length) lines.push(`${p.subject} ${p.be} ${mossList(doing)}.`)
   }
-  return lines.join(' ')
+  return { look: lines.slice(0, lookCount), doing: lines.slice(lookCount), pronoun: p, bodyTags, feminineMale }
 }
 
 const MOSS_PLACES = {
@@ -26591,6 +26607,45 @@ function mossBoxes(subjects, width, height) {
     H - m, Math.round(-W + m + (index + 1) * step + (index < subjects.length - 1 ? overlap : 0))])
 }
 
+const MOSS_LIGHT_RE = /\b(?:light|lights|lighting|lit|glow|glowing|lamp|lamplight|lantern|candle|candlelight|sunlight|moonlight|sunset|sunrise|dusk|dawn|twilight|neon|shadows?|backlit|backlighting|rim light|god rays|light rays)\b/i
+const MOSS_STYLE_TAGS = { anime: 'anime style', 'anime poster': 'anime style, key visual', painterly: 'painterly', 'semi-realistic': 'semi-realistic', comic: 'comic style' }
+
+function mossTagLine(image, subjects, personParts, chosen) {
+  const tally = { boy: 0, girl: 0, other: 0 }
+  for (const subject of subjects) tally[subject.count === '1boy' ? 'boy' : subject.count === '1girl' ? 'girl' : 'other']++
+  const counts = []
+  if (tally.girl) counts.push(tally.girl === 1 ? '1girl' : `${tally.girl}girls`)
+  if (tally.boy) counts.push(tally.boy === 1 ? '1boy' : `${tally.boy}boys`)
+  if (tally.other) counts.push(tally.other === 1 ? '1other' : `${tally.other}others`)
+  // The editor saves the style sentence itself, so read the style from its words.
+  const text = String(chosen || '').toLowerCase()
+  const known = Object.keys(MOSS_STYLES).find(key => key === text || MOSS_STYLES[key].toLowerCase() === text)
+  const style = known ? MOSS_STYLE_TAGS[known]
+    : !text ? 'anime style'
+    : /key[- ]visual|poster/.test(text) && /anime/.test(text) ? 'anime style, key visual'
+    : /anime|manga|cel[- ]shad/.test(text) ? 'anime style'
+    : /comic/.test(text) ? 'comic style'
+    : /semi[- ]realistic/.test(text) ? 'semi-realistic'
+    : /paint|watercolou?r|gouache/.test(text) ? 'painterly' : ''
+  const rating = ['safe', 'sensitive', 'nsfw', 'explicit'].includes(image.rating) ? image.rating : ''
+  // Body tags up front only for one person: with two or more they land on the wrong body.
+  const body = subjects.length === 1 ? personParts[0].bodyTags : []
+  const tags = uniqueStrings(['masterpiece', 'best quality', style, rating, ...counts, subjects.length === 1 ? 'solo' : '', ...body].filter(Boolean))
+  return tags.join(', ') + '.'
+}
+
+// "He wears…" → "Vesper wears…" on a person's first line, so each block says who it is about.
+function mossNamedLines(lines, subject, p) {
+  if (!lines.length || !subject.name) return lines
+  const name = String(subject.name).trim()
+  const first = lines[0].startsWith(p.subject + ' ')
+    ? (p.subject === 'They'
+      ? lines[0].replace(/^They (are|wear|have|look)\b/, (_, verb) => `${name} ${{ are: 'is', wear: 'wears', have: 'has', look: 'looks' }[verb]}`)
+      : name + lines[0].slice(p.subject.length))
+    : lines[0]
+  return [first, ...lines.slice(1)]
+}
+
 function compileMossImage(image, ctx) {
   // Same people, clothes, setting and memory decisions as the Anima path.
   const base = compileSimpleImage(image, ctx)
@@ -26620,7 +26675,23 @@ function compileMossImage(image, ctx) {
       bbox_format: 'yxyx',
     })
   } else {
-    prompt = [opening, settingLine, ...people, actions.join(' ')].filter(Boolean).join('\n\n')
+    // The four-part layout that has worked best with MOSS in practice:
+    // 1. a short booru tag line (quality, style, rating, who is in it),
+    // 2. one sentence of style, camera and light,
+    // 3. each person's look, written the same way every picture,
+    // 4. what happens now: action, clothes, expressions, and the place last.
+    const lighting = setting.filter(item => MOSS_LIGHT_RE.test(item))
+    const places = setting.filter(item => !lighting.includes(item))
+    const personParts = base.subjects.map(mossPersonParts)
+    const tagLine = mossTagLine(image, base.subjects, personParts, chosen)
+    const camera = [framing.length ? framing.join(', ') : '', lighting.length ? 'in ' + mossList(lighting.map(item => mossPlaceArticle(item))) : '']
+      .filter(Boolean).join(', ')
+    const styleLine = [mossSentence(mossPlain(style)), camera ? mossSentence(camera) : ''].filter(Boolean).join(' ')
+    const looks = personParts.map(part => part.look.join(' ')).filter(Boolean)
+    const now = [mossSentence(sceneText),
+      ...personParts.map((part, index) => mossNamedLines(part.doing, base.subjects[index], part.pronoun).join(' ')),
+      actions.join(' '), mossSettingSentence(places)].filter(Boolean)
+    prompt = [tagLine, styleLine, ...looks, now.join('\n')].filter(Boolean).join('\n\n')
   }
 
   const negatives = [String(preset.mossNegative || '').trim() || MOSS_DEFAULT_NEGATIVE]
@@ -26639,7 +26710,7 @@ function compileMossImage(image, ctx) {
   const negativePrompt = uniqueStrings(negatives.join(', ').split(',').map(tag => tag.trim()).filter(Boolean)).join(', ')
 
   const debug = { ...base.debug,
-    notes: [`MOSS Image prompt (${useLayout ? 'layout with one box per person' : 'plain English'}). The Anima prompt was not used.`, ...base.debug.notes],
+    notes: [`MOSS Image prompt (${useLayout ? 'layout with one box per person' : 'tag line, style, looks, then the moment'}). The Anima prompt was not used.`, ...base.debug.notes],
     moss: { style, layout: useLayout, animaPrompt: base.prompt } }
   return { ...base, prompt, negativePrompt, debug }
 }
