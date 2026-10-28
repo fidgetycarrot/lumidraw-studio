@@ -18895,7 +18895,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         reply = ok(payload, requestId, {
           sheet: {
             countTag: text(sheet.countTag, 40), subject: text(sheet.subject, 200), always: text(sheet.always),
-            appearance: text(sheet.appearance), outfit: text(sheet.outfit), anatomy: text(sheet.anatomy),
+            appearance: text(sheet.appearance), outfit: text(sheet.outfit), anatomy: text(sheet.anatomy), moss: text(sheet.moss, 1500),
           },
           name: text(shared.name, 80), title: text(shared.title, 120), updatedAt: Number(shared.updatedAt) || 0,
         })
@@ -18913,7 +18913,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const text = (value, max = 4000) => typeof value === 'string' ? value.slice(0, max) : ''
         const sheet = {
           countTag: text(given.countTag, 40), subject: text(given.subject, 200), always: text(given.always),
-          appearance: text(given.appearance), outfit: text(given.outfit), anatomy: text(given.anatomy),
+          appearance: text(given.appearance), outfit: text(given.outfit), anatomy: text(given.anatomy), moss: text(given.moss, 1500),
         }
         const id = text(input.id, 120); const kind = input.kind === 'persona' ? 'persona' : 'character'; const sentAt = Date.now()
         // Remembered so an update from LumiCast is only accepted for the character that was actually sent.
@@ -20599,6 +20599,8 @@ async function applyFromLumiCast(requesterExtensionId) {
   // Empty fields are written too: the revised sheet replaces the old one.
   profile.countTag = text(sheet.countTag, 40); profile.subject = text(sheet.subject, 200); profile.identityTags = text(sheet.always)
   profile.appearanceTags = text(sheet.appearance); profile.defaultOutfitTags = text(sheet.outfit); profile.anatomyTags = text(sheet.anatomy)
+  // LumiCast 0.15.0 and newer send the MOSS description too; an older LumiCast leaves it as it was.
+  if (typeof sheet.moss === 'string') profile.mossDescription = text(sheet.moss, 1500)
   normalizeProfile(profile, profile.appearanceTags || '', sent.kind)
   const updated = { ...entry, profile, updatedAt: Date.now() }
   list[index] = updated
@@ -20633,6 +20635,7 @@ async function addFromLumiCast(requesterExtensionId) {
   const profile = {}
   profile.countTag = text(sheet.countTag, 40); profile.subject = text(sheet.subject, 200); profile.identityTags = text(sheet.always)
   profile.appearanceTags = text(sheet.appearance); profile.defaultOutfitTags = text(sheet.outfit); profile.anatomyTags = text(sheet.anatomy)
+  if (typeof sheet.moss === 'string' && sheet.moss.trim()) profile.mossDescription = text(sheet.moss, 1500)
   if (!String(profile.anchor || '').trim()) profile.anchor = name
   normalizeProfile(profile, profile.appearanceTags || '', kind)
   // The anchor stays the real name, so "Vesper 2" is still drawn and found as Vesper.

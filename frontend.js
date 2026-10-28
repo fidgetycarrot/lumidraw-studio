@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.15.0'
+  const EXTENSION_VERSION = '1.15.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -430,7 +430,8 @@ function realSetup(ctx) {
       if (open) {
         const profile = entry.profile || {}
         const fields = [['.ld-persona-ed-count', profile.countTag], ['.ld-persona-ed-subject', profile.subject], ['.ld-persona-ed-identity', profile.identityTags],
-          ['.ld-persona-ed-tags', profile.appearanceTags], ['.ld-persona-ed-outfit', profile.defaultOutfitTags], ['.ld-persona-ed-anatomy', profile.anatomyTags]]
+          ['.ld-persona-ed-tags', profile.appearanceTags], ['.ld-persona-ed-outfit', profile.defaultOutfitTags], ['.ld-persona-ed-anatomy', profile.anatomyTags],
+          ['.ld-persona-ed-moss', profile.mossDescription]]
         for (const [selector, value] of fields) { const node = $(selector); if (node) node.value = value || '' }
         setStatus('.ld-persona-ed-status', `Updated from LumiCast and saved: “${entry.name || 'this character'}”.`, 'good')
       }
@@ -8189,6 +8190,7 @@ ${entry.prompt || ''}`.trim()
       const sheet = {
         countTag: value('.ld-persona-ed-count'), subject: value('.ld-persona-ed-subject'), always: value('.ld-persona-ed-identity'),
         appearance: value('.ld-persona-ed-tags'), outfit: value('.ld-persona-ed-outfit'), anatomy: value('.ld-persona-ed-anatomy'),
+        moss: value('.ld-persona-ed-moss'),
       }
       if (!Object.values(sheet).some(v => v.trim())) throw new Error('This character has no tags to send yet.')
       const name = value('.ld-persona-ed-name') || value('.ld-persona-ed-anchor') || 'This character'
@@ -8212,6 +8214,7 @@ ${entry.prompt || ''}`.trim()
         ['.ld-persona-ed-count', got.sheet.countTag, 'count tag'], ['.ld-persona-ed-subject', got.sheet.subject, 'subject phrase'],
         ['.ld-persona-ed-identity', got.sheet.always, 'always include'], ['.ld-persona-ed-tags', got.sheet.appearance, 'appearance'],
         ['.ld-persona-ed-outfit', got.sheet.outfit, 'outfit'], ['.ld-persona-ed-anatomy', got.sheet.anatomy, 'anatomy'],
+        ['.ld-persona-ed-moss', got.sheet.moss, 'MOSS description'],
       ]
       const filled = []
       for (const [selector, value, label] of fields) {
