@@ -25590,27 +25590,45 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
 // a change of clothes. Keep the specific version Lumi Studio already knows, minus
 // any old state words ("unfastened"), so a real state change still comes through.
 const SIMPLE_STATE_WORDS = new Set(['open', 'opened', 'unfastened', 'fastened', 'undone', 'unbuttoned', 'buttoned',
-  'unzipped', 'zipped', 'untied', 'tied', 'loosened', 'loose', 'torn', 'ripped', 'wet', 'soaked', 'damp', 'pulled',
-  'down', 'up', 'lifted', 'hiked', 'removed', 'half', 'off', 'around', 'tangled', 'hanging', 'bared', 'baring',
-  'disheveled', 'rumpled', 'hastily', 'partly', 'partially', 'askew', 'slipping', 'falling', 'front', 'waist'])
+  'unzipped', 'zipped', 'untied', 'tied', 'loosened', 'loose', 'torn', 'ripped', 'ruined', 'tattered', 'damaged',
+  'wet', 'soaked', 'damp', 'pulled', 'down', 'up', 'lifted', 'hiked', 'removed', 'half', 'off', 'around', 'tangled',
+  'hanging', 'bared', 'baring', 'disheveled', 'rumpled', 'hastily', 'partly', 'partially', 'askew', 'slipping',
+  'falling', 'front', 'waist'])
+const SIMPLE_CONDITION_WORDS = new Set(['ruined', 'torn', 'ripped', 'tattered', 'damaged', 'wet', 'soaked', 'damp',
+  'stained', 'bloodied', 'muddy', 'dusty', 'grimy'])
 function simpleWords(tag) {
   return normalizeIdentityText(tag).split(' ').filter(Boolean)
 }
+function simpleGarmentHead(tag) {
+  const head = mossHeadWord(tag)
+  return simpleWords(head).pop() || simpleWords(tag).pop() || ''
+}
 function simpleKeepSpecific(tags, ...knownGroups) {
   // knownGroups are tried in order (remembered outfit first, then the sheet's
-  // default), so what this chat last saw wins over the sheet.
+  // default), so what this chat last saw wins over the sheet. If a later group
+  // has a fuller description of the exact same garment (every word of the
+  // remembered match is inside the sheet's tag), upgrade to the fuller one.
   const kept = []
   const out = tags.map(tag => {
-    const words = simpleWords(tag)
-    if (!words.length || words.length > 3) return tag
-    const head = words[words.length - 1]
+    const rawTokens = String(tag || '').trim().split(/\s+/).filter(Boolean)
+    const condPrefix = []
+    while (rawTokens.length > 1 && SIMPLE_CONDITION_WORDS.has(normalizeIdentityText(rawTokens[0]))) {
+      condPrefix.push(rawTokens.shift().toLowerCase())
+    }
+    const coreTag = rawTokens.join(' ')
+    let words = simpleWords(coreTag)
+    if (!words.length || words.length > 4) return tag
+    const head = simpleGarmentHead(coreTag)
+    let matched = ''
     for (const group of knownGroups) {
       const candidates = []
       for (const item of group || []) {
         const tokens = String(item).trim().split(/\s+/).filter(token => !SIMPLE_STATE_WORDS.has(normalizeIdentityText(token)))
+        const cleanItem = tokens.join(' ')
         const base = tokens.flatMap(token => simpleWords(token))
-        if (base.length > words.length && base[base.length - 1] === head && words.every(word => base.includes(word))) {
-          candidates.push({ text: tokens.join(' ').toLowerCase(), base })
+        const itemHead = simpleGarmentHead(cleanItem)
+        if (base.length > words.length && itemHead === head && words.every(word => base.includes(word))) {
+          candidates.push({ text: cleanItem.toLowerCase(), base })
         }
       }
       if (!candidates.length) continue
@@ -25620,11 +25638,15 @@ function simpleKeepSpecific(tags, ...knownGroups) {
       // ambiguity, so the story's word stays.
       candidates.sort((x, y) => y.base.length - x.base.length)
       const fullest = candidates[0]
-      if (!candidates.every(c => c.base.every(word => fullest.base.includes(word)))) return tag
-      kept.push({ from: tag, to: fullest.text })
-      return fullest.text
+      if (!candidates.every(c => c.base.every(word => fullest.base.includes(word)))) break
+      matched = fullest.text
+      words = fullest.base
     }
-    return tag
+    if (!matched) return tag
+    const prefix = condPrefix.filter(w => !words.includes(normalizeIdentityText(w))).join(' ')
+    const finalText = prefix ? `${prefix} ${matched}` : matched
+    kept.push({ from: tag, to: finalText })
+    return finalText
   })
   return { tags: uniqueStrings(out), kept }
 }
