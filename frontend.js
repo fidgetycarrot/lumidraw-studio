@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.15.2'
+  const EXTENSION_VERSION = '1.16.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -393,6 +393,10 @@ function realSetup(ctx) {
 
   const unsub = ctx.onBackendMessage((payload) => {
     if (!payload) return
+    if (payload.type === 'paste_prompts') {
+      receivePastePrompts(payload)
+      return
+    }
     if (payload.type === 'renderer_progress') {
       receiveRendererPreview(payload)
       return
@@ -579,6 +583,37 @@ function realSetup(ctx) {
     .ld-pics-empty { padding: 26px 14px; text-align:center; color: var(--lumiverse-text-muted, #a2a5b4); }
     .ld-jump-flash { animation: ld-jump-flash 2.2s ease-out 1; border-radius: 10px; }
     @keyframes ld-jump-flash { 0%, 30% { box-shadow: 0 0 0 3px #b8b6ff; } 100% { box-shadow: 0 0 0 3px transparent; } }
+    /* Prompt only: the clipboard button and its sheet */
+    .ld-dock-btn.ld-paste-btn.ld-on { background:#5a4a2c; color:#ffd99a; }
+    .ld-drawnow.ld-prompt-mode { background:#6a5530; }
+    .ld-paste { position: fixed; z-index: 2147482002; width: min(460px, calc(100vw - 16px)); max-height: min(78vh, 720px);
+      display: flex; flex-direction: column; border-radius: 16px; overflow: hidden;
+      background: var(--lumiverse-bg, #17181f); border: 1px solid var(--lumiverse-border, #3d4050);
+      color: var(--lumiverse-text, #eceef4); box-shadow: 0 10px 34px rgba(0,0,0,.45); font: 13px/1.4 system-ui, sans-serif; }
+    .ld-paste[hidden] { display: none; }
+    .ld-paste-head { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--lumiverse-border, #3d4050); }
+    .ld-paste-head strong { font-size:14px; }
+    .ld-paste-count { color: var(--lumiverse-text-muted, #a2a5b4); font-size:12px; flex:1; }
+    .ld-paste-close { width:30px; height:30px; border:0; border-radius:9px; background:transparent; color:inherit; cursor:pointer; font-size:15px; }
+    .ld-paste-close:hover { background: var(--lumiverse-fill-subtle, #1a1b22); }
+    .ld-paste-body { overflow-y: auto; padding: 10px; }
+    .ld-paste-empty { padding: 22px 14px; text-align:center; color: var(--lumiverse-text-muted, #a2a5b4); }
+    .ld-paste-hint { display:block; color: var(--lumiverse-text-muted, #a2a5b4); font-size:12px; }
+    .ld-paste .ld-paste-switch { display:flex; gap:8px; align-items:flex-start; padding:10px 12px; border-bottom:1px solid var(--lumiverse-border, #3d4050); cursor:pointer; }
+    .ld-paste .ld-paste-switch input { margin-top:3px; }
+    .ld-paste-card { border:1px solid var(--lumiverse-border, #3d4050); border-radius:12px; padding:10px; margin-bottom:10px; background: var(--lumiverse-fill, #1f2029); }
+    .ld-paste-card.ld-picked { border-color:#d9b46a; }
+    .ld-paste-summary { font-weight:600; margin-bottom:4px; }
+    .ld-paste-meta { color: var(--lumiverse-text-muted, #a2a5b4); font-size:12px; margin-bottom:8px; }
+    .ld-paste-label { display:flex; align-items:center; justify-content:space-between; font-size:12px; color: var(--lumiverse-text-muted, #a2a5b4); margin:6px 0 3px; }
+    .ld-paste-text { width:100%; box-sizing:border-box; min-height:84px; max-height:180px; resize:vertical; border-radius:8px; padding:6px 8px;
+      border:1px solid var(--lumiverse-border, #3d4050); background:#101116; color:inherit; font:12px/1.4 ui-monospace, monospace; }
+    .ld-paste-text.ld-short { min-height:44px; }
+    .ld-paste-drop { margin-top:9px; padding:14px 10px; border:2px dashed #6b6e80; border-radius:10px; text-align:center; cursor:pointer; outline:none; }
+    .ld-paste-drop:focus, .ld-paste-card.ld-picked .ld-paste-drop, .ld-paste-drop.ld-over { border-color:#d9b46a; background:rgba(217,180,106,.08); }
+    .ld-paste-row { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; align-items:center; }
+    .ld-paste-status { font-size:12px; margin-top:6px; min-height:1em; }
+    .ld-paste-status.ld-err { color:#ffb4b4; } .ld-paste-status.ld-good { color:#a8e6a8; }
     .ld-drawnow-note { position:fixed; z-index:2147482000; max-width:250px; padding:7px 10px; border-radius:9px;
       background:rgba(12,14,20,.94); color:#fff; font:500 12px/1.4 system-ui,sans-serif; box-shadow:0 2px 10px rgba(0,0,0,.35); pointer-events:none; }
     .ld-drawnow-note[hidden] { display:none; }
@@ -963,6 +998,11 @@ function realSetup(ctx) {
           <path class="ld-spark-big" d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path class="ld-spark-small" d="M19 16v4M17 18h4"></path>
         </svg>
       </button>
+      <button class="ld-dock-btn ld-paste-btn" type="button" title="Prompt only (for Draw Things+)" aria-label="Prompt only: get a prompt to paste into Draw Things+">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="6" y="4" width="12" height="17" rx="2"></rect><path d="M9 4.5V3.5h6v1"></path><path d="M9 10h6M9 14h6M9 18h3"></path>
+        </svg>
+      </button>
       <button class="ld-dock-btn ld-pics-btn" type="button" title="This chat's pictures" aria-label="This chat's pictures">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="4" y="4" width="7" height="7" rx="1.5"></rect><rect x="13" y="4" width="7" height="7" rx="1.5"></rect><rect x="4" y="13" width="7" height="7" rx="1.5"></rect><rect x="13" y="13" width="7" height="7" rx="1.5"></rect>
@@ -979,6 +1019,12 @@ function realSetup(ctx) {
       <span class="ld-launcher-status" hidden></span>
       <progress class="ld-launcher-progress" max="100" aria-label="Drawing progress" hidden></progress>
     </button>
+    <div class="ld-paste" role="dialog" aria-label="Prompt only" hidden>
+      <div class="ld-paste-head"><strong>Prompt only</strong><span class="ld-paste-count"></span><button class="ld-paste-close" type="button" title="Close" aria-label="Close">✕</button></div>
+      <label class="ld-paste-switch"><input type="checkbox" class="ld-paste-toggle" /><span><b>Draw now gives me a prompt instead of a picture.</b><br><span class="ld-paste-hint">Copy it into Draw Things+, make the picture there, then paste it back here. LS puts it in the chat.</span></span></label>
+      <div class="ld-paste-body"><div class="ld-paste-list"></div><div class="ld-paste-empty" hidden></div></div>
+      <input type="file" class="ld-paste-file" accept="image/png,image/jpeg,image/webp" hidden />
+    </div>
     <div class="ld-pics" role="dialog" aria-label="This chat's pictures" hidden>
       <div class="ld-pics-head"><strong>This chat's pictures</strong><span class="ld-pics-count"></span><button class="ld-pics-close" type="button" title="Close" aria-label="Close">✕</button></div>
       <div class="ld-pics-body"><div class="ld-pics-grid"></div><div class="ld-pics-empty" hidden></div></div>
@@ -5604,6 +5650,7 @@ ${entry.prompt || ''}`.trim()
     if (!hit || hit.disabled) return
     if (hit.classList.contains('ld-launcher')) toggleStudioPanel()
     else if (hit.classList.contains('ld-pics-btn')) togglePicturesSheet()
+    else if (hit.classList.contains('ld-paste-btn')) togglePasteSheet()
     else if (hit.classList.contains('ld-drawnow')) startDrawNow()
   })
   launcher.addEventListener('pointercancel', () => { drag = null })
@@ -5633,6 +5680,7 @@ ${entry.prompt || ''}`.trim()
       note.style.top = clamp(above ? edge - h : edge, 4, window.innerHeight - h - 4) + 'px'
     }
     if (typeof placePicturesSheet === 'function') placePicturesSheet()
+    if (typeof placePasteSheet === 'function') placePasteSheet()
   }
   const placeDrawNow = placeDockExtras
   function placeDrawNowNote() { placeDockExtras() }
@@ -5662,7 +5710,7 @@ ${entry.prompt || ''}`.trim()
       const problem = drawNowModeProblem()
       if (problem) { showDrawNowNote(problem, 7000); return }
       drawNowButton.dataset.started = '1'
-      showDrawNowNote('Drawing the latest story message…', 4000)
+      showDrawNowNote(promptOnlyOn ? 'Writing a prompt for the latest story message…' : 'Drawing the latest story message…', 4000)
       // force: a button press always makes a new picture, even for a message
       // that already has one.
       runStoryScan(null, 'the latest story message', true)
@@ -5674,6 +5722,192 @@ ${entry.prompt || ''}`.trim()
     new MutationObserver(placeDrawNow).observe(launcher, { attributes: true, attributeFilter: ['style', 'class'] })
     requestAnimationFrame(placeDrawNow)
   }
+
+  // ---------- Prompt only (the clipboard button on the widget)
+  // For pictures LS cannot make itself: Draw now writes the prompt, you make the
+  // picture in Draw Things+, then paste it here and LS places it in the chat.
+  let promptOnlyOn = false
+  let pastePending = []
+  let pastePicked = ''
+  const pasteDone = new Map()
+  function showPromptOnly(on) {
+    promptOnlyOn = !!on
+    const button = $('.ld-paste-btn'), toggle = $('.ld-paste-toggle')
+    if (button) { button.classList.toggle('ld-on', promptOnlyOn); button.setAttribute('aria-pressed', String(promptOnlyOn)) }
+    if (toggle) toggle.checked = promptOnlyOn
+    if (drawNowButton) {
+      drawNowButton.classList.toggle('ld-prompt-mode', promptOnlyOn)
+      drawNowButton.title = promptOnlyOn ? 'Get a prompt for Draw Things+' : 'Draw now'
+    }
+  }
+  function placePasteSheet() {
+    const sheet = $('.ld-paste')
+    if (!sheet || sheet.hidden) return
+    const r = launcher.getBoundingClientRect()
+    const w = sheet.offsetWidth || 440, h = sheet.offsetHeight || 400
+    const above = r.top > window.innerHeight / 2
+    sheet.style.left = clamp(r.right - w, 8, window.innerWidth - w - 8) + 'px'
+    sheet.style.top = clamp(above ? r.top - h - 10 : r.bottom + 10, 8, window.innerHeight - h - 8) + 'px'
+  }
+  function closePasteSheet() { const sheet = $('.ld-paste'); if (sheet) sheet.hidden = true }
+  async function togglePasteSheet(forceOpen = false) {
+    const sheet = $('.ld-paste')
+    if (!sheet) return
+    if (!sheet.hidden && !forceOpen) { closePasteSheet(); return }
+    closePicturesSheet()
+    if (panel.classList.contains('ld-open')) toggleStudioPanel()
+    sheet.hidden = false
+    renderPastePrompts()
+    placePasteSheet()
+    if (!initialized && !(await tryInit())) return
+    try {
+      const res = await call('paste_list', {}, 15000)
+      pastePending = Array.isArray(res.pending) ? res.pending : []
+      showPromptOnly(res.promptOnly === true)
+    } catch (error) { /* the list stays as it was */ }
+    renderPastePrompts()
+    placePasteSheet()
+  }
+  function receivePastePrompts(payload) {
+    pastePending = Array.isArray(payload.pending) ? payload.pending : pastePending
+    const fresh = Array.isArray(payload.fresh) ? payload.fresh : []
+    if (fresh.length) pastePicked = fresh[0]
+    if (fresh.length || !$('.ld-paste').hidden) togglePasteSheet(true)
+  }
+  function pasteCopy(text, button) {
+    const done = () => { const old = button.textContent; button.textContent = 'Copied ✓'; setTimeout(() => { button.textContent = old }, 1400) }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => fallback())
+    else fallback()
+    function fallback() {
+      const area = document.createElement('textarea'); area.value = text; area.style.position = 'fixed'; area.style.opacity = '0'
+      document.body.appendChild(area); area.select()
+      try { document.execCommand('copy'); done() } catch { button.textContent = 'Select and copy by hand' }
+      area.remove()
+    }
+  }
+  function renderPastePrompts() {
+    const list = $('.ld-paste-list'), empty = $('.ld-paste-empty'), count = $('.ld-paste-count')
+    if (!list) return
+    list.replaceChildren()
+    const chatId = activeChatIdFromCtx() || ''
+    const shown = pastePending.filter(item => !chatId || !item.chatId || item.chatId === chatId)
+    if (count) count.textContent = shown.length ? `${shown.length} waiting for a picture` : ''
+    empty.hidden = !!shown.length
+    empty.textContent = promptOnlyOn ? 'Press Draw now and the prompt will show up here.' : 'Turn this on, then press Draw now.'
+    if (shown.length && !shown.some(item => item.id === pastePicked)) pastePicked = shown[0].id
+    for (const item of shown) {
+      const card = document.createElement('div')
+      card.className = 'ld-paste-card' + (item.id === pastePicked ? ' ld-picked' : '')
+      card.dataset.id = item.id
+      const summary = document.createElement('div'); summary.className = 'ld-paste-summary'; summary.textContent = item.summary || 'Story picture'
+      const meta = document.createElement('div'); meta.className = 'ld-paste-meta'
+      meta.textContent = [`${item.width} × ${item.height}`, item.steps ? `${item.steps} steps` : '', item.cfg ? `CFG ${item.cfg}` : '', item.shift ? `shift ${item.shift}` : '', item.rating || ''].filter(Boolean).join(' · ')
+      card.append(summary, meta)
+      for (const [label, text, short] of [['Prompt', item.prompt, false], ['Negative prompt', item.negativePrompt, true]]) {
+        if (!text) continue
+        const row = document.createElement('div'); row.className = 'ld-paste-label'
+        const name = document.createElement('span'); name.textContent = label
+        const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'ld-pics-go'; copy.textContent = 'Copy'
+        copy.addEventListener('click', () => pasteCopy(text, copy))
+        row.append(name, copy)
+        const area = document.createElement('textarea'); area.readOnly = true; area.className = 'ld-paste-text' + (short ? ' ld-short' : ''); area.value = text
+        card.append(row, area)
+      }
+      const drop = document.createElement('div'); drop.className = 'ld-paste-drop'; drop.tabIndex = 0
+      drop.textContent = 'Click here, then paste the picture (⌘V) — or drop the file here'
+      drop.addEventListener('click', () => pickPasteCard(item.id, drop))
+      drop.addEventListener('focus', () => pickPasteCard(item.id))
+      drop.addEventListener('dragover', (event) => { event.preventDefault(); drop.classList.add('ld-over') })
+      drop.addEventListener('dragleave', () => drop.classList.remove('ld-over'))
+      drop.addEventListener('drop', (event) => {
+        event.preventDefault(); drop.classList.remove('ld-over')
+        const file = [...(event.dataTransfer && event.dataTransfer.files || [])].find(f => /^image\//.test(f.type))
+        if (file) addPastePicture(item.id, file)
+      })
+      const actions = document.createElement('div'); actions.className = 'ld-paste-row'
+      const choose = document.createElement('button'); choose.type = 'button'; choose.className = 'ld-pics-go'; choose.textContent = 'Choose file'
+      choose.addEventListener('click', () => { pickPasteCard(item.id); const input = $('.ld-paste-file'); input.value = ''; input.click() })
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'ld-pics-go'; remove.textContent = 'Remove'
+      remove.addEventListener('click', async () => {
+        try { const res = await call('paste_dismiss', { id: item.id }, 15000); pastePending = res.pending || [] } catch { /* ignore */ }
+        renderPastePrompts()
+      })
+      actions.append(choose, remove)
+      const status = document.createElement('div'); status.className = 'ld-paste-status'
+      const done = pasteDone.get(item.id)
+      if (done) { status.textContent = done.text; status.classList.add(done.ok ? 'ld-good' : 'ld-err') }
+      card.append(drop, actions, status)
+      list.appendChild(card)
+    }
+  }
+  function pickPasteCard(id, focusNode) {
+    pastePicked = id
+    for (const card of document.querySelectorAll('.ld-paste-card')) card.classList.toggle('ld-picked', card.dataset.id === id)
+    if (focusNode && document.activeElement !== focusNode) focusNode.focus()
+  }
+  function readPictureFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onerror = () => reject(new Error('Could not read that picture.'))
+      reader.onload = () => {
+        const url = String(reader.result || '')
+        const img = new Image()
+        img.onload = () => {
+          // Very large files are re-saved as JPEG so they travel to the server quickly.
+          if (file.size > 6 * 1024 * 1024) {
+            const canvas = document.createElement('canvas'); canvas.width = img.naturalWidth; canvas.height = img.naturalHeight
+            canvas.getContext('2d').drawImage(img, 0, 0)
+            resolve({ data: canvas.toDataURL('image/jpeg', 0.92), width: img.naturalWidth, height: img.naturalHeight })
+          } else resolve({ data: url, width: img.naturalWidth, height: img.naturalHeight })
+        }
+        img.onerror = () => reject(new Error('That file is not a picture this browser can open.'))
+        img.src = url
+      }
+      reader.readAsDataURL(file)
+    })
+  }
+  async function addPastePicture(id, file) {
+    const card = document.querySelector(`.ld-paste-card[data-id="${CSS.escape(id)}"]`)
+    const status = card && card.querySelector('.ld-paste-status')
+    if (status) { status.className = 'ld-paste-status'; status.textContent = 'Adding the picture to the chat…' }
+    try {
+      const picture = await readPictureFile(file)
+      const res = await call('paste_add', { id, data: picture.data, width: picture.width, height: picture.height, app: 'Draw Things+' }, 120000)
+      pastePending = res.pending || pastePending.filter(item => item.id !== id)
+      pasteDone.set(id, { ok: true, text: 'Added to the chat ✓' })
+      const chatId = activeChatIdFromCtx()
+      if (chatId) await refreshImagePlacements(chatId).catch(() => {})
+      showDrawNowNote('Picture added to the chat ✓', 3500)
+      if (res.entry) { history = [res.entry, ...(history || []).filter(h => h !== res.entry)]; renderHistory() }
+    } catch (error) {
+      pasteDone.set(id, { ok: false, text: error.message })
+      if (status) { status.className = 'ld-paste-status ld-err'; status.textContent = error.message }
+      return
+    }
+    renderPastePrompts()
+  }
+  $('.ld-paste-close').addEventListener('click', closePasteSheet)
+  $('.ld-paste-toggle').addEventListener('change', async (event) => {
+    const on = event.target.checked
+    showPromptOnly(on)
+    renderPastePrompts()
+    try { const res = await call('save_settings', { promptOnly: on }); if (res && res.settings) settings = res.settings }
+    catch (error) { showPromptOnly(!on); showDrawNowNote(error.message) }
+  })
+  $('.ld-paste-file').addEventListener('change', (event) => {
+    const file = event.target.files && event.target.files[0]
+    if (file && pastePicked) addPastePicture(pastePicked, file)
+  })
+  document.addEventListener('paste', (event) => {
+    const sheet = $('.ld-paste')
+    if (!sheet || sheet.hidden || !pastePicked) return
+    const items = [...(event.clipboardData && event.clipboardData.items || [])]
+    const imageItem = items.find(item => item.kind === 'file' && /^image\//.test(item.type))
+    if (!imageItem) return
+    event.preventDefault()
+    const file = imageItem.getAsFile()
+    if (file) addPastePicture(pastePicked, file)
+  })
 
   // ---------- This chat's pictures (the middle button on the widget)
   // Every picture LS placed in the open chat that is still there, newest message
@@ -5837,6 +6071,7 @@ ${entry.prompt || ''}`.trim()
   // Pointer taps are handled above; keyboard activation has no pointerdown.
   studioButton.addEventListener('click', (event) => { if (event.detail === 0) toggleStudioPanel() })
   $('.ld-pics-btn').addEventListener('click', (event) => { if (event.detail === 0) togglePicturesSheet() })
+  $('.ld-paste-btn').addEventListener('click', (event) => { if (event.detail === 0) togglePasteSheet() })
   previewCard.addEventListener('click', () => { if (!panel.classList.contains('ld-open')) toggleStudioPanel() })
 
   // Settings was a flat scroll of five unrelated cards, where a cloud panel for a
@@ -6720,7 +6955,7 @@ ${entry.prompt || ''}`.trim()
     if (imageRestoreDisposed) return
     const index = !document.hidden && imagePlacements.length ? placementMessageIndex() : null
     const affected = new Set()
-    const extensionUI = '.ld-panel, .ld-dock, .ld-dock-preview, .ld-pics, .ld-lightbox, [data-spindle-ext], [data-lumidraw="1"]'
+    const extensionUI = '.ld-panel, .ld-dock, .ld-dock-preview, .ld-pics, .ld-paste, .ld-lightbox, [data-spindle-ext], [data-lumidraw="1"]'
     for (const record of records) {
       const target = record.target.nodeType === 1 ? record.target : record.target.parentElement
       // Our widget/gallery (and other extensions' widgets) are not chat mounts.
@@ -9299,6 +9534,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-port').value = settings.port
       $('.ld-swarm-url').value = settings.swarmUrl || 'http://localhost:7801'
       refreshNanoStatus()
+      showPromptOnly(settings.promptOnly === true)
       $('.ld-bridge-host').value = settings.bridgeHost || '127.0.0.1'
       $('.ld-bridge-port').value = settings.bridgePort || 7863
       $('.ld-cloud-enabled').checked = !!settings.cloudEnabled

@@ -70,6 +70,7 @@ const DEFAULT_SETTINGS = {
   host: '127.0.0.1',
   port: 7862,
   swarmUrl: 'http://localhost:7801',
+  promptOnly: false,      // Draw now writes the prompt for you to paste into another app (Draw Things+); you add the picture back
   mode: 'off',            // 'off' | 'inline' | 'parser'
   autoScan: true,         // auto-process after each story message (when events are available)
   autoImageEvery: 5,      // new assistant story replies; manual scans bypass cadence
@@ -18580,7 +18581,7 @@ async function replaceOneImage(userId, payload) {
         if (!preset) throw new Error('No saved recipe for this image and no matching preset to fall back on.')
         config = preset.config
         extra = preset.extra
-        if (source && !['swarmui', 'nanogpt'].includes(source.backend) && imageRenderer(config) !== 'drawthings') {
+        if (source && !['swarmui', 'nanogpt', 'pasted'].includes(source.backend) && imageRenderer(config) !== 'drawthings') {
           throw new Error('This older Draw Things image has no stored recipe. Select its original Draw Things preset before regenerating; Lumi Studio will not silently switch it to another app.')
         }
       }
@@ -18963,6 +18964,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.cloudEnabled !== undefined) settings.cloudEnabled = !!payload.cloudEnabled
         if (payload.cloudFallback !== undefined) settings.cloudFallback = !!payload.cloudFallback
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
+        if (payload.promptOnly !== undefined) settings.promptOnly = !!payload.promptOnly
         if (payload.autoImageEvery !== undefined) settings.autoImageEvery = Number(payload.autoImageEvery) === 1 ? 1 : 5
         if (payload.simplePipeline !== undefined) settings.simplePipeline = !!payload.simplePipeline
         if (payload.experimentalSceneCore !== undefined) settings.experimentalSceneCore = !!payload.experimentalSceneCore
@@ -19251,7 +19253,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const presets = await getPresets()
         const history = await getHistory()
         // One catalog merge, not one disk read/write per preset/history row.
-        const configs = [...presets.map(p => p.config || {}).filter(c => imageRenderer(c) === 'drawthings'), ...history.filter(h => !['swarmui', 'nanogpt'].includes(h.backend)).map(h => ({ model: h.model }))]
+        const configs = [...presets.map(p => p.config || {}).filter(c => imageRenderer(c) === 'drawthings'), ...history.filter(h => !['swarmui', 'nanogpt', 'pasted'].includes(h.backend)).map(h => ({ model: h.model }))]
         try {
           await rememberCatalog({ models: configs.flatMap(c => [c.model, c.refiner_model]).filter(Boolean),
             samplers: configs.map(c => c.sampler).filter(Boolean),
@@ -19283,6 +19285,23 @@ spindle.onFrontendMessage(async (payload, userId) => {
           chatId: payload.chatId,
         })
         reply = ok(payload, requestId, result)
+        break
+      }
+
+      case 'paste_list': {
+        reply = ok(payload, requestId, { pending: await getPastePending(), promptOnly: (await getSettings()).promptOnly === true })
+        break
+      }
+
+      case 'paste_add': {
+        reply = ok(payload, requestId, await addPastedPicture(userId, payload))
+        break
+      }
+
+      case 'paste_dismiss': {
+        const pending = (await getPastePending()).filter(entry => entry.id !== String(payload.id || ''))
+        await savePastePending(pending)
+        reply = ok(payload, requestId, { pending })
         break
       }
 
@@ -26028,6 +26047,96 @@ function simpleTroubleshooting({ target, profiles, settings, chatId, raw, parser
     entries: [entry], selectedEntryIndex: 1 } }
 }
 
+// ---------- prompt only: you make the picture elsewhere and paste it back ----
+// For pictures LS cannot make itself (Draw Things+ on the cloud). The scan stops
+// after the prompt is written; the prompt waits here, tied to its message and
+// spot, until a picture is added for it.
+const PASTE_PENDING_FILE = 'paste_pending.json'
+const PASTE_PENDING_MAX = 12
+
+async function getPastePending() {
+  const list = await spindle.storage.getJson(PASTE_PENDING_FILE, { fallback: [] })
+  return Array.isArray(list) ? list : []
+}
+
+async function savePastePending(list) {
+  await spindle.storage.setJson(PASTE_PENDING_FILE, list.slice(0, PASTE_PENDING_MAX), { indent: 2 })
+}
+
+async function finishPromptOnlyScan({ userId, preset, prepared, origin, target, chatId, memory, entries, debugBase }) {
+  const config = preset.config || {}
+  const moss = presetPromptStyle(preset) === 'moss'
+  const made = []
+  for (const { image, compiled } of prepared) {
+    const size = preset.smartSize === true ? simpleSizeShare(image, compiled) : null
+    const dims = aspectDims(config, image.aspect, size ? size.share : 1)
+    made.push({
+      id: 'paste_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      at: Date.now(), chatId: String(chatId || ''), messageId: String(target.id || ''), contentKey: target.contentKey || '',
+      swipeId: Number.isInteger(target.swipeId) ? target.swipeId : null, sourceRevision: storyImageRevision(target.content),
+      anchor: image.anchor || '', summary: image.scene_summary || '', rating: image.rating || '',
+      prompt: compiled.prompt, negativePrompt: compiled.negativePrompt || '',
+      width: dims.width, height: dims.height,
+      // What to set in the other app. MOSS's own recommended settings when the
+      // preset leaves them empty.
+      steps: Number(config.steps) || (moss ? 50 : ''), cfg: Number(config.guidance_scale) || (moss ? 3 : ''),
+      shift: moss ? 5 : '',
+      presetName: preset.name || '', notes: compiled.debug.notes.slice(0, 12),
+    })
+  }
+  const pending = [...made, ...(await getPastePending())]
+  await savePastePending(pending)
+  try { await writeSimpleCast(chatId, memory) }
+  catch (error) { spindle.log.warn('[lumidraw] prompt only · could not save chat memory: ' + error.message) }
+  if (target.id) await markProcessed(target.id, target.content)
+  const storyDebug = await saveStoryDebug({ ...debugBase, debugSource: 'simple pipeline · prompt only', entries,
+    selectedEntryIndex: entries.length || null, lastCompiledPrompt: entries.length ? entries[entries.length - 1].prompt : '' }, userId)
+  notifyFrontend(userId, 'paste_prompts', { pending: await getPastePending(), fresh: made.map(item => item.id) })
+  spindle.log.info(`[lumidraw] prompt only: ${made.length} prompt(s) ready to paste`)
+  return { mode: 'direct', processed: 0, promptOnly: true, pending: made, messageId: target.id, storyDebug,
+    note: made.length === 1 ? 'Prompt ready. Copy it into Draw Things+, then paste the picture back.' : `${made.length} prompts ready. Copy them into Draw Things+, then paste the pictures back.` }
+}
+
+function pastedImageKind(bytes) {
+  if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'png'
+  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg'
+  if (bytes.length > 12 && bytes.slice(0, 4).toString('ascii') === 'RIFF' && bytes.slice(8, 12).toString('ascii') === 'WEBP') return 'webp'
+  return ''
+}
+
+async function addPastedPicture(userId, payload) {
+  const pending = await getPastePending()
+  const item = pending.find(entry => entry.id === String(payload.id || ''))
+  if (!item) throw new Error('That prompt is no longer waiting for a picture.')
+  const base64 = String(payload.data || '').replace(/^data:[^,]*,/, '')
+  if (base64.length > 40 * 1024 * 1024) throw new Error('That picture is too large. Save it as JPEG and try again.')
+  const bytes = Buffer.from(base64, 'base64')
+  const kind = pastedImageKind(bytes)
+  if (!kind) throw new Error('That is not a PNG, JPEG or WebP picture.')
+  const width = Number(payload.width) || item.width, height = Number(payload.height) || item.height
+  const opts = { data: Uint8Array.from(bytes), filename: `lumidraw-pasted-${Date.now()}.${kind === 'jpeg' ? 'jpg' : kind}`, mime_type: 'image/' + kind }
+  let dto
+  try { dto = await spindle.images.upload({ ...opts, userId }) }
+  catch { dto = await spindle.images.upload(opts, userId) }
+  const origin = { messageId: item.messageId, chatId: item.chatId, contentKey: item.contentKey, presetName: item.presetName,
+    mode: 'direct', alt: storyImageAltText(item.prompt), swipeId: item.swipeId, sourceRevision: item.sourceRevision, pasted: true }
+  const entry = {
+    at: Date.now(), durationMs: 0, model: String(payload.app || 'Draw Things+').slice(0, 60), prompt: item.prompt,
+    negativePrompt: item.negativePrompt, seed: 'random', images: [{ id: dto.id, url: dto.url }], backend: 'pasted', origin,
+    recipe: { config: null, extra: null },
+    trace: (item.notes || []).map(note => ({ label: 'simple pipeline', status: 'applied', detail: note })),
+    scene: { direct: true, simple: true, anchor: item.anchor, sceneSummary: item.summary, rating: item.rating, pasted: true },
+  }
+  const history = await pushHistory(entry, userId)
+  notifyFrontend(userId, 'history_updated', { history, entry })
+  if (item.messageId) {
+    await placeGeneratedStoryImage(userId, { chatId: item.chatId, messageId: item.messageId, entry, alt: item.prompt,
+      dims: { width, height }, anchor: item.anchor, source: 'direct', target: null })
+  }
+  await savePastePending(pending.filter(entry => entry.id !== item.id))
+  return { entry, pending: await getPastePending() }
+}
+
 // ---------- story scan -----------------------------------------------------
 
 async function runSimpleStoryScan({ userId, settings, preset, messages, targetIndex, target, chatId, scan, storyDebugMeta = {} }) {
@@ -26064,6 +26173,9 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
     selectedEntryIndex: entries.length, lastCompiledPrompt: entries[entries.length - 1].prompt }, userId)
 
   const origin = { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '' }
+  if (settings.promptOnly === true) {
+    return await finishPromptOnlyScan({ userId, preset, prepared, origin, target, chatId, memory, entries, debugBase })
+  }
   const results = []
   for (let index = 0; index < prepared.length; index++) {
     assertStoryScanActive(scan)
