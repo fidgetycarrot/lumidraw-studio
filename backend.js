@@ -2197,6 +2197,7 @@ function sanitizeDrawThingsPayload(payload) {
 
 function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   if (imageRenderer(config) === 'swarmui') return buildSwarmPayload({ prompt, negativePrompt, seed, config })
+  if (imageRenderer(config) === 'nanogpt') return buildNanoPayload({ prompt, negativePrompt, seed, config })
   const payload = {}
 
   // Every Draw Things setting the workspace holds is sent, not a fixed
@@ -2633,10 +2634,15 @@ async function cloudGenerate(settings, payload) {
 // than a slow one.
 // Renderer identity belongs to a preset/recipe, never a global toggle. Historical
 // recipes without the marker remain Draw Things recipes after this upgrade.
+function rendererLabel(config) {
+  const renderer = imageRenderer(config)
+  return renderer === 'swarmui' ? 'SwarmUI' : renderer === 'nanogpt' ? 'NanoGPT' : 'Draw Things'
+}
+
 function imageRenderer(config) {
   const value = config && config.renderBackend
   if (!value || value === 'drawthings') return 'drawthings'
-  if (value === 'swarmui') return value
+  if (value === 'swarmui' || value === 'nanogpt') return value
   throw new Error('Unknown image renderer: ' + String(value))
 }
 
@@ -2900,7 +2906,260 @@ async function generateSwarmImages(settings, payload, progress, context = {}) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// NanoGPT (online). One request per picture through Lumiverse's network proxy.
+// The API key lives in Lumiverse's enclave and never reaches the interface.
+// Only the settings a model lists in supported_parameters are sent; LoRAs and
+// samplers do not exist there and are ignored.
+// ---------------------------------------------------------------------------
+const NANO_KEY = 'lumidraw_nanogpt_api_key'
+const NANO_API = 'https://api.nano-gpt.com'
+const NANO_MODEL_CACHE_MS = 10 * 60 * 1000
+let nanoModelCache = { at: 0, models: null }
+
+function nanoAvailable(userId) {
+  return !!(userId && spindle.enclave && spindle.enclave.get && spindle.enclave.put && spindle.enclave.delete && spindle.cors)
+}
+
+async function nanoKey(userId) {
+  if (!nanoAvailable(userId)) throw new Error('NanoGPT needs a current Lumiverse with secure key storage and the network proxy.')
+  let key
+  try { key = await spindle.enclave.get(NANO_KEY, userId) } catch (_) { throw new Error('Lumiverse could not read the saved NanoGPT key.') }
+  if (!key) throw new Error('Save your NanoGPT API key in Settings → Image apps first.')
+  return key
+}
+
+async function nanoStatus(userId) {
+  if (!nanoAvailable(userId)) return { available: false, hasKey: false }
+  try { return { available: true, hasKey: !!(await spindle.enclave.get(NANO_KEY, userId)) } }
+  catch (_) { return { available: true, hasKey: false } }
+}
+
+async function saveNanoKey(payload, userId) {
+  if (!nanoAvailable(userId)) throw new Error('NanoGPT needs a current Lumiverse with secure key storage and the network proxy.')
+  const key = typeof payload.apiKey === 'string' ? payload.apiKey.trim() : ''
+  if (payload.clearKey !== true && !key) throw new Error('Paste your NanoGPT API key first.')
+  if (key && (key.length > 2048 || /\s/.test(key))) throw new Error('The API key must be one piece of text with no spaces.')
+  try {
+    if (payload.clearKey === true) await spindle.enclave.delete(NANO_KEY, userId)
+    else await spindle.enclave.put(NANO_KEY, key, userId)
+  } catch (_) { throw new Error('Lumiverse could not save the NanoGPT key.') }
+  return nanoStatus(userId)
+}
+
+// A parameter's choices, whatever shape the listing uses for them.
+function nanoParamValues(spec) {
+  if (!spec) return []
+  if (Array.isArray(spec)) return spec
+  if (Array.isArray(spec.values)) return spec.values
+  if (Array.isArray(spec.options)) return spec.options
+  if (Array.isArray(spec.enum)) return spec.enum
+  return []
+}
+
+function nanoModelEntry(raw) {
+  if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string') return null
+  const caps = raw.capabilities || {}
+  const params = raw.supported_parameters && typeof raw.supported_parameters === 'object' && !Array.isArray(raw.supported_parameters)
+    ? raw.supported_parameters : {}
+  const inputs = raw.architecture && Array.isArray(raw.architecture.input_modalities) ? raw.architecture.input_modalities : null
+  if (caps.image_generation === false) return null
+  if (inputs && !inputs.includes('text')) return null
+  return { id: raw.id, name: String(raw.name || raw.id), nsfw: caps.nsfw === true, params,
+    description: String(raw.description || '').slice(0, 300), owner: String(raw.owned_by || '') }
+}
+
+async function nanoModels({ refresh = false } = {}) {
+  if (!refresh && nanoModelCache.models && Date.now() - nanoModelCache.at < NANO_MODEL_CACHE_MS) return nanoModelCache.models
+  let res
+  try { res = await hostRequest(NANO_API + '/api/v1/images/models', { timeoutMs: 30000 }) }
+  catch (error) { throw new Error('Could not reach NanoGPT (' + error.message + ').') }
+  if (!res.ok || !res.json) throw new Error('NanoGPT did not send its model list (HTTP ' + res.status + ').')
+  const list = Array.isArray(res.json.data) ? res.json.data : Array.isArray(res.json) ? res.json : []
+  const models = list.map(nanoModelEntry).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name))
+  if (!models.length) throw new Error('NanoGPT sent an empty model list.')
+  nanoModelCache = { at: Date.now(), models }
+  return models
+}
+
+async function nanoModel(id) {
+  try { return (await nanoModels()).find(model => model.id === id) || null }
+  catch (_) { return null }
+}
+
+function nanoRange(spec, value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return undefined
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return n
+  const min = Number(spec.min), max = Number(spec.max)
+  let out = n
+  if (Number.isFinite(min)) out = Math.max(min, out)
+  if (Number.isFinite(max)) out = Math.min(max, out)
+  return out
+}
+
+// Size: the model's own choice closest in shape (then in pixel count) to the
+// size LS wants. Handles "1344x768", fal names ("landscape_16_9"), tiers
+// ("1k", "2k") and ratios ("16:9"). With no listed choices, "WxH" is sent.
+function nanoPickSize(values, w, h) {
+  const want = Math.log(w / h), area = w * h
+  const shape = value => {
+    let m = /^(\d{3,4})\s*[x×*]\s*(\d{3,4})$/i.exec(value)
+    if (m) return { ratio: Math.log(+m[1] / +m[2]), area: +m[1] * +m[2] }
+    m = /^(square|portrait|landscape)(?:_hd)?(?:_(\d+)_(\d+))?$/i.exec(value)
+    if (m) {
+      const r = m[1].toLowerCase() === 'square' ? 1 : m[1].toLowerCase() === 'portrait' ? +m[3] / +m[2] : +m[2] / +m[3]
+      const hd = /_hd$/i.test(value) || m[1].toLowerCase() !== 'square'
+      return { ratio: Math.log(r || 1), area: hd ? 1048576 : 262144 }
+    }
+    m = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(value)
+    if (m) return { ratio: Math.log(+m[1] / +m[2]), area }
+    m = /^(\d+(?:\.\d+)?)\s*k$/i.exec(value)
+    if (m) return { ratio: want, area: Math.pow(Number(m[1]) * 1024, 2), tier: true }
+    return null
+  }
+  const known = values.map(value => ({ value, ...(shape(value) || {}) })).filter(item => item.ratio !== undefined)
+  if (!known.length) return ''
+  if (known.every(item => item.tier)) {
+    const tiers = known.sort((a, b) => a.area - b.area)
+    return (tiers.find(item => item.area >= area * 0.9) || tiers[tiers.length - 1]).value
+  }
+  known.sort((a, b) => Math.abs(a.ratio - want) - Math.abs(b.ratio - want) || Math.abs(a.area - area) - Math.abs(b.area - area))
+  return known[0].value
+}
+
+function nanoSize(params, width, height) {
+  const w = Math.max(512, Math.min(2048, Math.round((Number(width) || 1024) / 16) * 16))
+  const h = Math.max(512, Math.min(2048, Math.round((Number(height) || 1024) / 16) * 16))
+  const out = {}
+  let listedSize = false
+  for (const key of ['size', 'resolutions', 'resolution', 'image_size', 'aspect_ratio']) {
+    const values = nanoParamValues(params[key]).map(String)
+    if (!values.length) continue
+    const pick = nanoPickSize(values, w, h)
+    if (!pick) continue
+    if (key !== 'aspect_ratio') listedSize = true
+    if (key === 'size' || key === 'resolutions') out.size = pick
+    else {
+      out[key] = pick
+      // The generations endpoint reads "size" for a model's resolution choice.
+      if (!out.size && key !== 'aspect_ratio' && /x/i.test(pick)) out.size = pick
+    }
+  }
+  if (!listedSize && !out.size) out.size = `${w}x${h}`
+  return out
+}
+
+function buildNanoPayload({ prompt, negativePrompt, seed, config }) {
+  const model = String(config && config.model || '').trim()
+  if (!model) throw new Error('Choose a NanoGPT model for this preset.')
+  const n = seed === undefined || seed === null || seed === '' ? -1 : Number(seed)
+  if (n >= 0 && !Number.isSafeInteger(n)) throw new Error('Seed must be a safe whole number.')
+  const out = { model, prompt: String(prompt || ''), n: 1,
+    seed: n >= 0 ? n : Math.floor(Math.random() * 2147483647), width: Number(config.width) || 1024, height: Number(config.height) || 1024 }
+  if (String(negativePrompt || '').trim()) out.negative_prompt = String(negativePrompt).trim()
+  if (config.steps !== undefined && config.steps !== '') out.num_inference_steps = Number(config.steps)
+  if (config.guidance_scale !== undefined && config.guidance_scale !== '') out.guidance_scale = Number(config.guidance_scale)
+  if (config.nanoPromptExpansion === true) out.enable_prompt_expansion = true
+  return out
+}
+
+// The request NanoGPT actually receives, trimmed to what this model lists.
+function nanoRequestBody(payload, model) {
+  const params = model ? model.params : null
+  // Unknown model (list unavailable): send only what the generations endpoint
+  // documents for every model. Known model: what it lists.
+  const listed = key => !!params && Object.prototype.hasOwnProperty.call(params, key)
+  const has = key => !params || listed(key)
+  const body = { model: payload.model, prompt: payload.prompt, n: 1, response_format: 'b64_json',
+    ...nanoSize(params || {}, payload.width, payload.height) }
+  if (!params || Object.keys(params).length === 0 || has('seed')) body.seed = payload.seed
+  if (payload.negative_prompt && (has('negative_prompt') || !params)) body.negative_prompt = payload.negative_prompt
+  for (const [key, aliases] of [['num_inference_steps', ['num_inference_steps', 'steps']], ['guidance_scale', ['guidance_scale', 'guidance', 'cfg_scale']]]) {
+    if (payload[key] === undefined || !Number.isFinite(payload[key])) continue
+    const listed = params && aliases.find(alias => params[alias])
+    if (params && !listed) continue
+    body[key] = nanoRange(listed ? params[listed] : null, payload[key])
+  }
+  // MOSS expands short prompts on its own unless told not to. LS already
+  // writes full prompts, so expansion stays off unless the preset asks.
+  // MOSS takes any size in steps of 16; make sure the shape LS chose arrives.
+  if (/moss/i.test(payload.model) && !body.size) body.size = `${Math.round((Number(payload.width) || 1024) / 16) * 16}x${Math.round((Number(payload.height) || 1024) / 16) * 16}`
+  if (listed('enable_prompt_expansion') || /moss/i.test(payload.model)) body.enable_prompt_expansion = payload.enable_prompt_expansion === true
+  if (listed('enable_safety_checker')) body.enable_safety_checker = false
+  if (listed('output_format')) {
+    const formats = nanoParamValues(params.output_format).map(String)
+    if (!formats.length || formats.includes('png')) body.output_format = 'png'
+  }
+  return body
+}
+
+function nanoError(res) {
+  const json = res.json || {}
+  const detail = typeof json.message === 'string' ? json.message
+    : json.error && typeof json.error === 'object' ? (json.error.message || json.error.code || '')
+    : typeof json.error === 'string' ? json.error : String(res.text || '').slice(0, 200)
+  if (res.status === 401 || res.status === 403) return 'NanoGPT refused the API key. Check it in Settings → Image apps.'
+  if (res.status === 402) return 'NanoGPT says the balance is too low for this picture.'
+  if (res.status === 429) return 'NanoGPT is limiting requests right now. Try again in a minute.'
+  return 'NanoGPT returned HTTP ' + res.status + (detail ? ': ' + String(detail).slice(0, 240) : '.')
+}
+
+function nanoImageKind(bytes) {
+  if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'png'
+  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg'
+  if (bytes.length > 12 && bytes.slice(0, 4).toString('ascii') === 'RIFF' && bytes.slice(8, 12).toString('ascii') === 'WEBP') return 'webp'
+  return ''
+}
+
+// A safety-checked picture comes back solid black. A real 1024px picture is
+// hundreds of kilobytes; a solid one compresses to almost nothing.
+function nanoLooksBlank(bytes, width, height) {
+  const pixels = (Number(width) || 1024) * (Number(height) || 1024)
+  return bytes.length < Math.max(12000, pixels / 90)
+}
+
+async function generateNanoImages(settings, payload, progress, context = {}) {
+  const key = await nanoKey(context.userId)
+  const model = await nanoModel(payload.model)
+  const body = nanoRequestBody(payload, model)
+  spindle.log.info('[lumidraw] NanoGPT request ' + JSON.stringify({ ...body, prompt: String(body.prompt || '').length + ' characters',
+    ...(body.negative_prompt ? { negative_prompt: String(body.negative_prompt).length + ' characters' } : {}) }) + (model ? '' : ' (model not in the list; sent the basic settings only)'))
+  const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }
+  let res
+  try { res = await hostRequest(NANO_API + '/v1/images/generations', { method: 'POST', headers, body: JSON.stringify(body), timeoutMs: 300000 }) }
+  catch (error) { throw new Error('Could not reach NanoGPT (' + error.message + '). Check its status before retrying, in case the picture was charged.') }
+  if (!res.ok) throw new Error(nanoError(res))
+  const json = res.json || {}
+  const items = Array.isArray(json.data) ? json.data : Array.isArray(json.images) ? json.images : []
+  const item = items[0]
+  if (!item) throw new Error('NanoGPT answered without a picture.')
+  let bytes
+  if (typeof item.b64_json === 'string' && item.b64_json) bytes = Buffer.from(item.b64_json.replace(/^data:image\/[a-z]+;base64,/, ''), 'base64')
+  else if (typeof item.url === 'string' && /^https:\/\//.test(item.url)) {
+    let image
+    try { image = await hostRequest(item.url, { timeoutMs: 60000, binary: true }) }
+    catch (error) { throw new Error('NanoGPT made the picture, but downloading it failed (' + error.message + ').') }
+    if (!image.ok) throw new Error('NanoGPT made the picture, but downloading it failed (HTTP ' + image.status + ').')
+    bytes = image.bytes
+  } else if (typeof item.url === 'string' && item.url.startsWith('data:image/')) bytes = Buffer.from(item.url.split(',')[1] || '', 'base64')
+  if (!bytes || !bytes.length || !nanoImageKind(bytes)) throw new Error('NanoGPT sent something that is not a picture.')
+  if (nanoLooksBlank(bytes, payload.width, payload.height)) {
+    const error = new Error('NanoGPT sent back a blank picture. The model’s safety filter most likely blocked it; nothing was added to the chat.')
+    error.nanoBlank = true
+    throw error
+  }
+  const cost = Number(json.cost)
+  if (Number.isFinite(cost)) spindle.log.info(`[lumidraw] NanoGPT ${payload.model} · cost ${cost}` + (Number.isFinite(Number(json.remainingBalance)) ? ` · balance ${json.remainingBalance}` : ''))
+  return { images: [bytes.toString('base64')], mime: 'image/' + nanoImageKind(bytes), cost: Number.isFinite(cost) ? cost : undefined,
+    request: { ...body, prompt: undefined } }
+}
+
 async function generateImages(settings, payload, label = 'generation', renderer = 'drawthings', progress = null, context = {}) {
+  if (renderer === 'nanogpt') {
+    const out = await generateNanoImages(settings, payload, progress, context)
+    return { images: out.images, backend: 'nanogpt', mime: out.mime, cost: out.cost }
+  }
   if (renderer === 'swarmui') return { images: await generateSwarmImages(settings, payload, progress, context), backend: 'swarmui' }
   if (!cloudEnabled(settings)) return { images: await dtGenerate(settings, payload), backend: 'local' }
   try {
@@ -5072,14 +5331,15 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     ...(scan && scan.id ? { scanId: scan.id } : {}),
     imageIndex: progressContext.imageIndex || origin && origin.sceneIndex || 1,
     imageTotal: progressContext.imageTotal || origin && origin.sceneCount || 1 }
-  const { images, backend, fellBackFrom } = await generateImages(settings, payloadOut, 'story generation', imageRenderer(merged),
-    progress => notifyFrontend(userId, 'renderer_progress', progress), renderContext)
+  const { images, backend, fellBackFrom, mime, cost } = await generateImages(settings, payloadOut, 'story generation', imageRenderer(merged),
+    progress => notifyFrontend(userId, 'renderer_progress', progress), { ...renderContext, userId })
   assertStoryScanActive(scan)
   const uploads = []
   for (const b64 of images) {
     assertStoryScanActive(scan)
     const bytes = Uint8Array.from(Buffer.from(b64, 'base64'))
-    const opts = { data: bytes, filename: `lumidraw-${Date.now()}.png`, mime_type: 'image/png' }
+    const type = mime || 'image/png'
+    const opts = { data: bytes, filename: `lumidraw-${Date.now()}.${type === 'image/jpeg' ? 'jpg' : type.split('/')[1] || 'png'}`, mime_type: type }
     let dto
     try { dto = await spindle.images.upload({ ...opts, userId }) }
     catch { dto = await spindle.images.upload(opts, userId) }
@@ -5098,6 +5358,7 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     // otherwise be invisible in the history.
     backend,
     ...(fellBackFrom ? { fellBackFrom } : {}),
+    ...(cost !== undefined ? { cost } : {}),
     // Everything needed to regenerate this image later and put the result back
     // where it came from: the owning message, and the exact recipe used.
     ...(origin && typeof origin === 'object' ? { origin } : {}),
@@ -12937,7 +13198,7 @@ async function runDirectImagesImpl(initialImages, ctx) {
     assertStoryScanActive(scan)
     const { image, prompt: finalPrompt, negativePrompt, mechanics: groupMechanics } = prepared[index]
     setStoryScanStage(scan, 'generating',
-      `Sending image ${index + 1} of ${prepared.length} to ${imageRenderer(preset.config) === 'swarmui' ? 'SwarmUI' : 'Draw Things'}.`)
+      `Sending image ${index + 1} of ${prepared.length} to ${rendererLabel(preset.config)}.`)
 
     const dims = aspectDims(preset.config, image.aspect)
     const entry = await generateAndUpload({
@@ -17025,7 +17286,7 @@ async function scanStoryCore(userId, options = {}) {
     return { mode: settings.mode, note: 'No generation preset selected — choose one in Story → Setup.' }
   }
   if (scan) {
-    scan.renderer = imageRenderer(preset.config) === 'swarmui' ? 'SwarmUI' : 'Draw Things'
+    scan.renderer = rendererLabel(preset.config)
     setStoryScanStage(scan, 'starting', scan.note || 'Preparing story message.')
   }
 
@@ -17455,7 +17716,7 @@ async function scanStoryCore(userId, options = {}) {
       for (const item of acceptedParsed) {
         parserImageIndex++
         assertStoryScanActive(scan)
-        setStoryScanStage(scan, 'generating', `Sending image ${parserImageIndex} of ${acceptedParsed.length} to ${imageRenderer(preset.config) === 'swarmui' ? 'SwarmUI' : 'Draw Things'}.`)
+        setStoryScanStage(scan, 'generating', `Sending image ${parserImageIndex} of ${acceptedParsed.length} to ${rendererLabel(preset.config)}.`)
         const compiled = await compileSceneWithPreset(item.scene, preset, settings, userId, chatId, passage, parserInput.contextPreview || '', digest)
         const dims = aspectDims(preset.config, compiled.aspect)
         const parserAlt = markdownAltText(compiled.core)
@@ -17570,7 +17831,7 @@ async function scanStoryCore(userId, options = {}) {
     for (const line of lines) {
       legacyImageIndex++
       assertStoryScanActive(scan)
-      setStoryScanStage(scan, 'generating', `Sending image ${legacyImageIndex} of ${lines.length} to ${imageRenderer(preset.config) === 'swarmui' ? 'SwarmUI' : 'Draw Things'}.`)
+      setStoryScanStage(scan, 'generating', `Sending image ${legacyImageIndex} of ${lines.length} to ${rendererLabel(preset.config)}.`)
       const prompt = [lead, prefix, line].filter(Boolean).join(', ')
       if (!firstPrompt) firstPrompt = line
       const entry = await generateAndUpload({
@@ -17618,7 +17879,7 @@ async function scanStoryCore(userId, options = {}) {
 const MODELS_FILE = 'models.json'
 
 async function rememberModels(config) {
-  if (imageRenderer(config) === 'swarmui') return
+  if (imageRenderer(config) !== 'drawthings') return
   const known = await spindle.storage.getJson(MODELS_FILE, { fallback: { models: [], samplers: [], loras: [] } })
   const addTo = (arr, v) => { if (v && !arr.includes(v)) arr.push(v) }
   addTo(known.models, config.model)
@@ -18267,8 +18528,8 @@ async function replaceOneImage(userId, payload) {
         if (!preset) throw new Error('No saved recipe for this image and no matching preset to fall back on.')
         config = preset.config
         extra = preset.extra
-        if (source && source.backend !== 'swarmui' && imageRenderer(config) === 'swarmui') {
-          throw new Error('This older Draw Things image has no stored recipe. Select its original Draw Things preset before regenerating; Lumi Studio will not silently switch it to SwarmUI.')
+        if (source && !['swarmui', 'nanogpt'].includes(source.backend) && imageRenderer(config) !== 'drawthings') {
+          throw new Error('This older Draw Things image has no stored recipe. Select its original Draw Things preset before regenerating; Lumi Studio will not silently switch it to another app.')
         }
       }
 
@@ -18938,7 +19199,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const presets = await getPresets()
         const history = await getHistory()
         // One catalog merge, not one disk read/write per preset/history row.
-        const configs = [...presets.map(p => p.config || {}).filter(c => imageRenderer(c) !== 'swarmui'), ...history.filter(h => h.backend !== 'swarmui').map(h => ({ model: h.model }))]
+        const configs = [...presets.map(p => p.config || {}).filter(c => imageRenderer(c) === 'drawthings'), ...history.filter(h => !['swarmui', 'nanogpt'].includes(h.backend)).map(h => ({ model: h.model }))]
         try {
           await rememberCatalog({ models: configs.flatMap(c => [c.model, c.refiner_model]).filter(Boolean),
             samplers: configs.map(c => c.sampler).filter(Boolean),
@@ -18970,6 +19231,23 @@ spindle.onFrontendMessage(async (payload, userId) => {
           chatId: payload.chatId,
         })
         reply = ok(payload, requestId, result)
+        break
+      }
+
+      case 'nano_status': {
+        reply = ok(payload, requestId, await nanoStatus(userId))
+        break
+      }
+
+      case 'nano_save_key': {
+        reply = ok(payload, requestId, await saveNanoKey(payload, userId))
+        break
+      }
+
+      case 'nano_models': {
+        const models = await nanoModels({ refresh: payload.refresh === true })
+        reply = ok(payload, requestId, { models: models.map(model => ({ id: model.id, name: model.name, nsfw: model.nsfw,
+          params: Object.keys(model.params), description: model.description })), status: await nanoStatus(userId) })
         break
       }
 
@@ -19780,8 +20058,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (!renderChatId && imageRenderer(payload.config) === 'swarmui') {
           try { renderChatId = String(await resolveActiveChatId(userId) || '') } catch { /* Studio rendering does not require a story chat. */ }
         }
-        const { images, backend, fellBackFrom } = await generateImages(settings, payloadOut, 'Studio generation', imageRenderer(payload.config),
-          progress => notifyFrontend(userId, 'renderer_progress', progress), { chatId: renderChatId, imageIndex: 1, imageTotal: 1 })
+        const { images, backend, fellBackFrom, mime } = await generateImages(settings, payloadOut, 'Studio generation', imageRenderer(payload.config),
+          progress => notifyFrontend(userId, 'renderer_progress', progress), { chatId: renderChatId, imageIndex: 1, imageTotal: 1, userId })
 
         // Persist to Lumiverse's image library (tagged to this extension).
         // Operator-scoped installs require an explicit userId on user-owned
@@ -19791,8 +20069,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           const bytes = Uint8Array.from(Buffer.from(b64, 'base64'))
           const opts = {
             data: bytes,
-            filename: `lumidraw-${Date.now()}.png`,
-            mime_type: 'image/png',
+            filename: `lumidraw-${Date.now()}.${mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png'}`,
+            mime_type: mime || 'image/png',
           }
           let dto
           try {
@@ -25707,7 +25985,7 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
   for (let index = 0; index < prepared.length; index++) {
     assertStoryScanActive(scan)
     const { image, compiled } = prepared[index]
-    setStoryScanStage(scan, 'generating', `Sending image ${index + 1} of ${prepared.length} to ${imageRenderer(preset.config) === 'swarmui' ? 'SwarmUI' : 'Draw Things'}.`)
+    setStoryScanStage(scan, 'generating', `Sending image ${index + 1} of ${prepared.length} to ${rendererLabel(preset.config)}.`)
     const size = preset.smartSize === true ? simpleSizeShare(image, compiled) : null
     const dims = aspectDims(preset.config, image.aspect, size ? size.share : 1)
     if (size) compiled.debug.notes.push(`Size ${dims.width}×${dims.height}: ${size.why}, so ${Math.round(size.share * 100)}% of the preset's size.`)
@@ -25770,36 +26048,73 @@ async function runSimpleReparse({ userId, settings, preset, messages, targetInde
 }
 // END SIMPLE PIPELINE 1.9
 
-// BEGIN MOSS IMAGE PROMPTS (experiment)
+// BEGIN MOSS IMAGE PROMPTS
 // ---------------------------------------------------------------------------
 // A second prompt builder for presets set to "MOSS Image". It shares the same
 // single parser call, character sheets and per-chat memory as the Anima path,
 // then writes for MOSS instead: MOSS reads prompts with a language-model text
-// encoder (Qwen3.5), so it gets plain English paragraphs rather than booru tag
-// soup, with an optional experimental layout (one box per person).
+// encoder, so it gets whole English sentences rather than booru tags. Booru
+// shorthand is spelled out, a franchise gets its own sentence, articles and
+// pronouns are put back, and features hidden by a helmet are left out.
 // The Anima builder (compileSimpleImage) is called unchanged and only its
 // resolved people/setting are reused; its prompt text is thrown away here.
 // ---------------------------------------------------------------------------
 
-const MOSS_DEFAULT_STYLE = 'A polished digital painting with semi-realistic proportions, soft painterly shading, rich cinematic lighting and detailed textures.'
-const MOSS_DEFAULT_NEGATIVE = 'worst quality, bad anatomy, watermark, jpeg artifact'
+// Style choices offered in the preset editor. NanoGPT's website styles are not
+// part of its API, so the style is written into the prompt instead.
+const MOSS_STYLES = {
+  anime: 'An anime-style illustration with clean lineart, cel shading and dramatic cinematic lighting.',
+  'anime poster': 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.',
+  painterly: 'A polished digital painting with semi-realistic proportions, soft painterly shading, rich cinematic lighting and detailed textures.',
+  'semi-realistic': 'A semi-realistic digital illustration with natural proportions, detailed rendering, soft realistic lighting and fine textures.',
+  comic: 'A Western comic-book illustration with bold inked lines, flat colors, strong shadows and a halftone texture.',
+}
+const MOSS_DEFAULT_STYLE = MOSS_STYLES.anime
+const MOSS_DEFAULT_NEGATIVE = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, jpeg artifacts'
 
 function presetPromptStyle(preset) {
   return preset && preset.promptStyle === 'moss' ? 'moss' : 'anima'
 }
 
 // Booru shorthand a language model will not read the way Anima does.
-const MOSS_DROP_RE = /^(?:score[_ ]\d+(?:[_ ]up)?|masterpiece|masterwork|best quality|high quality|very aesthetic|highres|absurdres|newest|uncensored|male focus|female focus|solo|solo focus|\d+(?:girl|boy|other)s?|safe|sensitive|nsfw|explicit|@.*)$/i
+const MOSS_DROP_RE = /^(?:score[_ ]\d+(?:[_ ]up)?|masterpiece|masterwork|best quality|high quality|very aesthetic|highres|absurdres|newest|uncensored|male focus|female focus|solo|solo focus|\d+(?:girl|boy|other)s?|safe|sensitive|nsfw|explicit|questionable|yaoi|yuri|lips|duplicate|twins|@.*)$/i
+const MOSS_FEMININE_MALE_RE = /^(?:trap|otoko ?no ?ko|otokonoko|femboy|feminine male|girly boy|feminine boy)$/i
 const MOSS_WORDS = {
   tareme: 'droopy eyes', tsurime: 'sharp upturned eyes', jitome: 'half-lidded eyes', ahoge: 'a stray cowlick',
-  otokonoko: 'feminine-looking', trap: 'feminine-looking', femboy: 'feminine-looking', 'muscular male': 'muscular',
-  'muscular female': 'muscular', 'large man': 'large', 'large woman': 'large', 'tall male': 'tall', 'tall female': 'tall',
-  'cowboy shot': 'framed from mid-thigh up', 'upper body': 'upper-body shot', 'full body': 'full-body shot',
-  portrait: 'portrait framing', 'wide shot': 'wide shot', 'close-up': 'close-up', pov: 'first-person view',
-  'from side': 'seen from the side', 'from above': 'seen from above', 'from below': 'seen from below',
-  'from behind': 'seen from behind', 'front view': 'seen from the front', 'dutch angle': 'tilted camera angle',
-  'three-quarter view': 'three-quarter view',
+  'muscular male': 'muscular', 'muscular female': 'muscular', 'large man': 'large', 'large woman': 'large',
+  'tall male': 'tall', 'tall female': 'tall', manly: 'rugged', tan: 'tanned skin', tanlines: 'tan lines',
+  ass: 'a round rear', 'huge ass': 'a large round rear', 'large ass': 'a large round rear', fangs: 'sharp canine teeth',
+  'hairless smooth body': 'smooth, hairless skin', 'mole under eye': 'a mole under one eye', 'dark-skinned male': 'dark skin',
+  'dark-skinned female': 'dark skin', 'cowboy shot': 'framed from mid-thigh up', 'upper body': 'upper-body shot',
+  'full body': 'full-body shot', portrait: 'portrait framing', pov: 'first-person view', 'from side': 'seen from the side',
+  'from above': 'seen from above', 'from below': 'seen from below', 'from behind': 'seen from behind',
+  'front view': 'seen from the front', 'dutch angle': 'tilted camera angle',
 }
+// Single describing words that go in front of the noun: "a slim, petite man".
+const MOSS_BUILD_WORDS = new Set(['petite', 'slim', 'slender', 'skinny', 'thin', 'muscular', 'athletic', 'toned', 'tall', 'short',
+  'curvy', 'chubby', 'plump', 'stocky', 'burly', 'lanky', 'large', 'small', 'big', 'rugged', 'mature', 'androgynous', 'elegant',
+  'beautiful', 'handsome', 'pretty', 'cute', 'feminine', 'masculine', 'voluptuous', 'lean', 'broad', 'towering', 'tiny', 'wiry'])
+const MOSS_EXPRESSION_RE = /^(?:smirk|smile|smiling|grin|grinning|frown|frowning|scowl|pout|blush|blushing|expressionless|serious|smug|light smile|closed mouth|open mouth|parted lips)$/i
+const MOSS_MASS_NOUNS = new Set(['armor', 'armour', 'clothing', 'clothes', 'lingerie', 'underwear', 'jewelry', 'makeup', 'hair', 'skin',
+  'fur', 'leather', 'ash', 'rubble', 'light', 'sunlight', 'moonlight', 'candlelight', 'lamplight', 'firelight', 'snow', 'rain', 'fog',
+  'mist', 'smoke', 'water', 'grass', 'sand', 'darkness', 'torchlight', 'starlight', 'haze', 'gloom', 'shadow', 'shade', 'dust', 'debris', 'blood', 'steam', 'fire', 'lighting', 'gear', 'equipment',
+  'stubble', 'scenery', 'foliage', 'ice', 'mud', 'night', 'twilight', 'sunset', 'sunrise', 'dawn', 'dusk', 'silk', 'lace', 'denim',
+  'chainmail', 'mail', 'plate', 'attire', 'regalia', 'bedding', 'furniture', 'machinery', 'wreckage', 'gore', 'glitter', 'confetti',
+  'heterochromia', 'facial hair', 'bodysuit'])
+const MOSS_BODY_PART_RE = /(?:face|nose|cheeks?|chin|jaw|forehead|neck|throat|chest|back|spine|shoulders?|arms?|forearms?|hands?|wrists?|fingers?|hips?|waist|thighs?|legs?|knees?|ankles?|feet|foot|stomach|belly|lip corner|lips?|eyes?|eyebrows?|irises|ears?|temple|collarbone|lower back|abdomen)/
+
+// Franchise and faction tags read best as their own sentence:
+// "He is a Space Wolves space marine from Warhammer 40,000."
+const MOSS_UNIVERSES = { 'warhammer 40k': 'Warhammer 40,000', 'warhammer 40,000': 'Warhammer 40,000', warhammer: 'Warhammer 40,000' }
+const MOSS_ROLES = { 'adeptus astartes': 'space marine', 'space marine': 'space marine', 'space marines': 'space marine',
+  'primaris space marine': 'Primaris space marine', 'chaos space marine': 'Chaos space marine', 'adepta sororitas': 'battle sister',
+  'sister of battle': 'battle sister', 'imperial guard': 'Imperial Guardsman', 'astra militarum': 'Imperial Guardsman',
+  inquisitor: 'Inquisitor', 'tech-priest': 'tech-priest', 'adeptus mechanicus': 'tech-priest', 'custodes': 'Custodian Guard',
+  'adeptus custodes': 'Custodian Guard', commissar: 'Commissar' }
+const MOSS_FACTIONS = ['space wolves', 'ultramarines', 'blood angels', 'dark angels', 'imperial fists', 'black templars', 'salamanders',
+  'raven guard', 'white scars', 'iron hands', 'word bearers', 'death guard', 'thousand sons', 'world eaters', 'night lords',
+  'iron warriors', "emperor's children", 'alpha legion', 'grey knights', 'deathwatch', 'flesh tearers', 'black legion', 'crimson fists']
+const titleWords = value => value.replace(/\b[a-z]/g, letter => letter.toUpperCase()).replace(/'S\b/g, "'s")
 
 // Anima/SD prompt syntax means nothing to MOSS's language-model encoder and
 // shows up as code in the prompt: weights "(tag:1.2)", emphasis brackets,
@@ -25823,8 +26138,7 @@ function mossWords(tags, { keepDuplicates = false } = {}) {
   for (const raw of tags || []) {
     const tag = mossPlain(raw)
     if (!tag || MOSS_DROP_RE.test(tag)) continue
-    const mapped = MOSS_WORDS[tag.toLowerCase()] || tag
-    out.push(mapped)
+    out.push(MOSS_WORDS[tag.toLowerCase()] || tag)
   }
   return keepDuplicates ? out : uniqueStrings(out)
 }
@@ -25832,18 +26146,179 @@ function mossWords(tags, { keepDuplicates = false } = {}) {
 function mossList(items) {
   const values = uniqueStrings(items.filter(Boolean))
   if (values.length <= 1) return values.join('')
-  return values.slice(0, -1).join(', ') + ' and ' + values[values.length - 1]
+  // An item that already has "and" in it needs the comma to stay readable.
+  const comma = values.length > 2 && values.some(value => / and /.test(value)) ? ',' : ''
+  return values.slice(0, -1).join(', ') + comma + ' and ' + values[values.length - 1]
 }
 
 function mossPronouns(count) {
-  if (count === '1girl') return { subject: 'She', possessive: 'Her', be: 'is', wear: 'wears' }
-  if (count === '1boy') return { subject: 'He', possessive: 'His', be: 'is', wear: 'wears' }
-  return { subject: 'They', possessive: 'Their', be: 'are', wear: 'wear' }
+  if (count === '1girl') return { subject: 'She', object: 'her', possessive: 'her', be: 'is', wear: 'wears', have: 'has' }
+  if (count === '1boy') return { subject: 'He', object: 'him', possessive: 'his', be: 'is', wear: 'wears', have: 'has' }
+  return { subject: 'They', object: 'them', possessive: 'their', be: 'are', wear: 'wear', have: 'have' }
 }
 
 function mossSentence(text) {
   const value = String(text || '').trim().replace(/[.\s]+$/, '')
   return value ? upperFirst(value) + '.' : ''
+}
+
+// The word a phrase is about: the last word before "with", "on", "and"...
+function mossHeadWord(phrase) {
+  const core = String(phrase).toLowerCase().split(/\s+(?:with|through|on|in|at|of|from|under|over|around|across|along|and|falling|hanging|covering|behind|near)\s+/)[0]
+  const words = core.split(/\s+/).filter(Boolean)
+  // "robes tangled", "breeches hastily fastened": the noun is before these.
+  while (words.length > 1 && /(?:ed|ly|ing)$|^(?:open|undone|off|up|down|loose|askew|aside)$/.test(words[words.length - 1])) words.pop()
+  return words[words.length - 1] || ''
+}
+
+// "corset" → "a corset", "boots" → "boots", "power armor" → "power armor".
+function mossNoun(phrase) {
+  const text = String(phrase || '').trim()
+  if (!text) return ''
+  if (/^(?:a|an|the|his|her|their|my|your|its|one|two|three|four|several|some|many|no|both|each|every)\b/i.test(text) || /^\d/.test(text)) return text
+  const head = mossHeadWord(text)
+  const lower = text.toLowerCase()
+  const mass = MOSS_MASS_NOUNS.has(head) || [...MOSS_MASS_NOUNS].some(word => word.includes(' ') && lower.endsWith(word))
+  const plural = /[^s]s$/.test(head) || /(?:men|feet|teeth|people|clothes|glasses|pants|trousers|shorts|jeans|tights|leggings)$/.test(head)
+  if (mass || plural || /ing$/.test(head)) return text
+  return `${articleFor(text)} ${text}`
+}
+
+// "scar on face" → "scar on his face".
+function mossOwnBody(text, p) {
+  return String(text).replace(new RegExp(`\\b(on|across|along|over|around|at|under|below|above|behind|down|between)\\s+(?!(?:his|her|their|the|a|an|one|both|each)\\b)((?:left|right|upper|lower|one)\\s+)?(${MOSS_BODY_PART_RE.source})\\b`, 'gi'),
+    (_, prep, side, part) => `${prep} ${p.possessive} ${side || ''}${part}`)
+}
+
+// Drop a tag when a longer tag already says it ("scar" inside "scar on nose"),
+// and when two tags give the same feature different colours keep the longer
+// description ("yellow eyes" vs "amber cybernetic eyes").
+function mossTrimFeatures(features) {
+  const words = value => new Set(value.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter(Boolean).map(word => word.replace(/(?<=[a-z]{3})s$/, '')))
+  const out = features.filter((feature, index) => {
+    const mine = words(feature)
+    return !features.some((other, otherIndex) => otherIndex !== index && other.length > feature.length &&
+      [...mine].every(word => words(other).has(word)))
+  })
+  const eyeTags = out.filter(feature => /\beyes$/i.test(feature) && !/^(?:closed|half-closed|narrowed|wide|glaring|crying|teary)\b/i.test(feature))
+  if (eyeTags.length > 1) {
+    const keep = eyeTags.slice().sort((a, b) => b.split(' ').length - a.split(' ').length)[0]
+    return out.filter(feature => !eyeTags.includes(feature) || feature === keep)
+  }
+  return out
+}
+
+// "black hair" + "asymmetrical hair" → "black, asymmetrical hair".
+function mossMergeHair(features) {
+  const simple = features.filter(feature => /^[a-z-]+ hair$/i.test(feature) && !/^(?:facial|body|chest|pubic|armpit|navel|arm|leg|back|underarm) hair$/i.test(feature))
+  if (simple.length < 2) return features
+  const merged = simple.map(feature => feature.replace(/ hair$/i, '')).join(', ') + ' hair'
+  const first = features.indexOf(simple[0])
+  const out = features.filter(feature => !simple.includes(feature))
+  out.splice(first, 0, merged)
+  return out
+}
+
+const MOSS_HEAD_RE = /\b(?:hair|bangs|ponytail|braids?|bob|eyes|irises|eyelashes|eyebrows|face|nose|lips?|mouth|jaw|cheekbones|chin|ears|teeth|fangs|freckles|beard|stubble|mustache|forehead)\b/i
+
+function mossHelmetOn(outfit) {
+  return outfit.some(item => /\bhelmet\b/i.test(item) && !/\b(?:no|removed?|off|holding|under (?:his|her|their|one) arm|tucked|carried|carrying|in hand)\b/i.test(item))
+}
+
+function mossFranchise(identity) {
+  let universe = '', role = '', faction = ''
+  const rest = []
+  for (const tag of identity) {
+    const key = tag.toLowerCase()
+    if (MOSS_UNIVERSES[key]) universe = MOSS_UNIVERSES[key]
+    else if (MOSS_ROLES[key]) role = MOSS_ROLES[key]
+    else if (MOSS_FACTIONS.includes(key)) { faction = titleWords(key); if (!role) role = 'space marine' }
+    else rest.push(tag)
+  }
+  if (!universe && (role || faction) && (faction || /space marine|guardsman|battle sister|tech-priest|custodian|commissar/i.test(role))) universe = 'Warhammer 40,000'
+  return { universe, role, faction, rest }
+}
+
+// A pose list as a sentence: "standing, arm extended, aiming at drop pod" →
+// "He is standing with his arm extended, aiming at the drop pod".
+function mossPoseSentence(pose, p) {
+  const withPart = []
+  const acts = []
+  for (const raw of pose) {
+    const tag = mossPlaceArticle(mossOwnBody(raw, p))
+    const first = tag.split(' ')[0].toLowerCase()
+    if (/ing$/.test(first)) acts.push(tag.replace(/^(\w+ing)\s+(?:at|toward|towards|into|through)\s+(?!(?:the|a|an|his|her|their|him|them)\b)/i, (match) => match + 'the ')
+      .replace(/^(holding|wielding|carrying|gripping|clutching|raising|drawing|firing|swinging|brandishing|reading|drinking|eating)\s+(?!(?:the|a|an|his|her|their|two|both)\b)(.+)$/i, (_, verb, rest) => `${verb} ${mossNoun(rest)}`))
+    else if (new RegExp(`^(?:(?:left|right|one|both)\\s+)?(?:${MOSS_BODY_PART_RE.source})\\b`, 'i').test(tag)) withPart.push(`${p.possessive} ${tag}`)
+    else if (/^(?:on|in|against|under|beside|behind|between|over|at)\b/i.test(tag)) acts.push(tag)
+    else acts.push(tag)
+  }
+  if (!acts.length && !withPart.length) return ''
+  const head = acts.length ? acts[0] : 'posed'
+  const tail = acts.slice(1)
+  let text = `${p.subject} ${p.be} ${head}`
+  if (withPart.length) text += ` with ${mossList(withPart)}`
+  if (tail.length) text += (withPart.length ? ', ' : ', ') + mossList(tail)
+  return mossSentence(text)
+}
+
+function mossPersonParagraph(subject) {
+  const p = mossPronouns(subject.count)
+  const phrase = mossPlain(subject.phrase || 'adult person')
+  const phraseKey = normalizeIdentityText(phrase)
+  const outfit = mossWords(subject.outfit)
+  const helmet = mossHelmetOn(outfit)
+  const sealed = helmet && outfit.some(item => /\b(?:power|full|plate|terminator|space marine) armou?r\b|\b(?:spacesuit|hazmat suit|mecha suit|exoskeleton)\b/i.test(item))
+  const franchise = mossFranchise(mossWords(subject.identity))
+  const feminineMale = subject.count === '1boy' && franchise.rest.some(tag => MOSS_FEMININE_MALE_RE.test(tag))
+  const build = [], features = [], faceDefaults = []
+  for (const tag of franchise.rest) {
+    if (MOSS_FEMININE_MALE_RE.test(tag)) continue
+    const lower = tag.toLowerCase()
+    if (MOSS_EXPRESSION_RE.test(tag)) { faceDefaults.push(tag); continue }
+    if (MOSS_BUILD_WORDS.has(lower)) { if (!phraseKey.includes(normalizeIdentityText(tag))) build.push(lower); continue }
+    if (phraseKey.includes(normalizeIdentityText(tag))) continue
+    if (helmet && MOSS_HEAD_RE.test(tag)) continue
+    // Sealed in armour: skin, scars and tattoos cannot show.
+    if (sealed && /\b(?:skin|scars?|tattoos?|freckles|moles?|piercings?|veins|hairy|body hair|tan lines|birthmark)\b/i.test(tag)) continue
+    features.push(tag)
+  }
+  const trimmed = mossMergeHair(mossTrimFeatures(features)).map(feature => mossOwnBody(feature, p))
+  const noun = [build.join(', '), phrase].filter(Boolean).join(' ')
+  const who = subject.name ? `${subject.name}, ${articleFor(noun)} ${noun}` : `${articleFor(noun)} ${noun}`
+  const place = MOSS_PLACES[subject.position] || ''
+  const lines = []
+  let opening = place ? `${place} is ${who}` : upperFirst(who)
+  if (feminineMale) opening += ` with a soft, pretty, feminine face and a flat chest`
+  lines.push(opening + '.')
+  if (feminineMale) lines.push(`${p.subject} ${p.be} clearly a man, not a woman.`)
+  if (franchise.universe || franchise.role || franchise.faction) {
+    const role = [franchise.faction, franchise.role || (franchise.faction ? 'warrior' : '')].filter(Boolean).join(' ')
+    lines.push(role
+      ? `${p.subject} ${p.be} ${articleFor(role)} ${role}${franchise.universe ? ' from ' + franchise.universe : ''}.`
+      : `${p.subject} ${p.be} from the world of ${franchise.universe}.`)
+  }
+  if (trimmed.length) lines.push(`${p.subject} ${p.have} ${mossList(trimmed.map(mossNoun))}.`)
+  if (outfit.length) {
+    lines.push(outfit.length === 1 && /^(?:nude|naked|completely nude)$/i.test(outfit[0])
+      ? `${p.subject} ${p.be} nude.` : `${p.subject} ${p.wear} ${mossList(outfit.map(item => mossNoun(mossOwnBody(item, p))))}.`)
+  }
+  if (helmet) lines.push(`${upperFirst(p.possessive)} helmet is on and covers ${p.possessive} whole head.`)
+  const anatomy = mossTrimFeatures(mossWords(subject.shownAnatomy || []).filter(tag => !phraseKey.includes(normalizeIdentityText(tag))))
+  if (anatomy.length) lines.push(`${upperFirst(p.possessive)} ${mossList(anatomy)} ${anatomy.length > 1 || /[^s]s$/.test(anatomy[0]) ? 'are' : 'is'} visible.`)
+  const pose = mossPoseSentence(mossWords(subject.pose), p)
+  if (pose) lines.push(pose)
+  const face = mossWords(subject.expression).concat(subject.expression && subject.expression.length ? [] : faceDefaults)
+  if (face.length && !helmet) {
+    const doing = face.filter(tag => /^\w+ing\b/.test(tag))
+    const has = face.filter(tag => !/^\w+ing\b/.test(tag))
+    if (has.length) lines.push(`${p.subject} ${p.have} ${mossList(has.map(tag => mossNoun(mossOwnBody(tag, p))))}.`)
+    if (doing.length) lines.push(`${p.subject} ${p.be} ${mossList(doing.map(tag => mossOwnBody(tag, p)))}.`)
+  } else if (face.length && helmet) {
+    const doing = face.filter(tag => /^(?:looking|facing|turning)\b/i.test(tag))
+    if (doing.length) lines.push(`${p.subject} ${p.be} ${mossList(doing)}.`)
+  }
+  return lines.join(' ')
 }
 
 const MOSS_PLACES = {
@@ -25852,34 +26327,22 @@ const MOSS_PLACES = {
   background: 'In the background',
 }
 
-// Words that name a body part or feature go after "with"; single describing
-// words ("muscular", "slim") go before the noun, as people write it.
-const MOSS_FEATURE_RE = /\b(?:hair|bangs|ponytail|braids?|eyes?|eyelashes|eyebrows|skin|lips|mouth|nose|ears?|breasts?|nipples|belly|stomach|abs|hips|thighs|shoulders|waist|beard|stubble|mustache|scars?|tattoos?|horns?|tail|wings?|teeth|fangs|freckles|build|rear|ass|butt|arms|legs|face|chin|jaw|muscles|collarbone|undertone|body|frame|figure|hands|feet|claws|scales|fur|markings|piercings?|glasses)\b/i
+// "light through rose window" → "light through the rose window".
+function mossPlaceArticle(item) {
+  return String(item).replace(/\b(through|on|in|under|beside|behind|near|over|across|against|by|from|into|above|below|toward|towards|at|onto)\s+(?!(?:the|a|an|his|her|their|its|one|two|both|each|every|him|them)\b)([a-z][a-z' -]*)$/i,
+    (match, prep, rest) => {
+      const named = mossNoun(rest)
+      return named === rest ? match : `${prep} the ${rest}`
+    })
+}
 
-function mossPersonParagraph(subject) {
-  const p = mossPronouns(subject.count)
-  const phrase = String(subject.phrase || 'adult person')
-  const phraseKey = normalizeIdentityText(phrase)
-  const body = mossWords(subject.identity)
-  const describing = body.filter(tag => !MOSS_FEATURE_RE.test(tag) && tag.split(' ').length <= 2 && !phraseKey.includes(normalizeIdentityText(tag)))
-  const features = body.filter(tag => MOSS_FEATURE_RE.test(tag) || tag.split(' ').length > 2)
-  const noun = [describing.join(', '), phrase].filter(Boolean).join(' ')
-  const who = subject.name ? `${subject.name}, ${articleFor(noun)} ${noun}` : `${articleFor(noun)} ${noun}`
-  const place = MOSS_PLACES[subject.position] || ''
-  const lines = []
-  lines.push(`${place ? place + ' is ' + who : upperFirst(who)}${features.length ? ' with ' + mossList(features) : ''}.`)
-  const clothes = mossWords(subject.outfit)
-  if (clothes.length) {
-    lines.push(clothes.length === 1 && /^(?:nude|naked)$/i.test(clothes[0])
-      ? `${p.subject} ${p.be} nude.` : `${p.subject} ${p.wear} ${mossList(clothes)}.`)
-  }
-  const anatomy = mossWords(subject.shownAnatomy || []).filter(tag => !phraseKey.includes(normalizeIdentityText(tag)))
-  if (anatomy.length) lines.push(`Visible: ${mossList(anatomy)}.`)
-  const pose = mossWords(subject.pose)
-  if (pose.length) lines.push(`${p.subject} ${p.be} ${mossList(pose)}.`)
-  const face = mossWords(subject.expression)
-  if (face.length) lines.push(`Expression: ${face.join(', ')}.`)
-  return lines.join(' ')
+function mossSettingSentence(setting) {
+  const items = setting.filter(item => !/^(?:indoors|outdoors|scenery|no humans)$/i.test(item) || setting.length === 1)
+  if (!items.length) return ''
+  const [place, ...rest] = items
+  if (/^(?:indoors|outdoors)$/i.test(place)) return `The scene is ${place.toLowerCase()}.`
+  const tail = rest.map(item => mossNoun(mossPlaceArticle(item)))
+  return `The scene takes place in ${mossNoun(place)}${tail.length ? ', with ' + mossList(tail) : ''}.`
 }
 
 // Boxes in MOSS's layout space: absolute pixels, canvas centre is (0, 0),
@@ -25911,17 +26374,18 @@ function compileMossImage(image, ctx) {
   // Same people, clothes, setting and memory decisions as the Anima path.
   const base = compileSimpleImage(image, ctx)
   const { preset } = ctx
-  const style = String(preset.mossStyle || '').trim() || MOSS_DEFAULT_STYLE
+  const chosen = String(preset.mossStyle || '').trim()
+  const style = MOSS_STYLES[chosen.toLowerCase()] || chosen || MOSS_DEFAULT_STYLE
   const parts = base.parts || {}
   const framing = mossWords(parts.framing || image.framing)
-  const sceneText = parts.summary || String(image.scene_summary || '')
+  const sceneText = mossPlain(parts.summary || String(image.scene_summary || ''))
   const setting = mossWords(base.setting)
   const people = base.subjects.map(mossPersonParagraph)
-  const actions = (parts.actionLines || []).map(mossPlain).filter(Boolean)
-  if (image.composition) actions.push(`Position: ${image.composition}.`)
+  const actions = (parts.actionLines || []).map(mossPlain).filter(Boolean).map(mossSentence)
+  if (image.composition) actions.push(mossSentence(mossPlain(image.composition)))
 
-  const opening = [mossSentence(mossPlain(style)), mossSentence(mossPlain(sceneText)), framing.length ? mossSentence(framing.join(', ')) : ''].filter(Boolean).join(' ')
-  const settingLine = setting.length ? `The setting: ${mossList(setting)}.` : ''
+  const opening = [mossSentence(mossPlain(style)), mossSentence(sceneText), framing.length ? mossSentence(framing.join(', ')) : ''].filter(Boolean).join(' ')
+  const settingLine = mossSettingSentence(setting)
   const useLayout = preset.mossLayout === true && base.subjects.length >= 1
   let prompt
   if (useLayout) {
@@ -25938,9 +26402,14 @@ function compileMossImage(image, ctx) {
     prompt = [opening, settingLine, ...people, actions.join(' ')].filter(Boolean).join('\n\n')
   }
 
-  const negatives = [MOSS_DEFAULT_NEGATIVE]
-  if (String(preset.mossNegative || '').trim()) negatives.splice(0, 1, String(preset.mossNegative).trim())
+  const negatives = [String(preset.mossNegative || '').trim() || MOSS_DEFAULT_NEGATIVE]
   if (/\bplate armor\b/.test(base.negativePrompt) && !/\bplate armor\b/.test(String(preset.negativePrompt || ''))) negatives.push('plate armor, full armor')
+  if (/\bmirror\b/.test(base.negativePrompt)) negatives.push('mirror, reflection')
+  if (base.subjects.length >= 2 && /\bduplicate\b/.test(base.negativePrompt)) negatives.push('twins, identical faces')
+  // A pretty young man drawn as a woman is MOSS's most common miss. Only safe
+  // to push against when nobody in the picture is a woman.
+  const anyWoman = base.subjects.some(subject => subject.count !== '1boy')
+  if (!anyWoman && base.subjects.some(subject => mossWords(subject.identity).some(tag => MOSS_FEMININE_MALE_RE.test(tag)))) negatives.push('woman, girl, breasts, cleavage')
   if (['nsfw', 'explicit'].includes(image.rating)) {
     negatives.push('child, underage, teenager, preteen, toddler')
     if (base.subjects.some(subject => (subject.shownAnatomy || []).length)) negatives.push('censored, mosaic censoring')

@@ -1,11 +1,11 @@
 {
-  "version": "1.13.4",
+  "version": "1.14.0",
   "name": "Lumi Studio",
   "identifier": "lumidraw_studio",
   "author": "fidgetycarrot",
   "github": "https://github.com/fidgetycarrot/lumidraw-studio",
   "homepage": "https://github.com/fidgetycarrot/lumidraw-studio",
-  "description": "Story illustration studio with Draw Things and SwarmUI renderers, character libraries, and visual continuity.",
+  "description": "Story illustration studio with Draw Things, SwarmUI and NanoGPT renderers, character libraries, and visual continuity.",
   "permissions": [
     "images",
     "image_gen",

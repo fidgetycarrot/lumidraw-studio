@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.13.4'
+  const EXTENSION_VERSION = '1.14.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -327,8 +327,10 @@ function realSetup(ctx) {
   let catalog = { models: [], samplers: [], loras: [], source: 'memory', bridge: null, currentRecipe: null }
   let swarmCatalogData = { models: [], samplers: [], loras: [], schedulers: [], presets: [] }
   const rendererDrafts = {}
+  let nanoCatalogData = { models: [], samplers: [], loras: [], schedulers: [], loaded: false }
   function usesSwarm(config) { return config && config.renderBackend === 'swarmui' }
-  function rendererCatalog(config) { return usesSwarm(config) ? swarmCatalogData : catalog }
+  function usesNano(config) { return config && config.renderBackend === 'nanogpt' }
+  function rendererCatalog(config) { return usesSwarm(config) ? swarmCatalogData : usesNano(config) ? nanoCatalogData : catalog }
   let busy = false
   let defaults = { protocol: '', parserInstruction: '', legacyParserInstruction: '', animaParserInstruction: '' }
   const pending = new Map() // requestId → {resolve, reject}
@@ -1336,9 +1338,9 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
           <div class="ld-editor ld-card" style="display:none">
             <div class="ld-subtitle">Preset editor</div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
-            <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option></select>
+            <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option></select>
             <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
-            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><div class="ld-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-status ld-ed-nano-status"></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div class="ld-ed-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler" title="Blank uses SwarmUI's default."></select></div>
@@ -1488,6 +1490,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-help">For SwarmUI on this Mac, keep http://localhost:7801. The Lumiverse server makes the connection, including when you use your phone. Keep SwarmUI running. This preview supports local access without an account login.</div>
             <button class="ld-btn" data-act="swarm-test">Save address and test SwarmUI</button>
             <div class="ld-status ld-swarm-status"></div>
+          </div>
+          <div data-settings-section="connection" class="ld-card">
+            <div class="ld-subtitle">NanoGPT (online)</div>
+            <span class="ld-label">API key</span><input class="ld-nano-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your NanoGPT API key" />
+            <div class="ld-help">Pictures are made on NanoGPT’s servers and paid from your NanoGPT balance. The key is kept in Lumiverse’s secure storage and is not shown again. To use it, make a preset with NanoGPT as its image app.</div>
+            <div class="ld-row" style="margin-top:6px"><button class="ld-btn" data-act="nano-save">Save key</button><button class="ld-btn" data-act="nano-clear">Remove key</button></div>
+            <div class="ld-status ld-nano-status"></div>
           </div>
           <div data-settings-section="connection" class="ld-card">
             <div class="ld-subtitle">Draw Things API</div>
@@ -2298,18 +2307,45 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           box.appendChild(field('Prompt style for story pictures', styleSelect,
             'Pick the one that matches this preset’s model. Only used by the simple pipeline.'))
           const mossBox = make('div', 'ld-ed-moss-box')
+          // NanoGPT's website style buttons are not in its API, so the style is
+          // written into the prompt. These fill the sentence; it stays editable.
+          const mossStyles = [
+            ['anime', 'Anime', 'An anime-style illustration with clean lineart, cel shading and dramatic cinematic lighting.'],
+            ['anime poster', 'Anime poster', 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.'],
+            ['painterly', 'Painterly', 'A polished digital painting with semi-realistic proportions, soft painterly shading, rich cinematic lighting and detailed textures.'],
+            ['semi-realistic', 'Semi-realistic', 'A semi-realistic digital illustration with natural proportions, detailed rendering, soft realistic lighting and fine textures.'],
+            ['comic', 'Comic book', 'A Western comic-book illustration with bold inked lines, flat colors, strong shadows and a halftone texture.'],
+          ]
+          const stylePick = document.createElement('select')
+          stylePick.className = 'ld-ed-moss-style-pick'
+          for (const [value, label] of [['', 'Choose a style…'], ...mossStyles.map(([value, label]) => [value, label]), ['custom', 'My own (type below)']]) {
+            const option = document.createElement('option'); option.value = value; option.textContent = label; stylePick.appendChild(option)
+          }
+          mossBox.appendChild(field('Picture style', stylePick, 'Picks the sentence below. Same idea as the style buttons on the NanoGPT website.'))
           const mossStyle = document.createElement('textarea')
           mossStyle.className = 'ld-ed-moss-style'; mossStyle.rows = 2
-          mossStyle.placeholder = 'A polished digital painting with semi-realistic proportions, soft painterly shading, rich cinematic lighting and detailed textures.'
-          mossBox.appendChild(field('Picture style (one sentence)', mossStyle, 'Opens every MOSS prompt. Leave empty to use the example shown.'))
+          mossStyle.placeholder = mossStyles[0][2]
+          mossBox.appendChild(field('Style sentence', mossStyle, 'Opens every MOSS prompt. Leave empty to use the example shown.'))
+          stylePick.addEventListener('change', () => {
+            const found = mossStyles.find(([value]) => value === stylePick.value)
+            if (found) mossStyle.value = found[2]
+            else if (stylePick.value === 'custom') mossStyle.focus()
+          })
+          const syncPick = () => {
+            const text = mossStyle.value.trim()
+            const found = mossStyles.find(([, , sentence]) => sentence === text)
+            stylePick.value = found ? found[0] : text ? 'custom' : ''
+          }
+          mossStyle.addEventListener('input', syncPick)
+          mossStyle.addEventListener('ld-sync', syncPick)
           const mossNegative = document.createElement('textarea')
           mossNegative.className = 'ld-ed-moss-negative'; mossNegative.rows = 2
-          mossNegative.placeholder = 'worst quality, bad anatomy, watermark, jpeg artifact'
+          mossNegative.placeholder = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, jpeg artifacts'
           mossBox.appendChild(field('Negative prompt for MOSS', mossNegative, 'Leave empty to use the example shown. Your Story negative prompt is written for Anima, so it is not used here.'))
           const mossLayout = document.createElement('input')
           mossLayout.type = 'checkbox'; mossLayout.className = 'ld-ed-moss-layout'
           mossBox.appendChild(checkbox(mossLayout, 'Give each person their own box in the picture (MOSS layout, experimental)',
-            'Can help keep each person’s looks on the right body. Turn off if SwarmUI shows the prompt as text or the picture looks wrong.'))
+            'Can help keep each person’s looks on the right body. Turn off for NanoGPT, and if SwarmUI shows the prompt as text or the picture looks wrong.'))
           box.appendChild(mossBox)
           const syncMoss = () => { mossBox.style.display = styleSelect.value === 'moss' ? '' : 'none' }
           styleSelect.addEventListener('change', syncMoss)
@@ -2386,6 +2422,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       if (oldSettingsRail) oldSettingsRail.remove()
       const cardOf = (selector) => { const node = $(selector); return node ? node.closest('.ld-card') : null }
       const swarmCard = cardOf('.ld-swarm-url')
+      const nanoCard = cardOf('.ld-nano-key')
       const drawThingsCard = cardOf('.ld-host')
       const bridgeCard = cardOf('.ld-bridge-host')
       const cloudCard = cardOf('.ld-cloud-enabled')
@@ -2421,7 +2458,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const chat = section('chat')
       const help = section('help')
       const old = section('old')
-      for (const node of [swarmCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
+      for (const node of [swarmCard, nanoCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
       parserSection.appendChild(parserBinding)
       chat.appendChild(display)
       if (helpCard) help.appendChild(helpCard)
@@ -3147,7 +3184,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       if (!draftConfig) workspaceEl.textContent = 'Not loaded'
       else {
         const model = String(draftConfig.model || '').replace(/\.ckpt$/i, '')
-        workspaceEl.textContent = `${usesSwarm(draftConfig) ? 'SwarmUI' : 'Draw Things'} · ${draftDirty ? 'Modified' : 'Ready'}${model ? ' · ' + model : ''}`
+        workspaceEl.textContent = `${usesSwarm(draftConfig) ? 'SwarmUI' : usesNano(draftConfig) ? 'NanoGPT' : 'Draw Things'} · ${draftDirty ? 'Modified' : 'Ready'}${model ? ' · ' + model : ''}`
       }
     }
 
@@ -4768,7 +4805,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       return
     }
     const c = draftConfig
-    const bits = [usesSwarm(c) ? 'SwarmUI' : 'Draw Things']
+    const bits = [usesSwarm(c) ? 'SwarmUI' : usesNano(c) ? 'NanoGPT' : 'Draw Things']
     if (c.model) bits.push(`model: ${c.model}`)
     if (c.sampler) bits.push(`sampler: ${c.sampler}`)
     if (usesSwarm(c)) bits.push(`scheduler: ${c.swarmParams?.scheduler || 'SwarmUI default'}`)
@@ -5094,7 +5131,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     }
     const shown = libVisible('preset', presets, {
       nameOf: (p) => p.name || '',
-      textOf: (p) => { const c = p.config || {}; return [c.model, c.sampler, usesSwarm(c) ? 'swarmui' : 'draw things', (c.loras || []).map(l => l.file || l.name || '').join(' ')].join(' ') },
+      textOf: (p) => { const c = p.config || {}; return [c.model, c.sampler, usesSwarm(c) ? 'swarmui' : usesNano(c) ? 'nanogpt' : 'draw things', (c.loras || []).map(l => l.file || l.name || '').join(' ')].join(' ') },
     })
     libCount(bar, shown.length, presets.length, 'preset')
     if (!shown.length) libEmptyMatch(list, 'preset')
@@ -5104,7 +5141,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const loras = (c.loras || []).length
       list.appendChild(libItem({
         name: p.name,
-        badges: [p.name === activePreset ? 'in use' : '', usesSwarm(c) ? 'SwarmUI' : 'Draw Things', p.promptStyle === 'moss' ? 'MOSS prompts' : ''],
+        badges: [p.name === activePreset ? 'in use' : '', usesSwarm(c) ? 'SwarmUI' : usesNano(c) ? 'NanoGPT' : 'Draw Things', p.promptStyle === 'moss' ? 'MOSS prompts' : ''],
         sub: c.model || '',
         tags: [c.sampler, c.steps ? `${c.steps} steps` : '', size, loras ? `${loras} LoRA${loras === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · '),
         active: p.name === activePreset,
@@ -5432,7 +5469,7 @@ ${entry.prompt || ''}`.trim()
     busy = true
     const btn = $('[data-act="generate"]')
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="ld-spin">◌</span> Generating…' }
-    setStatus('.ld-gen-status', 'Sent to ' + (usesSwarm(draftConfig) ? 'SwarmUI' : 'Draw Things') + ' — hold tight…')
+    setStatus('.ld-gen-status', 'Sent to ' + (usesSwarm(draftConfig) ? 'SwarmUI' : usesNano(draftConfig) ? 'NanoGPT' : 'Draw Things') + ' — hold tight…')
     try {
       const bundle = currentDraftBundle()
       const seedRaw = $('.ld-seed').value
@@ -7719,6 +7756,56 @@ ${entry.prompt || ''}`.trim()
     $('.ld-' + prefix + '-swarm-params').value = JSON.stringify(params, null, 2)
   }
 
+  // Shows only the fields the chosen image app uses.
+  function syncEditorRendererFields() {
+    const nano = $('.ld-ed-backend').value === 'nanogpt'
+    const samplerRow = $('.ld-ed-sampler') ? $('.ld-ed-sampler').closest('.ld-row') : null
+    if (samplerRow) samplerRow.style.display = nano ? 'none' : ''
+    const loras = $('.ld-ed-loras')
+    if (loras) {
+      loras.style.display = nano ? 'none' : 'flex'
+      const label = loras.previousElementSibling
+      if (label && label.classList.contains('ld-label')) label.style.display = nano ? 'none' : ''
+    }
+    const addLora = $('[data-act="ed-addlora"]')
+    if (addLora) addLora.style.display = nano ? 'none' : ''
+    if ($('.ld-ed-model-hint')) $('.ld-ed-model-hint').style.display = nano ? 'none' : ''
+    if ($('.ld-ed-nano-hint')) $('.ld-ed-nano-hint').style.display = nano ? '' : 'none'
+    if (!nano) setStatus('.ld-ed-nano-status', '')
+  }
+
+  function labelNanoModels() {
+    if ($('.ld-ed-backend').value !== 'nanogpt') return
+    const list = document.getElementById('ld-model-catalog-ed')
+    if (!list) return
+    const byId = new Map(nanoCatalogData.models.map(m => [m.file, m]))
+    for (const option of list.querySelectorAll('option')) {
+      const model = byId.get(option.value)
+      if (model) option.label = model.name + (model.nsfw ? ' · adult allowed' : '')
+    }
+  }
+
+  async function loadNanoCatalog(refresh = false) {
+    setStatus('.ld-ed-nano-status', 'Loading NanoGPT models…')
+    const res = await call('nano_models', { refresh }, 45000)
+    nanoCatalogData = { models: (res.models || []).map(m => ({ file: m.id, name: m.name, nsfw: !!m.nsfw })), samplers: [], loras: [], schedulers: [], loaded: true }
+    if ($('.ld-ed-backend').value === 'nanogpt') {
+      populateDatalist('ld-model-catalog-ed', nanoCatalogData.models.map(m => m.file))
+      labelNanoModels()
+    }
+    const keyNote = res.status && res.status.hasKey ? '' : ' No API key saved yet — add it in Settings → Image apps.'
+    setStatus('.ld-ed-nano-status', `${nanoCatalogData.models.length} NanoGPT models.${keyNote}`, keyNote ? 'err' : 'good')
+    return nanoCatalogData
+  }
+
+  async function refreshNanoStatus() {
+    try {
+      const status = await call('nano_status', {})
+      if (!status.available) setStatus('.ld-nano-status', 'This Lumiverse cannot store keys securely yet. Update Lumiverse to use NanoGPT.', 'err')
+      else setStatus('.ld-nano-status', status.hasKey ? 'Key saved.' : 'No key saved.', status.hasKey ? 'good' : '')
+    } catch (e) { setStatus('.ld-nano-status', e.message, 'err') }
+  }
+
   async function loadSwarmCatalog() {
     setStatus('.ld-swarm-workspace-status', 'Connecting to SwarmUI…')
     try {
@@ -7804,16 +7891,19 @@ ${entry.prompt || ''}`.trim()
     editorExtra = p ? (p.extra || null) : (seed ? (seed.extra || null) : null)
     const c = p ? (p.config || {}) : (seed ? (seed.config || {}) : (syncedConfig || {}))
     editorRenderConfig = cloneJson(c)
-    $('.ld-ed-backend').value = usesSwarm(c) ? 'swarmui' : 'drawthings'
+    $('.ld-ed-backend').value = usesSwarm(c) ? 'swarmui' : usesNano(c) ? 'nanogpt' : 'drawthings'
     $('.ld-ed-swarm-settings').style.display = usesSwarm(c) ? '' : 'none'
     $('.ld-ed-scheduler-field').style.display = usesSwarm(c) ? '' : 'none'
-    try { if (usesSwarm(c)) await loadSwarmCatalog(); else await loadCatalog() } catch { /* saved presets remain editable offline */ }
+    syncEditorRendererFields()
+    try { if (usesSwarm(c)) await loadSwarmCatalog(); else if (usesNano(c)) await loadNanoCatalog(); else await loadCatalog() } catch { /* saved presets remain editable offline */ }
     populateDatalist('ld-model-catalog-ed', rendererCatalog(c).models.map(m => m.file))
+    labelNanoModels()
     writeSwarmParams('ed', c)
     $('.ld-ed-name').value = p ? p.name : ''
     if ($('.ld-ed-prompt-style')) {
       $('.ld-ed-prompt-style').value = p && p.promptStyle === 'moss' ? 'moss' : 'anima'
       $('.ld-ed-moss-style').value = (p && p.mossStyle) || ''
+      $('.ld-ed-moss-style').dispatchEvent(new Event('ld-sync'))
       $('.ld-ed-moss-negative').value = (p && p.mossNegative) || ''
       $('.ld-ed-moss-layout').checked = !!(p && p.mossLayout)
       $('.ld-ed-prompt-style').dispatchEvent(new Event('change'))
@@ -8238,6 +8328,21 @@ ${entry.prompt || ''}`.trim()
     try { draftConfig = readDraftConfigFromControls() } catch (e) { setStatus('.ld-draft-status', e.message, 'err'); return }
     loadSwarmCatalog().catch(() => {})
   })
+  $('[data-act="nano-save"]').addEventListener('click', async () => {
+    const input = $('.ld-nano-key')
+    try {
+      const status = await call('nano_save_key', { apiKey: input.value })
+      input.value = ''
+      setStatus('.ld-nano-status', status.hasKey ? 'Key saved.' : 'The key did not save.', status.hasKey ? 'good' : 'err')
+    } catch (e) { setStatus('.ld-nano-status', e.message, 'err') }
+  })
+  $('[data-act="nano-clear"]').addEventListener('click', async () => {
+    try {
+      await call('nano_save_key', { clearKey: true })
+      $('.ld-nano-key').value = ''
+      setStatus('.ld-nano-status', 'Key removed.', 'good')
+    } catch (e) { setStatus('.ld-nano-status', e.message, 'err') }
+  })
   $('[data-act="swarm-test"]').addEventListener('click', async () => {
     try {
       const result = await call('save_settings', {swarmUrl: $('.ld-swarm-url').value})
@@ -8254,7 +8359,9 @@ ${entry.prompt || ''}`.trim()
   })
   $('.ld-ed-backend').addEventListener('change', async () => {
     const swarm = $('.ld-ed-backend').value === 'swarmui'
-    editorRenderConfig = swarm ? {renderBackend:'swarmui',swarmParams:{}} : {}
+    const nano = $('.ld-ed-backend').value === 'nanogpt'
+    editorRenderConfig = swarm ? {renderBackend:'swarmui',swarmParams:{}} : nano ? {renderBackend:'nanogpt'} : {}
+    syncEditorRendererFields()
     editorExtra = null
     for (const field of ['model','steps','cfg','w','h']) $('.ld-ed-' + field).value = ''
     $('.ld-ed-loras').innerHTML = ''
@@ -8262,9 +8369,22 @@ ${entry.prompt || ''}`.trim()
     populateDatalist('ld-model-catalog-ed', rendererCatalog(editorRenderConfig).models.map(m => m.file))
     populateSelect($('.ld-ed-sampler'), rendererCatalog(editorRenderConfig).samplers, '', '— choose sampler —')
     writeSwarmParams('ed', editorRenderConfig)
-    try { if (swarm) await loadSwarmCatalog(); else await loadCatalog() } catch (e) { setStatus('.ld-ed-status', e.message, 'err') }
+    try { if (swarm) await loadSwarmCatalog(); else if (nano) await loadNanoCatalog(); else await loadCatalog() } catch (e) { setStatus(nano ? '.ld-ed-nano-status' : '.ld-ed-status', e.message, 'err') }
     writeSwarmParams('ed', editorRenderConfig)
-    $('.ld-ed-loras').appendChild(loraRow('', 1))
+    if (!nano) $('.ld-ed-loras').appendChild(loraRow('', 1))
+  })
+  // NanoGPT presets: a MOSS model wants the MOSS prompt style, an Anima model
+  // wants Anima. Switch it for the user and say so.
+  $('.ld-ed-model').addEventListener('change', () => {
+    if ($('.ld-ed-backend').value !== 'nanogpt' || !$('.ld-ed-prompt-style')) return
+    const model = $('.ld-ed-model').value.trim()
+    const want = /moss/i.test(model) ? 'moss' : /anima/i.test(model) ? 'anima' : ''
+    const select = $('.ld-ed-prompt-style')
+    if (want && select.value !== want) {
+      select.value = want
+      select.dispatchEvent(new Event('change'))
+      setStatus('.ld-ed-nano-status', want === 'moss' ? 'Prompt style set to MOSS Image (plain English) for this model.' : 'Prompt style set to Anima (tags) for this model.', 'good')
+    }
   })
   $('.ld-draft-scheduler').addEventListener('change', onDraftControlChange)
   $('.ld-draft-swarm-params').addEventListener('change', onDraftControlChange)
@@ -8289,13 +8409,14 @@ ${entry.prompt || ''}`.trim()
         const v = $(sel).value
         if (v !== '') config[key] = float ? parseFloat(v) : (isNaN(Number(v)) ? v : parseInt(v, 10))
         }
-      const sv = $('.ld-ed-sampler').value.trim(); if (sv) config.sampler = sv; else delete config.sampler
+      const sv = $('.ld-ed-sampler').value.trim(); if (sv && !usesNano(config)) config.sampler = sv; else delete config.sampler
       setIf('.ld-ed-steps', 'steps'); setIf('.ld-ed-cfg', 'guidance_scale', true)
       setIf('.ld-ed-w', 'width'); setIf('.ld-ed-h', 'height')
       config.loras = [...$('.ld-editor').querySelectorAll('.ld-ed-loras .ld-row')].map((row) => ({
         file: row.querySelector('.ld-lora-file').value.trim(),
         weight: row.querySelector('.ld-lora-weight').value === '' ? 1 : Number(row.querySelector('.ld-lora-weight').value),
       })).filter((l) => l.file)
+      if (usesNano(config)) config.loras = []
       const res = await call('save_preset', {
         name,
         config,
@@ -9140,6 +9261,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-host').value = settings.host
       $('.ld-port').value = settings.port
       $('.ld-swarm-url').value = settings.swarmUrl || 'http://localhost:7801'
+      refreshNanoStatus()
       $('.ld-bridge-host').value = settings.bridgeHost || '127.0.0.1'
       $('.ld-bridge-port').value = settings.bridgePort || 7863
       $('.ld-cloud-enabled').checked = !!settings.cloudEnabled
