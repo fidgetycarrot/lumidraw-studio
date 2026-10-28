@@ -1824,6 +1824,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       .ld-lib-main:focus-visible{box-shadow:0 0 0 2px var(--lumiverse-text-muted,#a2a5b4);border-radius:6px}
       .ld-lib-name{display:flex;align-items:center;flex-wrap:wrap;gap:5px;font-weight:650;font-size:13px;min-width:0}
       .ld-lib-name-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+      .ld-lib-badge.ld-lib-badge-warn{border-color:#e0a24e;color:#f0b866;font-weight:600}
+      .ld-lib-clash{border-left:3px solid #e0a24e;padding:6px 10px;margin:0 0 8px;font-size:12px;color:var(--lumiverse-text,#e6e6ee)}
       .ld-lib-badge{font-size:10px;font-weight:500;padding:1px 6px;border-radius:999px;border:1px solid var(--lumiverse-border,#3d4050);color:var(--lumiverse-text-muted,#a2a5b4);white-space:nowrap}
       .ld-lib-sub{font-size:11px;color:var(--lumiverse-text-muted,#a2a5b4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .ld-lib-tags{font-size:11px;line-height:1.4;color:var(--lumiverse-text-muted,#a2a5b4);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
@@ -4917,6 +4919,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     empty.textContent = `No ${noun}s match. Try fewer words, or clear the search.`
     list.appendChild(empty)
   }
+  // Characters from Paige whose name was already taken are saved as "Name 2" and marked until renamed.
+  const NEEDS_NEW_NAME = 'needs a new name'
   function libItem({ name, badges = [], sub = '', tags = '', active = false, faded = false, onOpen, onEdit, onDelete, editLabel = 'Edit', deleteTitle = 'Delete' }) {
     const item = document.createElement('div')
     item.className = 'ld-preset-item ld-lib-item' + (active ? ' ld-active' : '')
@@ -4932,8 +4936,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     title.appendChild(text)
     for (const badge of badges.filter(Boolean)) {
       const chip = document.createElement('span')
-      chip.className = 'ld-lib-badge'
+      chip.className = 'ld-lib-badge' + (badge === NEEDS_NEW_NAME ? ' ld-lib-badge-warn' : '')
       chip.textContent = badge
+      if (badge === NEEDS_NEW_NAME) chip.title = 'Another saved entry already had this name. Open it and give it a new name.'
       title.appendChild(chip)
     }
     main.appendChild(title)
@@ -4982,6 +4987,14 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     return raw.split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).slice(0, limit).join(', ')
   }
 
+  function clashNotice(list, entries, noun) {
+    const clashes = entries.filter((e) => e && e.nameClash)
+    if (!clashes.length) return
+    const note = document.createElement('div')
+    note.className = 'ld-lib-clash'
+    note.textContent = `${clashes.length === 1 ? `One ${noun}` : `${clashes.length} ${noun}s`} from Paige had a name you already used: ${clashes.map((e) => `“${e.name}” (same name as “${e.nameClash}”)`).join(', ')}. Open ${clashes.length === 1 ? 'it' : 'each one'} and give ${clashes.length === 1 ? 'it' : 'them'} a new name so you can tell them apart.`
+    list.appendChild(note)
+  }
   function renderCharacterList() {
     const list = $('.ld-charlib-list')
     if (!list) return
@@ -4994,6 +5007,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       renderCastEditor()
       return
     }
+    clashNotice(list, characters, 'character')
     const shown = libVisible('character', characters, {
       nameOf: (c) => c.name || '', textOf: (c) => libProfileText(c.profile), isStory: (c) => !!(c.profile && c.profile.declaredByStory) })
     libCount(bar, shown.length, characters.length, 'character')
@@ -5005,7 +5019,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const story = !!profile.declaredByStory
       list.appendChild(libItem({
         name: character.name || 'Unnamed character',
-        badges: [story ? 'story-made' : '', profile.countTag || '', libLooksBadge(profile)],
+        badges: [character.nameClash ? NEEDS_NEW_NAME : '', story ? 'story-made' : '', profile.countTag || '', libLooksBadge(profile)],
         sub: [profile.anchor && profile.anchor !== character.name ? profile.anchor : '', profile.subject || ''].filter(Boolean).join(' · '),
         tags: libFirstTags(profile),
         faded: story,
@@ -5039,6 +5053,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       renderPersonaLinkSelect($('.ld-ed-persona-link') ? $('.ld-ed-persona-link').value : '')
       return
     }
+    clashNotice(list, personas, 'persona')
     const shown = libVisible('persona', personas, { nameOf: (p) => p.name || '', textOf: (p) => libProfileText(p.profile) })
     libCount(bar, shown.length, personas.length, 'persona')
     if (!shown.length) libEmptyMatch(list, 'persona')
@@ -5046,7 +5061,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const profile = persona.profile || {}
       list.appendChild(libItem({
         name: persona.name || 'Unnamed persona',
-        badges: [profile.countTag || '', libLooksBadge(profile)],
+        badges: [persona.nameClash ? NEEDS_NEW_NAME : '', profile.countTag || '', libLooksBadge(profile)],
         sub: [profile.anchor && profile.anchor !== persona.name ? profile.anchor : '', profile.subject || ''].filter(Boolean).join(' · '),
         tags: libFirstTags(profile),
         onOpen: () => openPersonaEditor(persona.id),

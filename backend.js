@@ -19052,6 +19052,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const personas = await getPersonas()
         const id = String(payload.id || '').trim() || `persona_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
         const entry = { id, name, profile: profileInput, updatedAt: Date.now() }
+        // A "needs a new name" mark from Paige stays until the entry is renamed.
+        const before = personas.find((item) => item && item.id === id)
+        if (before && before.nameClash && String(before.name || '').trim() === name) entry.nameClash = before.nameClash
         const index = personas.findIndex((item) => item && item.id === id)
         if (index >= 0) personas[index] = entry
         else personas.push(entry)
@@ -19079,6 +19082,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const characters = await getCharacters()
         const id = String(payload.id || '').trim() || `character_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
         const entry = { id, name, profile: profileInput, updatedAt: Date.now() }
+        // A "needs a new name" mark from Paige stays until the entry is renamed.
+        const before = characters.find((item) => item && item.id === id)
+        if (before && before.nameClash && String(before.name || '').trim() === name) entry.nameClash = before.nameClash
         const index = characters.findIndex((item) => item && item.id === id)
         if (index >= 0) characters[index] = entry
         else characters.push(entry)
@@ -20276,8 +20282,8 @@ if (spindle.rpcPool && typeof spindle.rpcPool.handle === 'function') {
   catch (error) { spindle.log.warn('[lumidraw] could not offer LumiCast updates: ' + (error && error.message)) }
 }
 // Paige's Make my card, through LumiCast: LumiCast translates each look and publishes the sheet at
-// lumicast.paige.sheet, then reads this endpoint. A character or persona with the same name gets its six sheet
-// fields replaced (everything else in it stays); otherwise a new reusable one is added. Only LumiCast may call it.
+// lumicast.paige.sheet, then reads this endpoint, which adds a new reusable character or persona. Only LumiCast
+// may call it.
 async function addFromLumiCast(requesterExtensionId) {
   if (requesterExtensionId !== 'lumicast') throw new Error('Only LumiCast can add characters this way.')
   let shared
@@ -20289,23 +20295,26 @@ async function addFromLumiCast(requesterExtensionId) {
   const kind = shared.kind === 'persona' ? 'persona' : 'character'
   const sheet = shared.sheet
   const list = kind === 'character' ? await getCharacters() : await getPersonas()
-  const key = name.toLowerCase()
-  const index = list.findIndex((item) => item && String(item.name || '').trim().toLowerCase() === key)
-  const old = index >= 0 ? list[index] : null
-  const profile = { ...((old && old.profile) || {}) }
+  // Never replaces anyone: a name that's taken is saved as "Vesper 2", "Vesper 3"… and marked so the library
+  // shows it needs a new name. The mark stays until it's renamed.
+  const taken = (value) => list.some((item) => item && String(item.name || '').trim().toLowerCase() === value.toLowerCase())
+  let saveName = name
+  for (let n = 2; taken(saveName) && n < 1000; n++) saveName = `${name} ${n}`
+  const profile = {}
   profile.countTag = text(sheet.countTag, 40); profile.subject = text(sheet.subject, 200); profile.identityTags = text(sheet.always)
   profile.appearanceTags = text(sheet.appearance); profile.defaultOutfitTags = text(sheet.outfit); profile.anatomyTags = text(sheet.anatomy)
   if (!String(profile.anchor || '').trim()) profile.anchor = name
   normalizeProfile(profile, profile.appearanceTags || '', kind)
-  const entry = old ? { ...old, profile, updatedAt: Date.now() }
-    : { id: `${kind}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, name, profile, updatedAt: Date.now() }
-  if (old) list[index] = entry; else list.push(entry)
+  // The anchor stays the real name, so "Vesper 2" is still drawn and found as Vesper.
+  const entry = { id: `${kind}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, name: saveName, profile, updatedAt: Date.now(),
+    ...(saveName !== name ? { nameClash: name } : {}) }
+  list.push(entry)
   list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
   if (kind === 'character') await saveCharacters(list); else await savePersonas(list)
   // The same message as LumiCast's update, so an open Lumi Studio panel shows the new or changed entry.
   spindle.sendToFrontend({ type: 'lumicast_applied', kind, entry, [kind === 'character' ? 'characters' : 'personas']: list }, shared.userId || undefined)
-  spindle.log.info(`[lumidraw] ${old ? 'updated' : 'added'} ${kind} "${name}" from Paige through LumiCast`)
-  return { ok: true, updated: !!old, name, kind }
+  spindle.log.info(`[lumidraw] added ${kind} "${entry.name}" from Paige through LumiCast`)
+  return { ok: true, updated: false, name: entry.name, clashWith: entry.nameClash || '', kind }
 }
 if (spindle.rpcPool && typeof spindle.rpcPool.handle === 'function') {
   try { spindle.rpcPool.handle('lumicast.add', ({ requesterExtensionId }) => addFromLumiCast(requesterExtensionId), { requires: [] }) }
