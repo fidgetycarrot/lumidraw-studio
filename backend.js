@@ -24864,6 +24864,9 @@ POSE AND EXPRESSION
 - "pose": 2-5 tags for that person alone — standing, kneeling, leaning forward,
   arms around neck, head tilted back, arched back, hand on hip. All of them must
   be true at the same instant.
+- Aiming, pointing, shooting or throwing: name the target in that person's pose
+  ("aiming at drop pod", "pointing at door"). Without it the image model has them
+  aim at whoever else is in the picture.
 - "expression": at most one facial cue and one gaze cue. Facial cues: faint smile,
   soft smile, grin, smirk, parted lips, open mouth, pressed lips, biting lip,
   furrowed brow, raised eyebrow, half-closed eyes, closed eyes, wide-eyed,
@@ -25112,6 +25115,25 @@ function simplePossessive(label) {
   return /s$/i.test(label) ? label + "'" : label + "'s"
 }
 
+// Body tags that only make sense with bare skin. When the outfit covers that
+// part of the body, Anima strips the clothes to show the skin, so the tag goes.
+const SIMPLE_TORSO_SKIN_RE = /^(?:abs|six[- ]?pack|toned (?:stomach|abs)|stomach|midriff|navel|navel hair|navel piercing|happy trail|chest hair|pectorals|large pectorals|pecs|nipples?|nipple piercing|underboob|sideboob|bare chest|bare (?:stomach|back)|(?:chest|stomach|belly|back) tattoo|tramp stamp|hairless (?:chest|smooth body)|hairless smooth body|smooth (?:chest|body))$/i
+const SIMPLE_ARM_SKIN_RE = /^(?:biceps|muscular arms|veiny (?:arms|muscles)|arm hair|(?:shoulder|arm|forearm) tattoo|bare (?:arms|shoulders))$/i
+function simpleCoveredBodyTags(identity, outfit) {
+  const worn = (outfit || []).map(tag => String(tag || '').toLowerCase())
+  if (!worn.length) return []
+  const exposed = worn.some(tag => /\b(?:nude|naked|topless|shirtless|open (?:shirt|coat|jacket|robe|vest)|unbuttoned|unzipped|pulled (?:up|down|open|aside)|bare chest|crop top|bikini|swimsuit|harness|straps|sports bra|bra\b|tank top|off-shoulder|midriff)\b/.test(tag))
+  if (exposed) return []
+  const fullBody = worn.some(tag => /\b(?:power armou?r|full armou?r|plate armou?r|space marine|mecha|exoskeleton|spacesuit|space suit|hazmat|plugsuit|bodysuit)\b/.test(tag))
+  const torso = fullBody || worn.some(tag => /\b(?:shirt|t-shirt|blouse|sweater|hoodie|jacket|coat|armou?r|breastplate|chestplate|cuirass|tunic|robes?|dress|gown|uniform|suit|vest|corset|jumpsuit|cassock|habit|kimono|turtleneck|gambeson|tabard)\b/.test(tag))
+  if (!torso) return []
+  return (identity || []).filter(tag => {
+    const plain = String(tag || '').replace(/^\(|:[\d.]+\)$/g, '').trim()
+    return SIMPLE_TORSO_SKIN_RE.test(plain) || /\b(?:along (?:the |his |her )?spine|on (?:the |his |her )?back)\b/i.test(plain) ||
+      (fullBody && SIMPLE_ARM_SKIN_RE.test(plain))
+  })
+}
+
 function simpleResolveSubject(raw, index, total, image, ctx, notes) {
   const { profiles, memory, card } = ctx
   const banned = (ctx.preset && ctx.preset.bannedTags) || ''
@@ -25206,6 +25228,13 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
     if (!out.identity.length) notes.push(`${raw.name}: no sheet and the parser gave no body description — they may come out generic. Save a sheet or try again.`)
   }
   out.outfit = applyBannedToList(out.outfit, banned)
+  // Skin the clothes cover. "abs, chest hair, navel hair" on a sheet drew
+  // Grimnir shirtless with his power armor reduced to a belt.
+  const hidden = simpleCoveredBodyTags(out.identity, out.outfit)
+  if (hidden.length) {
+    out.identity = out.identity.filter(tag => !hidden.includes(tag))
+    notes.push(`${out.displayName}: left out “${hidden.join(', ')}” — covered by their clothes in this picture.`)
+  }
   out.pose = applyBannedToList(raw.pose, banned)
   out.expression = applyBannedToList(raw.expression, banned)
   // One gaze per face. "looking ahead" in pose plus "looking down" in expression
