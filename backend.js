@@ -25124,7 +25124,7 @@ function simpleCoveredBodyTags(identity, outfit) {
   if (!worn.length) return []
   const exposed = worn.some(tag => /\b(?:nude|naked|topless|shirtless|open (?:shirt|coat|jacket|robe|vest)|unbuttoned|unzipped|pulled (?:up|down|open|aside)|bare chest|crop top|bikini|swimsuit|harness|straps|sports bra|bra\b|tank top|off-shoulder|midriff)\b/.test(tag))
   if (exposed) return []
-  const fullBody = worn.some(tag => /\b(?:power armou?r|full armou?r|plate armou?r|space marine|mecha|exoskeleton|spacesuit|space suit|hazmat|plugsuit|bodysuit)\b/.test(tag))
+  const fullBody = worn.some(tag => /\b(?:power armou?r|full armou?r|plate armou?r|terminator armou?r|space marine|adeptus astartes|mecha|exoskeleton|spacesuit|space suit|hazmat|plugsuit|bodysuit)\b/.test(tag))
   const torso = fullBody || worn.some(tag => /\b(?:shirt|t-shirt|blouse|sweater|hoodie|jacket|coat|armou?r|breastplate|chestplate|cuirass|tunic|robes?|dress|gown|uniform|suit|vest|corset|jumpsuit|cassock|habit|kimono|turtleneck|gambeson|tabard)\b/.test(tag))
   if (!torso) return []
   return (identity || []).filter(tag => {

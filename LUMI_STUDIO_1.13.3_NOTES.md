@@ -6,3 +6,7 @@ Report: "Vesper is shooting Grimnir for some reason? Also, Grimnir should be in 
 - **Aiming needs a target.** The parser is now told to name what someone aims, points, shoots or throws at, for example "aiming at drop pod". With nothing said, Anima points the gun at the only other person in the picture.
 
 Checked on ten earlier reports: the only other change is Blark losing "large pectorals" under his iron breastplate.
+
+## 1.13.4
+
+- "adeptus astartes" and "terminator armor" also count as full-body armor for leaving out covered skin. Those are the booru names for Warhammer 40K space marines and their heavy armor.
