@@ -21,3 +21,10 @@ Whole sentences instead of tags with commas:
 - A worn helmet hides face, hair and eye details; sealed armour also hides skin, scars and tattoos.
 - The sheet's default expression (e.g. smirk) is used only when the scene gives none.
 - Mirror and twin negatives from the Anima path carry over.
+
+# 1.14.1 — NanoGPT goes through Lumiverse's own connection
+- 1.14.0 sent pictures through the extension network proxy, which gives up after 30 seconds. MOSS at 50 steps takes longer, so every picture timed out ("Request timed out after 30000ms").
+- Pictures now go through Lumiverse's Image Generation connection, which has no such limit. The key lives there; LS no longer stores its own.
+- Setup: in Lumiverse's **Image Generation** drawer, add a connection, choose **Nano-GPT**, paste the key. In LS → Settings → Image apps → NanoGPT, press Refresh and pick that connection (picked for you when there is only one).
+- Size, steps, CFG, seed and the negative prompt are passed through the connection's raw request override, so the connection's own size list does not limit them.
+- Lumiverse keeps its own copy of each connection picture; LS removes that copy after placing its own.

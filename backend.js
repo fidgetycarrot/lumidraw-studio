@@ -70,6 +70,7 @@ const DEFAULT_SETTINGS = {
   host: '127.0.0.1',
   port: 7862,
   swarmUrl: 'http://localhost:7801',
+  nanoConnection: '',     // Lumiverse Image Generation connection (Nano-GPT) used by NanoGPT presets
   mode: 'off',            // 'off' | 'inline' | 'parser'
   autoScan: true,         // auto-process after each story message (when events are available)
   autoImageEvery: 5,      // new assistant story replies; manual scans bypass cadence
@@ -2912,39 +2913,34 @@ async function generateSwarmImages(settings, payload, progress, context = {}) {
 // Only the settings a model lists in supported_parameters are sent; LoRAs and
 // samplers do not exist there and are ignored.
 // ---------------------------------------------------------------------------
-const NANO_KEY = 'lumidraw_nanogpt_api_key'
 const NANO_API = 'https://api.nano-gpt.com'
 const NANO_MODEL_CACHE_MS = 10 * 60 * 1000
+const NANO_RENDER_TIMEOUT_MS = 6 * 60 * 1000
 let nanoModelCache = { at: 0, models: null }
 
-function nanoAvailable(userId) {
-  return !!(userId && spindle.enclave && spindle.enclave.get && spindle.enclave.put && spindle.enclave.delete && spindle.cors)
+// Pictures go through Lumiverse's own Image Generation connection, not the
+// extension network proxy: the proxy gives up after 30 seconds and MOSS at 50
+// steps takes longer than that. The key stays in that connection.
+function nanoImageGenAvailable() {
+  return !!(spindle.imageGen && typeof spindle.imageGen.generate === 'function' && typeof spindle.imageGen.listConnections === 'function')
 }
 
-async function nanoKey(userId) {
-  if (!nanoAvailable(userId)) throw new Error('NanoGPT needs a current Lumiverse with secure key storage and the network proxy.')
-  let key
-  try { key = await spindle.enclave.get(NANO_KEY, userId) } catch (_) { throw new Error('Lumiverse could not read the saved NanoGPT key.') }
-  if (!key) throw new Error('Save your NanoGPT API key in Settings → Image apps first.')
-  return key
+async function nanoConnections(userId) {
+  if (!nanoImageGenAvailable()) return { available: false, connections: [] }
+  let list
+  try { list = await spindle.imageGen.listConnections(userId) }
+  catch (error) { throw new Error('Lumiverse would not list its image connections (' + error.message + '). Check that Lumi Studio has the image generation permission.') }
+  const rows = Array.isArray(list) ? list : list && Array.isArray(list.data) ? list.data : []
+  const connections = rows.filter(row => row && row.provider === 'nanogpt')
+    .map(row => ({ id: String(row.id), name: String(row.name || 'Nano-GPT'), hasKey: row.has_api_key !== false, isDefault: !!row.is_default }))
+  return { available: true, connections }
 }
 
-async function nanoStatus(userId) {
-  if (!nanoAvailable(userId)) return { available: false, hasKey: false }
-  try { return { available: true, hasKey: !!(await spindle.enclave.get(NANO_KEY, userId)) } }
-  catch (_) { return { available: true, hasKey: false } }
-}
-
-async function saveNanoKey(payload, userId) {
-  if (!nanoAvailable(userId)) throw new Error('NanoGPT needs a current Lumiverse with secure key storage and the network proxy.')
-  const key = typeof payload.apiKey === 'string' ? payload.apiKey.trim() : ''
-  if (payload.clearKey !== true && !key) throw new Error('Paste your NanoGPT API key first.')
-  if (key && (key.length > 2048 || /\s/.test(key))) throw new Error('The API key must be one piece of text with no spaces.')
-  try {
-    if (payload.clearKey === true) await spindle.enclave.delete(NANO_KEY, userId)
-    else await spindle.enclave.put(NANO_KEY, key, userId)
-  } catch (_) { throw new Error('Lumiverse could not save the NanoGPT key.') }
-  return nanoStatus(userId)
+async function nanoStatus(userId, settings = null) {
+  const current = settings || await getSettings()
+  const { available, connections } = await nanoConnections(userId)
+  const chosen = connections.find(c => c.id === current.nanoConnection) || (connections.length === 1 ? connections[0] : null)
+  return { available, connections, connectionId: chosen ? chosen.id : '', hasKey: !!(chosen && chosen.hasKey) }
 }
 
 // A parameter's choices, whatever shape the listing uses for them.
@@ -3094,17 +3090,6 @@ function nanoRequestBody(payload, model) {
   return body
 }
 
-function nanoError(res) {
-  const json = res.json || {}
-  const detail = typeof json.message === 'string' ? json.message
-    : json.error && typeof json.error === 'object' ? (json.error.message || json.error.code || '')
-    : typeof json.error === 'string' ? json.error : String(res.text || '').slice(0, 200)
-  if (res.status === 401 || res.status === 403) return 'NanoGPT refused the API key. Check it in Settings → Image apps.'
-  if (res.status === 402) return 'NanoGPT says the balance is too low for this picture.'
-  if (res.status === 429) return 'NanoGPT is limiting requests right now. Try again in a minute.'
-  return 'NanoGPT returned HTTP ' + res.status + (detail ? ': ' + String(detail).slice(0, 240) : '.')
-}
-
 function nanoImageKind(bytes) {
   if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'png'
   if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg'
@@ -3120,39 +3105,47 @@ function nanoLooksBlank(bytes, width, height) {
 }
 
 async function generateNanoImages(settings, payload, progress, context = {}) {
-  const key = await nanoKey(context.userId)
+  if (!nanoImageGenAvailable()) throw new Error('This Lumiverse is too old for NanoGPT in Lumi Studio. Update Lumiverse.')
+  const status = await nanoStatus(context.userId, settings)
+  if (!status.connectionId) {
+    throw new Error(status.connections.length
+      ? 'Pick which Nano-GPT connection to use in Lumi Studio → Settings → Image apps.'
+      : 'Add a Nano-GPT connection in Lumiverse’s Image Generation drawer (with your API key), then pick it in Lumi Studio → Settings → Image apps.')
+  }
   const model = await nanoModel(payload.model)
   const body = nanoRequestBody(payload, model)
+  const override = { ...body }
+  for (const key of ['model', 'prompt', 'n', 'response_format', 'size']) delete override[key]
   spindle.log.info('[lumidraw] NanoGPT request ' + JSON.stringify({ ...body, prompt: String(body.prompt || '').length + ' characters',
     ...(body.negative_prompt ? { negative_prompt: String(body.negative_prompt).length + ' characters' } : {}) }) + (model ? '' : ' (model not in the list; sent the basic settings only)'))
-  const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }
-  let res
-  try { res = await hostRequest(NANO_API + '/v1/images/generations', { method: 'POST', headers, body: JSON.stringify(body), timeoutMs: 300000 }) }
-  catch (error) { throw new Error('Could not reach NanoGPT (' + error.message + '). Check its status before retrying, in case the picture was charged.') }
-  if (!res.ok) throw new Error(nanoError(res))
-  const json = res.json || {}
-  const items = Array.isArray(json.data) ? json.data : Array.isArray(json.images) ? json.images : []
-  const item = items[0]
-  if (!item) throw new Error('NanoGPT answered without a picture.')
-  let bytes
-  if (typeof item.b64_json === 'string' && item.b64_json) bytes = Buffer.from(item.b64_json.replace(/^data:image\/[a-z]+;base64,/, ''), 'base64')
-  else if (typeof item.url === 'string' && /^https:\/\//.test(item.url)) {
-    let image
-    try { image = await hostRequest(item.url, { timeoutMs: 60000, binary: true }) }
-    catch (error) { throw new Error('NanoGPT made the picture, but downloading it failed (' + error.message + ').') }
-    if (!image.ok) throw new Error('NanoGPT made the picture, but downloading it failed (HTTP ' + image.status + ').')
-    bytes = image.bytes
-  } else if (typeof item.url === 'string' && item.url.startsWith('data:image/')) bytes = Buffer.from(item.url.split(',')[1] || '', 'base64')
-  if (!bytes || !bytes.length || !nanoImageKind(bytes)) throw new Error('NanoGPT sent something that is not a picture.')
+  let timer
+  let result
+  try {
+    result = await Promise.race([
+      spindle.imageGen.generate({ userId: context.userId, connection_id: status.connectionId, model: body.model, prompt: body.prompt,
+        negativePrompt: body.negative_prompt || '', includeDataUrl: true,
+        ...(context.chatId ? { owner_chat_id: context.chatId } : {}),
+        parameters: { size: body.size || '1024x1024', rawRequestOverride: JSON.stringify(override) } }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('NanoGPT took longer than 6 minutes.')), NANO_RENDER_TIMEOUT_MS) }),
+    ])
+  } catch (error) {
+    const text = String(error && error.message || error)
+    if (/\b401\b|\b403\b|unauthori|invalid api key|No API key/i.test(text)) throw new Error('NanoGPT refused the key in your Lumiverse Nano-GPT connection. Check it in the Image Generation drawer.')
+    if (/\b402\b|insufficient|balance/i.test(text)) throw new Error('NanoGPT says the balance is too low for this picture.')
+    throw new Error('NanoGPT: ' + text.slice(0, 300))
+  } finally { clearTimeout(timer) }
+  // Lumiverse keeps its own copy of every connection picture; LS uploads the
+  // one it places, so the extra copy is removed.
+  if (result && result.imageId) deleteOwnedImage(context.userId, { id: result.imageId }).catch(() => {})
+  const dataUrl = result && typeof result.imageDataUrl === 'string' ? result.imageDataUrl : ''
+  const bytes = dataUrl ? Buffer.from(dataUrl.replace(/^data:[^,]*,/, ''), 'base64') : null
+  if (!bytes || !bytes.length || !nanoImageKind(bytes)) throw new Error('NanoGPT answered without a picture.')
   if (nanoLooksBlank(bytes, payload.width, payload.height)) {
     const error = new Error('NanoGPT sent back a blank picture. The model’s safety filter most likely blocked it; nothing was added to the chat.')
     error.nanoBlank = true
     throw error
   }
-  const cost = Number(json.cost)
-  if (Number.isFinite(cost)) spindle.log.info(`[lumidraw] NanoGPT ${payload.model} · cost ${cost}` + (Number.isFinite(Number(json.remainingBalance)) ? ` · balance ${json.remainingBalance}` : ''))
-  return { images: [bytes.toString('base64')], mime: 'image/' + nanoImageKind(bytes), cost: Number.isFinite(cost) ? cost : undefined,
-    request: { ...body, prompt: undefined } }
+  return { images: [bytes.toString('base64')], mime: 'image/' + nanoImageKind(bytes) }
 }
 
 async function generateImages(settings, payload, label = 'generation', renderer = 'drawthings', progress = null, context = {}) {
@@ -18903,7 +18896,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           port: Number(payload.port) || prev.port || DEFAULT_SETTINGS.port,
         }
         if (payload.swarmUrl !== undefined) settings.swarmUrl = swarmBaseUrl({ swarmUrl: payload.swarmUrl })
-        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserRequestOverrides', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel', 'storyQualityTags', 'storyPromptPrefix', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor']) {
+        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserRequestOverrides', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel', 'storyQualityTags', 'storyPromptPrefix', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor', 'nanoConnection']) {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
         if (payload.bridgePort !== undefined) settings.bridgePort = Number(payload.bridgePort) || DEFAULT_SETTINGS.bridgePort
@@ -19236,11 +19229,6 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
       case 'nano_status': {
         reply = ok(payload, requestId, await nanoStatus(userId))
-        break
-      }
-
-      case 'nano_save_key': {
-        reply = ok(payload, requestId, await saveNanoKey(payload, userId))
         break
       }
 
