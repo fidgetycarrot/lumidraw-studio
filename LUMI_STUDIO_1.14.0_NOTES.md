@@ -28,3 +28,9 @@ Whole sentences instead of tags with commas:
 - Setup: in Lumiverse's **Image Generation** drawer, add a connection, choose **Nano-GPT**, paste the key. In LS → Settings → Image apps → NanoGPT, press Refresh and pick that connection (picked for you when there is only one).
 - Size, steps, CFG, seed and the negative prompt are passed through the connection's raw request override, so the connection's own size list does not limit them.
 - Lumiverse keeps its own copy of each connection picture; LS removes that copy after placing its own.
+
+# 1.14.2 — back to calling NanoGPT directly
+- Lumiverse's built-in Nano-GPT connection kept failing with "returned no image data", while the same request from Terminal came back fine (full-size MOSS, 50 steps, about 15 seconds). LS now calls NanoGPT itself again, at nano-gpt.com (the address that worked; 1.14.0 used api.nano-gpt.com, which is the likely cause of its 30-second timeout).
+- The key goes back in LS → Settings → Image apps → NanoGPT. A key saved under 1.14.0 is still there and is used. The same key can stay in Lumiverse's own image connection too.
+- LS reads the picture wherever the reply puts it (picture data or a link), and logs every reply's fields, time, safety flag, cost and balance to the Spindle log.
+- If MOSS's safety check flags a picture and nothing comes back, LS says so. If NanoGPT takes longer than Lumiverse's 30-second limit, LS says the picture was lost and may still have been charged.

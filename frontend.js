@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.14.1'
+  const EXTENSION_VERSION = '1.14.2'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1493,9 +1493,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           </div>
           <div data-settings-section="connection" class="ld-card">
             <div class="ld-subtitle">NanoGPT (online)</div>
-            <span class="ld-label">Nano-GPT connection</span><select class="ld-nano-connection"><option value="">— none found —</option></select>
-            <div class="ld-help">Your NanoGPT key lives in Lumiverse, not here. Open Lumiverse’s <b>Image Generation</b> drawer, add a connection, choose <b>Nano-GPT</b> and paste your key. Then press Refresh and pick it here. Pictures are paid from your NanoGPT balance. To use it, make a preset with NanoGPT as its image app.</div>
-            <div class="ld-row" style="margin-top:6px"><button class="ld-btn" data-act="nano-refresh">Refresh</button></div>
+            <span class="ld-label">API key</span><input class="ld-nano-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your NanoGPT API key" />
+            <div class="ld-help">Pictures are made on NanoGPT’s servers and paid from your NanoGPT balance. The key is kept in Lumiverse’s secure storage and is not shown again. The same key can also be used by Lumiverse’s own image connection. To use it here, make a preset with NanoGPT as its image app.</div>
+            <div class="ld-row" style="margin-top:6px"><button class="ld-btn" data-act="nano-save">Save key</button><button class="ld-btn" data-act="nano-clear">Remove key</button></div>
             <div class="ld-status ld-nano-status"></div>
           </div>
           <div data-settings-section="connection" class="ld-card">
@@ -2422,7 +2422,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       if (oldSettingsRail) oldSettingsRail.remove()
       const cardOf = (selector) => { const node = $(selector); return node ? node.closest('.ld-card') : null }
       const swarmCard = cardOf('.ld-swarm-url')
-      const nanoCard = cardOf('.ld-nano-connection')
+      const nanoCard = cardOf('.ld-nano-key')
       const drawThingsCard = cardOf('.ld-host')
       const bridgeCard = cardOf('.ld-bridge-host')
       const cloudCard = cardOf('.ld-cloud-enabled')
@@ -7793,7 +7793,7 @@ ${entry.prompt || ''}`.trim()
       populateDatalist('ld-model-catalog-ed', nanoCatalogData.models.map(m => m.file))
       labelNanoModels()
     }
-    const keyNote = res.status && res.status.connectionId ? '' : ' No Nano-GPT connection picked yet — see Settings → Image apps.'
+    const keyNote = res.status && res.status.hasKey ? '' : ' No API key saved yet — add it in Settings → Image apps.'
     setStatus('.ld-ed-nano-status', `${nanoCatalogData.models.length} NanoGPT models.${keyNote}`, keyNote ? 'err' : 'good')
     return nanoCatalogData
   }
@@ -7801,16 +7801,8 @@ ${entry.prompt || ''}`.trim()
   async function refreshNanoStatus() {
     try {
       const status = await call('nano_status', {})
-      const select = $('.ld-nano-connection')
-      select.innerHTML = ''
-      const list = status.connections || []
-      if (!list.length) select.appendChild(new Option('— none found —', ''))
-      for (const c of list) select.appendChild(new Option(c.name + (c.hasKey ? '' : ' (no key)'), c.id))
-      select.value = status.connectionId || ''
-      if (!status.available) setStatus('.ld-nano-status', 'This Lumiverse is too old for NanoGPT in Lumi Studio. Update Lumiverse.', 'err')
-      else if (!list.length) setStatus('.ld-nano-status', 'No Nano-GPT connection in Lumiverse yet.', '')
-      else if (!status.connectionId) setStatus('.ld-nano-status', 'Pick a connection.', '')
-      else setStatus('.ld-nano-status', status.hasKey ? 'Ready.' : 'That connection has no key yet. Add it in Lumiverse’s Image Generation drawer.', status.hasKey ? 'good' : 'err')
+      if (!status.available) setStatus('.ld-nano-status', 'This Lumiverse cannot store keys securely yet. Update Lumiverse to use NanoGPT.', 'err')
+      else setStatus('.ld-nano-status', status.hasKey ? 'Key saved.' : 'No key saved.', status.hasKey ? 'good' : '')
       return status
     } catch (e) { setStatus('.ld-nano-status', e.message, 'err') }
   }
@@ -8337,11 +8329,19 @@ ${entry.prompt || ''}`.trim()
     try { draftConfig = readDraftConfigFromControls() } catch (e) { setStatus('.ld-draft-status', e.message, 'err'); return }
     loadSwarmCatalog().catch(() => {})
   })
-  $('[data-act="nano-refresh"]').addEventListener('click', () => refreshNanoStatus())
-  $('.ld-nano-connection').addEventListener('change', async () => {
+  $('[data-act="nano-save"]').addEventListener('click', async () => {
+    const input = $('.ld-nano-key')
     try {
-      await call('save_settings', { nanoConnection: $('.ld-nano-connection').value })
-      await refreshNanoStatus()
+      const status = await call('nano_save_key', { apiKey: input.value })
+      input.value = ''
+      setStatus('.ld-nano-status', status.hasKey ? 'Key saved.' : 'The key did not save.', status.hasKey ? 'good' : 'err')
+    } catch (e) { setStatus('.ld-nano-status', e.message, 'err') }
+  })
+  $('[data-act="nano-clear"]').addEventListener('click', async () => {
+    try {
+      await call('nano_save_key', { clearKey: true })
+      $('.ld-nano-key').value = ''
+      setStatus('.ld-nano-status', 'Key removed.', 'good')
     } catch (e) { setStatus('.ld-nano-status', e.message, 'err') }
   })
   $('[data-act="swarm-test"]').addEventListener('click', async () => {
