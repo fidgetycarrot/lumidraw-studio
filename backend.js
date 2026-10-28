@@ -6449,6 +6449,8 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
     partialFeatures: normalizePartialFeatures(source.partialFeatures || source.partialTraits || '', `${fallbackRef} partial feature`),
     anatomy: normalizeConditionalAnatomy(shortList(source.anatomyTags || '', `${fallbackRef} conditional anatomy`, { maxItems: 12, maxWords: 7, maxChars: 72 })),
     anatomyMode: normalizeAnatomyMode(source.anatomyMode),
+    // Plain-English face and body for MOSS presets; Anima never reads it.
+    mossDescription: String(source.mossDescription || '').replace(/\s+/g, ' ').trim().slice(0, 1500),
     appearanceStates,
     defaultAppearanceState: normalizeDefaultAppearanceState(source.defaultAppearanceState || source.defaultForm || '', appearanceStates),
     looks,
@@ -6479,6 +6481,7 @@ async function resolveProfile(profile, userId, chatId) {
       description: await resolveMacros(alias.description, userId, chatId),
     }))), `${profile.ref} visual alias`),
     anatomy: normalizeConditionalAnatomy(await resolveMany(profile.anatomy, `${profile.ref} conditional anatomy`)),
+    mossDescription: profile.mossDescription ? String(await resolveMacros(profile.mossDescription, userId, chatId) || '').trim() : '',
     partialFeatures: normalizePartialFeatures(await Promise.all((profile.partialFeatures || []).map(async (feature) => ({
       name: await resolveMacros(feature.name, userId, chatId),
       tags: await resolveMany(feature.tags, `${profile.ref} partial feature`),
@@ -25496,6 +25499,9 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
       if (lookIncludesClothes) anatomy = []
       out.sources.look = raw.look && variant.id.toLowerCase() === raw.look.toLowerCase() ? 'parser' : remembered.look ? 'remembered' : 'starting look'
     } else {
+      // Only the sheet's own body has a written description; another look or
+      // form keeps the tag-built sentences.
+      if (profile.mossDescription) out.mossDescription = profile.mossDescription
       try {
         const identity = coreIdentityFor(profile, { name: raw.name }, banned)
         identityTags = identity.tags
@@ -26358,16 +26364,23 @@ function mossPersonParagraph(subject) {
   const who = subject.name ? `${subject.name}, ${articleFor(noun)} ${noun}` : `${articleFor(noun)} ${noun}`
   const place = MOSS_PLACES[subject.position] || ''
   const lines = []
-  let opening = place ? `${place} is ${who}` : upperFirst(who)
-  if (feminineMale) opening += ` with a soft, pretty, feminine face and a flat chest`
-  lines.push(opening + '.')
-  if (franchise.universe || franchise.role || franchise.faction) {
-    const role = [franchise.faction, franchise.role || (franchise.faction ? 'warrior' : '')].filter(Boolean).join(' ')
-    lines.push(role
-      ? `${p.subject} ${p.be} ${articleFor(role)} ${role}${franchise.universe ? ' from ' + franchise.universe : ''}.`
-      : `${p.subject} ${p.be} from the world of ${franchise.universe}.`)
+  if (subject.mossDescription) {
+    // The user's own words for this person replace the tag-built sentences.
+    const text = String(subject.mossDescription).trim().replace(/[.\s]+$/, '')
+    const named = subject.name ? `${subject.name}, ${text}` : upperFirst(text)
+    lines.push(`${place ? place + ' is ' + named : upperFirst(named)}.`)
+  } else {
+    let opening = place ? `${place} is ${who}` : upperFirst(who)
+    if (feminineMale) opening += ` with a soft, pretty, feminine face and a flat chest`
+    lines.push(opening + '.')
+    if (franchise.universe || franchise.role || franchise.faction) {
+      const role = [franchise.faction, franchise.role || (franchise.faction ? 'warrior' : '')].filter(Boolean).join(' ')
+      lines.push(role
+        ? `${p.subject} ${p.be} ${articleFor(role)} ${role}${franchise.universe ? ' from ' + franchise.universe : ''}.`
+        : `${p.subject} ${p.be} from the world of ${franchise.universe}.`)
+    }
+    if (trimmed.length) lines.push(`${p.subject} ${p.have} ${mossList(trimmed.map(mossNoun))}.`)
   }
-  if (trimmed.length) lines.push(`${p.subject} ${p.have} ${mossList(trimmed.map(mossNoun))}.`)
   if (outfit.length) {
     lines.push(outfit.length === 1 && /^(?:nude|naked|completely nude)$/i.test(outfit[0])
       ? `${p.subject} ${p.be} nude.` : `${p.subject} ${p.wear} ${mossList(outfit.map(item => mossNoun(mossOwnBody(item, p))))}.`)
@@ -26377,7 +26390,7 @@ function mossPersonParagraph(subject) {
   if (anatomy.length) lines.push(`${upperFirst(p.possessive)} ${mossList(anatomy)} ${anatomy.length > 1 || /[^s]s$/.test(anatomy[0]) ? 'are' : 'is'} visible.`)
   const pose = mossPoseSentence(mossWords(subject.pose), p)
   if (pose) lines.push(pose)
-  const face = mossWords(subject.expression).concat(subject.expression && subject.expression.length ? [] : faceDefaults)
+  const face = mossWords(subject.expression).concat(subject.expression && subject.expression.length || subject.mossDescription ? [] : faceDefaults)
   if (face.length && !helmet) {
     const doing = face.filter(tag => /^\w+ing\b/.test(tag))
     const looks = face.filter(tag => !doing.includes(tag) && mossIsAdjective(tag))

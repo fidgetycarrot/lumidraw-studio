@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.14.3'
+  const EXTENSION_VERSION = '1.15.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1026,7 +1026,7 @@ function realSetup(ctx) {
                 <div class="ld-card">
                   <div class="ld-subtitle">Core generation</div>
                   <span class="ld-label">Image renderer</span>
-                  <select class="ld-draft-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option></select>
+                  <select class="ld-draft-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option></select>
                   <div class="ld-swarm-tools" style="display:none;margin-top:8px">
                     <button class="ld-btn" data-act="swarm-reload">Connect / refresh SwarmUI</button>
                     <span class="ld-label">Load settings from a SwarmUI preset</span>
@@ -1310,6 +1310,7 @@ the diner = diner, booth seating, formica table, neon sign | aliases: the diner,
             <div><span class="ld-label">Stable subject phrase</span><input class="ld-persona-ed-subject" placeholder="adult man" /></div>
             <div><span class="ld-label">Always include (Direct mode)</span><input class="ld-persona-ed-identity" placeholder="futanari" /><div class="ld-hint">Non-negotiable identity tags. Direct mode restores these if the parser drops them. Stable futanari in Permanent appearance is also locked automatically.</div></div>
             <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-persona-ed-tags" style="min-height:58px"></textarea></div>
+            <div><span class="ld-label">Description for MOSS (plain English)</span><textarea class="ld-persona-ed-moss" style="min-height:74px" placeholder="a slender, petite young man with a delicately feminine face: porcelain-pale skin, jet-black hair in an asymmetrical bob, amber eyes with long dark lashes…"></textarea><div class="ld-hint">Face and body only, each trait once. Clothes, pose and expression still come from the story. MOSS presets use this word for word instead of the tags above; Anima ignores it. Leave empty to build it from the tags.</div></div>
             <div><span class="ld-label">Default outfit tags</span><textarea class="ld-persona-ed-outfit" style="min-height:48px"></textarea></div>
             <div class="ld-persona-ed-alternates"></div>
             <div><span class="ld-label">Default appearance state</span><input class="ld-persona-ed-default-state" placeholder="Default" /></div>
@@ -3644,6 +3645,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       weight: row.querySelector('.ld-lora-weight').value === '' ? 1 : Number(row.querySelector('.ld-lora-weight').value),
     })).filter((lora) => lora.file)
     if (usesSwarm(config)) config.swarmParams = readSwarmParams('draft')
+    else if (usesNano(config)) { delete config.sampler; config.loras = [] }
     else readDtSettingsFromControls(config)
     return config
   }
@@ -3651,14 +3653,20 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   function renderDraftControls() {
     const config = draftConfig || {}
     const activeCatalog = rendererCatalog(config)
-    $('[data-act="sync"]').title = usesSwarm(config) ? 'Refresh SwarmUI models and saved presets' : 'Capture the recipe currently shown in Draw Things'
-    $('.ld-draft-backend').value = usesSwarm(config) ? 'swarmui' : 'drawthings'
+    const nano = usesNano(config)
+    $('[data-act="sync"]').title = nano ? 'Refresh the NanoGPT model list' : usesSwarm(config) ? 'Refresh SwarmUI models and saved presets' : 'Capture the recipe currently shown in Draw Things'
+    $('.ld-draft-backend').value = usesSwarm(config) ? 'swarmui' : nano ? 'nanogpt' : 'drawthings'
     $('.ld-swarm-tools').style.display = usesSwarm(config) ? '' : 'none'
     $('.ld-swarm-settings').style.display = usesSwarm(config) ? '' : 'none'
-    $('.ld-dt-settings').style.display = usesSwarm(config) ? 'none' : ''
-    $('.ld-renderer-settings-title').textContent = usesSwarm(config) ? 'SwarmUI settings' : 'Draw Things settings'
-    $('.ld-renderer-settings-help').textContent = usesSwarm(config) ? 'Only SwarmUI-native settings are sent. Draw Things settings and its cloud option do not apply.' : 'Settings captured from Draw Things on the last Sync. Save the workspace to a preset to use them in Story.'
+    $('.ld-dt-settings').style.display = usesSwarm(config) || nano ? 'none' : ''
+    $('.ld-renderer-settings-title').textContent = nano ? 'NanoGPT' : usesSwarm(config) ? 'SwarmUI settings' : 'Draw Things settings'
+    $('.ld-renderer-settings-help').textContent = nano
+      ? 'Made online and paid from your NanoGPT balance. Steps and CFG are sent only when the model takes them; leave them empty for its defaults. For MOSS, write the prompt in plain English. Samplers and LoRAs do not apply.'
+      : usesSwarm(config) ? 'Only SwarmUI-native settings are sent. Draw Things settings and its cloud option do not apply.' : 'Settings captured from Draw Things on the last Sync. Save the workspace to a preset to use them in Story.'
+    const samplerRow = $('.ld-draft-sampler') ? $('.ld-draft-sampler').closest('.ld-row') : null
+    if (samplerRow) samplerRow.style.display = nano ? 'none' : ''
     populateDatalist('ld-model-catalog', activeCatalog.models.map(m => m.file))
+    if (nano) fillDraftNanoModels()
     writeSwarmParams('draft', config)
     ensureDraftModelOption(config.model || '')
     $('.ld-draft-model').value = config.model || ''
@@ -4196,6 +4204,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       partialFeatures: $('.ld-persona-ed-features').value.trim(),
       anatomyTags: $('.ld-persona-ed-anatomy').value.trim(),
       anatomyMode: $('.ld-persona-ed-anatomy-mode').value || 'relevant',
+      mossDescription: $('.ld-persona-ed-moss') ? $('.ld-persona-ed-moss').value.trim() : '',
       alternateAppearances: readAlternateAppearances('.ld-persona-ed-alternates'),
     }
   }
@@ -4217,6 +4226,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     $('.ld-persona-ed-features').value = partialFeaturesToText(value.partialFeatures)
     $('.ld-persona-ed-anatomy').value = value.anatomyTags || ''
     $('.ld-persona-ed-anatomy-mode').value = value.anatomyMode || 'relevant'
+    if ($('.ld-persona-ed-moss')) $('.ld-persona-ed-moss').value = value.mossDescription || ''
     writeAlternateAppearances('.ld-persona-ed-alternates', value.alternateAppearances, () => ({
       subject: $('.ld-persona-ed-subject').value,
       identityTags: $('.ld-persona-ed-identity').value,
@@ -5427,6 +5437,12 @@ ${entry.prompt || ''}`.trim()
 
   // ------------------------------------------------------------------ actions
   async function doSync(statusSel) {
+    if (usesNano(draftConfig)) {
+      await loadNanoCatalog(true)
+      fillDraftNanoModels()
+      setStatus(statusSel, `${nanoCatalogData.models.length} NanoGPT models loaded.`, 'good')
+      return
+    }
     if (usesSwarm(draftConfig)) {
       await loadSwarmCatalog()
       setStatus(statusSel, 'SwarmUI connected. Choose a saved SwarmUI preset above and load it; browser workspace settings are not exposed by its API.', 'good')
@@ -5457,6 +5473,10 @@ ${entry.prompt || ''}`.trim()
     catch (error) { setStatus('.ld-gen-status', error.message, 'err'); return }
     if (!draftConfig) {
       setStatus('.ld-gen-status', 'No workspace settings yet — choose a preset or press Sync.', 'err')
+      return
+    }
+    if (!draftConfig.model && usesNano(draftConfig)) {
+      setStatus('.ld-gen-status', 'Choose a NanoGPT model first, for example fal-ai/moss-image.', 'err')
       return
     }
     if (!draftConfig.model && usesSwarm(draftConfig)) {
@@ -7774,6 +7794,17 @@ ${entry.prompt || ''}`.trim()
     if (!nano) setStatus('.ld-ed-nano-status', '')
   }
 
+  function fillDraftNanoModels() {
+    if (!usesNano(draftConfig)) return
+    populateDatalist('ld-model-catalog', nanoCatalogData.models.map(m => m.file))
+    const byId = new Map(nanoCatalogData.models.map(m => [m.file, m]))
+    const list = document.getElementById('ld-model-catalog')
+    for (const option of list ? list.querySelectorAll('option') : []) {
+      const model = byId.get(option.value)
+      if (model) option.label = model.name
+    }
+  }
+
   function labelNanoModels() {
     if ($('.ld-ed-backend').value !== 'nanogpt') return
     const list = document.getElementById('ld-model-catalog-ed')
@@ -8317,11 +8348,13 @@ ${entry.prompt || ''}`.trim()
     const next = $('.ld-draft-backend').value
     try {
       const previous = readDraftConfigFromControls()
-      rendererDrafts[usesSwarm(previous) ? 'swarmui' : 'drawthings'] = previous
-      draftConfig = cloneJson(rendererDrafts[next] || (next === 'swarmui' ? {renderBackend:'swarmui', swarmParams:{}} : {}))
+      rendererDrafts[usesSwarm(previous) ? 'swarmui' : usesNano(previous) ? 'nanogpt' : 'drawthings'] = previous
+      draftConfig = cloneJson(rendererDrafts[next] || (next === 'swarmui' ? {renderBackend:'swarmui', swarmParams:{}}
+        : next === 'nanogpt' ? {renderBackend:'nanogpt', model:'fal-ai/moss-image', width:1024, height:1024} : {}))
       draftDirty = true
       renderDraftControls(); saveDraftLocal(); renderChips()
       if (next === 'swarmui') await loadSwarmCatalog()
+      if (next === 'nanogpt') { await loadNanoCatalog(); fillDraftNanoModels() }
       setStatus('.ld-draft-status', 'Renderer changed in the workspace only. Save a new preset to use it for Story images.')
     } catch (error) { setStatus('.ld-draft-status', error.message, 'err'); renderDraftControls() }
   })
