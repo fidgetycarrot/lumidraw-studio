@@ -3032,7 +3032,10 @@ function nanoPickSize(values, w, h) {
     const tiers = known.sort((a, b) => a.area - b.area)
     return (tiers.find(item => item.area >= area * 0.9) || tiers[tiers.length - 1]).value
   }
-  known.sort((a, b) => Math.abs(a.ratio - want) - Math.abs(b.ratio - want) || Math.abs(a.area - area) - Math.abs(b.area - area))
+  // Close enough in shape first, then nearest in pixel count (a much bigger
+  // picture costs more and takes longer), then closest shape.
+  const near = item => Math.abs(item.ratio - want) <= 0.08 ? 0 : 1
+  known.sort((a, b) => near(a) - near(b) || Math.abs(Math.log(a.area / area)) - Math.abs(Math.log(b.area / area)) || Math.abs(a.ratio - want) - Math.abs(b.ratio - want))
   return known[0].value
 }
 
@@ -3091,8 +3094,16 @@ function nanoRequestBody(payload, model) {
   }
   // MOSS expands short prompts on its own unless told not to. LS already
   // writes full prompts, so expansion stays off unless the preset asks.
-  // MOSS takes any size in steps of 16; make sure the shape LS chose arrives.
-  if (/moss/i.test(payload.model) && !body.size) body.size = `${Math.round((Number(payload.width) || 1024) / 16) * 16}x${Math.round((Number(payload.height) || 1024) / 16) * 16}`
+  // MOSS takes any size from 512 to 2048 in steps of 16, so it gets exactly the
+  // size LS chose rather than the nearest listed preset (which once turned
+  // 1024×576 into 1920×1072 at twice the price).
+  if (/moss/i.test(payload.model)) {
+    const side = value => Math.max(512, Math.min(2048, Math.round((Number(value) || 1024) / 16) * 16))
+    const exact = `${side(payload.width)}x${side(payload.height)}`
+    body.size = exact
+    if (body.resolution && /x/i.test(body.resolution)) body.resolution = exact
+    delete body.image_size
+  }
   if (listed('enable_prompt_expansion') || /moss/i.test(payload.model)) body.enable_prompt_expansion = payload.enable_prompt_expansion === true
   if (listed('enable_safety_checker')) body.enable_safety_checker = false
   if (listed('output_format')) {
@@ -25891,6 +25902,9 @@ function simpleRelationSentence(actor, action, target, part) {
   let act = String(action || '').trim().replace(/[.\s]+$/, '')
   const piece = String(part || '').trim().toLowerCase()
   const actorText = upperFirst(actor)
+  // "straightens collar of" + Harrow reads "straightens Harrow's collar".
+  const ofForm = /^(\S+)\s+(?:the\s+)?(.+?)\s+of$/i.exec(act)
+  if (ofForm) return `${actorText} ${ofForm[1]} ${simplePossessive(target)} ${ofForm[2]}.`
   if (piece) {
     const partRe = escapeRegExp(piece)
     const byPart = new RegExp(`\\s+(by|on|at|around)\\s+(?:the|his|her|their)\\s+${partRe}$`, 'i').exec(act)
@@ -26139,11 +26153,12 @@ const MOSS_MASS_NOUNS = new Set(['armor', 'armour', 'clothing', 'clothes', 'ling
   'stubble', 'scenery', 'foliage', 'ice', 'mud', 'night', 'twilight', 'sunset', 'sunrise', 'dawn', 'dusk', 'silk', 'lace', 'denim',
   'chainmail', 'mail', 'plate', 'attire', 'regalia', 'bedding', 'furniture', 'machinery', 'wreckage', 'gore', 'glitter', 'confetti',
   'heterochromia', 'facial hair', 'bodysuit'])
-const MOSS_BODY_PART_RE = /(?:face|nose|cheeks?|chin|jaw|forehead|neck|throat|chest|back|spine|shoulders?|arms?|forearms?|hands?|wrists?|fingers?|hips?|waist|thighs?|legs?|knees?|ankles?|feet|foot|stomach|belly|lip corner|lips?|eyes?|eyebrows?|irises|ears?|temple|collarbone|lower back|abdomen)/
+const MOSS_BODY_PART_RE = /(?:elbows?|face|nose|cheeks?|chin|jaw|forehead|neck|throat|chest|back|spine|shoulders?|arms?|forearms?|hands?|wrists?|fingers?|hips?|waist|thighs?|legs?|knees?|ankles?|feet|foot|stomach|belly|lip corner|lips?|eyes?|eyebrows?|irises|ears?|temple|collarbone|lower back|abdomen)/
 
 // Franchise and faction tags read best as their own sentence:
 // "He is a Space Wolves space marine from Warhammer 40,000."
-const MOSS_UNIVERSES = { 'warhammer 40k': 'Warhammer 40,000', 'warhammer 40,000': 'Warhammer 40,000', warhammer: 'Warhammer 40,000' }
+const MOSS_UNIVERSES = { 'warhammer 40k': 'Warhammer 40,000', 'warhammer 40,000': 'Warhammer 40,000', warhammer: 'Warhammer 40,000',
+  '40k': 'Warhammer 40,000', wh40k: 'Warhammer 40,000', w40k: 'Warhammer 40,000' }
 const MOSS_ROLES = { 'adeptus astartes': 'space marine', 'space marine': 'space marine', 'space marines': 'space marine',
   'primaris space marine': 'Primaris space marine', 'chaos space marine': 'Chaos space marine', 'adepta sororitas': 'battle sister',
   'sister of battle': 'battle sister', 'imperial guard': 'Imperial Guardsman', 'astra militarum': 'Imperial Guardsman',
@@ -26285,6 +26300,7 @@ function mossPoseSentence(pose, p) {
   for (const raw of pose) {
     const tag = mossPlaceArticle(mossOwnBody(raw, p))
     const first = tag.split(' ')[0].toLowerCase()
+    if (/\b(?:posture|stance|pose|expression|gait|grip)$/i.test(tag)) { withPart.push(mossNoun(tag)); continue }
     if (/ing$/.test(first)) acts.push(tag.replace(/^(\w+ing)\s+(?:at|toward|towards|into|through)\s+(?!(?:the|a|an|his|her|their|him|them)\b)/i, (match) => match + 'the ')
       .replace(/^(holding|wielding|carrying|gripping|clutching|raising|drawing|firing|swinging|brandishing|reading|drinking|eating)\s+(?!(?:the|a|an|his|her|their|two|both)\b)(.+)$/i, (_, verb, rest) => `${verb} ${mossNoun(rest)}`))
     else if (new RegExp(`^(?:(?:left|right|one|both)\\s+)?(?:${MOSS_BODY_PART_RE.source})\\b`, 'i').test(tag)) withPart.push(`${p.possessive} ${tag}`)
@@ -26300,14 +26316,30 @@ function mossPoseSentence(pose, p) {
   return mossSentence(text)
 }
 
+// "wide-eyed", "nervous", "flustered" describe how someone looks; "a smirk",
+// "narrowed eyes" are things they have.
+const MOSS_ADJECTIVES = new Set(['angry', 'happy', 'sad', 'shy', 'calm', 'sleepy', 'nervous', 'scared', 'smug', 'serious', 'tired',
+  'bored', 'confident', 'determined', 'worried', 'anxious', 'afraid', 'shocked', 'surprised', 'embarrassed', 'annoyed', 'stern',
+  'cold', 'gentle', 'playful', 'flirty', 'sly', 'pensive', 'curious', 'proud', 'tense', 'relaxed', 'excited', 'furious', 'sheepish'])
+function mossIsAdjective(tag) {
+  const words = String(tag).toLowerCase().split(/\s+/)
+  const last = words[words.length - 1]
+  if (/(?:s|ness|ment|ion)$/.test(last) && !/(?:ous|less)$/.test(last)) return false
+  return MOSS_ADJECTIVES.has(last) || /-eyed$|(?:ed|ous|ful|less|ive|ish)$/.test(last)
+}
+
 function mossPersonParagraph(subject) {
   const p = mossPronouns(subject.count)
-  const phrase = mossPlain(subject.phrase || 'adult person')
+  // Franchise words in the sheet's phrase ("adult man adeptus astartes") move
+  // to the franchise sentence.
+  const franchiseWords = new RegExp(`\\b(?:${[...Object.keys(MOSS_UNIVERSES), ...Object.keys(MOSS_ROLES), ...MOSS_FACTIONS].map(escapeRegExp).sort((a, b) => b.length - a.length).join('|')})\\b`, 'gi')
+  const phrase = mossPlain(subject.phrase || 'adult person').replace(franchiseWords, ' ').replace(/\s+/g, ' ').trim() || 'adult person'
+  const phraseFranchise = (mossPlain(subject.phrase || '').match(franchiseWords) || []).map(word => word.toLowerCase())
   const phraseKey = normalizeIdentityText(phrase)
   const outfit = mossWords(subject.outfit)
   const helmet = mossHelmetOn(outfit)
   const sealed = helmet && outfit.some(item => /\b(?:power|full|plate|terminator|space marine) armou?r\b|\b(?:spacesuit|hazmat suit|mecha suit|exoskeleton)\b/i.test(item))
-  const franchise = mossFranchise(mossWords(subject.identity))
+  const franchise = mossFranchise(uniqueStrings([...phraseFranchise, ...mossWords(subject.identity)]))
   const feminineMale = subject.count === '1boy' && franchise.rest.some(tag => MOSS_FEMININE_MALE_RE.test(tag))
   const build = [], features = [], faceDefaults = []
   for (const tag of franchise.rest) {
@@ -26329,7 +26361,6 @@ function mossPersonParagraph(subject) {
   let opening = place ? `${place} is ${who}` : upperFirst(who)
   if (feminineMale) opening += ` with a soft, pretty, feminine face and a flat chest`
   lines.push(opening + '.')
-  if (feminineMale) lines.push(`${p.subject} ${p.be} clearly a man, not a woman.`)
   if (franchise.universe || franchise.role || franchise.faction) {
     const role = [franchise.faction, franchise.role || (franchise.faction ? 'warrior' : '')].filter(Boolean).join(' ')
     lines.push(role
@@ -26349,8 +26380,10 @@ function mossPersonParagraph(subject) {
   const face = mossWords(subject.expression).concat(subject.expression && subject.expression.length ? [] : faceDefaults)
   if (face.length && !helmet) {
     const doing = face.filter(tag => /^\w+ing\b/.test(tag))
-    const has = face.filter(tag => !/^\w+ing\b/.test(tag))
+    const looks = face.filter(tag => !doing.includes(tag) && mossIsAdjective(tag))
+    const has = face.filter(tag => !doing.includes(tag) && !looks.includes(tag))
     if (has.length) lines.push(`${p.subject} ${p.have} ${mossList(has.map(tag => mossNoun(mossOwnBody(tag, p))))}.`)
+    if (looks.length) lines.push(`${p.subject} ${p.be === 'are' ? 'look' : 'looks'} ${mossList(looks)}.`)
     if (doing.length) lines.push(`${p.subject} ${p.be} ${mossList(doing.map(tag => mossOwnBody(tag, p)))}.`)
   } else if (face.length && helmet) {
     const doing = face.filter(tag => /^(?:looking|facing|turning)\b/i.test(tag))
@@ -26444,10 +26477,11 @@ function compileMossImage(image, ctx) {
   if (/\bplate armor\b/.test(base.negativePrompt) && !/\bplate armor\b/.test(String(preset.negativePrompt || ''))) negatives.push('plate armor, full armor')
   if (/\bmirror\b/.test(base.negativePrompt)) negatives.push('mirror, reflection')
   if (base.subjects.length >= 2 && /\bduplicate\b/.test(base.negativePrompt)) negatives.push('twins, identical faces')
-  // A pretty young man drawn as a woman is MOSS's most common miss. Only safe
-  // to push against when nobody in the picture is a woman.
+  // A pretty young man drawn with a bust is MOSS's most common miss. Not
+  // "woman": that pushes every bit of femininity out of a feminine man. Only
+  // when nobody in the picture is a woman.
   const anyWoman = base.subjects.some(subject => subject.count !== '1boy')
-  if (!anyWoman && base.subjects.some(subject => mossWords(subject.identity).some(tag => MOSS_FEMININE_MALE_RE.test(tag)))) negatives.push('woman, girl, breasts, cleavage')
+  if (!anyWoman && base.subjects.some(subject => mossWords(subject.identity).some(tag => MOSS_FEMININE_MALE_RE.test(tag)))) negatives.push('breasts, cleavage')
   if (['nsfw', 'explicit'].includes(image.rating)) {
     negatives.push('child, underage, teenager, preteen, toddler')
     if (base.subjects.some(subject => (subject.shownAnatomy || []).length)) negatives.push('censored, mosaic censoring')

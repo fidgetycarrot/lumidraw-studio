@@ -34,3 +34,8 @@ Whole sentences instead of tags with commas:
 - The key goes back in LS → Settings → Image apps → NanoGPT. A key saved under 1.14.0 is still there and is used. The same key can stay in Lumiverse's own image connection too.
 - LS reads the picture wherever the reply puts it (picture data or a link), and logs every reply's fields, time, safety flag, cost and balance to the Spindle log.
 - If MOSS's safety check flags a picture and nothing comes back, LS says so. If NanoGPT takes longer than Lumiverse's 30-second limit, LS says the picture was lost and may still have been charged.
+
+# 1.14.3 — MOSS size and wording fixes
+- MOSS gets exactly the size LS chooses. Before, LS picked the nearest size on NanoGPT's preset list, which turned 1024×576 into 1920×1072: about twice the price ($0.10 instead of ~$0.05) and 28 seconds, close to Lumiverse's 30-second limit. Other NanoGPT models still use their listed sizes, now picked by nearest pixel count among the right shape.
+- Feminine men: dropped the "clearly a man, not a woman" sentence and "woman, girl" from the negative. Both pushed all femininity out of characters like Vesper. "breasts, cleavage" stays in the negative when nobody in the picture is a woman.
+- Wording: "40k" joins the Warhammer sentence; franchise words leave the person phrase ("a muscular, rugged adult man. He is a space marine from Warhammer 40,000."); "He looks wide-eyed"; "with a stiff posture"; "with his elbow on the table"; "straightens Ser Harrow's collar" (also fixes that kind of relation in Anima prompts).
