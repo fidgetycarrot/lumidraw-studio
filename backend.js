@@ -26360,7 +26360,7 @@ function mossSentence(text) {
 
 // The word a phrase is about: the last word before "with", "on", "and"...
 function mossHeadWord(phrase) {
-  const core = String(phrase).toLowerCase().split(/\s+(?:with|through|on|in|at|of|from|under|over|around|across|along|and|falling|hanging|covering|behind|near)\s+/)[0]
+  const core = String(phrase).toLowerCase().split(/\s+(?:with|through|on|in|into|onto|at|of|from|under|over|around|across|along|and|falling|hanging|covering|behind|near|plugged|attached|running)\s+/)[0]
   const words = core.split(/\s+/).filter(Boolean)
   // "robes tangled", "breeches hastily fastened": the noun is before these.
   while (words.length > 1 && /(?:ed|ly|ing)$|^(?:open|undone|off|up|down|loose|askew|aside)$/.test(words[words.length - 1])) words.pop()
@@ -26486,6 +26486,9 @@ function mossSafeWords(text) {
   return String(text || '')
     .replace(/\b(?:porcelain[- ]pale|porcelain|alabaster|chalk[- ]white|chalky|pallid|deathly pale|bone[- ]white|milk[- ]white|white|pale)(\s+(?:and\s+)?(?:[a-z-]+\s+){0,2})skin\b/gi, (m, gap) => 'fair' + gap + 'skin')
     .replace(/\b(?:around|ringing|encircling)\s+(?:(?:his|her|their|the)\s+)?irises\b/gi, 'inside the irises')
+    // Loose cables read as a bare robot body; tie them to where they plug in.
+    .replace(/\b((?:thin\s+|cybernetic\s+|mechanical\s+)*)(cables|wires|tubes)\s+(?:running|coming|trailing|snaking|hanging)\s+(?:from|out of|off)\s+(?:his|her|their|the)\s+body\b/gi, (m, adj, what) => `${adj || 'thin cybernetic '}${what} plugged into the back of the neck`)
+    .replace(/^(?:cables?|wires?|tubes?|cybernetic cables|mechanical cables)$/i, 'thin cybernetic cables plugged into the back of the neck')
     .replace(/\bglowing\s+((?:[a-z-]+\s+){0,3})eyes\b/gi, (m, between) => /\b(?:lens|lenses|visor)\b/i.test(between) ? m : between + 'eyes')
 }
 
@@ -26590,13 +26593,24 @@ function mossPersonParts(subject) {
     features.push(tag)
   }
   const trimmed = mossMergeHair(mossTrimFeatures(features)).map(feature => mossSafeWords(mossOwnBody(feature, p)))
-  const noun = [build.join(', '), phrase].filter(Boolean).join(' ')
+  // "a cyborg woman" drew a bare robot body over her clothes; lead with the
+  // person and keep the implants as a detail. A full-body machine stays one.
+  const fullMachine = /\b(?:full[- ]body|android|robot|mech|mecha|automaton|machine body)\b/i.test([phrase, ...franchise.rest].join(' '))
+  const cyborgPhrase = !fullMachine && /\bcyborg\b/i.test(phrase)
+  const personPhrase = cyborgPhrase ? phrase.replace(/\s*\bcyborg\b\s*/i, ' ').replace(/\s+/g, ' ').trim() || 'adult person' : phrase
+  const noun = [build.join(', '), personPhrase].filter(Boolean).join(' ')
   const who = subject.name ? `${subject.name}, ${articleFor(noun)} ${noun}` : `${articleFor(noun)} ${noun}`
   const place = MOSS_PLACES[subject.position] || ''
   const lines = []
   if (subject.mossDescription) {
     // The user's own words for this person replace the tag-built sentences.
-    const text = mossSafeWords(helmet ? mossHelmetTrim(subject.mossDescription) : subject.mossDescription).trim().replace(/[.\s]+$/, '')
+    let text = mossSafeWords(helmet ? mossHelmetTrim(subject.mossDescription) : subject.mossDescription).trim().replace(/[.\s]+$/, '')
+    // Under a hat or hood, scalp implants go where they can show, so MOSS keeps the hat.
+    if (outfit.some(item => /\b(?:hat|hood|cap|cowl|bonnet|beret|tricorn)\b/i.test(item) && !/\b(?:no|removed?|off|holding)\b/i.test(item))) {
+      text = text.replace(/\b(?:set\s+)?(?:into|in|on|across|along)\s+(?:(?:his|her|their|the)\s+)?(?:shaved\s+)?scalp\b/gi, 'at the temples and neck')
+    }
+    // An unstated eye colour came out as blank white eyes; give a plain one.
+    if (!helmet && /^1(?:girl|boy)$/.test(subject.count) && !/\beyes?\b/i.test(text)) text += ', with dark eyes'
     const named = subject.name ? `${subject.name}, ${text}` : upperFirst(text)
     lines.push(`${place ? place + ' is ' + named : upperFirst(named)}.`)
   } else {
@@ -26612,6 +26626,9 @@ function mossPersonParts(subject) {
         ? `${p.subject} ${p.be} ${articleFor(role)} ${role}${franchise.universe ? ' from ' + franchise.universe : ''}.`
         : `${p.subject} ${p.be} from the world of ${franchise.universe}.`)
     }
+    if (cyborgPhrase) trimmed.push('subtle cybernetic implants')
+    // An unstated eye colour came out as blank white eyes; give a plain one.
+    if (!helmet && /^1(?:girl|boy)$/.test(subject.count) && !trimmed.some(feature => /\beyes?\b/i.test(feature))) trimmed.push('dark eyes')
     if (trimmed.length) lines.push(`${p.subject} ${p.have} ${mossList(trimmed.map(mossNoun))}.`)
   }
   const lookCount = lines.length

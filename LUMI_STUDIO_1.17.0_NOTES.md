@@ -17,3 +17,8 @@ MOSS prompts now follow the four-part layout that has worked best in practice (A
 - **Skin and eyes:** porcelain, alabaster, chalk-white, pallid and pale skin become "fair skin" (no more grey undead look); "around the irises" becomes "inside the irises"; "glowing" is taken off eyes but kept for visors and lenses. This applies to the Description for MOSS box too.
 - **Helmet on:** hair, eye and face details are left out of the Description for MOSS for that picture, the way the tag-built description already did.
 - **Feminine men without a MOSS box:** "a soft, pretty, feminine face" (which made sharp characters look sweet) is now "delicate feminine bone structure", followed by "His slender body has a feminine hourglass curve with narrow shoulders and a flat male chest."
+
+# 1.17.2 — more of Argon's MOSS findings (MOSS prompts only)
+- **No blank eyes:** when nothing says an eye colour (sheet tags or the Description for MOSS box), a woman or man gets "dark eyes". MOSS drew blank white eyes otherwise. Not added under a worn helmet. Skin tone is not guessed: a wrong guess would change who the character is.
+- **Cyborgs:** "a cyborg woman" became "a woman … with subtle cybernetic implants" (leading with "cyborg" drew a bare robot body over the clothes). Full-body machines (android, robot, mecha, full-body) keep it. Loose "cables" / "cables running from her body" become "thin cybernetic cables plugged into the back of the neck".
+- **Hats and scalp implants:** with a hat, hood, cap or cowl worn, "set into the scalp" in the MOSS box becomes "at the temples and neck", so MOSS keeps the hat.
