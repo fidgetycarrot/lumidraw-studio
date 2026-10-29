@@ -25636,7 +25636,7 @@ function simpleKeepSpecific(tags, ...knownGroups) {
     }
     const coreTag = rawTokens.join(' ')
     let words = simpleWords(coreTag)
-    if (!words.length || words.length > 4) return tag
+    if (!words.length || words.length > 6) return tag
     const head = simpleGarmentHead(coreTag)
     let matched = ''
     for (const group of knownGroups) {
@@ -26258,10 +26258,12 @@ async function runSimpleReparse({ userId, settings, preset, messages, targetInde
 // Style choices offered in the preset editor. NanoGPT's website styles are not
 // part of its API, so the style is written into the prompt instead.
 const MOSS_STYLES = {
-  'semi-realistic': 'A smooth semi-realistic digital illustration with natural adult proportions, finely drawn features, softly blended shading and smooth gradients, detailed hair and clothing textures, and warm natural lighting. Clean, polished illustrated art style without flat cartoon cel-shading, visible brushstrokes, or photographic realism.',
-  manhwa: 'A high-detail mature webtoon and visual-novel illustration with clean fine linework, realistic adult facial proportions, smooth soft-shaded coloring, subtle skin and fabric shading, and soft atmospheric lighting. Smooth digital character art, neither flat cartoony anime nor a real photograph.',
-  concept: 'A clean semi-realistic digital concept illustration with sharp adult facial structure, smooth blended form shading, rich dramatic lighting, and realistic fabric and metal material details. Smoothly rendered digital illustration without visible brushstrokes, flat cartoon cel-shading, or photorealistic skin.',
-  painterly: 'A polished digital illustration with natural adult proportions, smooth softly blended shading, rich cinematic lighting, and detailed textures without visible brushstrokes or flat cartoon outlines.',
+  dark: 'A dark, atmospheric high-detail anime illustration with soft blended shading, rich dramatic lighting, and detailed textures.',
+  smooth: 'A warm, high-detail anime illustration with soft blended shading, natural lighting, and detailed textures.',
+  manhwa: 'A high-detail mature webtoon and anime illustration with fine linework, soft blended shading, and atmospheric lighting.',
+  'semi-realistic': 'A warm, high-detail anime illustration with soft blended shading, natural lighting, and detailed textures.',
+  concept: 'A dark, atmospheric high-detail anime illustration with soft blended shading, rich dramatic lighting, and detailed textures.',
+  painterly: 'A dark, atmospheric high-detail anime illustration with soft blended shading, rich dramatic lighting, and detailed textures.',
   comic: 'A clean graphic-novel illustration with bold shapes, smooth modeled shading, strong dramatic shadows, and no flat cartoon cel-shading.',
   storybook: 'A soft storybook illustration with gentle blended colors, warm diffused light, muted palette, and a clean hand-illustrated feel rather than a photograph.',
   cover: 'A painterly dark sci-fi fantasy book-cover illustration rendered in rich oil and acrylic brushwork, expressive visible brushstrokes, strong three-dimensional form modeling, dramatic chiaroscuro rim lighting, deep warm shadows, weathered metallic and fabric textures, sharp defined facial bone structure, hand-painted concept art finish, neither photorealistic nor flat cel-shaded.',
@@ -26273,10 +26275,23 @@ const MOSS_STYLES = {
   anime: 'An anime-style illustration with clean lineart, cel shading and dramatic cinematic lighting.',
   'anime poster': 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.',
 }
-const MOSS_DEFAULT_STYLE = MOSS_STYLES['semi-realistic']
-const MOSS_DEFAULT_NEGATIVE = 'worst quality, low quality, bad anatomy, extra limbs, watermark, signature, text, border, jpeg artifacts, photorealistic photograph, DSLR, real photo, glossy CGI, 3D render, Unreal Engine, plastic skin, doll, mannequin'
-const MOSS_ANTI_CARTOON_NEGATIVE = 'cartoon, chibi, flat cel shading, flat vector art, thick comic outlines'
+const MOSS_DEFAULT_STYLE = MOSS_STYLES.dark
+const MOSS_DEFAULT_NEGATIVE = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin'
+const MOSS_ANTI_CARTOON_NEGATIVE = 'cartoon, chibi, flat cel shading, flat colors, flat vector art, thick comic outlines'
 const MOSS_ANTI_BRUSH_NEGATIVE = 'thick oil paint, impasto, visible brushstrokes, canvas texture'
+const MOSS_ANTI_3D_NEGATIVE = '3d, realistic, photorealistic, CGI, doll, plastic skin'
+
+// Upgrade 1.17.3/1.17.4 "semi-realistic" sentences that triggered MOSS's 3D/photo mode.
+function resolveMossStyle(chosen) {
+  const raw = String(chosen || '').trim()
+  if (!raw) return MOSS_DEFAULT_STYLE
+  const lower = raw.toLowerCase()
+  if (MOSS_STYLES[lower]) return MOSS_STYLES[lower]
+  if (/\bsemi-realistic digital concept illustration\b/i.test(raw) || /\bpainterly dark sci-fi fantasy book-cover\b/i.test(raw)) return MOSS_STYLES.dark
+  if (/\bsmooth semi-realistic digital illustration\b/i.test(raw)) return MOSS_STYLES.smooth
+  if (/\bmature webtoon and visual-novel illustration\b/i.test(raw)) return MOSS_STYLES.manhwa
+  return raw
+}
 
 function presetPromptStyle(preset) {
   return preset && preset.promptStyle === 'moss' ? 'moss' : 'anima'
@@ -26287,7 +26302,8 @@ const MOSS_DROP_RE = /^(?:score[_ ]\d+(?:[_ ]up)?|masterpiece|masterwork|best qu
 const MOSS_FEMININE_MALE_RE = /^(?:trap|otoko ?no ?ko|otokonoko|femboy|feminine male|girly boy|feminine boy)$/i
 const MOSS_WORDS = {
   tareme: 'droopy eyes', tsurime: 'sharp upturned eyes', jitome: 'half-lidded eyes', ahoge: 'a stray cowlick',
-  'muscular male': 'muscular', 'muscular female': 'muscular', 'large man': 'large', 'large woman': 'large',
+  'muscular male': 'muscular', 'muscular female': 'muscular', 'mature male': 'mature', 'mature female': 'mature',
+  'large man': 'large', 'large woman': 'large',
   'tall male': 'tall', 'tall female': 'tall', manly: 'rugged', tan: 'tanned skin', tanlines: 'tan lines',
   ass: 'a round rear', 'huge ass': 'a large round rear', 'large ass': 'a large round rear', fangs: 'sharp canine teeth',
   'hairless smooth body': 'smooth, hairless skin', 'mole under eye': 'a mole under one eye', 'dark-skinned male': 'dark skin',
@@ -26458,6 +26474,7 @@ function mossPoseSentence(pose, p) {
     if (/ing$/.test(first)) acts.push(tag.replace(/^(\w+ing)\s+(?:at|toward|towards|into|through)\s+(?!(?:the|a|an|his|her|their|him|them)\b)/i, (match) => match + 'the ')
       .replace(/^(holding|wielding|carrying|gripping|clutching|raising|drawing|firing|swinging|brandishing|reading|drinking|eating)\s+(?!(?:the|a|an|his|her|their|two|both)\b)(.+)$/i, (_, verb, rest) => `${verb} ${mossNoun(rest)}`))
     else if (new RegExp(`^(?:(?:left|right|one|both)\\s+)?(?:${MOSS_BODY_PART_RE.source})\\b`, 'i').test(tag)) withPart.push(`${p.possessive} ${tag}`)
+    else if (/^bare\s+/i.test(tag)) withPart.push(tag)
     else if (/^(?:on|in|against|under|beside|behind|between|over|at)\b/i.test(tag)) acts.push(tag)
     else acts.push(tag)
   }
@@ -26501,6 +26518,8 @@ function mossSafeWords(text) {
     .replace(/\b((?:thin\s+|cybernetic\s+|mechanical\s+)*)(cables|wires|tubes)\s+(?:running|coming|trailing|snaking|hanging)\s+(?:from|out of|off)\s+(?:his|her|their|the)\s+body\b/gi, (m, adj, what) => `${adj || 'thin cybernetic '}${what} plugged into the back of the neck`)
     .replace(/^(?:cables?|wires?|tubes?|cybernetic cables|mechanical cables)$/i, 'thin cybernetic cables plugged into the back of the neck')
     .replace(/\bglowing\s+((?:[a-z-]+\s+){0,3})eyes\b/gi, (m, between) => /\b(?:lens|lenses|visor)\b/i.test(between) ? m : between + 'eyes')
+    .replace(/,?\s*(?:with\s+a\s+light\s+smudge\s+of\s+dust\s+on\s+one\s+cheek|smudged\s+with\s+grey\s+ash\s+on\s+one\s+cheek)/gi, '')
+    .replace(/\s+and\s+a\s+faint\s+silver\s+dueling\s+scar\s+at\s+the\s+left\s+corner\s+of\s+his\s+mouth/gi, '')
 }
 
 // A helmet that is on hides the head, so the parts of a written description
@@ -26531,22 +26550,28 @@ function mossGarmentKey(item) {
   const raw = String(mossHeadWord(item) || '').toLowerCase().replace(/[^a-z]/g, '')
   return MOSS_GARMENT_SAME[raw] || MOSS_GARMENT_SAME[raw.replace(/s$/, '')] || raw
 }
-function mossOutfit(items) {
-  const cleaned = items.map(item => {
+function mossOutfit(items, defaultItems = []) {
+  const cleanList = list => (list || []).map(item => {
     let text = String(item).trim()
     if (/\b(?:corset|vest|bodice|waistcoat)\b/i.test(text)) text = text.replace(/\bsleeveless\s+/gi, '')
     if (/\bbreeches\b/i.test(text) && !/\b(?:fitted|tight|slim|skinny|loose|baggy|wide)\b/i.test(text)) text = text.replace(/\bbreeches\b/i, 'fitted breeches')
     return text
   }).filter(Boolean)
+  const cleaned = cleanList(items)
+  const cleanedDefaults = cleanList(defaultItems)
   const parts = [], groups = new Map()
   for (const item of cleaned) {
     const key = mossGarmentKey(item)
-    if (MOSS_GARMENT_PART[key]) { parts.push({ item, to: MOSS_GARMENT_PART[key] }); continue }
+    if (MOSS_GARMENT_PART[key]) { parts.push({ item, to: MOSS_GARMENT_PART[key], fromDefault: false }); continue }
     // Words like "coat on shoulders" or "holstered bolter" are kept whole; only
     // the same garment named twice is merged.
     const list = groups.get(key) || []
     list.push(item)
     groups.set(key, list)
+  }
+  for (const item of cleanedDefaults) {
+    const key = mossGarmentKey(item)
+    if (MOSS_GARMENT_PART[key]) parts.push({ item, to: MOSS_GARMENT_PART[key], fromDefault: true })
   }
   const out = []
   for (const [, list] of groups) {
@@ -26567,11 +26592,22 @@ function mossOutfit(items) {
     const before = partByKey.get(key)
     if (!before || part.item.split(/\s+/).length > before.item.split(/\s+/).length) partByKey.set(key, part)
   }
-  for (const { item, to } of partByKey.values()) {
+  for (const { item, to, fromDefault } of partByKey.values()) {
     const at = out.findIndex(garment => mossGarmentKey(garment) === to || (to === 'corset' && /\b(?:shirt|blouse|vest|corset)\b/i.test(garment)))
     const word = String(mossHeadWord(item)).toLowerCase().replace(/s$/, '')
-    if (at < 0) out.push(item)
-    else if (!new RegExp(`\\b${escapeRegExp(word)}`, 'i').test(out[at])) out[at] = `${out[at]} with ${mossNoun(item).replace(/^an? /, '')}`
+    if (at < 0) {
+      if (!fromDefault) out.push(item)
+      continue
+    }
+    if (fromDefault) {
+      const defParent = cleanedDefaults.find(d => mossGarmentKey(d) === to || (to === 'corset' && /\b(?:shirt|blouse|vest|corset)\b/i.test(d)))
+      if (defParent) {
+        const defWords = simpleWords(defParent).filter(w => !['coat', 'greatcoat', 'corset', 'armor', 'armour', 'black', 'fitted'].includes(w))
+        const wornWords = simpleWords(out[at])
+        if (defWords.length && !defWords.some(w => wornWords.includes(w))) continue
+      }
+    }
+    if (!new RegExp(`\\b${escapeRegExp(word)}`, 'i').test(out[at])) out[at] = `${out[at]} with ${mossNoun(item).replace(/^an? /, '')}`
   }
   return uniqueStrings(out)
 }
@@ -26586,7 +26622,7 @@ function mossPersonParts(subject) {
   const phrase = mossPlain(subject.phrase || 'adult person').replace(franchiseWords, ' ').replace(/\s+/g, ' ').trim() || 'adult person'
   const phraseFranchise = (mossPlain(subject.phrase || '').match(franchiseWords) || []).map(word => word.toLowerCase())
   const phraseKey = normalizeIdentityText(phrase)
-  const outfit = mossOutfit(mossWords(subject.outfit))
+  const outfit = mossOutfit(mossWords(subject.outfit), mossWords(subject.profile && subject.profile.defaultOutfit))
   const helmet = mossHelmetOn(outfit)
   const sealed = helmet && outfit.some(item => /\b(?:power|full|plate|terminator|space marine) armou?r\b|\b(?:spacesuit|hazmat suit|mecha suit|exoskeleton)\b/i.test(item))
   const franchise = mossFranchise(uniqueStrings([...phraseFranchise, ...mossWords(subject.identity)]))
@@ -26655,7 +26691,13 @@ function mossPersonParts(subject) {
   if (helmet) lines.push(`${upperFirst(p.possessive)} helmet is on and covers ${p.possessive} whole head.`)
   const anatomy = mossTrimFeatures(mossWords(subject.shownAnatomy || []).filter(tag => !phraseKey.includes(normalizeIdentityText(tag))))
   if (anatomy.length) lines.push(`${upperFirst(p.possessive)} ${mossList(anatomy)} ${anatomy.length > 1 || /[^s]s$/.test(anatomy[0]) ? 'are' : 'is'} visible.`)
-  const pose = mossPoseSentence(mossWords(subject.pose), p)
+  const hasOwnFur = outfit.some(item => /\b(?:fur|pelt)\b/i.test(item))
+  const poseWords = mossWords(subject.pose).filter(tag => hasOwnFur || !/^(?:grabbing|holding|clutching|gripping)\s+(?:the\s+)?(?:fur|pelt)\b/i.test(tag))
+  const isTowering = build.includes('towering') || /\btowering\b/i.test(phrase)
+  if (isTowering && poseWords.some(tag => /^standing\b/i.test(tag)) && !poseWords.some(tag => /\btowering\b/i.test(tag))) {
+    poseWords.push('towering')
+  }
+  const pose = mossPoseSentence(poseWords, p)
   if (pose) lines.push(pose)
   const face = mossWords(subject.expression).concat(subject.expression && subject.expression.length || subject.mossDescription ? [] : faceDefaults)
   if (face.length && !helmet) {
@@ -26723,10 +26765,12 @@ function mossBoxes(subjects, width, height) {
 
 const MOSS_LIGHT_RE = /\b(?:light|lights|lighting|lit|glow|glowing|lamp|lamplight|lantern|candle|candlelight|sunlight|moonlight|sunset|sunrise|dusk|dawn|twilight|neon|shadows?|backlit|backlighting|rim light|god rays|light rays)\b/i
 const MOSS_STYLE_TAGS = {
-  'semi-realistic': 'semi-realistic digital illustration',
-  manhwa: 'mature webtoon illustration, visual novel art',
-  concept: 'semi-realistic concept illustration',
-  painterly: 'digital illustration',
+  dark: 'anime style',
+  smooth: 'anime style',
+  manhwa: 'anime style',
+  'semi-realistic': 'anime style',
+  concept: 'anime style',
+  painterly: 'anime style',
   comic: 'graphic novel illustration',
   storybook: 'storybook illustration',
   cover: 'painterly illustration, oil painting',
@@ -26741,9 +26785,9 @@ const MOSS_STYLE_TAGS = {
 
 function isMossAnimeStyle(text) {
   const s = String(text || '').toLowerCase()
-  if (!s) return false
-  if (/\b(?:not anime|neither .* anime|neither .* cel[- ]shad|no .* cartoon|without .* cel[- ]shad|without .* cartoon|rather than photographic|oil paint|gouache|watercolou?r|webtoon|visual[- ]novel|semi[- ]realistic)\b/.test(s)) return false
-  return /\b(?:anime|manga|cel[- ]shad)/.test(s)
+  if (!s) return true
+  if (/\b(?:not anime|neither .* anime|rather than photographic|oil paint|gouache|watercolou?r)\b/.test(s)) return false
+  return /\b(?:anime|manga|webtoon|cel[- ]shad)/.test(s)
 }
 
 function isMossBrushStyle(text) {
@@ -26800,7 +26844,7 @@ function compileMossImage(image, ctx) {
   const base = compileSimpleImage(image, ctx)
   const { preset } = ctx
   const chosen = String(preset.mossStyle || '').trim()
-  const style = MOSS_STYLES[chosen.toLowerCase()] || chosen || MOSS_DEFAULT_STYLE
+  const style = resolveMossStyle(chosen)
   const parts = base.parts || {}
   const framing = mossWords(parts.framing || image.framing)
   const sceneText = mossPlain(parts.summary || String(image.scene_summary || ''))
@@ -26824,26 +26868,29 @@ function compileMossImage(image, ctx) {
       bbox_format: 'yxyx',
     })
   } else {
-    // The four-part layout that has worked best with MOSS in practice:
-    // 1. a short booru tag line (quality, style, rating, who is in it),
-    // 2. one sentence of style, camera and light,
-    // 3. each person's look, written the same way every picture,
-    // 4. what happens now: action, clothes, expressions, and the place last.
+    // Cohesive per-person layout (1.15.1 + Studio test):
+    // 1. short booru tag line (quality, style, rating, counts),
+    // 2. style, camera, lighting and scene summary,
+    // 3. the setting,
+    // 4. one full paragraph per person (look, outfit, helmet, pose, expression together),
+    // 5. cross-character action lines at the end.
     const lighting = setting.filter(item => MOSS_LIGHT_RE.test(item))
     const places = setting.filter(item => !lighting.includes(item))
     const personParts = base.subjects.map(mossPersonParts)
     const tagLine = mossTagLine(image, base.subjects, personParts, style)
     const camera = [framing.length ? framing.join(', ') : '', lighting.length ? 'in ' + mossList(lighting.map(item => mossPlaceArticle(item))) : '']
       .filter(Boolean).join(', ')
-    const styleLine = [mossSentence(mossPlain(style)), camera ? mossSentence(camera) : ''].filter(Boolean).join(' ')
-    const looks = personParts.map(part => part.look.join(' ')).filter(Boolean)
-    const now = [mossSentence(sceneText),
-      ...personParts.map((part, index) => mossNamedLines(part.doing, base.subjects[index], part.pronoun).join(' ')),
-      actions.join(' '), mossSettingSentence(places)].filter(Boolean)
-    prompt = [tagLine, styleLine, ...looks, now.join('\n')].filter(Boolean).join('\n\n')
+    const styleLine = [mossSentence(mossPlain(style)), camera ? mossSentence(camera) : '', mossSentence(sceneText)].filter(Boolean).join(' ')
+    const personBlocks = personParts.map(part => [...part.look, ...part.doing].join(' ')).filter(Boolean)
+    prompt = [tagLine, styleLine, mossSettingSentence(places), ...personBlocks, actions.join(' ')].filter(Boolean).join('\n\n')
   }
 
-  const negatives = [String(preset.mossNegative || '').trim() || MOSS_DEFAULT_NEGATIVE]
+  let rawNeg = String(preset.mossNegative || '').trim() || MOSS_DEFAULT_NEGATIVE
+  if (isMossAnimeStyle(style)) {
+    rawNeg = rawNeg.split(',').map(t => t.trim()).filter(t => t && !/^(?:anime|smooth airbrushing|digital art smoothing)$/i.test(t)).join(', ')
+  }
+  const negatives = [rawNeg, MOSS_ANTI_3D_NEGATIVE]
+  if (!/\bcel[- ]shad/i.test(style)) negatives.push('cel shading, flat colors, cartoon, chibi')
   if (!isMossAnimeStyle(style)) {
     negatives.push(MOSS_ANTI_CARTOON_NEGATIVE)
     if (!isMossBrushStyle(style)) negatives.push(MOSS_ANTI_BRUSH_NEGATIVE)

@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.17.4'
+  const EXTENSION_VERSION = '1.17.5'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2358,23 +2358,23 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           // NanoGPT's website style buttons are not in its API, so the style is
           // written into the prompt. These fill the sentence; it stays editable.
           const mossStyles = [
-            ['semi-realistic', 'Smooth Semi-Realistic (Slice of Life & Everyday)', 'A smooth semi-realistic digital illustration with natural adult proportions, finely drawn features, softly blended shading and smooth gradients, detailed hair and clothing textures, and warm natural lighting. Clean, polished illustrated art style without flat cartoon cel-shading, visible brushstrokes, or photographic realism.'],
-            ['manhwa', 'Mature Manhwa / Visual Novel (Clean & Stylized)', 'A high-detail mature webtoon and visual-novel illustration with clean fine linework, realistic adult facial proportions, smooth soft-shaded coloring, subtle skin and fabric shading, and soft atmospheric lighting. Smooth digital character art, neither flat cartoony anime nor a real photograph.'],
-            ['concept', 'Clean Concept Art (Darker / Sci-Fi & Fantasy)', 'A clean semi-realistic digital concept illustration with sharp adult facial structure, smooth blended form shading, rich dramatic lighting, and realistic fabric and metal material details. Smoothly rendered digital illustration without visible brushstrokes, flat cartoon cel-shading, or photorealistic skin.'],
+            ['dark', 'Dark Atmospheric Illustration (Sci-Fi & Dark Fantasy)', 'A dark, atmospheric high-detail anime illustration with soft blended shading, rich dramatic lighting, and detailed textures.'],
+            ['smooth', 'Smooth Warm Illustration (Slice of Life & Everyday)', 'A warm, high-detail anime illustration with soft blended shading, natural lighting, and detailed textures.'],
+            ['manhwa', 'Mature Manhwa / Webtoon Illustration', 'A high-detail mature webtoon and anime illustration with fine linework, soft blended shading, and atmospheric lighting.'],
             ['comic', 'Graphic Novel / Comic Style', 'A clean graphic-novel illustration with bold shapes, smooth modeled shading, strong dramatic shadows, and no flat cartoon cel-shading.'],
             ['storybook', 'Soft Storybook Illustration', 'A soft storybook illustration with gentle blended colors, warm diffused light, muted palette, and a clean hand-illustrated feel rather than a photograph.'],
             ['cover', 'Painted Book-Cover Style (with brush texture)', 'A painterly dark sci-fi fantasy book-cover illustration rendered in rich oil and acrylic brushwork, expressive visible brushstrokes, strong three-dimensional form modeling, dramatic chiaroscuro rim lighting, deep warm shadows, weathered metallic and fabric textures, sharp defined facial bone structure, hand-painted concept art finish, neither photorealistic nor flat cel-shaded.'],
             ['oil', 'Classic Painted Style (with brush texture)', 'A classic oil painting with visible brushwork and canvas texture, dramatic chiaroscuro lighting, rich muted earthy palette, modeled form, and an intentionally painterly rather than photographic finish.'],
             ['90s cel', '90s Retro Anime', 'A 1990s retro anime screencap illustration with hand-drawn linework, cel-shaded flat colors, muted VHS color palette, painted background, and subtle film grain.'],
-            ['anime', 'Standard Modern Anime', 'An anime-style illustration with clean lineart, cel shading and dramatic cinematic lighting.'],
-            ['anime poster', 'Anime Poster', 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.'],
+            ['anime', 'Standard Modern Anime (Cel-Shaded)', 'An anime-style illustration with clean lineart, cel shading and dramatic cinematic lighting.'],
+            ['anime poster', 'Anime Poster (Cel-Shaded)', 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.'],
           ]
           const stylePick = document.createElement('select')
           stylePick.className = 'ld-ed-moss-style-pick'
           for (const [value, label] of [['', 'Choose a style…'], ...mossStyles.map(([value, label]) => [value, label]), ['custom', 'My own (type below)']]) {
             const option = document.createElement('option'); option.value = value; option.textContent = label; stylePick.appendChild(option)
           }
-          mossBox.appendChild(field('Picture style', stylePick, 'Picks the sentence below. The top three options are smooth, clean illustration styles (no cartoon cel-shading, no visible paint strokes, and no real-photo look).'))
+          mossBox.appendChild(field('Picture style', stylePick, 'Picks the sentence below. The top three options give smooth, non-cartoony 2D illustration (soft blended shading with cel-shading, cartoons, and 3D/photo rendering blocked in the negative prompt).'))
           const mossStyle = document.createElement('textarea')
           mossStyle.className = 'ld-ed-moss-style'; mossStyle.rows = 3
           mossStyle.placeholder = mossStyles[0][2]
@@ -2386,15 +2386,20 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           })
           const syncPick = () => {
             const text = mossStyle.value.trim()
-            const found = mossStyles.find(([key, , sentence]) => key === text.toLowerCase() || sentence === text)
+            const lower = text.toLowerCase()
+            const alias = lower === 'concept' || /\bsemi-realistic digital concept illustration\b/i.test(text) ? 'dark'
+              : lower === 'semi-realistic' || /\bsmooth semi-realistic digital illustration\b/i.test(text) ? 'smooth'
+              : /\bmature webtoon and visual-novel illustration\b/i.test(text) ? 'manhwa' : ''
+            if (alias) { stylePick.value = alias; return }
+            const found = mossStyles.find(([key, , sentence]) => key === lower || sentence === text)
             stylePick.value = found ? found[0] : text ? 'custom' : ''
           }
           mossStyle.addEventListener('input', syncPick)
           mossStyle.addEventListener('ld-sync', syncPick)
           const mossNegative = document.createElement('textarea')
           mossNegative.className = 'ld-ed-moss-negative'; mossNegative.rows = 2
-          mossNegative.placeholder = 'worst quality, low quality, bad anatomy, extra limbs, watermark, signature, text, border, jpeg artifacts, cartoon, chibi, flat cel shading, flat vector art, thick comic outlines, photorealistic photograph, DSLR, real photo, glossy CGI, 3D render, plastic skin, doll, mannequin, thick oil paint, impasto, visible brushstrokes, canvas texture'
-          mossBox.appendChild(field('Negative prompt for MOSS', mossNegative, 'Leave empty to use the example shown (automatically blocks cartoons, real photos, and paint strokes for smooth styles).'))
+          mossNegative.placeholder = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin'
+          mossBox.appendChild(field('Negative prompt for MOSS', mossNegative, 'Leave empty to use the example shown (blocks flat cel-shading, cartoons, and 3D/photo rendering).'))
           const mossLayout = document.createElement('input')
           mossLayout.type = 'checkbox'; mossLayout.className = 'ld-ed-moss-layout'
           mossBox.appendChild(checkbox(mossLayout, 'Give each person their own box in the picture (MOSS layout, experimental)',
