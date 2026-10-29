@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.17.3'
+  const EXTENSION_VERSION = '1.17.4'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2358,26 +2358,23 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           // NanoGPT's website style buttons are not in its API, so the style is
           // written into the prompt. These fill the sentence; it stays editable.
           const mossStyles = [
-            ['cover', 'Heroic Book-Cover Illustration (oil & acrylic)', 'A painterly dark sci-fi fantasy book-cover illustration rendered in rich oil and acrylic brushwork, expressive visible brushstrokes, strong three-dimensional form modeling, dramatic chiaroscuro rim lighting, deep warm shadows, weathered metallic and fabric textures, sharp defined facial bone structure, hand-painted concept art finish, neither photorealistic nor flat cel-shaded.'],
-            ['oil', 'Classic Oil Painting (balanced painterly)', 'A classic oil painting with visible brushwork and canvas texture, dramatic chiaroscuro lighting, rich muted earthy palette, modeled form, and an intentionally painterly rather than photographic finish.'],
-            ['gritty', 'Gritty Dark Fantasy Oil (heavy brushwork)', 'A dark fantasy oil painting with thick impasto and bold broken brushstrokes, loose unfinished edges, visible canvas weave, torchlight and ember light against deep shadow, weathered stone and dented steel, deliberately imperfect handmade artwork, and no photographic realism.'],
-            ['concept', 'Painterly Concept Art (gouache & ink-wash)', 'A semi-painterly graphic novel concept illustration in opaque gouache and oil paint on textured board, chiseled angular facial features, visible directional brushstrokes, matte chalky highlights and deep ink-wash shadows, moody atmospheric lighting, richly textured surfaces, stylized hand-painted illustration without flat cartoon lineart or photorealistic skin.'],
-            ['pulp', 'Vintage Pulp Illustration (bold shapes & shadow)', 'A vintage pulp illustration in oil paint with loose confident brushstrokes, broad interlocking shapes, dramatic shadows in deep burgundy and brown with pale cream highlights, rough painterly edges, faded paper grain, and an intentionally painterly rather than photographic finish.'],
-            ['gouache', 'Muted Gouache / Matte Illustration', 'A gouache illustration with opaque matte color blocks, visible brush texture, restrained muted palette, soft modeled shading, and a hand-painted surface that is neither flat vector nor photographic.'],
-            ['storybook', 'Storybook Watercolor (soft washes)', 'A watercolor storybook illustration with soft translucent washes on textured paper, gentle diffused light, muted palette with faded pigments, soft painterly edges, and a hand-painted feel rather than photographic.'],
-            ['painterly', 'Polished Digital Painting', 'A polished digital painting with semi-realistic proportions, soft painterly shading, rich cinematic lighting and detailed textures.'],
-            ['semi-realistic', 'Semi-realistic Illustration', 'A semi-realistic digital illustration with natural proportions, detailed rendering, soft realistic lighting and fine textures.'],
-            ['comic', 'Painted Comic Book', 'A painted comic-book illustration with bold shapes, soft modeled shading, strong dramatic shadows, subtle paper grain, and no hard flat cartoon outlines.'],
-            ['90s cel', '90s Retro Cel Anime', 'A 1990s retro anime screencap illustration with hand-drawn linework, cel-shaded flat colors, muted VHS color palette, painted background, and subtle film grain.'],
-            ['anime', 'Modern Anime', 'An anime-style illustration with clean lineart, cel shading and dramatic cinematic lighting.'],
-            ['anime poster', 'Anime Key-Visual Poster', 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.'],
+            ['semi-realistic', 'Smooth Semi-Realistic (Slice of Life & Everyday)', 'A smooth semi-realistic digital illustration with natural adult proportions, finely drawn features, softly blended shading and smooth gradients, detailed hair and clothing textures, and warm natural lighting. Clean, polished illustrated art style without flat cartoon cel-shading, visible brushstrokes, or photographic realism.'],
+            ['manhwa', 'Mature Manhwa / Visual Novel (Clean & Stylized)', 'A high-detail mature webtoon and visual-novel illustration with clean fine linework, realistic adult facial proportions, smooth soft-shaded coloring, subtle skin and fabric shading, and soft atmospheric lighting. Smooth digital character art, neither flat cartoony anime nor a real photograph.'],
+            ['concept', 'Clean Concept Art (Darker / Sci-Fi & Fantasy)', 'A clean semi-realistic digital concept illustration with sharp adult facial structure, smooth blended form shading, rich dramatic lighting, and realistic fabric and metal material details. Smoothly rendered digital illustration without visible brushstrokes, flat cartoon cel-shading, or photorealistic skin.'],
+            ['comic', 'Graphic Novel / Comic Style', 'A clean graphic-novel illustration with bold shapes, smooth modeled shading, strong dramatic shadows, and no flat cartoon cel-shading.'],
+            ['storybook', 'Soft Storybook Illustration', 'A soft storybook illustration with gentle blended colors, warm diffused light, muted palette, and a clean hand-illustrated feel rather than a photograph.'],
+            ['cover', 'Painted Book-Cover Style (with brush texture)', 'A painterly dark sci-fi fantasy book-cover illustration rendered in rich oil and acrylic brushwork, expressive visible brushstrokes, strong three-dimensional form modeling, dramatic chiaroscuro rim lighting, deep warm shadows, weathered metallic and fabric textures, sharp defined facial bone structure, hand-painted concept art finish, neither photorealistic nor flat cel-shaded.'],
+            ['oil', 'Classic Painted Style (with brush texture)', 'A classic oil painting with visible brushwork and canvas texture, dramatic chiaroscuro lighting, rich muted earthy palette, modeled form, and an intentionally painterly rather than photographic finish.'],
+            ['90s cel', '90s Retro Anime', 'A 1990s retro anime screencap illustration with hand-drawn linework, cel-shaded flat colors, muted VHS color palette, painted background, and subtle film grain.'],
+            ['anime', 'Standard Modern Anime', 'An anime-style illustration with clean lineart, cel shading and dramatic cinematic lighting.'],
+            ['anime poster', 'Anime Poster', 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.'],
           ]
           const stylePick = document.createElement('select')
           stylePick.className = 'ld-ed-moss-style-pick'
           for (const [value, label] of [['', 'Choose a style…'], ...mossStyles.map(([value, label]) => [value, label]), ['custom', 'My own (type below)']]) {
             const option = document.createElement('option'); option.value = value; option.textContent = label; stylePick.appendChild(option)
           }
-          mossBox.appendChild(field('Picture style', stylePick, 'Picks the sentence below. Painterly styles replace anime/cel-shading and block both cartoony and plastic-photo drift.'))
+          mossBox.appendChild(field('Picture style', stylePick, 'Picks the sentence below. The top three options are smooth, clean illustration styles (no cartoon cel-shading, no visible paint strokes, and no real-photo look).'))
           const mossStyle = document.createElement('textarea')
           mossStyle.className = 'ld-ed-moss-style'; mossStyle.rows = 3
           mossStyle.placeholder = mossStyles[0][2]
@@ -2396,8 +2393,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           mossStyle.addEventListener('ld-sync', syncPick)
           const mossNegative = document.createElement('textarea')
           mossNegative.className = 'ld-ed-moss-negative'; mossNegative.rows = 2
-          mossNegative.placeholder = 'worst quality, low quality, bad anatomy, extra limbs, watermark, signature, text, border, jpeg artifacts, photorealistic photograph, DSLR, glossy CGI, 3D render, Unreal Engine, anime, cartoon, cel shading, chibi, flat vector art, thick comic outlines, plastic skin, smooth airbrushing, digital art smoothing, doll, mannequin'
-          mossBox.appendChild(field('Negative prompt for MOSS', mossNegative, 'Leave empty to use the example shown (anti-cartoon terms are added automatically for painterly styles). Your Story negative prompt is written for Anima, so it is not used here.'))
+          mossNegative.placeholder = 'worst quality, low quality, bad anatomy, extra limbs, watermark, signature, text, border, jpeg artifacts, cartoon, chibi, flat cel shading, flat vector art, thick comic outlines, photorealistic photograph, DSLR, real photo, glossy CGI, 3D render, plastic skin, doll, mannequin, thick oil paint, impasto, visible brushstrokes, canvas texture'
+          mossBox.appendChild(field('Negative prompt for MOSS', mossNegative, 'Leave empty to use the example shown (automatically blocks cartoons, real photos, and paint strokes for smooth styles).'))
           const mossLayout = document.createElement('input')
           mossLayout.type = 'checkbox'; mossLayout.className = 'ld-ed-moss-layout'
           mossBox.appendChild(checkbox(mossLayout, 'Give each person their own box in the picture (MOSS layout, experimental)',

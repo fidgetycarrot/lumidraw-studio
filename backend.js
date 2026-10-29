@@ -26258,23 +26258,25 @@ async function runSimpleReparse({ userId, settings, preset, messages, targetInde
 // Style choices offered in the preset editor. NanoGPT's website styles are not
 // part of its API, so the style is written into the prompt instead.
 const MOSS_STYLES = {
+  'semi-realistic': 'A smooth semi-realistic digital illustration with natural adult proportions, finely drawn features, softly blended shading and smooth gradients, detailed hair and clothing textures, and warm natural lighting. Clean, polished illustrated art style without flat cartoon cel-shading, visible brushstrokes, or photographic realism.',
+  manhwa: 'A high-detail mature webtoon and visual-novel illustration with clean fine linework, realistic adult facial proportions, smooth soft-shaded coloring, subtle skin and fabric shading, and soft atmospheric lighting. Smooth digital character art, neither flat cartoony anime nor a real photograph.',
+  concept: 'A clean semi-realistic digital concept illustration with sharp adult facial structure, smooth blended form shading, rich dramatic lighting, and realistic fabric and metal material details. Smoothly rendered digital illustration without visible brushstrokes, flat cartoon cel-shading, or photorealistic skin.',
+  painterly: 'A polished digital illustration with natural adult proportions, smooth softly blended shading, rich cinematic lighting, and detailed textures without visible brushstrokes or flat cartoon outlines.',
+  comic: 'A clean graphic-novel illustration with bold shapes, smooth modeled shading, strong dramatic shadows, and no flat cartoon cel-shading.',
+  storybook: 'A soft storybook illustration with gentle blended colors, warm diffused light, muted palette, and a clean hand-illustrated feel rather than a photograph.',
   cover: 'A painterly dark sci-fi fantasy book-cover illustration rendered in rich oil and acrylic brushwork, expressive visible brushstrokes, strong three-dimensional form modeling, dramatic chiaroscuro rim lighting, deep warm shadows, weathered metallic and fabric textures, sharp defined facial bone structure, hand-painted concept art finish, neither photorealistic nor flat cel-shaded.',
   oil: 'A classic oil painting with visible brushwork and canvas texture, dramatic chiaroscuro lighting, rich muted earthy palette, modeled form, and an intentionally painterly rather than photographic finish.',
   gritty: 'A dark fantasy oil painting with thick impasto and bold broken brushstrokes, loose unfinished edges, visible canvas weave, torchlight and ember light against deep shadow, weathered stone and dented steel, deliberately imperfect handmade artwork, and no photographic realism.',
-  concept: 'A semi-painterly graphic novel concept illustration in opaque gouache and oil paint on textured board, chiseled angular facial features, visible directional brushstrokes, matte chalky highlights and deep ink-wash shadows, moody atmospheric lighting, richly textured surfaces, stylized hand-painted illustration without flat cartoon lineart or photorealistic skin.',
   pulp: 'A vintage pulp illustration in oil paint with loose confident brushstrokes, broad interlocking shapes, dramatic shadows in deep burgundy and brown with pale cream highlights, rough painterly edges, faded paper grain, and an intentionally painterly rather than photographic finish.',
   gouache: 'A gouache illustration with opaque matte color blocks, visible brush texture, restrained muted palette, soft modeled shading, and a hand-painted surface that is neither flat vector nor photographic.',
-  storybook: 'A watercolor storybook illustration with soft translucent washes on textured paper, gentle diffused light, muted palette with faded pigments, soft painterly edges, and a hand-painted feel rather than photographic.',
-  painterly: 'A polished digital painting with semi-realistic proportions, soft painterly shading, rich cinematic lighting and detailed textures.',
-  'semi-realistic': 'A semi-realistic digital illustration with natural proportions, detailed rendering, soft realistic lighting and fine textures.',
-  comic: 'A painted comic-book illustration with bold shapes, soft modeled shading, strong dramatic shadows, subtle paper grain, and no hard flat cartoon outlines.',
   '90s cel': 'A 1990s retro anime screencap illustration with hand-drawn linework, cel-shaded flat colors, muted VHS color palette, painted background, and subtle film grain.',
   anime: 'An anime-style illustration with clean lineart, cel shading and dramatic cinematic lighting.',
   'anime poster': 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.',
 }
-const MOSS_DEFAULT_STYLE = MOSS_STYLES.cover
-const MOSS_DEFAULT_NEGATIVE = 'worst quality, low quality, bad anatomy, extra limbs, watermark, signature, text, border, jpeg artifacts, photorealistic photograph, DSLR, glossy CGI, 3D render, Unreal Engine, plastic skin, smooth airbrushing, digital art smoothing, doll, mannequin'
-const MOSS_ANTI_CARTOON_NEGATIVE = 'anime, cartoon, cel shading, chibi, flat vector art, thick comic outlines'
+const MOSS_DEFAULT_STYLE = MOSS_STYLES['semi-realistic']
+const MOSS_DEFAULT_NEGATIVE = 'worst quality, low quality, bad anatomy, extra limbs, watermark, signature, text, border, jpeg artifacts, photorealistic photograph, DSLR, real photo, glossy CGI, 3D render, Unreal Engine, plastic skin, doll, mannequin'
+const MOSS_ANTI_CARTOON_NEGATIVE = 'cartoon, chibi, flat cel shading, flat vector art, thick comic outlines'
+const MOSS_ANTI_BRUSH_NEGATIVE = 'thick oil paint, impasto, visible brushstrokes, canvas texture'
 
 function presetPromptStyle(preset) {
   return preset && preset.promptStyle === 'moss' ? 'moss' : 'anima'
@@ -26721,16 +26723,17 @@ function mossBoxes(subjects, width, height) {
 
 const MOSS_LIGHT_RE = /\b(?:light|lights|lighting|lit|glow|glowing|lamp|lamplight|lantern|candle|candlelight|sunlight|moonlight|sunset|sunrise|dusk|dawn|twilight|neon|shadows?|backlit|backlighting|rim light|god rays|light rays)\b/i
 const MOSS_STYLE_TAGS = {
+  'semi-realistic': 'semi-realistic digital illustration',
+  manhwa: 'mature webtoon illustration, visual novel art',
+  concept: 'semi-realistic concept illustration',
+  painterly: 'digital illustration',
+  comic: 'graphic novel illustration',
+  storybook: 'storybook illustration',
   cover: 'painterly illustration, oil painting',
   oil: 'oil painting, painterly illustration',
   gritty: 'dark fantasy oil painting, painterly illustration',
-  concept: 'painterly concept art, gouache illustration',
   pulp: 'vintage pulp illustration, oil painting',
   gouache: 'gouache illustration, painterly',
-  storybook: 'watercolor illustration, storybook art',
-  painterly: 'painterly illustration',
-  'semi-realistic': 'semi-realistic illustration',
-  comic: 'painted comic illustration',
   '90s cel': '1990s retro anime style, cel animation',
   anime: 'anime style',
   'anime poster': 'anime style, key visual',
@@ -26739,8 +26742,14 @@ const MOSS_STYLE_TAGS = {
 function isMossAnimeStyle(text) {
   const s = String(text || '').toLowerCase()
   if (!s) return false
-  if (/\b(?:not anime|neither .* cel[- ]shad|no .* cartoon|without .* cartoon|rather than photographic|oil paint|gouache|watercolou?r)\b/.test(s)) return false
+  if (/\b(?:not anime|neither .* anime|neither .* cel[- ]shad|no .* cartoon|without .* cel[- ]shad|without .* cartoon|rather than photographic|oil paint|gouache|watercolou?r|webtoon|visual[- ]novel|semi[- ]realistic)\b/.test(s)) return false
   return /\b(?:anime|manga|cel[- ]shad)/.test(s)
+}
+
+function isMossBrushStyle(text) {
+  const s = String(text || '').toLowerCase()
+  if (!s || /\b(?:without visible brushstrokes|no visible brushstrokes)\b/.test(s)) return false
+  return /\b(?:oil paint|impasto|brushwork|brushstrokes|canvas texture|canvas weave|gouache|watercolou?r)\b/.test(s)
 }
 
 function mossTagLine(image, subjects, personParts, chosen) {
@@ -26755,16 +26764,17 @@ function mossTagLine(image, subjects, personParts, chosen) {
   const known = Object.keys(MOSS_STYLES).find(key => key === text || MOSS_STYLES[key].toLowerCase() === text)
   const isAnime = isMossAnimeStyle(text)
   const style = known ? MOSS_STYLE_TAGS[known]
-    : !text ? MOSS_STYLE_TAGS.cover
+    : !text ? MOSS_STYLE_TAGS['semi-realistic']
     : isAnime && /key[- ]visual|poster/.test(text) ? 'anime style, key visual'
     : isAnime && /1990s|90s|retro/.test(text) ? '1990s retro anime style, cel animation'
     : isAnime ? 'anime style'
-    : /oil paint/.test(text) ? 'oil painting, painterly illustration'
-    : /gouache/.test(text) ? 'gouache illustration, painterly'
-    : /watercolou?r/.test(text) ? 'watercolor illustration, painterly'
-    : /comic/.test(text) ? 'painted comic illustration'
-    : /semi[- ]realistic/.test(text) ? 'semi-realistic illustration'
-    : /paint|illustrat|brush/.test(text) ? 'painterly illustration' : ''
+    : /webtoon|manhwa|visual[- ]novel/.test(text) ? 'mature webtoon illustration, visual novel art'
+    : /semi[- ]realistic/.test(text) ? 'semi-realistic digital illustration'
+    : isMossBrushStyle(text) && /oil paint/.test(text) ? 'oil painting, painterly illustration'
+    : isMossBrushStyle(text) && /gouache/.test(text) ? 'gouache illustration, painterly'
+    : isMossBrushStyle(text) && /watercolou?r/.test(text) ? 'watercolor illustration, painterly'
+    : /comic|graphic[- ]novel/.test(text) ? 'graphic novel illustration'
+    : /illustrat|concept/.test(text) ? 'digital illustration' : ''
   const rating = ['safe', 'sensitive', 'nsfw', 'explicit'].includes(image.rating) ? image.rating : ''
   // Body tags up front only for one person: with two or more they land on the wrong body.
   const body = subjects.length === 1 ? personParts[0].bodyTags : []
@@ -26834,7 +26844,10 @@ function compileMossImage(image, ctx) {
   }
 
   const negatives = [String(preset.mossNegative || '').trim() || MOSS_DEFAULT_NEGATIVE]
-  if (!isMossAnimeStyle(style)) negatives.push(MOSS_ANTI_CARTOON_NEGATIVE)
+  if (!isMossAnimeStyle(style)) {
+    negatives.push(MOSS_ANTI_CARTOON_NEGATIVE)
+    if (!isMossBrushStyle(style)) negatives.push(MOSS_ANTI_BRUSH_NEGATIVE)
+  }
   if (/\bplate armor\b/.test(base.negativePrompt) && !/\bplate armor\b/.test(String(preset.negativePrompt || ''))) negatives.push('plate armor, full armor')
   if (/\bmirror\b/.test(base.negativePrompt)) negatives.push('mirror, reflection')
   if (base.subjects.length >= 2 && /\bduplicate\b/.test(base.negativePrompt)) negatives.push('twins, identical faces')
