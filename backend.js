@@ -19409,6 +19409,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         else personas.push(entry)
         personas.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
         await savePersonas(personas)
+        try { await syncSimpleCastOnSheetSave(profileInput, 'persona') } catch { /* best-effort */ }
         reply = ok(payload, requestId, { personas, entry })
         break
       }
@@ -19439,6 +19440,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         else characters.push(entry)
         characters.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
         await saveCharacters(characters)
+        try { await syncSimpleCastOnSheetSave(profileInput, 'character') } catch { /* best-effort */ }
         reply = ok(payload, requestId, { characters, entry })
         break
       }
@@ -25011,6 +25013,40 @@ async function clearSimpleCast(chatId, personKey = '') {
   await spindle.storage.setJson(SIMPLE_CAST_FILE, all, { indent: 2 })
 }
 
+async function syncSimpleCastOnSheetSave(profile, kind = '') {
+  const all = await readSimpleCastAll()
+  const targetAnchor = simpleKey(profile && profile.anchor)
+  const targetRef = kind === 'persona' ? 'persona' : kind === 'character' ? 'character' : ''
+  let changed = false
+  for (const chat of Object.values(all)) {
+    if (!chat || !chat.people || typeof chat.people !== 'object') continue
+    for (const [k, person] of Object.entries(chat.people)) {
+      if (!person) continue
+      const matchRef = targetRef && (person.ref === targetRef || k === 'ref:' + targetRef)
+      const matchName = targetAnchor && (simpleKey(person.name) === targetAnchor || k === 'ref:' + targetAnchor || k === 'npc:' + targetAnchor)
+      if (matchRef || matchName) {
+        delete person.outfit
+        changed = true
+      }
+    }
+  }
+  if (changed) await spindle.storage.setJson(SIMPLE_CAST_FILE, all, { indent: 2 })
+}
+
+const SIMPLE_SHORT_BOTTOMS_RE = /\b(?:boyshorts?|booty shorts?|hotpants|short[- ]shorts|micro[- ]shorts|high[- ]cut shorts|high[- ]waisted [a-z ]*shorts)\b/i
+const SIMPLE_LONG_PANTS_RE = /\b(?:breeches|pants|trousers|slacks|jeans|chinos)\b/i
+function simpleAlignSheetLegwear(tags, defaultTags) {
+  const defs = simpleTags(defaultTags || [])
+  const defShorts = defs.find(item => SIMPLE_SHORT_BOTTOMS_RE.test(item))
+  if (!defShorts || defs.some(item => SIMPLE_LONG_PANTS_RE.test(item))) return tags
+  const otherDefs = defs.filter(item => item !== defShorts).map(item => simpleGarmentHead(item)).filter(Boolean)
+  const wearingDefault = !otherDefs.length || (tags || []).some(tag => otherDefs.includes(simpleGarmentHead(tag)))
+  if (!wearingDefault) return tags
+  return uniqueStrings((tags || []).map(tag =>
+    SIMPLE_LONG_PANTS_RE.test(tag) && !/\b(?:pulled|unbuckled|undone|open|off|down|around|torn|ripped)\b/i.test(tag) ? defShorts : tag
+  ))
+}
+
 // Clothing states that belong to one moment. Remembering them made a sex
 // scene's "shorts pulled down to knees" or a fight's "ichor-stained wet leather
 // armor" follow a character into every later picture.
@@ -25275,14 +25311,14 @@ function simpleSubjectRule(maxSubjects) {
 // The passage's own wardrobe or scene card is newer than anything remembered,
 // so it comes first; the remembered outfit is offered only as detail.
 function simpleOutfitFor(profile, key, memory, card, profiles, name = '') {
+  const defaults = profile ? simpleTags(profile.defaultOutfit || []) : []
   const remembered = simpleMemoryFor(memory, key) ||
     (profile ? simpleMemoryFor(memory, 'npc:' + simpleKey(profile.anchor || name)) : null)
-  const earlier = simpleSteadyOutfit((remembered && remembered.outfit) || [])
+  const earlier = simpleAlignSheetLegwear(simpleSteadyOutfit((remembered && remembered.outfit) || []), defaults)
   const entry = simpleCardEntryFor(card, profile, profile ? profile.anchor : name, profiles)
-  const fromCard = entry && entry.attire ? sceneCardAttireTags(entry.attire, { keepAll: !!entry.full }) : []
+  const fromCard = entry && entry.attire ? simpleAlignSheetLegwear(sceneCardAttireTags(entry.attire, { keepAll: !!entry.full }), defaults) : []
   if (fromCard.length) return { tags: fromCard, source: entry.full ? 'story wardrobe' : 'scene card', earlier }
   if (earlier.length) return { tags: earlier, source: 'remembered', earlier: [] }
-  const defaults = profile ? simpleTags(profile.defaultOutfit || []) : []
   return defaults.length ? { tags: defaults, source: 'sheet default', earlier: [] } : { tags: [], source: '', earlier: [] }
 }
 
@@ -25549,7 +25585,9 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
       out.outfit = []
       out.sources.outfit = 'included in the saved look'
     } else if (raw.outfit.length) {
-      const specific = simpleKeepSpecific(raw.outfit, remembered.outfit || [], simpleTags(profile.defaultOutfit || []))
+      const alignedRaw = simpleAlignSheetLegwear(raw.outfit, profile.defaultOutfit || [])
+      const alignedMem = simpleAlignSheetLegwear(remembered.outfit || [], profile.defaultOutfit || [])
+      const specific = simpleKeepSpecific(alignedRaw, alignedMem, simpleTags(profile.defaultOutfit || []))
       out.outfit = specific.tags; out.sources.outfit = 'story (parser)'
       for (const item of specific.kept) notes.push(`${out.displayName}: kept “${item.to}” — the story only said “${item.from}”.`)
     } else {
@@ -25583,6 +25621,11 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
     if (!out.identity.length) notes.push(`${raw.name}: no sheet and the parser gave no body description — they may come out generic. Save a sheet or try again.`)
   }
   out.outfit = applyBannedToList(out.outfit, banned)
+  if (out.outfit.some(item => SIMPLE_SHORT_BOTTOMS_RE.test(item)) &&
+      out.outfit.some(item => /\b(?:thigh[- ]high|over[- ]the[- ]knee)\b/i.test(item)) &&
+      !out.outfit.some(item => /\bbare thighs\b/i.test(item))) {
+    out.outfit.push('bare thighs')
+  }
   // Skin the clothes cover. "abs, chest hair, navel hair" on a sheet drew
   // Grimnir shirtless with his power armor reduced to a belt.
   const hidden = simpleCoveredBodyTags(out.identity, out.outfit)
@@ -26538,8 +26581,12 @@ function mossGarmentKey(item) {
 function mossOutfit(items, defaultItems = []) {
   const cleanList = list => (list || []).map(item => {
     let text = String(item).trim()
+    if (/^bare thighs$/i.test(text)) return ''
     if (/\b(?:corset|vest|bodice|waistcoat)\b/i.test(text)) text = text.replace(/\bsleeveless\s+/gi, '')
     if (/\bbreeches\b/i.test(text) && !/\b(?:fitted|tight|slim|skinny|loose|baggy|wide)\b/i.test(text)) text = text.replace(/\bbreeches\b/i, 'fitted breeches')
+    if (/\bboyshorts?\b/i.test(text) && !/\b(?:short[- ]cut|hotpants|micro|short[- ]shorts)\b/i.test(text)) {
+      text = text.replace(/\bboyshorts?\b/i, 'short-cut boyshorts')
+    }
     return text
   }).filter(Boolean)
   const cleaned = cleanList(items)
@@ -26585,7 +26632,7 @@ function mossOutfit(items, defaultItems = []) {
       continue
     }
     if (fromDefault) {
-      const defParent = cleanedDefaults.find(d => mossGarmentKey(d) === to || (to === 'corset' && /\b(?:shirt|blouse|vest|corset)\b/i.test(d)))
+      const defParent = cleanedDefaults.find(d => mossGarmentKey(d) === to || (d && to === 'corset' && /\b(?:shirt|blouse|vest|corset)\b/i.test(d)))
       if (defParent) {
         const defWords = simpleWords(defParent).filter(w => !['coat', 'greatcoat', 'corset', 'armor', 'armour', 'black', 'fitted'].includes(w))
         const wornWords = simpleWords(out[at])
@@ -26593,6 +26640,16 @@ function mossOutfit(items, defaultItems = []) {
       }
     }
     if (!new RegExp(`\\b${escapeRegExp(word)}`, 'i').test(out[at])) out[at] = `${out[at]} with ${mossNoun(item).replace(/^an? /, '')}`
+  }
+  const shortIdx = out.findIndex(item => SIMPLE_SHORT_BOTTOMS_RE.test(item))
+  const tallBootIdx = out.findIndex(item => /\b(?:thigh[- ]high|over[- ]the[- ]knee)\b/i.test(item))
+  if (shortIdx >= 0 && tallBootIdx >= 0 && !/\bbare\b.*\bthighs?\b/i.test(out[shortIdx])) {
+    out[shortIdx] = `${out[shortIdx]} with bare skin on the upper thighs`
+    if (tallBootIdx !== shortIdx + 1) {
+      const [bootItem] = out.splice(tallBootIdx, 1)
+      const insertAt = out.findIndex(item => SIMPLE_SHORT_BOTTOMS_RE.test(item)) + 1
+      out.splice(insertAt, 0, bootItem)
+    }
   }
   return uniqueStrings(out)
 }
