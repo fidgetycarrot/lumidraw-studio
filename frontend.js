@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.17.6'
+  const EXTENSION_VERSION = '1.18.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1968,47 +1968,105 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     }
     const oldStudioPresetCard = controls.presetSelect ? controls.presetSelect.closest('.ld-card') : null
 
-    // ---------- STORY · 1.9 layout
-    // One scroll, ordered by how often you touch it. Rarely-changed things live in
-    // Settings; everything only the 1.8 pipeline needs is grouped under Settings →
-    // Old pipeline (1.8). Existing nodes are MOVED, never recreated, so every
-    // handler that was bound to them keeps working.
+    const MOSS_STYLES_UI = [
+      ['dark', 'Dark Atmospheric Illustration (Sci-Fi & Dark Fantasy)', 'A dark, atmospheric high-detail anime illustration with soft blended shading, rich dramatic lighting, and detailed textures.'],
+      ['smooth', 'Smooth Warm Illustration (Slice of Life & Everyday)', 'A warm, high-detail anime illustration with soft blended shading, natural lighting, and detailed textures.'],
+      ['manhwa', 'Mature Manhwa / Webtoon Illustration', 'A high-detail mature webtoon and anime illustration with fine linework, soft blended shading, and atmospheric lighting.'],
+      ['comic', 'Graphic Novel / Comic Style', 'A clean graphic-novel illustration with bold shapes, smooth modeled shading, strong dramatic shadows, and no flat cartoon cel-shading.'],
+      ['storybook', 'Soft Storybook Illustration', 'A soft storybook illustration with gentle blended colors, warm diffused light, muted palette, and a clean hand-illustrated feel rather than a photograph.'],
+      ['cover', 'Painted Book-Cover Style (with brush texture)', 'A painterly dark sci-fi fantasy book-cover illustration rendered in rich oil and acrylic brushwork, expressive visible brushstrokes, strong three-dimensional form modeling, dramatic chiaroscuro rim lighting, deep warm shadows, weathered metallic and fabric textures, sharp defined facial bone structure, hand-painted concept art finish, neither photorealistic nor flat cel-shaded.'],
+      ['oil', 'Classic Painted Style (with brush texture)', 'A classic oil painting with visible brushwork and canvas texture, dramatic chiaroscuro lighting, rich muted earthy palette, modeled form, and an intentionally painterly rather than photographic finish.'],
+      ['90s cel', '90s Retro Anime', 'A 1990s retro anime screencap illustration with hand-drawn linework, cel-shaded flat colors, muted VHS color palette, painted background, and subtle film grain.'],
+      ['anime', 'Standard Modern Anime (Cel-Shaded)', 'An anime-style illustration with clean lineart, cel shading and dramatic cinematic lighting.'],
+      ['anime poster', 'Anime Poster (Cel-Shaded)', 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.'],
+    ]
+    const MOSS_DEFAULT_STYLE_UI = MOSS_STYLES_UI[0][2]
+    const MOSS_DEFAULT_NEGATIVE_UI = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin'
+
+    // ---------- STORY · 1.18 layout
+    // Clean, engine-aware layout:
+    // 1. Story pictures (Scan + Active Preset + Drawing Mode in one top card)
+    // 2. Style & negative prompt (live MOSS or Anima fields for the active preset — what you see is what gets sent)
+    // 3. This chat (Cast, Playing as, and a tidy drawer for chat memory)
+    // 4. Last picture (Final prompt + Troubleshooting report)
     const storyForm = storyView.querySelector('.ld-form-view')
 
-    // 1. Make a picture now
+    // 1. Story pictures (top control card)
     const hero = card()
-    hero.classList.add('ld-reset-hero')
+    const heroTop = make('div', 'ld-reset-hero')
     const heroText = make('div')
     heroText.appendChild(make('div', 'ld-subtitle', 'Story pictures'))
     const currentLine = make('div', 'ld-reset-preset-line')
-    currentLine.appendChild(document.createTextNode('Image preset: '))
+    currentLine.appendChild(document.createTextNode('Active preset: '))
     currentLine.appendChild(make('strong', 'ld-story-preset-name', 'None'))
     heroText.appendChild(currentLine)
     const heroActions = inline(controls.scan, controls.scanOld, controls.cancelScan)
-    hero.append(heroText, heroActions)
+    heroTop.append(heroText, heroActions)
+    hero.appendChild(heroTop)
+
+    const heroGrid = make('div', 'ld-reset-grid')
+    heroGrid.style.marginTop = '10px'
+    if (controls.presetSelect) {
+      heroGrid.appendChild(field('Image preset', controls.presetSelect, 'Which image app, model, and prompt engine (MOSS or Anima) to use.'))
+    }
+    heroGrid.appendChild(field('Drawing mode', controls.mode,
+      'Manual: only when you press Scan. Automatic: after story replies. Off: no story pictures.'))
+    hero.appendChild(heroGrid)
+    if (controls.autoScan) hero.appendChild(controls.autoScan)
+    const autoIntervalField = field('How often (automatic mode)', controls.autoInterval,
+      'Rerolls do not count. Scan latest makes a picture right away.')
+    autoIntervalField.className += ' ld-story-auto-interval-field'
+    autoIntervalField.style.marginTop = '8px'
+    hero.appendChild(autoIntervalField)
+    if (controls.mode) {
+      controls.mode.addEventListener('change', () => {
+        autoIntervalField.style.display = storyAutoScanFromBehavior(controls.mode.value) ? '' : 'none'
+      })
+    }
+
+    const simpleToggle = document.createElement('input')
+    simpleToggle.type = 'checkbox'
+    simpleToggle.className = 'ld-simple-pipeline'
+    const behaviorMore = details('More drawing options', 'Picture limits per reply and pipeline toggles.')
+    behaviorMore.el.style.marginTop = '10px'
+    const imageCount = make('div', 'ld-reset-grid')
+    imageCount.appendChild(field('Most pictures per reply', controls.maxImages))
+    imageCount.appendChild(field('Fewest pictures per reply', controls.minImages, '0 lets the parser decide.'))
+    behaviorMore.body.appendChild(imageCount)
+    behaviorMore.body.appendChild(field('Most people in one picture', controls.maxSubjects))
+    behaviorMore.body.appendChild(checkbox(simpleToggle, 'Use the simple pipeline (1.9)',
+      'Recommended. One parser call, then the prompt is built straight from it.'))
+    behaviorMore.body.appendChild(checkbox(controls.charTags, 'Use the chat character’s image tags if there is no saved sheet'))
+    behaviorMore.body.appendChild(checkbox(controls.strip, 'Hide old image requests from the story model',
+      'Stops the story model from copying them. Your saved messages are not changed.'))
+    hero.appendChild(behaviorMore.el)
+
     if (controls.lastStatus) {
       controls.lastStatus.classList.add('ld-reset-status')
-      controls.lastStatus.style.gridColumn = '1 / -1'
+      controls.lastStatus.style.marginTop = '10px'
       hero.appendChild(controls.lastStatus)
     }
 
     // 2. This chat: who is in it, and what Lumi Studio remembers about them
-    const castCard = card('This chat', 'Who is in this story. Saved characters and personas come from your Library.')
+    const castCard = card('This chat', 'Who is in this story. Edit character and persona sheets in Library.')
     const castTop = make('div', 'ld-reset-grid')
     castTop.appendChild(field('Cast', inline(controls.castPick, controls.castCopy)))
     castTop.appendChild(field('Playing as', controls.chatPersona, 'Remembered for this chat.'))
     castCard.appendChild(castTop)
     castCard.appendChild(field('Add a saved character', inline(controls.wardrobeAdd, controls.wardrobeAddButton)))
-    castCard.appendChild(checkbox(controls.chatLeads, 'Use this chat’s character and persona as the main two',
-      'Other characters still come from the cast.'))
-    castCard.appendChild(checkbox(controls.fantasy, 'Fantasy story — elves, orcs and other species are expected'))
     if (controls.castSummary) castCard.appendChild(controls.castSummary)
     if (controls.castStatus) castCard.appendChild(controls.castStatus)
 
+    const memoryDrawer = details('Chat memory & cast options', 'What Lumi Studio currently remembers for this chat, plus species and lead-character options.')
+    memoryDrawer.el.style.marginTop = '10px'
+    memoryDrawer.body.appendChild(checkbox(controls.chatLeads, 'Use this chat’s character and persona as the main two',
+      'Other characters still come from the cast.'))
+    memoryDrawer.body.appendChild(checkbox(controls.fantasy, 'Fantasy story — elves, orcs and other species are expected'))
+
     const memoryBox = make('div', 'ld-simple-memory-box')
-    memoryBox.style.marginTop = '12px'
+    memoryBox.style.marginTop = '10px'
     memoryBox.appendChild(make('div', 'ld-label', 'What Lumi Studio remembers in this chat'))
-    addHelp(memoryBox, 'Looks of people without a sheet, everyone’s current clothes, and the last place. Updated after each picture. Used by the simple pipeline.')
+    addHelp(memoryBox, 'Looks of people without a sheet, everyone’s current clothes, and the last place. Updated after each picture.')
     const simpleList = make('div', 'ld-help ld-simple-memory')
     simpleList.style.whiteSpace = 'pre-wrap'
     simpleList.style.marginTop = '6px'
@@ -2055,40 +2113,12 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     memoryBox.appendChild(simpleStatus)
     memoryBox.appendChild(simpleList)
     addHelp(memoryBox, 'If someone without a sheet came out wrong, press Forget this chat and make the picture again.')
-    castCard.appendChild(memoryBox)
+    memoryDrawer.body.appendChild(memoryBox)
+    castCard.appendChild(memoryDrawer.el)
     const storyMainTab = $('.ld-main-tab[data-tab="story"]')
     if (storyMainTab) storyMainTab.addEventListener('click', () => { renderSimpleMemory() })
 
-    // 3. When to draw
-    const behavior = card('When to draw')
-    if (controls.presetSelect) {
-      behavior.appendChild(field('Image preset', controls.presetSelect, 'Which image app and model to use. Edit presets in Library.'))
-    }
-    behavior.appendChild(field('Mode', controls.mode,
-      'Manual: only when you press Scan. Automatic: after story replies, as often as set below. Off: no story pictures.'))
-    // Kept in the DOM only as a compatibility mirror for the backend's saved
-    // `autoScan` field. It is no longer a second user-facing control.
-    if (controls.autoScan) behavior.appendChild(controls.autoScan)
-    behavior.appendChild(field('How often (automatic mode)', controls.autoInterval,
-      'Rerolls do not count. Scan latest makes a picture right away.'))
-    const simpleToggle = document.createElement('input')
-    simpleToggle.type = 'checkbox'
-    simpleToggle.className = 'ld-simple-pipeline'
-    behavior.appendChild(checkbox(simpleToggle, 'Use the simple pipeline (1.9)',
-      'One parser call, then the prompt is built straight from it. Turn off to use the old 1.8 pipeline; its settings are in Settings → Old pipeline.'))
-    const imageCount = make('div', 'ld-reset-grid')
-    imageCount.style.marginTop = '8px'
-    imageCount.appendChild(field('Most pictures per reply', controls.maxImages))
-    imageCount.appendChild(field('Fewest pictures per reply', controls.minImages, '0 lets the parser decide.'))
-    behavior.appendChild(imageCount)
-    behavior.appendChild(field('Most people in one picture', controls.maxSubjects))
-    const behaviorMore = details('More options')
-    behaviorMore.body.appendChild(checkbox(controls.charTags, 'Use the chat character’s image tags if there is no saved sheet'))
-    behaviorMore.body.appendChild(checkbox(controls.strip, 'Hide old image requests from the story model',
-      'Stops the story model from copying them. Your saved messages are not changed.'))
-    behavior.appendChild(behaviorMore.el)
-
-    // 4. Prompt
+    // 3. Style & negative prompt (Engine-aware: shows MOSS fields for MOSS presets, Anima fields for Anima presets)
     const storyQuality = document.createElement('textarea')
     storyQuality.className = 'ld-story-quality'
     storyQuality.rows = 2
@@ -2104,7 +2134,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const storyBanned = document.createElement('textarea')
     storyBanned.className = 'ld-story-banned'
     storyBanned.rows = 2
-    storyBanned.placeholder = 'Tags that must never be used'
+    storyBanned.placeholder = 'Tags or words that must never be used'
     const storyAnchor = document.createElement('textarea')
     storyAnchor.className = 'ld-story-scene-anchor'
     storyAnchor.rows = 2
@@ -2113,16 +2143,98 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     storyBreak.type = 'checkbox'
     storyBreak.className = 'ld-story-break'
 
-    const promptCard = card('Prompt', 'Added to every story picture, whatever image preset you use.')
+    const promptCard = card('Style & negative prompt', 'What you see below is what gets sent with every story picture.')
+    const promptSubtitle = promptCard.querySelector('.ld-help')
+    if (promptSubtitle) promptSubtitle.classList.add('ld-story-prompt-subtitle')
+
+    // MOSS live controls on the Story tab (synced directly with the active preset)
+    const storyMossBox = make('div', 'ld-story-moss-box')
+    const storyMossPick = document.createElement('select')
+    storyMossPick.className = 'ld-story-moss-style-pick'
+    for (const [value, label] of [['', 'Choose a preset style…'], ...MOSS_STYLES_UI.map(([value, label]) => [value, label]), ['custom', 'Custom (edit sentence below)']]) {
+      const option = document.createElement('option'); option.value = value; option.textContent = label; storyMossPick.appendChild(option)
+    }
+    storyMossBox.appendChild(field('Picture style', storyMossPick, 'Fills the style sentence below. Whatever is in the box below is sent word-for-word.'))
+    const storyMossStyle = document.createElement('textarea')
+    storyMossStyle.className = 'ld-story-moss-style'
+    storyMossStyle.rows = 3
+    storyMossStyle.placeholder = MOSS_DEFAULT_STYLE_UI
+    storyMossBox.appendChild(field('Style sentence sent to MOSS', storyMossStyle, 'Opens every MOSS prompt. Sent word-for-word after "masterpiece, best quality, anime style."'))
+    const storyMossNegative = document.createElement('textarea')
+    storyMossNegative.className = 'ld-story-moss-negative'
+    storyMossNegative.rows = 3
+    storyMossNegative.placeholder = MOSS_DEFAULT_NEGATIVE_UI
+    storyMossBox.appendChild(field('Negative prompt sent to MOSS', storyMossNegative, 'Sent word-for-word as the negative prompt. Nothing is hidden or swapped in the background.'))
+    const storyMossStatus = make('div', 'ld-status ld-story-moss-status')
+    storyMossStatus.style.marginTop = '6px'
+    storyMossBox.appendChild(storyMossStatus)
+
+    const syncStoryMossPick = () => {
+      const text = storyMossStyle.value.trim()
+      const lower = text.toLowerCase()
+      const found = MOSS_STYLES_UI.find(([key, , sentence]) => key === lower || sentence === text)
+      storyMossPick.value = found ? found[0] : text ? 'custom' : ''
+    }
+    let storyMossSaveTimer = null
+    const saveStoryMossToActivePreset = async (immediate = false) => {
+      if (storyMossSaveTimer) { clearTimeout(storyMossSaveTimer); storyMossSaveTimer = null }
+      const run = async () => {
+        const p = typeof activePresetObj === 'function' ? activePresetObj() : null
+        if (!p || p.promptStyle !== 'moss') return
+        const nextStyle = storyMossStyle.value.trim() || MOSS_DEFAULT_STYLE_UI
+        const nextNeg = storyMossNegative.value.trim() || MOSS_DEFAULT_NEGATIVE_UI
+        p.mossStyle = nextStyle
+        p.mossNegative = nextNeg
+        if (editorOriginalName === p.name) {
+          if ($('.ld-ed-moss-style')) { $('.ld-ed-moss-style').value = nextStyle; $('.ld-ed-moss-style').dispatchEvent(new Event('ld-sync')) }
+          if ($('.ld-ed-moss-negative')) $('.ld-ed-moss-negative').value = nextNeg
+        }
+        try {
+          setStatus('.ld-story-moss-status', `Saving to preset “${p.name}”…`)
+          const res = await call('save_preset', {
+            ...p,
+            name: p.name,
+            config: p.config || {},
+            promptStyle: 'moss',
+            mossStyle: nextStyle,
+            mossNegative: nextNeg,
+            mossLayout: !!p.mossLayout,
+          })
+          if (res && Array.isArray(res.presets)) presets = res.presets
+          setStatus('.ld-story-moss-status', `Saved to preset “${p.name}”.`, 'good')
+        } catch (err) {
+          setStatus('.ld-story-moss-status', err.message, 'err')
+        }
+      }
+      if (immediate) await run()
+      else storyMossSaveTimer = setTimeout(run, 500)
+    }
+    storyMossPick.addEventListener('change', () => {
+      const found = MOSS_STYLES_UI.find(([value]) => value === storyMossPick.value)
+      if (found) {
+        storyMossStyle.value = found[2]
+        saveStoryMossToActivePreset(true)
+      } else if (storyMossPick.value === 'custom') {
+        storyMossStyle.focus()
+      }
+    })
+    storyMossStyle.addEventListener('input', () => {
+      syncStoryMossPick()
+      saveStoryMossToActivePreset(false)
+    })
+    storyMossStyle.addEventListener('ld-sync', syncStoryMossPick)
+    storyMossNegative.addEventListener('input', () => {
+      saveStoryMossToActivePreset(false)
+    })
+    promptCard.appendChild(storyMossBox)
+
+    // Anima tag controls on the Story tab (shown only when an Anima preset is active)
+    const storyAnimaBox = make('div', 'ld-story-anima-box')
     const promptGrid = make('div', 'ld-reset-grid')
     promptGrid.appendChild(field('Quality tags (always included)', storyQuality))
-    promptGrid.appendChild(field('Negative prompt', storyNegative))
+    promptGrid.appendChild(field('Negative prompt (Anima)', storyNegative))
     promptGrid.appendChild(field('Prompt prefix', storyPrefix))
-    promptGrid.appendChild(field('Banned tags', storyBanned))
-    promptCard.appendChild(promptGrid)
-    promptCard.appendChild(field('Starting place', storyAnchor, 'Used until the story says where everyone is.'))
-    // The artist vocabulary is prompt knowledge; move the existing nodes so their
-    // handlers still bind to exactly the same elements.
+    storyAnimaBox.appendChild(promptGrid)
     const artistInput = $('.ld-artist-index')
     if (artistInput) {
       const artistStatus = $('.ld-artist-status')
@@ -2132,13 +2244,23 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         $('[data-act="artist-clear"]'),
       ].filter(Boolean)
       const artist = details('Anima artist list', 'Optional. Checks that your @artist tags are names Anima knows.')
+      artist.el.style.marginTop = '8px'
       artist.body.appendChild(artistInput)
       artist.body.appendChild(inline(...artistButtons))
       if (artistStatus) artist.body.appendChild(artistStatus)
-      promptCard.appendChild(artist.el)
+      storyAnimaBox.appendChild(artist.el)
     }
+    promptCard.appendChild(storyAnimaBox)
 
-    // 5. Last picture
+    const sharedPromptMore = details('Starting place & banned words', 'Optional fallback location and words/tags to strip from prompts.')
+    sharedPromptMore.el.style.marginTop = '10px'
+    const sharedPromptGrid = make('div', 'ld-reset-grid')
+    sharedPromptGrid.appendChild(field('Starting place', storyAnchor, 'Used until the story says where everyone is.'))
+    sharedPromptGrid.appendChild(field('Banned words / tags', storyBanned, 'Never sent to the image model.'))
+    sharedPromptMore.body.appendChild(sharedPromptGrid)
+    promptCard.appendChild(sharedPromptMore.el)
+
+    // 4. Last picture
     const debugCard = card()
     if (controls.debugTitle) debugCard.appendChild(controls.debugTitle)
     else debugCard.appendChild(make('div', 'ld-subtitle ld-parser-debug-title', 'Last picture'))
@@ -2153,9 +2275,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       if (real) real.click()
     })
     debugCard.appendChild(inline(reportButton))
-    addHelp(debugCard, 'The report shows where each person’s look and clothes came from. More reports are in Settings → Help & reports.')
+    addHelp(debugCard, 'The report shows the exact prompt, negative prompt, and where each person’s look and clothes came from.')
 
-    storyForm.replaceChildren(hero, castCard, behavior, promptCard, debugCard)
+    storyForm.replaceChildren(hero, promptCard, castCard, debugCard)
 
     // ---------- Parts of the old Story tab that now live in Settings.
     const display = card('Pictures in the chat')
@@ -2202,7 +2324,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
     // Old pipeline (1.8): everything that only matters with the simple pipeline off.
     const oldIntro = card('Old pipeline (1.8)',
-      'Only used when “Use the simple pipeline” is off (Story → When to draw). Kept together here so the two can be compared.')
+      'Only used when “Use the simple pipeline” is off (Story → More drawing options).')
     const continuityStatus = make('div', 'ld-status ld-reset-status ld-story-continuity')
     continuityStatus.setAttribute('role', 'status')
     continuityStatus.setAttribute('aria-live', 'polite')
@@ -2299,17 +2421,114 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const newPreset = $('[data-act="new-preset"]')
     const presetManager = newPreset ? newPreset.closest('.ld-card') : null
 
+    // Reorganize Character & Persona Sheet Editor (.ld-persona-editor) into 3 clean tabs
+    if (sharedEditor && !sharedEditor.dataset.tabbedV18) {
+      sharedEditor.dataset.tabbedV18 = '1'
+      const edTitle = sharedEditor.querySelector('.ld-lib-ed-title')
+      const lumicastBtn = sharedEditor.querySelector('[data-act="fill-lumicast"]')
+      const lumicastRow = lumicastBtn ? lumicastBtn.closest('.ld-row') : null
+      const nameInput = sharedEditor.querySelector('.ld-persona-ed-name')
+      const anchorInput = sharedEditor.querySelector('.ld-persona-ed-anchor')
+      const countInput = sharedEditor.querySelector('.ld-persona-ed-count')
+      const subjectInput = sharedEditor.querySelector('.ld-persona-ed-subject')
+      const promptNameInput = sharedEditor.querySelector('.ld-persona-ed-promptname')
+      const identityInput = sharedEditor.querySelector('.ld-persona-ed-identity')
+      const tagsInput = sharedEditor.querySelector('.ld-persona-ed-tags')
+      const mossInput = sharedEditor.querySelector('.ld-persona-ed-moss')
+      const outfitInput = sharedEditor.querySelector('.ld-persona-ed-outfit')
+      const alternatesBox = sharedEditor.querySelector('.ld-persona-ed-alternates')
+      const defaultStateInput = sharedEditor.querySelector('.ld-persona-ed-default-state')
+      const statesInput = sharedEditor.querySelector('.ld-persona-ed-states')
+      const looksInput = sharedEditor.querySelector('.ld-persona-ed-looks')
+      const defaultLookInput = sharedEditor.querySelector('.ld-persona-ed-default-look')
+      const featuresInput = sharedEditor.querySelector('.ld-persona-ed-features')
+      const aliasesInput = sharedEditor.querySelector('.ld-persona-ed-aliases')
+      const anatomyInput = sharedEditor.querySelector('.ld-persona-ed-anatomy')
+      const anatomyModeSelect = sharedEditor.querySelector('.ld-persona-ed-anatomy-mode')
+      const saveBtn = sharedEditor.querySelector('[data-act="persona-save"]')
+      const saveRow = saveBtn ? saveBtn.closest('.ld-row') : null
+      const statusEl = sharedEditor.querySelector('.ld-persona-ed-status')
+
+      if (mossInput) mossInput.style.minHeight = '115px'
+      if (outfitInput) outfitInput.style.minHeight = '58px'
+
+      const topBasics = make('div', 'ld-reset-grid')
+      topBasics.style.marginTop = '8px'
+      topBasics.appendChild(field('Library name', nameInput, 'Name shown in your Library list.'))
+      topBasics.appendChild(field('Story name (Anchor)', anchorInput, 'Name used in the story chat (e.g. Vesper, Kaelen).'))
+      topBasics.appendChild(field('Count tag', countInput, '1girl or 1boy (used for gender & framing).'))
+      topBasics.appendChild(field('Short role / build phrase', subjectInput, 'e.g. adult woman, towering space marine.'))
+
+      const sheetRail = rail([
+        ['moss', 'MOSS & Outfit'],
+        ['anima', 'Anima Tags'],
+        ['advanced', 'Forms, Props & LumiCast'],
+      ], 'lumidraw.sheetSection.v1', 'moss')
+      sheetRail.style.marginTop = '12px'
+
+      const tabMoss = section('moss')
+      tabMoss.appendChild(field('Description for MOSS (plain English)', mossInput,
+        'Face, hair, eyes, skin, and body in plain English. MOSS presets use this word-for-word. Leave empty to fall back to your Anima tags.'))
+      tabMoss.appendChild(field('Default outfit', outfitInput,
+        'What this character wears when the story has not specified another outfit (comma-separated items).'))
+      const looksDrawer = details('Named outfits / looks & conditional anatomy', 'Optional recurring outfits triggered by story cues and NSFW/conditional anatomy.')
+      looksDrawer.el.style.marginTop = '6px'
+      looksDrawer.body.appendChild(field('Named looks (clothing)', looksInput,
+        'One per line: name = outfit tags | aliases: cues | no: negative tags'))
+      looksDrawer.body.appendChild(field('Default look', defaultLookInput))
+      looksDrawer.body.appendChild(field('Conditional visible anatomy', anatomyInput))
+      looksDrawer.body.appendChild(field('Conditional anatomy rule', anatomyModeSelect))
+      tabMoss.appendChild(looksDrawer.el)
+
+      const tabAnima = section('anima')
+      addHelp(tabAnima, 'Used when an Anima tag preset is active, or as a fallback if Description for MOSS is left blank.')
+      tabAnima.appendChild(field('Permanent appearance tags (Anima)', tagsInput,
+        'Booru/Anima tags for hair, eyes, body, and permanent features.'))
+      tabAnima.appendChild(field('Always include (identity tags)', identityInput,
+        'Non-negotiable tags restored if the parser drops them.'))
+      tabAnima.appendChild(field('Name in prompts (optional)', promptNameInput,
+        'Only needed if the character’s name is also a common object or booru tag (like "Rose").'))
+
+      const tabAdvanced = section('advanced')
+      if (lumicastRow) tabAdvanced.appendChild(lumicastRow)
+      tabAdvanced.appendChild(field('Named props / weapons / visual aliases', aliasesInput,
+        'One Name = description per line (up to 8 props, e.g. Mercy = oversized two-handed chainsword).'))
+      if (alternatesBox) tabAdvanced.appendChild(alternatesBox)
+      const formsDrawer = details('Transformations & partial features', 'Optional multi-form states and partial transformation tags.')
+      formsDrawer.el.style.marginTop = '6px'
+      formsDrawer.body.appendChild(field('Default appearance state', defaultStateInput))
+      formsDrawer.body.appendChild(field('Appearance states / forms', statesInput,
+        'One per line: Name [count=1boy; outfit=inherit|omit; subject=phrase] | recognition phrases => appearance tags'))
+      formsDrawer.body.appendChild(field('Partial features', featuresInput,
+        'One per line: name = tags (e.g. wolf eyes = yellow eyes, slit pupils).'))
+      tabAdvanced.appendChild(formsDrawer.el)
+
+      sharedEditor.replaceChildren(
+        ...(edTitle ? [edTitle] : []),
+        topBasics,
+        sheetRail,
+        tabMoss,
+        tabAnima,
+        tabAdvanced,
+        ...(saveRow ? [saveRow] : []),
+        ...(statusEl ? [statusEl] : []),
+      )
+      let savedSheetTab = 'moss'
+      try { savedSheetTab = localStorage.getItem('lumidraw.sheetSection.v1') || 'moss' } catch { /* best effort */ }
+      sheetRail._setResetTab(savedSheetTab)
+    }
+
     if (charCard) {
       const title = charCard.querySelector('.ld-subtitle')
       const help = charCard.querySelector('.ld-help')
       if (title) title.textContent = 'Characters'
-      if (help) help.textContent = 'Reusable character identities used by casts. They are not stored in generation presets.'
+      if (help) help.textContent = 'Reusable character sheets used by your casts.'
     }
     if (personaCard) {
       const title = personaCard.querySelector('.ld-subtitle')
       const help = personaCard.querySelector('.ld-help')
       if (title) title.textContent = 'Personas'
-      if (help) help.textContent = 'Reusable identities for who you are playing. They belong to Story/casts, not generation presets.'
+      if (help) help.textContent = 'Reusable sheets for who you are playing.'
     }
     if (placesCard) {
       const title = placesCard.querySelector('.ld-subtitle')
@@ -2319,7 +2538,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const title = presetManager.querySelector('.ld-subtitle')
       const help = presetManager.querySelector('.ld-help')
       if (title) title.textContent = 'Generation presets'
-      if (help) help.textContent = 'A generation preset is only the image recipe: renderer, model, sampler, steps, dimensions, LoRAs, and renderer-specific settings.'
+      if (help) help.textContent = 'Each preset stores your image app, model, dimensions, and prompt engine (MOSS plain English or Anima tags).'
       if (newPreset) newPreset.textContent = '＋ New generation preset'
     }
     if (presetEditor) {
@@ -2329,9 +2548,6 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const saveButton = presetEditor.querySelector('[data-act="ed-save"]')
       const saveRow = saveButton ? saveButton.closest('.ld-row') : null
       if (quality && saveRow) {
-        // Keep old inputs in the DOM for backwards-compatible editor code, but the
-        // new save path ignores them. This avoids breaking handlers while making
-        // the product model unambiguous.
         let node = quality
         while (node && node !== saveRow) {
           const next = node.nextElementSibling
@@ -2340,68 +2556,60 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         }
         if (!presetEditor.querySelector('.ld-reset-generation-note')) {
           const note = make('div', 'ld-help ld-reset-generation-note',
-            'Generation-only preset. Story prompting, cast, characters, personas, and places are managed outside this editor.')
+            'You can also edit your active preset’s Picture style and Negative prompt directly on the Story tab.')
           presetEditor.insertBefore(note, saveRow)
         }
-        // Prompt style (MOSS experiment). Anima stays the default and is unchanged.
         if (!presetEditor.querySelector('.ld-ed-prompt-style')) {
           const box = make('div', 'ld-ed-prompt-style-box')
           box.style.marginTop = '10px'
           const styleSelect = document.createElement('select')
           styleSelect.className = 'ld-ed-prompt-style'
-          for (const [value, label] of [['anima', 'Anima (tags) — default'], ['moss', 'MOSS Image (plain English) — experiment']]) {
+          for (const [value, label] of [['anima', 'Anima (tags) — default'], ['moss', 'MOSS Image (plain English)']]) {
             const option = document.createElement('option'); option.value = value; option.textContent = label; styleSelect.appendChild(option)
           }
           box.appendChild(field('Prompt style for story pictures', styleSelect,
-            'Pick the one that matches this preset’s model. Only used by the simple pipeline.'))
+            'Pick the one that matches this preset’s model.'))
           const mossBox = make('div', 'ld-ed-moss-box')
-          // NanoGPT's website style buttons are not in its API, so the style is
-          // written into the prompt. These fill the sentence; it stays editable.
-          const mossStyles = [
-            ['dark', 'Dark Atmospheric Illustration (Sci-Fi & Dark Fantasy)', 'A dark, atmospheric high-detail anime illustration with soft blended shading, rich dramatic lighting, and detailed textures.'],
-            ['smooth', 'Smooth Warm Illustration (Slice of Life & Everyday)', 'A warm, high-detail anime illustration with soft blended shading, natural lighting, and detailed textures.'],
-            ['manhwa', 'Mature Manhwa / Webtoon Illustration', 'A high-detail mature webtoon and anime illustration with fine linework, soft blended shading, and atmospheric lighting.'],
-            ['comic', 'Graphic Novel / Comic Style', 'A clean graphic-novel illustration with bold shapes, smooth modeled shading, strong dramatic shadows, and no flat cartoon cel-shading.'],
-            ['storybook', 'Soft Storybook Illustration', 'A soft storybook illustration with gentle blended colors, warm diffused light, muted palette, and a clean hand-illustrated feel rather than a photograph.'],
-            ['cover', 'Painted Book-Cover Style (with brush texture)', 'A painterly dark sci-fi fantasy book-cover illustration rendered in rich oil and acrylic brushwork, expressive visible brushstrokes, strong three-dimensional form modeling, dramatic chiaroscuro rim lighting, deep warm shadows, weathered metallic and fabric textures, sharp defined facial bone structure, hand-painted concept art finish, neither photorealistic nor flat cel-shaded.'],
-            ['oil', 'Classic Painted Style (with brush texture)', 'A classic oil painting with visible brushwork and canvas texture, dramatic chiaroscuro lighting, rich muted earthy palette, modeled form, and an intentionally painterly rather than photographic finish.'],
-            ['90s cel', '90s Retro Anime', 'A 1990s retro anime screencap illustration with hand-drawn linework, cel-shaded flat colors, muted VHS color palette, painted background, and subtle film grain.'],
-            ['anime', 'Standard Modern Anime (Cel-Shaded)', 'An anime-style illustration with clean lineart, cel shading and dramatic cinematic lighting.'],
-            ['anime poster', 'Anime Poster (Cel-Shaded)', 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.'],
-          ]
           const stylePick = document.createElement('select')
           stylePick.className = 'ld-ed-moss-style-pick'
-          for (const [value, label] of [['', 'Choose a style…'], ...mossStyles.map(([value, label]) => [value, label]), ['custom', 'My own (type below)']]) {
+          for (const [value, label] of [['', 'Choose a style…'], ...MOSS_STYLES_UI.map(([value, label]) => [value, label]), ['custom', 'My own (type below)']]) {
             const option = document.createElement('option'); option.value = value; option.textContent = label; stylePick.appendChild(option)
           }
-          mossBox.appendChild(field('Picture style', stylePick, 'Picks the sentence below. The top three options give smooth, non-cartoony 2D illustration (soft blended shading with cel-shading, cartoons, and 3D/photo rendering blocked in the negative prompt).'))
+          mossBox.appendChild(field('Picture style', stylePick, 'Fills the style sentence below. Whatever is in the box is sent word-for-word.'))
           const mossStyle = document.createElement('textarea')
           mossStyle.className = 'ld-ed-moss-style'; mossStyle.rows = 3
-          mossStyle.placeholder = mossStyles[0][2]
-          mossBox.appendChild(field('Style sentence', mossStyle, 'Opens every MOSS prompt. Leave empty to use the example shown.'))
+          mossStyle.placeholder = MOSS_DEFAULT_STYLE_UI
+          mossBox.appendChild(field('Style sentence sent to MOSS', mossStyle, 'Opens every MOSS prompt. Sent word-for-word.'))
           stylePick.addEventListener('change', () => {
-            const found = mossStyles.find(([value]) => value === stylePick.value)
+            const found = MOSS_STYLES_UI.find(([value]) => value === stylePick.value)
             if (found) mossStyle.value = found[2]
             else if (stylePick.value === 'custom') mossStyle.focus()
           })
           const syncPick = () => {
             const text = mossStyle.value.trim()
             const lower = text.toLowerCase()
-            const found = mossStyles.find(([key, , sentence]) => key === lower || sentence === text)
+            const found = MOSS_STYLES_UI.find(([key, , sentence]) => key === lower || sentence === text)
             stylePick.value = found ? found[0] : text ? 'custom' : ''
           }
           mossStyle.addEventListener('input', syncPick)
           mossStyle.addEventListener('ld-sync', syncPick)
           const mossNegative = document.createElement('textarea')
-          mossNegative.className = 'ld-ed-moss-negative'; mossNegative.rows = 2
-          mossNegative.placeholder = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin'
-          mossBox.appendChild(field('Negative prompt for MOSS', mossNegative, 'Sent as written. Leave empty to use the default shown in the box.'))
+          mossNegative.className = 'ld-ed-moss-negative'; mossNegative.rows = 3
+          mossNegative.placeholder = MOSS_DEFAULT_NEGATIVE_UI
+          mossBox.appendChild(field('Negative prompt for MOSS', mossNegative, 'Sent word-for-word.'))
           const mossLayout = document.createElement('input')
           mossLayout.type = 'checkbox'; mossLayout.className = 'ld-ed-moss-layout'
           mossBox.appendChild(checkbox(mossLayout, 'Give each person their own box in the picture (MOSS layout, experimental)',
-            'Can help keep each person’s looks on the right body. Turn off for NanoGPT, and if SwarmUI shows the prompt as text or the picture looks wrong.'))
+            'Turn off for NanoGPT, and if SwarmUI shows the prompt as text or the picture looks wrong.'))
           box.appendChild(mossBox)
-          const syncMoss = () => { mossBox.style.display = styleSelect.value === 'moss' ? '' : 'none' }
+          const syncMoss = () => {
+            const isMoss = styleSelect.value === 'moss'
+            mossBox.style.display = isMoss ? '' : 'none'
+            if (isMoss) {
+              if (!mossStyle.value.trim()) { mossStyle.value = MOSS_DEFAULT_STYLE_UI; syncPick() }
+              if (!mossNegative.value.trim()) mossNegative.value = MOSS_DEFAULT_NEGATIVE_UI
+            }
+          }
           styleSelect.addEventListener('change', syncMoss)
           syncMoss()
           presetEditor.insertBefore(box, saveRow)
@@ -2438,8 +2646,6 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     for (const button of libRail.querySelectorAll('.ld-reset-tab')) {
       button.addEventListener('click', () => { if (sharedEditor) sharedEditor.style.display = 'none' })
     }
-    // While an editor is open, hide the list it came from so there is nothing to
-    // scroll past; a Back button closes the editor the same way Cancel does.
     const watchLibraryEditor = (editor, host, cancelSelector) => {
       if (!editor || !host) return
       if (!editor.querySelector('.ld-lib-back')) {
@@ -2452,7 +2658,6 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const sync = () => {
         const open = editor.style.display !== 'none'
         host.classList.toggle('ld-lib-editing', open)
-        // Start at the top of the editor, not wherever the list was scrolled to.
         if (open && !wasOpen && editor.scrollIntoView) requestAnimationFrame(() => editor.scrollIntoView({ block: 'start' }))
         wasOpen = open
       }
@@ -2466,9 +2671,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     try { savedLibraryTab = localStorage.getItem('lumidraw.librarySection.v2') || 'presets' } catch { /* best effort */ }
     libRail._setResetTab(savedLibraryTab)
 
-    // ---------- SETTINGS · 1.9 layout
-    // Things you set once. Cards are moved, not rebuilt, and lose their old
-    // data-settings-section tag so the 1.8 tab switcher cannot hide them.
+    // ---------- SETTINGS · 1.18 layout
     const settingsView = $('.ld-view[data-view="settings"]')
     const settingsForm = settingsView ? settingsView.querySelector('.ld-form-view') : null
     if (settingsForm) {
@@ -2504,22 +2707,24 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         ['apps', 'Image apps'],
         ['parser', 'Parser'],
         ['chat', 'Chat pictures'],
-        ['help', 'Help & reports'],
-        ['old', 'Old pipeline (1.8)'],
+        ['help', 'Help & legacy'],
       ], 'lumidraw.settingsSection.v3', 'apps')
       const apps = section('apps')
       const parserSection = section('parser')
       const chat = section('chat')
       const help = section('help')
-      const old = section('old')
       for (const node of [swarmCard, nanoCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
       parserSection.appendChild(parserBinding)
       chat.appendChild(display)
       if (helpCard) help.appendChild(helpCard)
-      for (const node of [oldIntro, coreCard, jevCard, trackedClothing, oldDebug]) if (node) old.appendChild(node)
-      settingsForm.replaceChildren(settingsRail, apps, parserSection, chat, help, old, ...(settingsStatus ? [settingsStatus] : []))
+      const legacyDrawer = details('Old pipeline (1.8) settings', 'Only used if you turn off “Use the simple pipeline (1.9)” in Story → More drawing options.')
+      legacyDrawer.el.style.marginTop = '8px'
+      for (const node of [oldIntro, coreCard, jevCard, trackedClothing, oldDebug]) if (node) legacyDrawer.body.appendChild(node)
+      help.appendChild(legacyDrawer.el)
+      settingsForm.replaceChildren(settingsRail, apps, parserSection, chat, help, ...(settingsStatus ? [settingsStatus] : []))
       let savedSettingsTab = 'apps'
       try { savedSettingsTab = localStorage.getItem('lumidraw.settingsSection.v3') || 'apps' } catch { /* best effort */ }
+      if (savedSettingsTab === 'old') savedSettingsTab = 'help'
       settingsRail._setResetTab(savedSettingsTab)
     }
     const saveConnections = $('[data-act="save-settings"]')
@@ -3224,6 +3429,46 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     flushHistoryViews()
   }
 
+  let lastSyncedStoryPresetName = null
+  function syncStoryPromptCard(force = false) {
+    const p = typeof activePresetObj === 'function' ? activePresetObj() : null
+    const isMoss = !!(p && p.promptStyle === 'moss')
+    const mossBox = $('.ld-story-moss-box')
+    const animaBox = $('.ld-story-anima-box')
+    const subtitle = $('.ld-story-prompt-subtitle')
+    const intervalField = $('.ld-story-auto-interval-field')
+    if (intervalField && $('.ld-mode')) {
+      intervalField.style.display = storyAutoScanFromBehavior($('.ld-mode').value) ? '' : 'none'
+    }
+    if (mossBox) mossBox.style.display = isMoss ? '' : 'none'
+    if (animaBox) animaBox.style.display = isMoss ? 'none' : ''
+    if (subtitle) {
+      subtitle.textContent = isMoss
+        ? `MOSS preset “${p.name}” — what you see in the boxes below is sent word-for-word.`
+        : p
+          ? `Anima tag preset “${p.name}” — added to every story picture.`
+          : 'Added to every story picture.'
+    }
+    if (isMoss) {
+      const defaultStyle = 'A dark, atmospheric high-detail anime illustration with soft blended shading, rich dramatic lighting, and detailed textures.'
+      const defaultNeg = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin'
+      const styleEl = $('.ld-story-moss-style')
+      const negEl = $('.ld-story-moss-negative')
+      const presetChanged = lastSyncedStoryPresetName !== p.name
+      if (styleEl && (force || presetChanged || document.activeElement !== styleEl)) {
+        styleEl.value = (p.mossStyle && p.mossStyle.trim()) || defaultStyle
+        styleEl.dispatchEvent(new Event('ld-sync'))
+      }
+      if (negEl && (force || presetChanged || document.activeElement !== negEl)) {
+        negEl.value = (p.mossNegative && p.mossNegative.trim()) || defaultNeg
+      }
+      if (presetChanged) setStatus('.ld-story-moss-status', '')
+      lastSyncedStoryPresetName = p.name
+    } else {
+      lastSyncedStoryPresetName = p ? p.name : null
+    }
+  }
+
   function renderHeaderState() {
     const presetEl = $('.ld-header-preset')
     const workspaceEl = $('.ld-header-workspace')
@@ -3233,6 +3478,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const presetName = activePreset || 'None'
     if (presetEl) presetEl.textContent = presetName
     if (storyPreset) storyPreset.textContent = presetName
+    syncStoryPromptCard()
 
     if (workspaceEl) {
       if (!draftConfig) workspaceEl.textContent = 'Not loaded'
@@ -4947,7 +5193,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   function libProfileText(profile) {
     const p = profile || {}
     const looks = (p.alternateAppearances && p.alternateAppearances.variants || []).map(v => [v.label, libTagText(v.tags)].join(' '))
-    return [p.anchor, p.promptName, p.subject, p.countTag, libTagText(p.identityTags), libTagText(p.appearanceTags),
+    return [p.anchor, p.promptName, p.subject, p.countTag, p.mossDescription, libTagText(p.identityTags), libTagText(p.appearanceTags),
       libTagText(p.appearance), libTagText(p.defaultOutfitTags), ...looks].join(' ')
   }
   function libVisible(kind, items, { nameOf, textOf, isStory = () => false }) {
@@ -5082,6 +5328,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     return formCount ? `${formCount} state${formCount === 1 ? '' : 's'}` : ''
   }
   function libFirstTags(profile, limit = 8) {
+    if (profile && profile.mossDescription && String(profile.mossDescription).trim()) {
+      return String(profile.mossDescription).trim()
+    }
     const raw = [libTagText(profile.identityTags), libTagText(profile.appearanceTags), libTagText(profile.appearance)].join(',')
     const seen = new Set()
     return raw.split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).slice(0, limit).join(', ')
@@ -5119,7 +5368,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const story = !!profile.declaredByStory
       list.appendChild(libItem({
         name: character.name || 'Unnamed character',
-        badges: [character.nameClash ? NEEDS_NEW_NAME : '', story ? 'story-made' : '', profile.countTag || '', libLooksBadge(profile)],
+        badges: [character.nameClash ? NEEDS_NEW_NAME : '', story ? 'story-made' : '', profile.mossDescription && String(profile.mossDescription).trim() ? 'MOSS' : '', profile.countTag || '', libLooksBadge(profile)],
         sub: [profile.anchor && profile.anchor !== character.name ? profile.anchor : '', profile.subject || ''].filter(Boolean).join(' · '),
         tags: libFirstTags(profile),
         faded: story,
@@ -5161,7 +5410,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const profile = persona.profile || {}
       list.appendChild(libItem({
         name: persona.name || 'Unnamed persona',
-        badges: [persona.nameClash ? NEEDS_NEW_NAME : '', profile.countTag || '', libLooksBadge(profile)],
+        badges: [persona.nameClash ? NEEDS_NEW_NAME : '', profile.mossDescription && String(profile.mossDescription).trim() ? 'MOSS' : '', profile.countTag || '', libLooksBadge(profile)],
         sub: [profile.anchor && profile.anchor !== persona.name ? profile.anchor : '', profile.subject || ''].filter(Boolean).join(' · '),
         tags: libFirstTags(profile),
         onOpen: () => openPersonaEditor(persona.id),
@@ -8581,7 +8830,7 @@ ${entry.prompt || ''}`.trim()
       presets = result.presets
       syncedConfig = cloneJson(bundle.config)
       draftDirty = false
-      renderPresetList(); renderPresetSelect(); renderChips()
+      renderPresetList(); renderPresetSelect(); renderChips(); syncStoryPromptCard(true)
       setStatus('.ld-draft-status', `Updated active preset “${activePreset}” from the workspace.`, 'good')
     } catch (error) {
       setStatus('.ld-draft-status', error.message, 'err')
@@ -8715,7 +8964,7 @@ ${entry.prompt || ''}`.trim()
       if (!editorOriginalName || activePreset === editorOriginalName || activePreset === name) {
         selectPreset(name)
       }
-      renderPresetList(); renderPresetSelect(); renderChips()
+      renderPresetList(); renderPresetSelect(); renderChips(); syncStoryPromptCard(true)
       setStatus('.ld-ed-status', `Saved "${name}".`, 'good')
       editorOriginalName = name
     } catch (e) { setStatus('.ld-ed-status', e.message, 'err') }
