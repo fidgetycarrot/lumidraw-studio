@@ -45,3 +45,8 @@ MOSS prompts now follow the four-part layout that has worked best in practice (A
   - **Compact `This chat` card:** keeps `Cast`, `Playing as`, and `Add a saved character` front and center, and tucks chat memory and species/lead options into a **Chat memory & cast options** drawer.
 - **Tabbed Character & Persona Sheet Editor:** replaces the 15-field vertical wall with a compact top basics grid (`Library name`, `Story name`, `Count tag`, `Short role phrase`) and 3 clean tabs: **MOSS & Outfit** (default), **Anima Tags**, and **Forms, Props & LumiCast**. Library cards also show a `MOSS` badge and preview the plain-English MOSS description when present.
 - **Streamlined Settings:** combines `Help & reports` and `Old pipeline (1.8)` into a single **Help & legacy** tab with the old 1.8 settings tucked inside a collapsed drawer.
+
+# 1.18.1 — High-contrast visual styling & color-coded sections
+- **Three-layer surface contrast:** deep dark scroll background (`#0f1117`), elevated slate cards (`#1a1e2b`), and deep recessed dark input wells (`#0b0d14`) with a violet focus ring so text boxes never blend into the card background.
+- **Color-coded section cards:** distinct left accent bars and tinted headers for **Story pictures** (amber/gold), **Style & negative prompt** (violet), **This chat** (sky blue), and **Last picture** (emerald green).
+- **Clear typography hierarchy:** larger `17px` bold card headings, `13.5px` bright silver-blue field labels, `14.5px` crisp white input text, and `12.5px` muted slate helper notes.

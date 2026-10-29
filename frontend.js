@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.18.0'
+  const EXTENSION_VERSION = '1.18.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1843,59 +1843,119 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const resetStyle = document.createElement('style')
     resetStyle.setAttribute('data-lumidraw-ui-reset-v11', '1')
     resetStyle.textContent = `
-      .ld-reset-rail{display:flex;flex:0 0 auto;gap:5px;flex-wrap:wrap;min-height:38px;margin:0 0 2px;padding:3px;border:1px solid var(--lumiverse-border,#3d4050);border-radius:10px;background:#121318}
-      .ld-reset-tab{appearance:none;flex:0 0 auto;white-space:nowrap;border:0;border-radius:7px;padding:7px 11px;background:transparent;color:var(--lumiverse-text-muted,#a2a5b4);font:inherit;font-size:12px;cursor:pointer;touch-action:manipulation}
-      .ld-reset-tab:hover{color:var(--lumiverse-text,#eceef4)}
-      .ld-reset-tab.ld-active{background:var(--lumiverse-fill,#262833);color:var(--lumiverse-text,#eceef4);font-weight:650}
-      .ld-reset-section{display:none;flex:0 0 auto;flex-direction:column;gap:9px}
+      /* --- 1.18.1 High-Contrast Visual Hierarchy & Color Coding --- */
+      .ld-panel{background:#0f1117!important;color:#f1f4f9!important;font-size:14.5px!important}
+      .ld-head{background:#141720!important;border-bottom:1px solid #2b3145!important;padding:10px 14px!important}
+      .ld-head-title{font-size:16px!important;font-weight:750!important;color:#ffffff!important;letter-spacing:.01em}
+      .ld-main-nav{gap:6px!important}
+      .ld-main-tab{font-size:13.5px!important;font-weight:600!important;padding:8px 14px!important;border-radius:9px!important;color:#9aa6be!important;transition:background .15s,color .15s}
+      .ld-main-tab:hover{color:#ffffff!important;background:#1e2332!important}
+      .ld-main-tab.ld-active{background:linear-gradient(180deg,#5548e8,#4135be)!important;color:#ffffff!important;font-weight:700!important;box-shadow:0 2px 10px rgba(85,72,232,.35)!important}
+
+      .ld-statebar{background:#131620!important;border-bottom:1px solid #262c3f!important;padding:9px 14px!important;gap:10px!important}
+      .ld-state-pill{background:#1b202e!important;border:1px solid #31384f!important;padding:8px 11px!important;font-size:12.5px!important;border-radius:10px!important}
+      .ld-state-key{color:#8fa0be!important;font-weight:600!important;text-transform:uppercase;font-size:11px!important;letter-spacing:.04em}
+      .ld-state-value{color:#f8fafc!important;font-weight:700!important;font-size:13px!important}
+
+      .ld-form-view{padding:16px!important;gap:14px!important;background:#0f1117!important}
+      .ld-card{background:#1a1e2b!important;border:1px solid #2f374d!important;border-radius:12px!important;padding:16px 18px!important;box-shadow:0 6px 18px rgba(0,0,0,.32)!important}
+      .ld-card+.ld-card{margin-top:12px!important}
+
+      /* Color-coded left accent bars & header tints so sections are easy to track */
+      .ld-card-hero{border-left:4px solid #f59e0b!important;background:linear-gradient(180deg,#20222f 0%,#1a1e2b 100%)!important}
+      .ld-card-hero>.ld-reset-hero .ld-subtitle,.ld-card-hero>.ld-subtitle{color:#fbbf24!important}
+      .ld-card-prompt{border-left:4px solid #8b5cf6!important}
+      .ld-card-prompt>.ld-subtitle{color:#c4b5fd!important}
+      .ld-card-cast{border-left:4px solid #38bdf8!important}
+      .ld-card-cast>.ld-subtitle{color:#7dd3fc!important}
+      .ld-card-debug{border-left:4px solid #10b981!important}
+      .ld-card-debug>.ld-subtitle{color:#6ee7b7!important}
+      .ld-persona-editor,.ld-editor{border-left:4px solid #8b5cf6!important}
+
+      /* Distinct typography sizes & colors: Section Title > Field Label > Input Text > Help Note */
+      .ld-subtitle{font-size:17px!important;font-weight:750!important;color:#ffffff!important;margin-bottom:10px!important;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,.08);letter-spacing:.01em}
+      .ld-card-hero .ld-subtitle{border-bottom:none;padding-bottom:0;margin-bottom:4px!important}
+      .ld-label{font-size:13.5px!important;font-weight:650!important;color:#dce5f7!important;margin-bottom:6px!important;letter-spacing:.01em}
+      .ld-help,.ld-hint{font-size:12.5px!important;line-height:1.48!important;color:#8e9bb4!important}
+
+      /* Deep recessed input wells so text boxes never blend into the card background */
+      .ld-panel input:not([type="checkbox"]):not([type="radio"]),.ld-panel select,.ld-panel textarea{
+        background:#0b0d14!important;border:1px solid #3d4663!important;border-radius:9px!important;
+        padding:10px 12px!important;font-size:14.5px!important;line-height:1.48!important;color:#f8fafc!important;
+        box-shadow:inset 0 1px 3px rgba(0,0,0,.45)!important;transition:border-color .15s,box-shadow .15s
+      }
+      .ld-panel input:not([type="checkbox"]):not([type="radio"]):focus,.ld-panel select:focus,.ld-panel textarea:focus{
+        border-color:#8b5cf6!important;box-shadow:0 0 0 3px rgba(139,92,246,.24),inset 0 1px 3px rgba(0,0,0,.45)!important;outline:none!important
+      }
+      .ld-panel input::placeholder,.ld-panel textarea::placeholder{color:#5c667d!important}
+
+      /* Buttons */
+      .ld-btn{font-size:13.5px!important;font-weight:600!important;padding:8px 14px!important;border-radius:9px!important;background:#262c3f!important;border:1px solid #414b68!important;color:#f1f5f9!important}
+      .ld-btn:hover:not(:disabled){background:#313952!important;border-color:#566387!important}
+      .ld-btn.ld-primary{background:linear-gradient(180deg,#5b4ee4,#4436c2)!important;border-color:#7c6ff2!important;color:#ffffff!important;font-weight:700!important;box-shadow:0 2px 10px rgba(91,78,228,.32)!important}
+      .ld-btn.ld-primary:hover:not(:disabled){background:linear-gradient(180deg,#685bf0,#4e40cf)!important}
+      .ld-compact{font-size:12.5px!important;padding:6px 11px!important}
+
+      /* Sub-tab rails & collapsible drawers */
+      .ld-reset-rail{display:flex;flex:0 0 auto;gap:6px;flex-wrap:wrap;min-height:42px;margin:0 0 4px;padding:4px;border:1px solid #2e364d;border-radius:11px;background:#11141d}
+      .ld-reset-tab{appearance:none;flex:0 0 auto;white-space:nowrap;border:1px solid transparent;border-radius:8px;padding:8px 14px;background:transparent;color:#9aa6be;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer;touch-action:manipulation}
+      .ld-reset-tab:hover{color:#ffffff;background:#1c2130}
+      .ld-reset-tab.ld-active{background:#2d2a54;border-color:#6d5dfc;color:#ffffff;font-weight:700;box-shadow:0 2px 8px rgba(109,93,252,.25)}
+      .ld-reset-section{display:none;flex:0 0 auto;flex-direction:column;gap:12px}
       .ld-reset-section.ld-active{display:flex}
-      .ld-reset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+      .ld-reset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
       .ld-reset-field{min-width:0}
-      .ld-reset-field+.ld-reset-field{margin-top:8px}
+      .ld-reset-field+.ld-reset-field{margin-top:11px}
       .ld-reset-help{margin-top:5px}
-      .ld-reset-inline{display:flex;align-items:center;gap:7px;min-width:0}
+      .ld-reset-inline{display:flex;align-items:center;gap:8px;min-width:0}
       .ld-reset-inline>*{min-width:0}
       .ld-reset-inline>input,.ld-reset-inline>select,.ld-reset-inline>textarea{flex:1}
-      .ld-reset-check-wrap+.ld-reset-check-wrap{margin-top:7px}
-      .ld-reset-check{display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer}
-      .ld-reset-check input{flex:0 0 auto!important}
-      .ld-reset-details{border:1px solid var(--lumiverse-border,#3d4050);border-radius:9px;background:var(--lumiverse-fill-subtle,#1a1b22);overflow:hidden}
-      .ld-reset-details>summary{cursor:pointer;padding:9px 11px;font-size:12px;font-weight:650;user-select:none}
-      .ld-reset-details-body{padding:0 11px 11px}
-      .ld-reset-hero{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center}
-      .ld-reset-preset-line{font-size:12px;margin-top:3px}
-      .ld-reset-status{padding:8px 9px;border-radius:8px;background:var(--lumiverse-fill-subtle,#1a1b22)}
+      .ld-reset-check-wrap+.ld-reset-check-wrap{margin-top:9px}
+      .ld-reset-check{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:500;color:#e2e8f0;cursor:pointer}
+      .ld-reset-check input{flex:0 0 auto!important;width:16px!important;height:16px!important;accent-color:#8b5cf6}
+      .ld-reset-details{border:1px solid #2f374f;border-radius:10px;background:#131621;overflow:hidden}
+      .ld-reset-details>summary{cursor:pointer;padding:11px 14px;font-size:13.5px;font-weight:650;color:#c3d0ea;user-select:none;background:#161a27}
+      .ld-reset-details>summary:hover{color:#ffffff;background:#1c2132}
+      .ld-reset-details[open]>summary{border-bottom:1px solid #262d42;margin-bottom:10px}
+      .ld-reset-details-body{padding:0 14px 14px}
+      .ld-reset-hero{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.08)}
+      .ld-reset-preset-line{font-size:13px;color:#b8c4dc;margin-top:3px}
+      .ld-reset-preset-line strong{color:#fde68a;font-weight:700}
+      .ld-reset-status{padding:9px 12px;border-radius:9px;background:#12151f;border:1px solid #283044;font-size:13px}
       .ld-reset-library-note{margin-bottom:1px}
       .ld-reset-hidden-legacy{display:none!important}
-      .ld-reset-save-note{font-size:11px;color:var(--lumiverse-text-muted,#a2a5b4);margin-top:7px}
-      .ld-lib-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:10px}
+      .ld-reset-save-note{font-size:12px;color:#8e9bb4;margin-top:7px}
+
+      /* Library Cards & Badges */
+      .ld-lib-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px}
       .ld-lib-toolbar .ld-lib-search{flex:1 1 220px;min-width:0}
       .ld-lib-toolbar .ld-lib-sort{flex:0 0 auto;width:auto}
-      .ld-lib-toggle{display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;white-space:nowrap}
-      .ld-lib-toggle input{width:auto!important}
-      .ld-lib-count{margin-left:auto;font-size:11px;color:var(--lumiverse-text-muted,#a2a5b4);white-space:nowrap}
-      .ld-lib-grid{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin-top:9px!important}
+      .ld-lib-toggle{display:flex;align-items:center;gap:6px;font-size:13px;color:#cbd5e1;cursor:pointer;white-space:nowrap}
+      .ld-lib-toggle input{width:16px!important;height:16px!important;accent-color:#8b5cf6}
+      .ld-lib-count{margin-left:auto;font-size:12.5px;font-weight:600;color:#9aa6be;white-space:nowrap}
+      .ld-lib-grid{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;margin-top:11px!important}
       .ld-lib-grid>.ld-status{grid-column:1/-1}
-      .ld-lib-item{flex-direction:column;align-items:stretch;gap:8px;min-width:0}
-      .ld-lib-main{cursor:pointer;min-width:0;display:flex;flex-direction:column;gap:3px;outline:none}
-      .ld-lib-main:focus-visible{box-shadow:0 0 0 2px var(--lumiverse-text-muted,#a2a5b4);border-radius:6px}
-      .ld-lib-name{display:flex;align-items:center;flex-wrap:wrap;gap:5px;font-weight:650;font-size:13px;min-width:0}
+      .ld-lib-item{flex-direction:column;align-items:stretch;gap:9px;min-width:0;padding:12px 14px!important;background:#141824!important;border:1px solid #2e364e!important;border-radius:10px!important}
+      .ld-lib-item:hover{border-color:#5548e8!important}
+      .ld-lib-item.ld-active{border-color:#f59e0b!important;box-shadow:0 0 0 1px #f59e0b!important}
+      .ld-lib-main{cursor:pointer;min-width:0;display:flex;flex-direction:column;gap:5px;outline:none}
+      .ld-lib-main:focus-visible{box-shadow:0 0 0 2px #8b5cf6;border-radius:6px}
+      .ld-lib-name{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-weight:700;font-size:15px;color:#ffffff;min-width:0}
       .ld-lib-name-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-      .ld-lib-badge.ld-lib-badge-warn{border-color:#e0a24e;color:#f0b866;font-weight:600}
-      .ld-lib-clash{border-left:3px solid #e0a24e;padding:6px 10px;margin:0 0 8px;font-size:12px;color:var(--lumiverse-text,#e6e6ee)}
-      .ld-lib-badge{font-size:10px;font-weight:500;padding:1px 6px;border-radius:999px;border:1px solid var(--lumiverse-border,#3d4050);color:var(--lumiverse-text-muted,#a2a5b4);white-space:nowrap}
-      .ld-lib-sub{font-size:11px;color:var(--lumiverse-text-muted,#a2a5b4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-      .ld-lib-tags{font-size:11px;line-height:1.4;color:var(--lumiverse-text-muted,#a2a5b4);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-      .ld-lib-actions{display:flex;gap:6px;justify-content:flex-end;margin-top:auto}
+      .ld-lib-badge{font-size:11px;font-weight:650;padding:2px 8px;border-radius:999px;border:1px solid #434c69;background:#1f2537;color:#d8e1f5;white-space:nowrap}
+      .ld-lib-badge.ld-lib-badge-warn{border-color:#e0a24e;background:rgba(224,162,78,.15);color:#f0b866;font-weight:700}
+      .ld-lib-clash{border-left:3px solid #e0a24e;padding:8px 12px;margin:0 0 10px;font-size:13px;color:#f1f5f9;background:rgba(224,162,78,.1);border-radius:6px}
+      .ld-lib-sub{font-size:12.5px;font-weight:500;color:#93c5fd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .ld-lib-tags{font-size:12.5px;line-height:1.45;color:#9aa6be;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+      .ld-lib-actions{display:flex;gap:7px;justify-content:flex-end;margin-top:auto;padding-top:4px}
       .ld-lib-actions .ld-btn{width:auto}
       .ld-lib-editing .ld-lib-list-card{display:none!important}
-      .ld-lib-back{margin-bottom:8px;width:auto}
-      .ld-check{display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;margin-top:6px}
-      .ld-check input{width:auto!important;flex:0 0 auto}
-      .ld-hint{font-size:11px;line-height:1.45;color:var(--lumiverse-text-muted,#a2a5b4);margin-top:5px}
-      label.ld-label{display:block;margin-top:8px}
-      label.ld-label>input,label.ld-label>select,label.ld-label>textarea{margin-top:4px}
-      .ld-simple-memory-box{border-top:1px solid var(--lumiverse-border,#3d4050);padding-top:10px}
+      .ld-lib-back{margin-bottom:10px;width:auto}
+      .ld-check{display:flex;align-items:center;gap:8px;font-size:13.5px;color:#e2e8f0;cursor:pointer;margin-top:8px}
+      .ld-check input{width:16px!important;height:16px!important;flex:0 0 auto;accent-color:#8b5cf6}
+      label.ld-label{display:block;margin-top:9px}
+      label.ld-label>input,label.ld-label>select,label.ld-label>textarea{margin-top:5px}
+      .ld-simple-memory-box{border-top:1px solid #2d354b;padding-top:12px}
       @media(max-width:700px){
         .ld-reset-grid{grid-template-columns:1fr}
         .ld-reset-hero{grid-template-columns:1fr}
@@ -1993,6 +2053,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
     // 1. Story pictures (top control card)
     const hero = card()
+    hero.classList.add('ld-card-hero')
+    if (controls.scan) controls.scan.classList.add('ld-primary')
+    if (controls.scanOld) controls.scanOld.classList.remove('ld-primary')
     const heroTop = make('div', 'ld-reset-hero')
     const heroText = make('div')
     heroText.appendChild(make('div', 'ld-subtitle', 'Story pictures'))
@@ -2049,6 +2112,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
     // 2. This chat: who is in it, and what Lumi Studio remembers about them
     const castCard = card('This chat', 'Who is in this story. Edit character and persona sheets in Library.')
+    castCard.classList.add('ld-card-cast')
     const castTop = make('div', 'ld-reset-grid')
     castTop.appendChild(field('Cast', inline(controls.castPick, controls.castCopy)))
     castTop.appendChild(field('Playing as', controls.chatPersona, 'Remembered for this chat.'))
@@ -2144,6 +2208,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     storyBreak.className = 'ld-story-break'
 
     const promptCard = card('Style & negative prompt', 'What you see below is what gets sent with every story picture.')
+    promptCard.classList.add('ld-card-prompt')
     const promptSubtitle = promptCard.querySelector('.ld-help')
     if (promptSubtitle) promptSubtitle.classList.add('ld-story-prompt-subtitle')
 
@@ -2262,6 +2327,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
 
     // 4. Last picture
     const debugCard = card()
+    debugCard.classList.add('ld-card-debug')
     if (controls.debugTitle) debugCard.appendChild(controls.debugTitle)
     else debugCard.appendChild(make('div', 'ld-subtitle ld-parser-debug-title', 'Last picture'))
     debugCard.appendChild(field('Prompt sent to the image app', controls.finalPrompt))
