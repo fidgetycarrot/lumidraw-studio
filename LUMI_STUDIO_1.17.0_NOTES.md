@@ -10,3 +10,10 @@ MOSS prompts now follow the four-part layout that has worked best in practice (A
 - Default MOSS negative adds `3d, doll, plastic skin`.
 - Prompt only suggests CFG 4 for MOSS (inside the 3.5–5 range that follows the last sentences more closely).
 - The experimental layout option (one box per person) is unchanged.
+
+# 1.17.1 — lessons from Argon's live MOSS testing (MOSS prompts only; Anima unchanged)
+- **One item per garment:** MOSS read "red coat" beside "crimson silk greatcoat" as two coats. The fullest wording of each garment is kept, a plain catch-all ("black footwear") loses to a named one ("thigh boots"), how it's worn survives ("crimson silk greatcoat on shoulders"), and small parts join their garment ("… with heavy gold bullion epaulets", "black corset with lace cravat", "power armor with pauldrons").
+- **"Sleeveless"** is dropped from corsets and vests (it bled onto other people's armor), and bare "breeches" become "fitted breeches" (plain breeches came out baggy).
+- **Skin and eyes:** porcelain, alabaster, chalk-white, pallid and pale skin become "fair skin" (no more grey undead look); "around the irises" becomes "inside the irises"; "glowing" is taken off eyes but kept for visors and lenses. This applies to the Description for MOSS box too.
+- **Helmet on:** hair, eye and face details are left out of the Description for MOSS for that picture, the way the tag-built description already did.
+- **Feminine men without a MOSS box:** "a soft, pretty, feminine face" (which made sharp characters look sweet) is now "delicate feminine bone structure", followed by "His slender body has a feminine hourglass curve with narrow shoulders and a flat male chest."

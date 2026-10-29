@@ -26479,6 +26479,89 @@ function mossPersonParagraph(subject) {
 // Body-shape words for the opening tag line (one-person pictures only).
 const MOSS_SHAPE_TAG_RE = /\b(?:chest|waist|hips|thighs|shoulders|breasts|build|figure|frame|abs|legs)\b/i
 
+// Words MOSS reads the wrong way (found in live testing): pale-skin metaphors
+// draw grey undead skin, "around the irises" paints the cheeks, and "glowing"
+// eyes turn into bug-eye lamps. Glowing stays for lenses and visors.
+function mossSafeWords(text) {
+  return String(text || '')
+    .replace(/\b(?:porcelain[- ]pale|porcelain|alabaster|chalk[- ]white|chalky|pallid|deathly pale|bone[- ]white|milk[- ]white|white|pale)(\s+(?:and\s+)?(?:[a-z-]+\s+){0,2})skin\b/gi, (m, gap) => 'fair' + gap + 'skin')
+    .replace(/\b(?:around|ringing|encircling)\s+(?:(?:his|her|their|the)\s+)?irises\b/gi, 'inside the irises')
+    .replace(/\bglowing\s+((?:[a-z-]+\s+){0,3})eyes\b/gi, (m, between) => /\b(?:lens|lenses|visor)\b/i.test(between) ? m : between + 'eyes')
+}
+
+// A helmet that is on hides the head, so the parts of a written description
+// about hair, eyes and face are left out of that picture.
+function mossHelmetTrim(text) {
+  const sentences = String(text || '').split(/(?<=[.!?])\s+/).filter(Boolean)
+  const out = []
+  sentences.forEach((sentence, index) => {
+    if (!MOSS_HEAD_RE.test(sentence) && !/\b(?:cheekbones|eyelashes|lashes|irises|lips)\b/i.test(sentence)) { out.push(sentence); return }
+    if (index > 0) return
+    const at = sentence.search(/\s+with\s+/i)
+    if (at < 0) { out.push(sentence.replace(/,.*$/, '').replace(/[.\s]*$/, '.')); return }
+    const lead = sentence.slice(0, at)
+    const rest = sentence.slice(at).replace(/^\s+with\s+/i, '').replace(/[.\s]+$/, '')
+      .split(/,\s*(?:and\s+)?|\s+and\s+/).filter(part => part && !MOSS_HEAD_RE.test(part) && !/\b(?:cheekbones|eyelashes|lashes|irises|lips|bone structure|facial)\b/i.test(part))
+    out.push(lead + (rest.length ? ' with ' + mossList(rest) : '') + '.')
+  })
+  return out.join(' ')
+}
+
+// One line per garment for MOSS, which reads every listed item as something
+// worn: "red coat" beside "crimson silk greatcoat" became two coats. The
+// fullest wording of each garment wins; small parts join their garment.
+const MOSS_GARMENT_SAME = { greatcoat: 'coat', overcoat: 'coat', trenchcoat: 'coat', boot: 'boots', footwear: 'boots', shoe: 'shoes',
+  pant: 'pants', trouser: 'pants', trousers: 'pants', breech: 'breeches', armour: 'armor', glove: 'gloves', gauntlet: 'gloves' }
+const MOSS_GARMENT_PART = { epaulette: 'coat', epaulettes: 'coat', epaulet: 'coat', epaulets: 'coat', cravat: 'corset', pauldron: 'armor', pauldrons: 'armor' }
+function mossGarmentKey(item) {
+  const raw = String(mossHeadWord(item) || '').toLowerCase().replace(/[^a-z]/g, '')
+  return MOSS_GARMENT_SAME[raw] || MOSS_GARMENT_SAME[raw.replace(/s$/, '')] || raw
+}
+function mossOutfit(items) {
+  const cleaned = items.map(item => {
+    let text = String(item).trim()
+    if (/\b(?:corset|vest|bodice|waistcoat)\b/i.test(text)) text = text.replace(/\bsleeveless\s+/gi, '')
+    if (/\bbreeches\b/i.test(text) && !/\b(?:fitted|tight|slim|skinny|loose|baggy|wide)\b/i.test(text)) text = text.replace(/\bbreeches\b/i, 'fitted breeches')
+    return text
+  }).filter(Boolean)
+  const parts = [], groups = new Map()
+  for (const item of cleaned) {
+    const key = mossGarmentKey(item)
+    if (MOSS_GARMENT_PART[key]) { parts.push({ item, to: MOSS_GARMENT_PART[key] }); continue }
+    // Words like "coat on shoulders" or "holstered bolter" are kept whole; only
+    // the same garment named twice is merged.
+    const list = groups.get(key) || []
+    list.push(item)
+    groups.set(key, list)
+  }
+  const out = []
+  for (const [, list] of groups) {
+    // A plain catch-all ("black footwear") loses to a named garment ("thigh boots").
+    const named = list.filter(item => !/\b(?:footwear|clothes|clothing|outfit|garments?)\b/i.test(item))
+    const pool = named.length ? named : list
+    // Describing words count, not how it is worn: "crimson silk greatcoat" beats "coat on shoulders".
+    const core = item => item.split(/\s+(?:on|over|with|draped|around|across)\s+/i)[0].split(/\s+/).length
+    const fullest = pool.slice().sort((a, b) => core(b) - core(a) || b.split(/\s+/).length - a.split(/\s+/).length)[0]
+    // Keep how it is worn when only a shorter wording said so ("on shoulders").
+    const worn = !/\s(?:on|over|draped)\s/i.test(fullest) && list.map(item => /\s((?:on|over|draped over)\s+(?:the\s+|his\s+|her\s+|their\s+)?shoulders?)$/i.exec(item)).find(Boolean)
+    out.push(worn ? `${fullest} ${worn[1]}` : fullest)
+  }
+  // The fullest wording of each small part ("heavy gold bullion epaulets" over "epaulettes").
+  const partByKey = new Map()
+  for (const part of parts) {
+    const key = mossGarmentKey(part.item).replace(/s$/, '').replace(/te$/, '').replace(/t$/, '')
+    const before = partByKey.get(key)
+    if (!before || part.item.split(/\s+/).length > before.item.split(/\s+/).length) partByKey.set(key, part)
+  }
+  for (const { item, to } of partByKey.values()) {
+    const at = out.findIndex(garment => mossGarmentKey(garment) === to || (to === 'corset' && /\b(?:shirt|blouse|vest|corset)\b/i.test(garment)))
+    const word = String(mossHeadWord(item)).toLowerCase().replace(/s$/, '')
+    if (at < 0) out.push(item)
+    else if (!new RegExp(`\\b${escapeRegExp(word)}`, 'i').test(out[at])) out[at] = `${out[at]} with ${mossNoun(item).replace(/^an? /, '')}`
+  }
+  return uniqueStrings(out)
+}
+
 // One person, split in two: how they look (kept the same every picture) and
 // what they are doing, wearing and showing in this one.
 function mossPersonParts(subject) {
@@ -26489,7 +26572,7 @@ function mossPersonParts(subject) {
   const phrase = mossPlain(subject.phrase || 'adult person').replace(franchiseWords, ' ').replace(/\s+/g, ' ').trim() || 'adult person'
   const phraseFranchise = (mossPlain(subject.phrase || '').match(franchiseWords) || []).map(word => word.toLowerCase())
   const phraseKey = normalizeIdentityText(phrase)
-  const outfit = mossWords(subject.outfit)
+  const outfit = mossOutfit(mossWords(subject.outfit))
   const helmet = mossHelmetOn(outfit)
   const sealed = helmet && outfit.some(item => /\b(?:power|full|plate|terminator|space marine) armou?r\b|\b(?:spacesuit|hazmat suit|mecha suit|exoskeleton)\b/i.test(item))
   const franchise = mossFranchise(uniqueStrings([...phraseFranchise, ...mossWords(subject.identity)]))
@@ -26506,20 +26589,23 @@ function mossPersonParts(subject) {
     if (sealed && /\b(?:skin|scars?|tattoos?|freckles|moles?|piercings?|veins|hairy|body hair|tan lines|birthmark)\b/i.test(tag)) continue
     features.push(tag)
   }
-  const trimmed = mossMergeHair(mossTrimFeatures(features)).map(feature => mossOwnBody(feature, p))
+  const trimmed = mossMergeHair(mossTrimFeatures(features)).map(feature => mossSafeWords(mossOwnBody(feature, p)))
   const noun = [build.join(', '), phrase].filter(Boolean).join(' ')
   const who = subject.name ? `${subject.name}, ${articleFor(noun)} ${noun}` : `${articleFor(noun)} ${noun}`
   const place = MOSS_PLACES[subject.position] || ''
   const lines = []
   if (subject.mossDescription) {
     // The user's own words for this person replace the tag-built sentences.
-    const text = String(subject.mossDescription).trim().replace(/[.\s]+$/, '')
+    const text = mossSafeWords(helmet ? mossHelmetTrim(subject.mossDescription) : subject.mossDescription).trim().replace(/[.\s]+$/, '')
     const named = subject.name ? `${subject.name}, ${text}` : upperFirst(text)
     lines.push(`${place ? place + ' is ' + named : upperFirst(named)}.`)
   } else {
     let opening = place ? `${place} is ${who}` : upperFirst(who)
-    if (feminineMale) opening += ` with a soft, pretty, feminine face and a flat chest`
+    // Not "soft, pretty": that made sharp characters look sweet. The face gets
+    // feminine bones; the body gets one sentence tying the curve to a flat chest.
+    if (feminineMale) opening += ` with delicate feminine bone structure`
     lines.push(opening + '.')
+    if (feminineMale) lines.push(`${upperFirst(p.possessive)} slender body has a feminine hourglass curve with narrow shoulders and a flat male chest.`)
     if (franchise.universe || franchise.role || franchise.faction) {
       const role = [franchise.faction, franchise.role || (franchise.faction ? 'warrior' : '')].filter(Boolean).join(' ')
       lines.push(role
