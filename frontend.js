@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.17.5'
+  const EXTENSION_VERSION = '1.17.6'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2387,10 +2387,6 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           const syncPick = () => {
             const text = mossStyle.value.trim()
             const lower = text.toLowerCase()
-            const alias = lower === 'concept' || /\bsemi-realistic digital concept illustration\b/i.test(text) ? 'dark'
-              : lower === 'semi-realistic' || /\bsmooth semi-realistic digital illustration\b/i.test(text) ? 'smooth'
-              : /\bmature webtoon and visual-novel illustration\b/i.test(text) ? 'manhwa' : ''
-            if (alias) { stylePick.value = alias; return }
             const found = mossStyles.find(([key, , sentence]) => key === lower || sentence === text)
             stylePick.value = found ? found[0] : text ? 'custom' : ''
           }
@@ -2399,7 +2395,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           const mossNegative = document.createElement('textarea')
           mossNegative.className = 'ld-ed-moss-negative'; mossNegative.rows = 2
           mossNegative.placeholder = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin'
-          mossBox.appendChild(field('Negative prompt for MOSS', mossNegative, 'Leave empty to use the example shown (blocks flat cel-shading, cartoons, and 3D/photo rendering).'))
+          mossBox.appendChild(field('Negative prompt for MOSS', mossNegative, 'Sent as written. Leave empty to use the default shown in the box.'))
           const mossLayout = document.createElement('input')
           mossLayout.type = 'checkbox'; mossLayout.className = 'ld-ed-moss-layout'
           mossBox.appendChild(checkbox(mossLayout, 'Give each person their own box in the picture (MOSS layout, experimental)',

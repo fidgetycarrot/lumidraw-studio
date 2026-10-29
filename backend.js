@@ -26277,21 +26277,6 @@ const MOSS_STYLES = {
 }
 const MOSS_DEFAULT_STYLE = MOSS_STYLES.dark
 const MOSS_DEFAULT_NEGATIVE = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin'
-const MOSS_ANTI_CARTOON_NEGATIVE = 'cartoon, chibi, flat cel shading, flat colors, flat vector art, thick comic outlines'
-const MOSS_ANTI_BRUSH_NEGATIVE = 'thick oil paint, impasto, visible brushstrokes, canvas texture'
-const MOSS_ANTI_3D_NEGATIVE = '3d, realistic, photorealistic, CGI, doll, plastic skin'
-
-// Upgrade 1.17.3/1.17.4 "semi-realistic" sentences that triggered MOSS's 3D/photo mode.
-function resolveMossStyle(chosen) {
-  const raw = String(chosen || '').trim()
-  if (!raw) return MOSS_DEFAULT_STYLE
-  const lower = raw.toLowerCase()
-  if (MOSS_STYLES[lower]) return MOSS_STYLES[lower]
-  if (/\bsemi-realistic digital concept illustration\b/i.test(raw) || /\bpainterly dark sci-fi fantasy book-cover\b/i.test(raw)) return MOSS_STYLES.dark
-  if (/\bsmooth semi-realistic digital illustration\b/i.test(raw)) return MOSS_STYLES.smooth
-  if (/\bmature webtoon and visual-novel illustration\b/i.test(raw)) return MOSS_STYLES.manhwa
-  return raw
-}
 
 function presetPromptStyle(preset) {
   return preset && preset.promptStyle === 'moss' ? 'moss' : 'anima'
@@ -26844,7 +26829,7 @@ function compileMossImage(image, ctx) {
   const base = compileSimpleImage(image, ctx)
   const { preset } = ctx
   const chosen = String(preset.mossStyle || '').trim()
-  const style = resolveMossStyle(chosen)
+  const style = MOSS_STYLES[chosen.toLowerCase()] || chosen || MOSS_DEFAULT_STYLE
   const parts = base.parts || {}
   const framing = mossWords(parts.framing || image.framing)
   const sceneText = mossPlain(parts.summary || String(image.scene_summary || ''))
@@ -26885,16 +26870,7 @@ function compileMossImage(image, ctx) {
     prompt = [tagLine, styleLine, mossSettingSentence(places), ...personBlocks, actions.join(' ')].filter(Boolean).join('\n\n')
   }
 
-  let rawNeg = String(preset.mossNegative || '').trim() || MOSS_DEFAULT_NEGATIVE
-  if (isMossAnimeStyle(style)) {
-    rawNeg = rawNeg.split(',').map(t => t.trim()).filter(t => t && !/^(?:anime|smooth airbrushing|digital art smoothing)$/i.test(t)).join(', ')
-  }
-  const negatives = [rawNeg, MOSS_ANTI_3D_NEGATIVE]
-  if (!/\bcel[- ]shad/i.test(style)) negatives.push('cel shading, flat colors, cartoon, chibi')
-  if (!isMossAnimeStyle(style)) {
-    negatives.push(MOSS_ANTI_CARTOON_NEGATIVE)
-    if (!isMossBrushStyle(style)) negatives.push(MOSS_ANTI_BRUSH_NEGATIVE)
-  }
+  const negatives = [String(preset.mossNegative || '').trim() || MOSS_DEFAULT_NEGATIVE]
   if (/\bplate armor\b/.test(base.negativePrompt) && !/\bplate armor\b/.test(String(preset.negativePrompt || ''))) negatives.push('plate armor, full armor')
   if (/\bmirror\b/.test(base.negativePrompt)) negatives.push('mirror, reflection')
   if (base.subjects.length >= 2 && /\bduplicate\b/.test(base.negativePrompt)) negatives.push('twins, identical faces')
