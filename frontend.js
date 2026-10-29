@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.18.2'
+  const EXTENSION_VERSION = '1.18.3'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2029,6 +2029,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const oldStudioPresetCard = controls.presetSelect ? controls.presetSelect.closest('.ld-card') : null
 
     const MOSS_STYLES_UI = [
+      ['3d film', 'Stylised 3D Animated Film (Lee’s Preset)', 'stylised 3D animated film still, CGI characters with smooth rounded stylised features, soft global illumination, clean modelled materials, animated feature film look, not a photograph.'],
       ['dark', 'Dark Atmospheric Illustration (Sci-Fi & Dark Fantasy)', 'A dark, atmospheric high-detail anime illustration with soft blended shading, rich dramatic lighting, and detailed textures.'],
       ['smooth', 'Smooth Warm Illustration (Slice of Life & Everyday)', 'A warm, high-detail anime illustration with soft blended shading, natural lighting, and detailed textures.'],
       ['manhwa', 'Mature Manhwa / Webtoon Illustration', 'A high-detail mature webtoon and anime illustration with fine linework, soft blended shading, and atmospheric lighting.'],
@@ -2040,8 +2041,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       ['anime', 'Standard Modern Anime (Cel-Shaded)', 'An anime-style illustration with clean lineart, cel shading and dramatic cinematic lighting.'],
       ['anime poster', 'Anime Poster (Cel-Shaded)', 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.'],
     ]
-    const MOSS_DEFAULT_STYLE_UI = MOSS_STYLES_UI[0][2]
+    const MOSS_DEFAULT_STYLE_UI = MOSS_STYLES_UI[1][2]
     const MOSS_DEFAULT_NEGATIVE_UI = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin'
+    const MOSS_3D_FILM_NEGATIVE_UI = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, realistic, photorealistic'
 
     // ---------- STORY · 1.18 layout
     // Clean, engine-aware layout:
@@ -2278,6 +2280,15 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const found = MOSS_STYLES_UI.find(([value]) => value === storyMossPick.value)
       if (found) {
         storyMossStyle.value = found[2]
+        if (found[0] === '3d film') {
+          storyMossNegative.value = storyMossNegative.value
+            .split(',')
+            .map(s => s.trim())
+            .filter(s => s && !/^(?:3d|3d render|cgi|doll|plastic skin)$/i.test(s))
+            .join(', ') || MOSS_3D_FILM_NEGATIVE_UI
+        } else if (storyMossNegative.value.trim() === MOSS_3D_FILM_NEGATIVE_UI) {
+          storyMossNegative.value = MOSS_DEFAULT_NEGATIVE_UI
+        }
         saveStoryMossToActivePreset(true)
       } else if (storyMossPick.value === 'custom') {
         storyMossStyle.focus()
@@ -2648,7 +2659,18 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           mossBox.appendChild(field('Style sentence sent to MOSS', mossStyle, 'Opens every MOSS prompt. Sent word-for-word.'))
           stylePick.addEventListener('change', () => {
             const found = MOSS_STYLES_UI.find(([value]) => value === stylePick.value)
-            if (found) mossStyle.value = found[2]
+            if (found) {
+              mossStyle.value = found[2]
+              if (found[0] === '3d film' && mossNegative) {
+                mossNegative.value = mossNegative.value
+                  .split(',')
+                  .map(s => s.trim())
+                  .filter(s => s && !/^(?:3d|3d render|cgi|doll|plastic skin)$/i.test(s))
+                  .join(', ') || MOSS_3D_FILM_NEGATIVE_UI
+              } else if (mossNegative && mossNegative.value.trim() === MOSS_3D_FILM_NEGATIVE_UI) {
+                mossNegative.value = MOSS_DEFAULT_NEGATIVE_UI
+              }
+            }
             else if (stylePick.value === 'custom') mossStyle.focus()
           })
           const syncPick = () => {

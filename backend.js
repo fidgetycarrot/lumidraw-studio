@@ -25189,7 +25189,7 @@ OUTPUT:
    "anatomy":["genital tags"],
    "outfit":["every garment worn right now, one per item"],
    "pose":["pose and one-person action tags"],
-   "expression":["one facial cue","one gaze cue"],
+   "expression":["1-3 vivid facial cues","one gaze cue"],
    "show_anatomy":false
  }],
  "interactions":[{"actor":"name","act":"fellatio|cunnilingus|handjob|vaginal|anal|masturbation|paizuri|fingering|kissing|groping","recipient":"name"}],
@@ -25252,15 +25252,29 @@ POSE AND EXPRESSION
 - "pose": 2-5 tags for that person alone — standing, kneeling, leaning forward,
   arms around neck, head tilted back, arched back, hand on hip. All of them must
   be true at the same instant.
+- Avoid stiff, frozen mannequin poses: include dynamic body language, weight shift,
+  and physical momentum when the passage supports it (e.g., "leaning in closely",
+  "arching back", "gripping sheets", "shoulders hunched", "striding forward",
+  "head thrown back").
+- Never write vague "hand on weapon" when the character wears more than one weapon
+  (that causes the image model to fuse a gun and sword into one hybrid weapon).
+  Name the specific weapon ("hand on chainsword hilt", "hand on holstered bolter").
 - Aiming, pointing, shooting or throwing: name the target in that person's pose
   ("aiming at drop pod", "pointing at door"). Without it the image model has them
   aim at whoever else is in the picture.
-- "expression": at most one facial cue and one gaze cue. Facial cues: faint smile,
-  soft smile, grin, smirk, parted lips, open mouth, pressed lips, biting lip,
-  furrowed brow, raised eyebrow, half-closed eyes, closed eyes, wide-eyed,
-  narrowed eyes, clenched teeth, tears, flushed cheeks, ahegao, rolling eyes.
-  Gaze cues: looking at viewer (only for a POV shot), looking at [name], looking
-  down, looking up, looking away, eye contact, eyes closed.
+- "expression": 1-3 vivid facial cues and one gaze cue. Match the emotional intensity
+  of the moment — never leave faces blank or neutral in dramatic or passionate scenes!
+  - Everyday/dramatic facial cues: faint smile, soft smile, grin, smirk, parted lips,
+    open mouth, pressed lips, biting lip, furrowed brow, raised eyebrow, half-closed
+    eyes, closed eyes, wide-eyed, narrowed eyes, clenched teeth, tears, scowling,
+    snarling, gasping.
+  - NSFW / passionate / intimate cues (use 2-3 together at the height of passion):
+    flushed cheeks, heavy blush, parted lips, open mouth, panting, heavy breathing,
+    half-lidded bedroom eyes, eyes rolled back, biting lower lip, furrowed brow,
+    pleasure-knitted brows, sweating, bead of sweat, trembling lips, ecstatic
+    expression, ahegao.
+  - Gaze cues: looking at viewer (only for a POV shot), looking at [name], looking
+    down, looking up, looking away, eye contact, eyes closed.
 - Never abstract labels like "tense expression"; translate them to face mechanics.
 
 INTERACTIONS AND RELATIONS
@@ -25435,7 +25449,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
         anatomy: simpleTags(s.anatomy, 6),
         outfit: simpleTags(s.outfit, 14),
         pose: simpleTags(s.pose, 6),
-        expression: simpleTags(s.expression, 2),
+        expression: simpleTags(s.expression, 4),
         showAnatomy: s.show_anatomy === true || s.include_saved_anatomy === true,
       }))
     if (!subjects.length) continue
@@ -26301,6 +26315,7 @@ async function runSimpleReparse({ userId, settings, preset, messages, targetInde
 // Style choices offered in the preset editor. NanoGPT's website styles are not
 // part of its API, so the style is written into the prompt instead.
 const MOSS_STYLES = {
+  '3d film': 'stylised 3D animated film still, CGI characters with smooth rounded stylised features, soft global illumination, clean modelled materials, animated feature film look, not a photograph.',
   dark: 'A dark, atmospheric high-detail anime illustration with soft blended shading, rich dramatic lighting, and detailed textures.',
   smooth: 'A warm, high-detail anime illustration with soft blended shading, natural lighting, and detailed textures.',
   manhwa: 'A high-detail mature webtoon and anime illustration with fine linework, soft blended shading, and atmospheric lighting.',
@@ -26546,6 +26561,7 @@ function mossSafeWords(text) {
     .replace(/\b((?:thin\s+|cybernetic\s+|mechanical\s+)*)(cables|wires|tubes)\s+(?:running|coming|trailing|snaking|hanging)\s+(?:from|out of|off)\s+(?:his|her|their|the)\s+body\b/gi, (m, adj, what) => `${adj || 'thin cybernetic '}${what} plugged into the back of the neck`)
     .replace(/^(?:cables?|wires?|tubes?|cybernetic cables|mechanical cables)$/i, 'thin cybernetic cables plugged into the back of the neck')
     .replace(/\bglowing\s+((?:[a-z-]+\s+){0,3})eyes\b/gi, (m, between) => /\b(?:lens|lenses|visor)\b/i.test(between) ? m : between + 'eyes')
+    .replace(/\bwith\s+(?:subtle\s+)?(?:golden|gold|amber|yellow|glowing|cybernetic)\s+(?:tech[- ]?ring|ring|cybernetic|circuit)\s+patterns?\s+(?:inside|in|within)\s+(?:the\s+|his\s+|her\s+|their\s+)?irises\b/gi, 'with bright golden irises and dark pupils')
     .replace(/,?\s*(?:with\s+a\s+light\s+smudge\s+of\s+dust\s+on\s+one\s+cheek|smudged\s+with\s+grey\s+ash\s+on\s+one\s+cheek)/gi, '')
     .replace(/\s+and\s+a\s+faint\s+silver\s+dueling\s+scar\s+at\s+the\s+left\s+corner\s+of\s+his\s+mouth/gi, '')
 }
@@ -26651,6 +26667,20 @@ function mossOutfit(items, defaultItems = []) {
       out.splice(insertAt, 0, bootItem)
     }
   }
+  const gunIdx = out.findIndex(item => /\b(?:bolter|pistol|revolver|handgun|rifle|carbine|blaster|laspistol|lasgun|plasma gun|sidearm)\b/i.test(item))
+  const bladeIdx = out.findIndex((item, idx) => idx !== gunIdx && /\b(?:chainsword|sword|blade|rapier|sabre|saber|cutlass|dagger|knife|axe|frost[- ]axe|warhammer|power sword)\b/i.test(item))
+  if (gunIdx >= 0 && bladeIdx >= 0) {
+    if (!/\b(?:left|right|back|shoulder|thigh)\b/i.test(out[gunIdx])) {
+      out[gunIdx] = /\bat (?:his|her|their|the) hip\b/i.test(out[gunIdx])
+        ? out[gunIdx].replace(/\bat (?:his|her|their|the) hip\b/i, 'on the right hip')
+        : `${out[gunIdx]} on the right hip`
+    }
+    if (!/\b(?:left|right|back|shoulder|thigh)\b/i.test(out[bladeIdx])) {
+      out[bladeIdx] = /\bat (?:his|her|their|the) hip\b/i.test(out[bladeIdx])
+        ? out[bladeIdx].replace(/\bat (?:his|her|their|the) hip\b/i, 'on the left hip')
+        : `${out[bladeIdx]} on the left hip`
+    }
+  }
   return uniqueStrings(out)
 }
 
@@ -26734,7 +26764,20 @@ function mossPersonParts(subject) {
   const anatomy = mossTrimFeatures(mossWords(subject.shownAnatomy || []).filter(tag => !phraseKey.includes(normalizeIdentityText(tag))))
   if (anatomy.length) lines.push(`${upperFirst(p.possessive)} ${mossList(anatomy)} ${anatomy.length > 1 || /[^s]s$/.test(anatomy[0]) ? 'are' : 'is'} visible.`)
   const hasOwnFur = outfit.some(item => /\b(?:fur|pelt)\b/i.test(item))
-  const poseWords = mossWords(subject.pose).filter(tag => hasOwnFur || !/^(?:grabbing|holding|clutching|gripping)\s+(?:the\s+)?(?:fur|pelt)\b/i.test(tag))
+  const namedBlade = outfit.map(item => {
+    const m = /\b(chainsword|power sword|frost[- ]axe|broad[- ]?sword|longsword|rapier|sabre|saber|cutlass|sword|axe|dagger|warhammer)\b/i.exec(item)
+    return m ? m[1].toLowerCase() : ''
+  }).find(Boolean)
+  const namedGun = outfit.map(item => {
+    const m = /\b(bolter|bolt pistol|plasma pistol|laspistol|pistol|revolver|rifle|carbine|sidearm)\b/i.exec(item)
+    return m ? m[1].toLowerCase() : ''
+  }).find(Boolean)
+  const specificWeapon = namedBlade ? `${namedBlade} hilt` : namedGun ? `holstered ${namedGun}` : ''
+  const poseWords = mossWords(subject.pose)
+    .filter(tag => hasOwnFur || !/^(?:grabbing|holding|clutching|gripping)\s+(?:the\s+)?(?:fur|pelt)\b/i.test(tag))
+    .map(tag => specificWeapon && /\b(?:hand|grip|fingers|palm)\s+(?:on|at|resting on|gripping)\s+(?:(?:his|her|their|the)\s+)?(?:weapon|hilt)\b/i.test(tag)
+      ? tag.replace(/\b(?:(?:his|her|their|the)\s+)?(?:weapon|hilt)\b/i, `${p.possessive} ${specificWeapon}`)
+      : tag)
   const isTowering = build.includes('towering') || /\btowering\b/i.test(phrase)
   if (isTowering && poseWords.some(tag => /^standing\b/i.test(tag)) && !poseWords.some(tag => /\btowering\b/i.test(tag))) {
     poseWords.push('towering')
@@ -26807,6 +26850,7 @@ function mossBoxes(subjects, width, height) {
 
 const MOSS_LIGHT_RE = /\b(?:light|lights|lighting|lit|glow|glowing|lamp|lamplight|lantern|candle|candlelight|sunlight|moonlight|sunset|sunrise|dusk|dawn|twilight|neon|shadows?|backlit|backlighting|rim light|god rays|light rays)\b/i
 const MOSS_STYLE_TAGS = {
+  '3d film': '',
   dark: 'anime style',
   smooth: 'anime style',
   manhwa: 'anime style',
@@ -26828,7 +26872,7 @@ const MOSS_STYLE_TAGS = {
 function isMossAnimeStyle(text) {
   const s = String(text || '').toLowerCase()
   if (!s) return true
-  if (/\b(?:not anime|neither .* anime|rather than photographic|oil paint|gouache|watercolou?r)\b/.test(s)) return false
+  if (/\b(?:not anime|neither .* anime|rather than photographic|oil paint|gouache|watercolou?r|3d animated film|cgi characters|animated feature film)\b/.test(s)) return false
   return /\b(?:anime|manga|webtoon|cel[- ]shad)/.test(s)
 }
 
@@ -26855,6 +26899,7 @@ function mossTagLine(image, subjects, personParts, chosen) {
     : isAnime && /1990s|90s|retro/.test(text) ? '1990s retro anime style, cel animation'
     : isAnime ? 'anime style'
     : /webtoon|manhwa|visual[- ]novel/.test(text) ? 'mature webtoon illustration, visual novel art'
+    : /3d animated film|cgi characters|animated feature film/.test(text) ? ''
     : /semi[- ]realistic/.test(text) ? 'semi-realistic digital illustration'
     : isMossBrushStyle(text) && /oil paint/.test(text) ? 'oil painting, painterly illustration'
     : isMossBrushStyle(text) && /gouache/.test(text) ? 'gouache illustration, painterly'
