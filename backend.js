@@ -26120,7 +26120,7 @@ async function savePastePending(list) {
   await spindle.storage.setJson(PASTE_PENDING_FILE, list.slice(0, PASTE_PENDING_MAX), { indent: 2 })
 }
 
-async function finishPromptOnlyScan({ userId, preset, prepared, origin, target, chatId, memory, entries, debugBase }) {
+async function finishPromptOnlyScan({ userId, preset, prepared, origin, target, chatId, memory, entries, debugBase, troubleshootingFor = null }) {
   const config = preset.config || {}
   const moss = presetPromptStyle(preset) === 'moss'
   const made = []
@@ -26139,6 +26139,9 @@ async function finishPromptOnlyScan({ userId, preset, prepared, origin, target, 
       steps: Number(config.steps) || (moss ? 50 : ''), cfg: Number(config.guidance_scale) || (moss ? 4 : ''),
       shift: moss ? 5 : '',
       presetName: preset.name || '', notes: compiled.debug.notes.slice(0, 12),
+      scene: { direct: true, simple: true, anchor: image.anchor, sceneSummary: image.scene_summary, rating: image.rating,
+        aspect: image.aspect, simplePipeline: compiled.debug },
+      troubleshooting: troubleshootingFor ? troubleshootingClean(troubleshootingFor(compiled.prompt, { anchor: image.anchor, sceneSummary: image.scene_summary })) : null,
     })
   }
   const pending = [...made, ...(await getPastePending())]
@@ -26182,7 +26185,8 @@ async function addPastedPicture(userId, payload) {
     negativePrompt: item.negativePrompt, seed: 'random', images: [{ id: dto.id, url: dto.url }], backend: 'pasted', origin,
     recipe: { config: null, extra: null },
     trace: (item.notes || []).map(note => ({ label: 'simple pipeline', status: 'applied', detail: note })),
-    scene: { direct: true, simple: true, anchor: item.anchor, sceneSummary: item.summary, rating: item.rating, pasted: true },
+    scene: { ...(item.scene || { direct: true, simple: true, anchor: item.anchor, sceneSummary: item.summary, rating: item.rating }), pasted: true },
+    ...(item.troubleshooting ? { troubleshooting: item.troubleshooting } : {}),
   }
   const history = await pushHistory(entry, userId)
   notifyFrontend(userId, 'history_updated', { history, entry })
@@ -26231,7 +26235,10 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
 
   const origin = { messageId: String(target.id || ''), chatId: String(chatId || ''), contentKey: target.contentKey || '', presetName: preset.name || '' }
   if (settings.promptOnly === true) {
-    return await finishPromptOnlyScan({ userId, preset, prepared, origin, target, chatId, memory, entries, debugBase })
+    return await finishPromptOnlyScan({ userId, preset, prepared, origin, target, chatId, memory, entries, debugBase,
+      // Kept with each waiting prompt, so a pasted picture's report has the parser reply like any other.
+      troubleshootingFor: (prompt, scene) => simpleTroubleshooting({ target, profiles, settings, chatId, raw, parserInput, report, parserMs,
+        startedAt, source: 'story scan (prompt only)', entry: { prompt, scene } }) })
   }
   const results = []
   for (let index = 0; index < prepared.length; index++) {
@@ -26487,8 +26494,17 @@ function mossMergeHair(features) {
 
 const MOSS_HEAD_RE = /\b(?:hair|bangs|ponytail|braids?|bob|eyes|irises|eyelashes|eyebrows|face|nose|lips?|mouth|jaw|cheekbones|chin|ears|teeth|fangs|freckles|beard|stubble|mustache|forehead)\b/i
 
+// A helmet that is carried or stowed is a prop, not something on the head.
+// "helmet on belt" once read as worn: MOSS drew one on his head and one on his belt.
+const MOSS_HELMET_STOWED_RE = /\b(?:no|removed?|off|holding|held|under (?:(?:his|her|their|one|an) )?arm|tucked|carried|carrying|in (?:his |her |their |one )?hands?|on (?:his |her |their |the )?(?:belt|hip|thigh|back|desk|table|floor|ground|bench|seat|rack|hook)|at (?:his |her |their |the )?(?:belt|hip|side|feet)|hanging|hung|clipped|clamped|mag-?locked|slung|strapped|stowed|set down|beside|nearby|discarded|dropped)\b/i
+function mossHelmetWorn(item) {
+  return /\bhelmet\b/i.test(item) && !MOSS_HELMET_STOWED_RE.test(item)
+}
 function mossHelmetOn(outfit) {
-  return outfit.some(item => /\bhelmet\b/i.test(item) && !/\b(?:no|removed?|off|holding|under (?:his|her|their|one) arm|tucked|carried|carrying|in hand)\b/i.test(item))
+  return outfit.some(mossHelmetWorn)
+}
+function mossHelmetStowed(outfit) {
+  return !mossHelmetOn(outfit) && outfit.some(item => /\bhelmet\b/i.test(item) && MOSS_HELMET_STOWED_RE.test(item))
 }
 
 function mossFranchise(identity) {
@@ -26761,6 +26777,7 @@ function mossPersonParts(subject) {
       ? `${p.subject} ${p.be} nude.` : `${p.subject} ${p.wear} ${mossList(outfit.map(item => mossNoun(mossOwnBody(item, p))))}.`)
   }
   if (helmet) lines.push(`${upperFirst(p.possessive)} helmet is on and covers ${p.possessive} whole head.`)
+  else if (mossHelmetStowed(outfit)) lines.push(`${upperFirst(p.possessive)} head is bare and ${p.possessive} face is visible; the helmet is not on ${p.possessive} head.`)
   const anatomy = mossTrimFeatures(mossWords(subject.shownAnatomy || []).filter(tag => !phraseKey.includes(normalizeIdentityText(tag))))
   if (anatomy.length) lines.push(`${upperFirst(p.possessive)} ${mossList(anatomy)} ${anatomy.length > 1 || /[^s]s$/.test(anatomy[0]) ? 'are' : 'is'} visible.`)
   const hasOwnFur = outfit.some(item => /\b(?:fur|pelt)\b/i.test(item))
