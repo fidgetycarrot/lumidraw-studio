@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.18.5'
+  const EXTENSION_VERSION = '1.18.6'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -6168,6 +6168,10 @@ ${entry.prompt || ''}`.trim()
         if (file) addPastePicture(item.id, file)
       })
       const actions = document.createElement('div'); actions.className = 'ld-paste-row'
+      // Reads the clipboard directly. Waits for a picture copied on another
+      // Apple device (Universal Clipboard), which ⌘V often misses.
+      const pasteBtn = document.createElement('button'); pasteBtn.type = 'button'; pasteBtn.className = 'ld-pics-go'; pasteBtn.textContent = 'Paste picture'
+      pasteBtn.addEventListener('click', () => { pickPasteCard(item.id); pasteFromClipboard(item.id) })
       const choose = document.createElement('button'); choose.type = 'button'; choose.className = 'ld-pics-go'; choose.textContent = 'Choose file'
       choose.addEventListener('click', () => { pickPasteCard(item.id); const input = $('.ld-paste-file'); input.value = ''; input.click() })
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'ld-pics-go'; remove.textContent = 'Remove'
@@ -6175,7 +6179,7 @@ ${entry.prompt || ''}`.trim()
         try { const res = await call('paste_dismiss', { id: item.id }, 15000); pastePending = res.pending || [] } catch { /* ignore */ }
         renderPastePrompts()
       })
-      actions.append(choose, remove)
+      actions.append(pasteBtn, choose, remove)
       const status = document.createElement('div'); status.className = 'ld-paste-status'
       const done = pasteDone.get(item.id)
       if (done) { status.textContent = done.text; status.classList.add(done.ok ? 'ld-good' : 'ld-err') }
@@ -6188,6 +6192,28 @@ ${entry.prompt || ''}`.trim()
     for (const card of document.querySelectorAll('.ld-paste-card')) card.classList.toggle('ld-picked', card.dataset.id === id)
     if (focusNode && document.activeElement !== focusNode) focusNode.focus()
   }
+  async function pasteFromClipboard(id) {
+    const card = document.querySelector(`.ld-paste-card[data-id="${CSS.escape(id)}"]`)
+    const status = card && card.querySelector('.ld-paste-status')
+    const say = (text, kind = '') => { if (status) { status.className = 'ld-paste-status' + (kind ? ' ld-' + kind : ''); status.textContent = text } }
+    if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
+      say('This browser can’t read pictures from the clipboard. Click the dashed box and press ⌘V, or use Choose file.', 'err'); return
+    }
+    say('Reading the clipboard… (a picture from your iPhone can take a few seconds)')
+    try {
+      const items = await navigator.clipboard.read()
+      for (const entry of items) {
+        const type = entry.types.find(t => /^image\//.test(t))
+        if (!type) continue
+        const blob = await entry.getType(type)
+        await addPastePicture(id, new File([blob], 'pasted.' + (type.split('/')[1] || 'png'), { type }))
+        return
+      }
+      say('No picture on the clipboard. Copy it again (on iPhone: Share → Copy), wait a moment, then press Paste picture.', 'err')
+    } catch (error) {
+      say(/denied|permission|not allowed/i.test(String(error && error.message)) ? 'The browser blocked reading the clipboard. Allow it when asked, or click the dashed box and press ⌘V.' : 'Could not read the clipboard: ' + error.message, 'err')
+    }
+  }
   function readPictureFile(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader()
@@ -6197,7 +6223,12 @@ ${entry.prompt || ''}`.trim()
         const img = new Image()
         img.onload = () => {
           // Very large files are re-saved as JPEG so they travel to the server quickly.
-          if (file.size > 6 * 1024 * 1024) {
+          // HEIC or TIFF from an iPhone or the Mac clipboard: re-save as PNG.
+          if (!/^image\/(?:png|jpeg|webp)$/.test(file.type || '') && file.size <= 6 * 1024 * 1024) {
+            const canvas = document.createElement('canvas'); canvas.width = img.naturalWidth; canvas.height = img.naturalHeight
+            canvas.getContext('2d').drawImage(img, 0, 0)
+            resolve({ data: canvas.toDataURL('image/png'), width: img.naturalWidth, height: img.naturalHeight })
+          } else if (file.size > 6 * 1024 * 1024) {
             const canvas = document.createElement('canvas'); canvas.width = img.naturalWidth; canvas.height = img.naturalHeight
             canvas.getContext('2d').drawImage(img, 0, 0)
             resolve({ data: canvas.toDataURL('image/jpeg', 0.92), width: img.naturalWidth, height: img.naturalHeight })
@@ -6246,7 +6277,12 @@ ${entry.prompt || ''}`.trim()
     if (!sheet || sheet.hidden || !pastePicked) return
     const items = [...(event.clipboardData && event.clipboardData.items || [])]
     const imageItem = items.find(item => item.kind === 'file' && /^image\//.test(item.type))
-    if (!imageItem) return
+    if (!imageItem) {
+      // A picture still arriving from another device can show up as nothing yet.
+      const card = document.querySelector(`.ld-paste-card[data-id="${CSS.escape(pastePicked)}"] .ld-paste-status`)
+      if (card && !items.some(item => item.kind === 'string' && item.type === 'text/plain')) { card.className = 'ld-paste-status ld-err'; card.textContent = 'No picture arrived. Press Paste picture instead — it waits for pictures copied on your iPhone.' }
+      return
+    }
     event.preventDefault()
     const file = imageItem.getAsFile()
     if (file) addPastePicture(pastePicked, file)
