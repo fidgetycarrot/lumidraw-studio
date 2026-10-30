@@ -26727,10 +26727,14 @@ function mossPersonParts(subject) {
   const sealed = helmet && outfit.some(item => /\b(?:power|full|plate|terminator|space marine) armou?r\b|\b(?:spacesuit|hazmat suit|mecha suit|exoskeleton)\b/i.test(item))
   const franchise = mossFranchise(uniqueStrings([...phraseFranchise, ...mossWords(subject.identity)]))
   const feminineMale = subject.count === '1boy' && franchise.rest.some(tag => MOSS_FEMININE_MALE_RE.test(tag))
-  const build = [], features = [], faceDefaults = []
+  const build = [], features = [], faceDefaults = [], states = []
   for (const tag of franchise.rest) {
     if (MOSS_FEMININE_MALE_RE.test(tag)) continue
     const lower = tag.toLowerCase()
+    // One describing word is something they are, not something they have:
+    // "clean-shaven", "sweating" read "a clean-shaven, sweating" before.
+    if (/^[a-z]+(?:-[a-z]+)?$/.test(lower) && !MOSS_BUILD_WORDS.has(lower) && !MOSS_EXPRESSION_RE.test(tag) &&
+      (/ing$|-shaven$|^(?:bald|bearded|freckled|tattooed|scarred|barefoot|shirtless|wet|sweaty|bloodied|dirty)$/.test(lower) || mossIsAdjective(lower))) { states.push(lower); continue }
     if (MOSS_EXPRESSION_RE.test(tag)) { faceDefaults.push(tag); continue }
     if (MOSS_BUILD_WORDS.has(lower)) { if (!phraseKey.includes(normalizeIdentityText(tag))) build.push(lower); continue }
     if (phraseKey.includes(normalizeIdentityText(tag))) continue
@@ -26777,6 +26781,7 @@ function mossPersonParts(subject) {
     // An unstated eye colour came out as blank white eyes; give a plain one.
     if (!helmet && /^1(?:girl|boy)$/.test(subject.count) && !trimmed.some(feature => /\beyes?\b/i.test(feature))) trimmed.push('dark eyes')
     if (trimmed.length) lines.push(`${p.subject} ${p.have} ${mossList(trimmed.map(mossNoun))}.`)
+    if (states.length && !(helmet && states.every(word => /shaven|bearded|bald|freckled/.test(word)))) lines.push(`${p.subject} ${p.be} ${mossList(states)}.`)
   }
   const lookCount = lines.length
   const bodyTags = uniqueStrings([

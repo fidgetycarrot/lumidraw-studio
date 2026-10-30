@@ -13,3 +13,6 @@ Parser rules only; the prompt layout for each model is unchanged. They improve w
 - Works in Safari on the iPhone too, so the whole round trip (Draw Things+ → copy → Lumiverse → Paste picture) can happen on the phone.
 - HEIC or TIFF pictures are re-saved as PNG before sending.
 - If ⌘V brings no picture, the card now says to use Paste picture instead of doing nothing.
+
+# 1.18.7 — one-word traits read as sentences (MOSS)
+- Single describing words on a person's tags ("clean-shaven", "sweating", "bald", "scarred") now become "He is clean-shaven and sweating." instead of the broken "He has … a clean-shaven, sweating and dark eyes."

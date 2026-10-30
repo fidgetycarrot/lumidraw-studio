@@ -1,6 +1,6 @@
 {
   "name": "lumidraw-studio",
-  "version": "1.18.6",
+  "version": "1.18.7",
   "private": true,
   "description": "Story illustration studio with Draw Things, SwarmUI and NanoGPT renderers, character libraries, and visual continuity.",
   "license": "MIT",
