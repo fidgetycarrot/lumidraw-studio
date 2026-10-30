@@ -25209,7 +25209,13 @@ CHOOSING THE MOMENT
 - "scene_summary" never names clothing or armor that nobody in the picture is
   wearing (carried, dropped, on a rack). The image model dresses someone in it.
   Say "a bundle of gear" instead.
-- Dialogue about an act, plans, memories and wishes are not happening now.
+- Dialogue about an act, plans, memories and wishes are not happening now. The
+  same goes for places: the picture is set where they physically are. A place
+  they talk about, plan to visit or remember is not the setting until the story
+  shows them arrive.
+- If a counter, desk, table, bar or doorway is between people, say so in
+  "scene_summary" ("on opposite sides of the desk"); if they sit side by side
+  at it, say that. Otherwise the image model puts them on the same side.
 
 WHO IS IN THE PICTURE
 - Every person physically in the moment gets one entry in "subjects", up to the
@@ -25285,6 +25291,8 @@ INTERACTIONS AND RELATIONS
   when it matters. "action" must read as a sentence with the target right after
   it ("pulls", "grips", "holds eye contact with"), and never repeats the body part.
 - Do not repeat an interaction as a relation.
+- Only contact the passage states or clearly shows. Do not add touching,
+  hand-holding or leaning in because the mood is warm.
 
 CAMERA
 - "framing": one shot tag (portrait, upper body, cowboy shot, full body, wide
@@ -25301,6 +25309,10 @@ SETTING
   "moss-covered pillars", "glowing altar", "candlelight". Use the scene card and
   LAST KNOWN SETTING when the passage does not restate it. Never leave it empty if
   the place is known.
+- Only what a camera could see: no smoke, haze or steam for a smell, a sound or
+  a feeling.
+- For the light, name its source and side when the story gives them:
+  "lamplight from the left", "window light behind her".
 
 RATING: safe = nothing suggestive; sensitive = suggestive, no nudity;
 nsfw = nudity; explicit = a sexual act or visible genitals.
