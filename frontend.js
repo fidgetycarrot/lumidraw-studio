@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.18.7'
+  const EXTENSION_VERSION = '1.18.8'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1083,7 +1083,7 @@ function realSetup(ctx) {
                     <div class="ld-status ld-swarm-workspace-status"></div>
                   </div>
                   <span class="ld-label">Model</span>
-                  <input class="ld-draft-model" list="ld-model-catalog" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog"></datalist>
+                  <input class="ld-draft-model" list="ld-model-catalog" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog"></datalist><select class="ld-draft-nano-pick" style="display:none" aria-label="NanoGPT model"></select>
                   <div class="ld-row" style="margin-top:7px">
                     <div><span class="ld-label">Sampler</span><select class="ld-draft-sampler"><option value="">— choose sampler —</option></select></div>
                     <div class="ld-draft-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-draft-scheduler" title="Blank uses SwarmUI's default. Save to your preset to use this for Story images."></select></div>
@@ -1388,7 +1388,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
             <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option></select>
             <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
-            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-status ld-ed-nano-status"></div>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-status ld-ed-nano-status"></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div class="ld-ed-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler" title="Blank uses SwarmUI's default."></select></div>
@@ -4057,6 +4057,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     writeSwarmParams('draft', config)
     ensureDraftModelOption(config.model || '')
     $('.ld-draft-model').value = config.model || ''
+    fillNanoPicker($('.ld-draft-nano-pick'), $('.ld-draft-model'), nano)
     populateSelect($('.ld-draft-sampler'), activeCatalog.samplers, config.sampler || '', '— choose sampler —')
     $('.ld-draft-steps').value = config.steps !== undefined ? config.steps : ''
     $('.ld-draft-cfg').value = config.guidance_scale !== undefined ? config.guidance_scale : ''
@@ -5948,6 +5949,37 @@ ${entry.prompt || ''}`.trim()
     panel.style.right = 'auto'
     panel.style.bottom = 'auto'
   }
+
+  // Phones: the on-screen keyboard covers the bottom of the screen without
+  // shrinking it, so a box being typed into ended up under the keyboard. While
+  // typing, the panel is fitted to the part of the screen still visible.
+  function fitPanelToKeyboard() {
+    const vv = window.visualViewport
+    if (!vv) return
+    const active = document.activeElement
+    const typing = panel.classList.contains('ld-open') && active && panel.contains(active) &&
+      (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && !/^(?:checkbox|radio|button|range|file|submit)$/i.test(active.type || '')))
+    const keyboardUp = window.innerHeight - vv.height > 120
+    if (typing && keyboardUp) {
+      const top = Math.round(vv.offsetTop + 4), height = Math.round(vv.height - 8)
+      panel.classList.add('ld-keyboard-fit')
+      panel.style.setProperty('top', top + 'px', 'important')
+      panel.style.setProperty('bottom', 'auto', 'important')
+      panel.style.setProperty('height', height + 'px', 'important')
+      panel.style.setProperty('max-height', height + 'px', 'important')
+      requestAnimationFrame(() => { try { active.scrollIntoView({ block: 'center' }) } catch { /* ok */ } })
+    } else if (panel.classList.contains('ld-keyboard-fit')) {
+      panel.classList.remove('ld-keyboard-fit')
+      for (const key of ['top', 'bottom', 'height', 'max-height']) panel.style.removeProperty(key)
+      if (panel.classList.contains('ld-open') && !panel.classList.contains('ld-fullscreen')) placePanel()
+    }
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', fitPanelToKeyboard)
+    window.visualViewport.addEventListener('scroll', fitPanelToKeyboard)
+  }
+  panel.addEventListener('focusin', () => setTimeout(fitPanelToKeyboard, 350))
+  panel.addEventListener('focusout', () => setTimeout(fitPanelToKeyboard, 350))
 
   function toggleStudioPanel() {
     panel.classList.toggle('ld-open')
@@ -8404,9 +8436,34 @@ ${entry.prompt || ''}`.trim()
     }
     const addLora = $('[data-act="ed-addlora"]')
     if (addLora) addLora.style.display = nano ? 'none' : ''
+    fillNanoPicker($('.ld-ed-nano-pick'), $('.ld-ed-model'), nano)
     if ($('.ld-ed-model-hint')) $('.ld-ed-model-hint').style.display = nano ? 'none' : ''
     if ($('.ld-ed-nano-hint')) $('.ld-ed-nano-hint').style.display = nano ? '' : 'none'
     if (!nano) setStatus('.ld-ed-nano-status', '')
+  }
+
+  // NanoGPT models as a real list to pick from: phones show no suggestions
+  // for a typed box, so the names had to be hunted down.
+  function fillNanoPicker(select, input, on) {
+    if (!select || !input) return
+    select.style.display = on ? '' : 'none'
+    input.style.display = on ? 'none' : ''
+    if (!on) return
+    const current = input.value.trim()
+    select.replaceChildren(new Option(nanoCatalogData.models.length ? '— choose a model —' : 'Loading models…', ''))
+    for (const m of nanoCatalogData.models) select.appendChild(new Option(m.name && m.name !== m.file ? `${m.name} — ${m.file}` : m.file, m.file))
+    if (current && !nanoCatalogData.models.some(m => m.file === current)) select.appendChild(new Option(current, current))
+    select.value = current
+  }
+  for (const [pick, field] of [['.ld-ed-nano-pick', '.ld-ed-model'], ['.ld-draft-nano-pick', '.ld-draft-model']]) {
+    const select = $(pick)
+    if (!select) continue
+    select.addEventListener('change', () => {
+      const input = $(field)
+      input.value = select.value
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
   }
 
   function fillDraftNanoModels() {
@@ -8438,7 +8495,9 @@ ${entry.prompt || ''}`.trim()
     if ($('.ld-ed-backend').value === 'nanogpt') {
       populateDatalist('ld-model-catalog-ed', nanoCatalogData.models.map(m => m.file))
       labelNanoModels()
+      fillNanoPicker($('.ld-ed-nano-pick'), $('.ld-ed-model'), true)
     }
+    if (usesNano(draftConfig)) fillNanoPicker($('.ld-draft-nano-pick'), $('.ld-draft-model'), true)
     const keyNote = res.status && res.status.hasKey ? '' : ' No API key saved yet — add it in Settings → Image apps.'
     setStatus('.ld-ed-nano-status', `${nanoCatalogData.models.length} NanoGPT models.${keyNote}`, keyNote ? 'err' : 'good')
     return nanoCatalogData
@@ -8556,6 +8615,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-ed-prompt-style').dispatchEvent(new Event('change'))
     }
     $('.ld-ed-model').value = c.model || ''
+    fillNanoPicker($('.ld-ed-nano-pick'), $('.ld-ed-model'), usesNano(c))
     populateSelect($('.ld-ed-sampler'), rendererCatalog(c).samplers, c.sampler || '', '— choose sampler —')
     $('.ld-ed-steps').value = c.steps !== undefined ? c.steps : ''
     $('.ld-ed-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''

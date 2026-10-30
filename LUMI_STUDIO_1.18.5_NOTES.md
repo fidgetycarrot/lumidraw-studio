@@ -16,3 +16,7 @@ Parser rules only; the prompt layout for each model is unchanged. They improve w
 
 # 1.18.7 — one-word traits read as sentences (MOSS)
 - Single describing words on a person's tags ("clean-shaven", "sweating", "bald", "scarred") now become "He is clean-shaven and sweating." instead of the broken "He has … a clean-shaven, sweating and dark eyes."
+
+# 1.18.8 — phone fixes
+- **Typing on a phone:** while you type in any box in the Lumi Studio panel, the panel shrinks to the part of the screen above the keyboard and scrolls the box into view, whether or not the panel is full size. It goes back to its normal size when the keyboard closes.
+- **NanoGPT model list:** in the preset editor and the Studio tab, a NanoGPT model is now picked from a list ("MOSS Image — fal-ai/moss-image") instead of typed. Phones show no suggestions for a typed box.
