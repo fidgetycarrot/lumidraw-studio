@@ -19381,6 +19381,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.mossNegative !== undefined) preset.mossNegative = String(payload.mossNegative || '').slice(0, 1200)
         if (payload.mossLayout !== undefined) preset.mossLayout = payload.mossLayout === true
         if (payload.smartSize !== undefined) preset.smartSize = payload.smartSize === true
+        if (payload.adultPromptOnly !== undefined) preset.adultPromptOnly = payload.adultPromptOnly === true
         try { await rememberModels(preset.config || {}) } catch { /* best-effort */ }
         const idx = presets.findIndex((p) => p.name === name)
         if (idx >= 0) presets[idx] = preset
@@ -26133,8 +26134,22 @@ async function savePastePending(list) {
 }
 
 async function finishPromptOnlyScan({ userId, preset, prepared, origin, target, chatId, memory, entries, debugBase, troubleshootingFor = null }) {
-  const config = preset.config || {}
-  const moss = presetPromptStyle(preset) === 'moss'
+  const made = await queuePastePrompts({ userId, preset, prepared, target, chatId, troubleshootingFor })
+  try { await writeSimpleCast(chatId, memory) }
+  catch (error) { spindle.log.warn('[lumidraw] prompt only · could not save chat memory: ' + error.message) }
+  if (target.id) await markProcessed(target.id, target.content)
+  const storyDebug = await saveStoryDebug({ ...debugBase, debugSource: 'simple pipeline · prompt only', entries,
+    selectedEntryIndex: entries.length || null, lastCompiledPrompt: entries.length ? entries[entries.length - 1].prompt : '' }, userId)
+  return { mode: 'direct', processed: 0, promptOnly: true, pending: made, messageId: target.id, storyDebug,
+    note: made.length === 1 ? 'Prompt ready. Copy it into Draw Things+, then paste the picture back.' : `${made.length} prompts ready. Copy them into Draw Things+, then paste the pictures back.` }
+}
+
+// Makes the waiting prompts and tells the widget. forMoss: the picture will be
+// made with MOSS in Draw Things+ whatever this preset's own model is, so the
+// suggested settings are MOSS's.
+async function queuePastePrompts({ userId, preset, prepared, target, chatId, troubleshootingFor = null, forMoss = false }) {
+  const config = forMoss ? {} : (preset.config || {})
+  const moss = forMoss || presetPromptStyle(preset) === 'moss'
   const made = []
   for (const { image, compiled } of prepared) {
     const size = preset.smartSize === true ? simpleSizeShare(image, compiled) : null
@@ -26158,15 +26173,9 @@ async function finishPromptOnlyScan({ userId, preset, prepared, origin, target, 
   }
   const pending = [...made, ...(await getPastePending())]
   await savePastePending(pending)
-  try { await writeSimpleCast(chatId, memory) }
-  catch (error) { spindle.log.warn('[lumidraw] prompt only · could not save chat memory: ' + error.message) }
-  if (target.id) await markProcessed(target.id, target.content)
-  const storyDebug = await saveStoryDebug({ ...debugBase, debugSource: 'simple pipeline · prompt only', entries,
-    selectedEntryIndex: entries.length || null, lastCompiledPrompt: entries.length ? entries[entries.length - 1].prompt : '' }, userId)
   notifyFrontend(userId, 'paste_prompts', { pending: await getPastePending(), fresh: made.map(item => item.id) })
   spindle.log.info(`[lumidraw] prompt only: ${made.length} prompt(s) ready to paste`)
-  return { mode: 'direct', processed: 0, promptOnly: true, pending: made, messageId: target.id, storyDebug,
-    note: made.length === 1 ? 'Prompt ready. Copy it into Draw Things+, then paste the picture back.' : `${made.length} prompts ready. Copy them into Draw Things+, then paste the pictures back.` }
+  return made
 }
 
 function pastedImageKind(bytes) {
@@ -26252,11 +26261,25 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
       troubleshootingFor: (prompt, scene) => simpleTroubleshooting({ target, profiles, settings, chatId, raw, parserInput, report, parserMs,
         startedAt, source: 'story scan (prompt only)', entry: { prompt, scene } }) })
   }
+  // "Adult pictures: prompt only": NSFW and explicit pictures wait for Draw
+  // Things+, everything else is drawn with this preset as usual.
+  let queuedAdult = []
+  let toDraw = prepared
+  if (preset.adultPromptOnly === true) {
+    const adult = prepared.filter(({ image }) => ['nsfw', 'explicit'].includes(image.rating))
+    if (adult.length) {
+      toDraw = prepared.filter(item => !adult.includes(item))
+      queuedAdult = await queuePastePrompts({ userId, preset, prepared: adult, target, chatId, forMoss: true,
+        troubleshootingFor: (prompt, scene) => simpleTroubleshooting({ target, profiles, settings, chatId, raw, parserInput, report, parserMs,
+          startedAt, source: 'story scan (adult picture, prompt only)', entry: { prompt, scene } }) })
+    }
+  }
+  const adultNote = queuedAdult.length ? (queuedAdult.length === 1 ? 'The adult picture is waiting in Prompt only for Draw Things+.' : `${queuedAdult.length} adult pictures are waiting in Prompt only for Draw Things+.`) : ''
   const results = []
-  for (let index = 0; index < prepared.length; index++) {
+  for (let index = 0; index < toDraw.length; index++) {
     assertStoryScanActive(scan)
-    const { image, compiled } = prepared[index]
-    setStoryScanStage(scan, 'generating', `Sending image ${index + 1} of ${prepared.length} to ${rendererLabel(preset.config)}.`)
+    const { image, compiled } = toDraw[index]
+    setStoryScanStage(scan, 'generating', `Sending image ${index + 1} of ${toDraw.length} to ${rendererLabel(preset.config)}.`)
     const size = preset.smartSize === true ? simpleSizeShare(image, compiled) : null
     const dims = aspectDims(preset.config, image.aspect, size ? size.share : 1)
     if (size) compiled.debug.notes.push(`Size ${dims.width}×${dims.height}: ${size.why}, so ${Math.round(size.share * 100)}% of the preset's size.`)
@@ -26264,7 +26287,7 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
       aspect: image.aspect, simplePipeline: compiled.debug }
     const entry = await generateAndUpload({
       prompt: compiled.prompt, negativePrompt: compiled.negativePrompt, config: preset.config, extra: preset.extra, dims,
-      progressContext: { imageIndex: index + 1, imageTotal: prepared.length },
+      progressContext: { imageIndex: index + 1, imageTotal: toDraw.length },
       origin: { ...origin, mode: 'direct', alt: storyImageAltText(compiled.prompt), swipeId: target.swipeId },
       debug: { trace: compiled.debug.notes.map(note => ({ label: 'simple pipeline', status: 'applied', detail: note })), scene,
         troubleshooting: simpleTroubleshooting({ target, profiles, settings, chatId, raw, parserInput, report, parserMs, startedAt,
@@ -26282,8 +26305,9 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
   if (target.id) await markProcessed(target.id, target.content)
   const storyDebug = await saveStoryDebug({ ...debugBase, debugSource: 'simple pipeline · generated', entries,
     selectedEntryIndex: results.length || null, lastCompiledPrompt: results.length ? results[results.length - 1].prompt : '' }, userId)
-  spindle.log.info(`[lumidraw] simple pipeline produced ${results.length} image(s)`)
-  return { mode: 'direct', processed: results.length, results, messageId: target.id, storyDebug }
+  spindle.log.info(`[lumidraw] simple pipeline produced ${results.length} image(s)` + (queuedAdult.length ? `, ${queuedAdult.length} adult prompt(s) waiting` : ''))
+  return { mode: 'direct', processed: results.length, results, messageId: target.id, storyDebug,
+    ...(queuedAdult.length ? { pending: queuedAdult, note: results.length ? `Made ${results.length} picture${results.length === 1 ? '' : 's'}. ${adultNote}` : adultNote } : {}) }
 }
 
 // ---------- re-parse from the image viewer ---------------------------------
