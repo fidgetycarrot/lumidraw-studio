@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.19.0'
+  const EXTENSION_VERSION = '1.19.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1083,7 +1083,7 @@ function realSetup(ctx) {
                     <div class="ld-status ld-swarm-workspace-status"></div>
                   </div>
                   <span class="ld-label">Model</span>
-                  <input class="ld-draft-model" list="ld-model-catalog" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog"></datalist><select class="ld-draft-nano-pick" style="display:none" aria-label="NanoGPT model"></select>
+                  <input class="ld-draft-model" list="ld-model-catalog" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog"></datalist><input class="ld-draft-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-draft-nano-pick" style="display:none" aria-label="NanoGPT model"></select>
                   <div class="ld-row" style="margin-top:7px">
                     <div><span class="ld-label">Sampler</span><select class="ld-draft-sampler"><option value="">— choose sampler —</option></select></div>
                     <div class="ld-draft-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-draft-scheduler" title="Blank uses SwarmUI's default. Save to your preset to use this for Story images."></select></div>
@@ -1388,7 +1388,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
             <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option></select>
             <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
-            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-status ld-ed-nano-status"></div>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-status ld-ed-nano-status"></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div class="ld-ed-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler" title="Blank uses SwarmUI's default."></select></div>
@@ -8448,18 +8448,29 @@ ${entry.prompt || ''}`.trim()
   // for a typed box, so the names had to be hunted down.
   function fillNanoPicker(select, input, on) {
     if (!select || !input) return
+    const search = select.previousElementSibling && select.previousElementSibling.matches('input[type="search"]') ? select.previousElementSibling : null
     select.style.display = on ? '' : 'none'
+    if (search) search.style.display = on ? '' : 'none'
     input.style.display = on ? 'none' : ''
     if (!on) return
     const current = input.value.trim()
-    select.replaceChildren(new Option(nanoCatalogData.models.length ? '— choose a model —' : 'Loading models…', ''))
-    for (const m of nanoCatalogData.models) select.appendChild(new Option(m.name && m.name !== m.file ? `${m.name} — ${m.file}` : m.file, m.file))
+    // Every word typed must appear in the name or the id ("moss", "krea 2", "flux lora").
+    const words = String(search ? search.value : '').toLowerCase().split(/\s+/).filter(Boolean)
+    const shown = nanoCatalogData.models.filter(m => words.every(word => (m.name + ' ' + m.file).toLowerCase().includes(word)))
+    const placeholder = !nanoCatalogData.models.length ? 'Loading models…'
+      : words.length ? (shown.length ? `— ${shown.length} match${shown.length === 1 ? '' : 'es'} —` : '— no matches —') : '— choose a model —'
+    select.replaceChildren(new Option(placeholder, ''))
+    for (const m of shown) select.appendChild(new Option(m.name && m.name !== m.file ? `${m.name} — ${m.file}` : m.file, m.file))
     if (current && !nanoCatalogData.models.some(m => m.file === current)) select.appendChild(new Option(current, current))
     select.value = current
   }
   for (const [pick, field] of [['.ld-ed-nano-pick', '.ld-ed-model'], ['.ld-draft-nano-pick', '.ld-draft-model']]) {
     const select = $(pick)
     if (!select) continue
+    const search = select.previousElementSibling
+    if (search && search.matches('input[type="search"]')) {
+      search.addEventListener('input', () => fillNanoPicker(select, $(field), true))
+    }
     select.addEventListener('change', () => {
       const input = $(field)
       input.value = select.value

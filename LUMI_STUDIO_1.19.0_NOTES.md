@@ -7,3 +7,6 @@ A preset setting that sends adult pictures to Draw Things+ and draws everything 
 - **Safe and sensitive** pictures are drawn with the preset as usual. When one passage gives both, the tame one is drawn and the adult one waits; the status says so.
 - The prompt is written in the preset's prompt style; with plain English (MOSS) style it works for MOSS in Draw Things+.
 - The general Prompt only switch on the clipboard sheet still sends every picture to Prompt only.
+
+# 1.19.1 — search the NanoGPT model list
+- A "Search models…" box sits above the NanoGPT model list in the preset editor and the Studio tab. Every word typed must appear in the model's name or id ("krea", "flux lora", "qwen 2.1"); the list shows how many match.
