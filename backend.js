@@ -3106,6 +3106,12 @@ function nanoRequestBody(payload, model) {
     delete body.image_size
   }
   if (listed('enable_prompt_expansion') || /moss/i.test(payload.model)) body.enable_prompt_expansion = payload.enable_prompt_expansion === true
+  // Other names models use for rewriting the prompt before drawing. LS already
+  // writes the full prompt, so each one a model lists is switched off.
+  for (const key of ['prompt_expansion', 'expand_prompt', 'enhance_prompt', 'prompt_enhancement', 'prompt_enhancer', 'prompt_upsampling', 'prompt_extend', 'enable_prompt_optimizer', 'prompt_optimizer', 'magic_prompt']) {
+    if (listed(key)) body[key] = false
+  }
+  if (listed('magic_prompt_option')) body.magic_prompt_option = 'OFF'
   if (listed('enable_safety_checker')) body.enable_safety_checker = false
   if (listed('output_format')) {
     const formats = nanoParamValues(params.output_format).map(String)
@@ -3202,13 +3208,19 @@ async function generateNanoImages(settings, payload, progress, context = {}) {
     throw error
   }
   const cost = Number(json.cost)
-  return { images: [bytes.toString('base64')], mime: 'image/' + nanoImageKind(bytes), cost: Number.isFinite(cost) ? cost : undefined }
+  // A model that rewrote the prompt says so in its reply; keep what it drew from.
+  const first = Array.isArray(json.data) && json.data[0] || {}
+  const used = [json.actual_prompt, json.revised_prompt, json.expanded_prompt, first.revised_prompt].find(text => typeof text === 'string' && text.trim())
+  const rewritten = used && used.trim() !== String(payload.prompt || '').trim() ? used.trim().slice(0, 8000) : ''
+  if (rewritten) spindle.log.warn(`[lumidraw] NanoGPT rewrote the prompt before drawing (${payload.model}). The rewritten prompt is saved with the picture.`)
+  return { images: [bytes.toString('base64')], mime: 'image/' + nanoImageKind(bytes), cost: Number.isFinite(cost) ? cost : undefined,
+    ...(rewritten ? { rewrittenPrompt: rewritten } : {}) }
 }
 
 async function generateImages(settings, payload, label = 'generation', renderer = 'drawthings', progress = null, context = {}) {
   if (renderer === 'nanogpt') {
     const out = await generateNanoImages(settings, payload, progress, context)
-    return { images: out.images, backend: 'nanogpt', mime: out.mime, cost: out.cost }
+    return { images: out.images, backend: 'nanogpt', mime: out.mime, cost: out.cost, rewrittenPrompt: out.rewrittenPrompt }
   }
   if (renderer === 'swarmui') return { images: await generateSwarmImages(settings, payload, progress, context), backend: 'swarmui' }
   if (!cloudEnabled(settings)) return { images: await dtGenerate(settings, payload), backend: 'local' }
@@ -5381,7 +5393,7 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     ...(scan && scan.id ? { scanId: scan.id } : {}),
     imageIndex: progressContext.imageIndex || origin && origin.sceneIndex || 1,
     imageTotal: progressContext.imageTotal || origin && origin.sceneCount || 1 }
-  const { images, backend, fellBackFrom, mime, cost } = await generateImages(settings, payloadOut, 'story generation', imageRenderer(merged),
+  const { images, backend, fellBackFrom, mime, cost, rewrittenPrompt } = await generateImages(settings, payloadOut, 'story generation', imageRenderer(merged),
     progress => notifyFrontend(userId, 'renderer_progress', progress), { ...renderContext, userId })
   assertStoryScanActive(scan)
   const uploads = []
@@ -5409,6 +5421,8 @@ async function generateAndUpload({ prompt, negativePrompt, config, extra, dims, 
     backend,
     ...(fellBackFrom ? { fellBackFrom } : {}),
     ...(cost !== undefined ? { cost } : {}),
+    // NanoGPT rewrote the prompt before drawing; this is what the model actually got.
+    ...(rewrittenPrompt ? { providerRewrotePrompt: rewrittenPrompt } : {}),
     // Everything needed to regenerate this image later and put the result back
     // where it came from: the owning message, and the exact recipe used.
     ...(origin && typeof origin === 'object' ? { origin } : {}),
