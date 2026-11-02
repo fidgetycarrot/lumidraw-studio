@@ -26801,7 +26801,9 @@ function mossPersonParts(subject) {
     // An unstated eye colour came out as blank white eyes; give a plain one.
     if (!helmet && /^1(?:girl|boy)$/.test(subject.count) && !/\beyes?\b/i.test(text)) text += ', with dark eyes'
     const named = subject.name ? `${subject.name}, ${text}` : upperFirst(text)
-    lines.push(`${place ? place + ' is ' + named : upperFirst(named)}.`)
+    // "In the center is A 23-year-old woman" — the box text starts a sentence of its own.
+    const afterPlace = subject.name ? named : text.replace(/^(A|An|The)\b/, (word) => word.toLowerCase())
+    lines.push(`${place ? place + ' is ' + afterPlace : upperFirst(named)}.`)
   } else {
     let opening = place ? `${place} is ${who}` : upperFirst(who)
     // Not "soft, pretty": that made sharp characters look sweet. The face gets
@@ -27028,7 +27030,9 @@ function compileMossImage(image, ctx) {
     })
   } else {
     // Cohesive per-person layout (1.15.1 + Studio test):
-    // 1. short booru tag line (quality, style, rating, counts),
+    // 1. (removed in 1.19.4) the booru tag line — "masterpiece, best quality,
+    //    anime style, safe, 2girls, 1boy." Eric did not want it; mossTagLine is
+    //    kept below in case it is ever wanted back as an option,
     // 2. style, camera, lighting and scene summary,
     // 3. the setting,
     // 4. one full paragraph per person (look, outfit, helmet, pose, expression together),
@@ -27036,12 +27040,11 @@ function compileMossImage(image, ctx) {
     const lighting = setting.filter(item => MOSS_LIGHT_RE.test(item))
     const places = setting.filter(item => !lighting.includes(item))
     const personParts = base.subjects.map(mossPersonParts)
-    const tagLine = mossTagLine(image, base.subjects, personParts, style)
     const camera = [framing.length ? framing.join(', ') : '', lighting.length ? 'in ' + mossList(lighting.map(item => mossPlaceArticle(item))) : '']
       .filter(Boolean).join(', ')
     const styleLine = [mossSentence(mossPlain(style)), camera ? mossSentence(camera) : '', mossSentence(sceneText)].filter(Boolean).join(' ')
     const personBlocks = personParts.map(part => [...part.look, ...part.doing].join(' ')).filter(Boolean)
-    prompt = [tagLine, styleLine, mossSettingSentence(places), ...personBlocks, actions.join(' ')].filter(Boolean).join('\n\n')
+    prompt = [styleLine, mossSettingSentence(places), ...personBlocks, actions.join(' ')].filter(Boolean).join('\n\n')
   }
 
   const negatives = [String(preset.mossNegative || '').trim() || MOSS_DEFAULT_NEGATIVE]
@@ -27060,7 +27063,7 @@ function compileMossImage(image, ctx) {
   const negativePrompt = uniqueStrings(negatives.join(', ').split(',').map(tag => tag.trim()).filter(Boolean)).join(', ')
 
   const debug = { ...base.debug,
-    notes: [`MOSS Image prompt (${useLayout ? 'layout with one box per person' : 'tag line, style, looks, then the moment'}). The Anima prompt was not used.`, ...base.debug.notes],
+    notes: [`MOSS Image prompt (${useLayout ? 'layout with one box per person' : 'style, looks, then the moment'}). The Anima prompt was not used.`, ...base.debug.notes],
     moss: { style, layout: useLayout, animaPrompt: base.prompt } }
   return { ...base, prompt, negativePrompt, debug }
 }

@@ -19,3 +19,7 @@ A preset setting that sends adult pictures to Draw Things+ and draws everything 
 # 1.19.3 — "This chat" lists who is in it again
 - The 1.9.1 layout moved the list of people into Clothing tracking, leaving the "This chat" card with only "No saved cast bound". It now shows an **In this chat** row with everyone the chat is using (the chat character is marked). A saved character's name opens its sheet. Outfits and removing someone stay under Clothing tracking.
 - The no-cast line now reads "No saved cast picked — that is fine. This chat keeps its own list."
+
+# 1.19.4 — MOSS prompts lose the tag line
+- MOSS prompts no longer start with the short tag line ("masterpiece, best quality, anime style, safe, 2girls, 1boy."). They open with the preset's style sentence. The Anima prompts are unchanged.
+- Fixed "In the center is A 23-year-old woman…" when a person's MOSS description starts with "A", "An" or "The" and has no name in front.
