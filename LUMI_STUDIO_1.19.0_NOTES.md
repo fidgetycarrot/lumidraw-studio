@@ -23,3 +23,9 @@ A preset setting that sends adult pictures to Draw Things+ and draws everything 
 # 1.19.4 — MOSS prompts lose the tag line
 - MOSS prompts no longer start with the short tag line ("masterpiece, best quality, anime style, safe, 2girls, 1boy."). They open with the preset's style sentence. The Anima prompts are unchanged.
 - Fixed "In the center is A 23-year-old woman…" when a person's MOSS description starts with "A", "An" or "The" and has no name in front.
+
+# 1.19.5 — pictures land under their paragraph again
+- Cause: Lumiverse staging (31 Oct, "render the message list more efficiently") now shows a message empty for a moment and fills its text just after. LS placed the picture in that moment, found no paragraph to follow, put it at the top, and never moved it.
+- LS now waits while a message's text is still loading, and a picture that is not directly under its paragraph is moved there once the text appears.
+- Anchors also match through curly vs straight quotes, dash styles and leftover * or _ marks.
+- A picture whose words truly are not in the message still goes to the top, as before.

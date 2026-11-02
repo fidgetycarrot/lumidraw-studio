@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.19.4'
+  const EXTENSION_VERSION = '1.19.5'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -7069,7 +7069,14 @@ ${entry.prompt || ''}`.trim()
   }
 
   function normalizeAnchorText(value) {
+    // Curly vs straight quotes, dash styles and leftover markdown marks must not
+    // stop an anchor from matching the rendered paragraph.
     return String(value || '')
+      .replace(/[\u2018\u2019\u201a\u201b\u2032]/g, "'")
+      .replace(/[\u201c\u201d\u201e\u201f\u2033]/g, '"')
+      .replace(/[\u2010-\u2015\u2212]/g, '-')
+      .replace(/\u2026/g, '...')
+      .replace(/[*_~`]+/g, '')
       .replace(/[\u00a0\u2007\u202f]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -7105,10 +7112,24 @@ ${entry.prompt || ''}`.trim()
     return null
   }
 
+  // Lumiverse (staging, 31 Oct 2026) mounts a scrolled-to row EMPTY first —
+  // MessageContent carries data-display-pending and renders '' — and fills the
+  // text a moment later. An image placed then found no anchor, went to the top,
+  // and stayed there once the text arrived. Wait for the text instead.
+  function messageTextPending(contentRoot) {
+    if (!contentRoot) return true
+    if (contentRoot.hasAttribute && contentRoot.hasAttribute('data-display-pending')) return true
+    if (contentRoot.closest && contentRoot.closest('[data-display-pending]')) return true
+    return !normalizeAnchorText(contentRoot.textContent)
+  }
+
   function placementInjectionTarget(messageNode, item) {
     const contentRoot = messageContentRoot(messageNode)
     const anchorBlock = findAnchorBlock(contentRoot, item.anchor)
     if (anchorBlock) return { target: anchorBlock, position: 'afterend', anchored: true }
+    if (String(item.anchor || '').trim() && messageTextPending(contentRoot)) {
+      return { target: null, position: '', anchored: false, pending: true }
+    }
 
     // Match the pre-1.3.3 behavior: if a story anchor cannot be placed, put the
     // image at the TOP rather than silently moving it to the end of the scene.
@@ -7118,6 +7139,18 @@ ${entry.prompt || ''}`.trim()
       return { target: contentRoot || messageNode, position: 'beforeend', anchored: false }
     }
     return { target: contentRoot || messageNode, position: 'afterbegin', anchored: false }
+  }
+
+  // Is this mount where its anchor says (directly after the paragraph, give or
+  // take other images that share the paragraph)? Unanchored or still-pending
+  // placements count as fine: there is nothing better to move them to.
+  function mountFollowsAnchor(mount, where) {
+    if (!where || !where.anchored || !where.target) return true
+    let prev = mount.previousElementSibling
+    while (prev && prev !== where.target && (prev.matches('.ld-message-image-host') || prev.querySelector('.ld-message-image-host'))) {
+      prev = prev.previousElementSibling
+    }
+    return prev === where.target
   }
 
   // Returns true when every placement for this message has a live mount. A
@@ -7155,6 +7188,12 @@ ${entry.prompt || ''}`.trim()
           }
         }
         if (!mount || !mount.isConnected || !messageNode.contains(mount) || imagePlacementRenderKeys.get(placementId) !== placementRenderKey(item)) {
+          rebuild = true
+          break
+        }
+        // Placed before its text existed (top of the message) or moved by the
+        // host's re-render: once the anchor paragraph is there, put it back.
+        if (!mountFollowsAnchor(mount, placementInjectionTarget(messageNode, item))) {
           rebuild = true
           break
         }
