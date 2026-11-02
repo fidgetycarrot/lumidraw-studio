@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.19.5'
+  const EXTENSION_VERSION = '1.19.6'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -6204,8 +6204,13 @@ ${entry.prompt || ''}`.trim()
       drop.addEventListener('dragleave', () => drop.classList.remove('ld-over'))
       drop.addEventListener('drop', (event) => {
         event.preventDefault(); drop.classList.remove('ld-over')
-        const file = [...(event.dataTransfer && event.dataTransfer.files || [])].find(f => /^image\//.test(f.type))
+        const file = pictureFileFrom(event.dataTransfer && event.dataTransfer.files)
         if (file) addPastePicture(item.id, file)
+        else {
+          const types = clipboardTypesText(event.dataTransfer && [...event.dataTransfer.types])
+          const status = drop.parentElement && drop.parentElement.querySelector('.ld-paste-status')
+          if (status) { status.className = 'ld-paste-status ld-err'; status.textContent = `That drop had no picture file in it (it had: ${types}). Save the picture from Draw Things first, then drop the saved file here.` }
+        }
       })
       const actions = document.createElement('div'); actions.className = 'ld-paste-row'
       // Reads the clipboard directly. Waits for a picture copied on another
@@ -6227,6 +6232,17 @@ ${entry.prompt || ''}`.trim()
       list.appendChild(card)
     }
   }
+  // A picture can arrive as a file with a proper image type, or (dragged or
+  // pasted from some Mac apps) with no type at all but a picture's name.
+  const PICTURE_NAME_RE = /\.(?:png|jpe?g|webp|gif|bmp|tiff?|heic|heif)$/i
+  function pictureFileFrom(files) {
+    return [...(files || [])].find(f => f && (/^image\//.test(f.type || '') || (!f.type && PICTURE_NAME_RE.test(f.name || '')))) || null
+  }
+  // What the clipboard actually held, in a few words, for the error message.
+  function clipboardTypesText(types) {
+    const list = [...new Set((types || []).map(t => String(t || '').trim()).filter(Boolean))]
+    return list.length ? list.slice(0, 6).join(', ') : 'nothing'
+  }
   function pickPasteCard(id, focusNode) {
     pastePicked = id
     for (const card of document.querySelectorAll('.ld-paste-card')) card.classList.toggle('ld-picked', card.dataset.id === id)
@@ -6242,16 +6258,24 @@ ${entry.prompt || ''}`.trim()
     say('Reading the clipboard… (a picture from your iPhone can take a few seconds)')
     try {
       const items = await navigator.clipboard.read()
+      const seen = []
       for (const entry of items) {
-        const type = entry.types.find(t => /^image\//.test(t))
+        seen.push(...entry.types)
+        const type = entry.types.find(t => /^(?:web )?image\//.test(t))
         if (!type) continue
         const blob = await entry.getType(type)
-        await addPastePicture(id, new File([blob], 'pasted.' + (type.split('/')[1] || 'png'), { type }))
+        const plain = type.replace(/^web /, '')
+        await addPastePicture(id, new File([blob], 'pasted.' + (plain.split('/')[1] || 'png'), { type: blob.type || plain }))
         return
       }
-      say('No picture on the clipboard. Copy it again (on iPhone: Share → Copy), wait a moment, then press Paste picture.', 'err')
+      console.log('[Lumi Studio] Paste picture: clipboard held', seen)
+      say(`No picture on the clipboard (it had: ${clipboardTypesText(seen)}). Copy the picture again, wait a moment, then press Paste picture. If it keeps failing, save it from Draw Things and use Choose file.`, 'err')
     } catch (error) {
-      say(/denied|permission|not allowed/i.test(String(error && error.message)) ? 'The browser blocked reading the clipboard. Allow it when asked, or click the dashed box and press ⌘V.' : 'Could not read the clipboard: ' + error.message, 'err')
+      const why = `${error && error.name ? error.name + ': ' : ''}${error && error.message || error}`
+      console.log('[Lumi Studio] Paste picture failed:', why)
+      say(/denied|permission|not allowed|NotAllowed/i.test(why)
+        ? `The browser blocked reading the clipboard (${why}). Allow clipboard access for this site in the browser's site settings, or click the dashed box and press ⌘V.`
+        : 'Could not read the clipboard: ' + why, 'err')
     }
   }
   function readPictureFile(file) {
@@ -6317,15 +6341,22 @@ ${entry.prompt || ''}`.trim()
     if (!sheet || sheet.hidden || !pastePicked) return
     const items = [...(event.clipboardData && event.clipboardData.items || [])]
     const imageItem = items.find(item => item.kind === 'file' && /^image\//.test(item.type))
-    if (!imageItem) {
-      // A picture still arriving from another device can show up as nothing yet.
+    const file = (imageItem && imageItem.getAsFile()) || pictureFileFrom(event.clipboardData && event.clipboardData.files)
+    if (!file) {
+      // Typing in a text box: leave ordinary text pastes alone.
+      const typing = event.target && event.target.closest && event.target.closest('input, textarea, [contenteditable="true"]')
+      if (typing) return
+      const types = clipboardTypesText(items.map(item => item.type))
+      console.log('[Lumi Studio] ⌘V paste held no picture:', types)
       const card = document.querySelector(`.ld-paste-card[data-id="${CSS.escape(pastePicked)}"] .ld-paste-status`)
-      if (card && !items.some(item => item.kind === 'string' && item.type === 'text/plain')) { card.className = 'ld-paste-status ld-err'; card.textContent = 'No picture arrived. Press Paste picture instead — it waits for pictures copied on your iPhone.' }
+      if (card) {
+        card.className = 'ld-paste-status ld-err'
+        card.textContent = `No picture arrived (the clipboard had: ${types}). Press Paste picture instead, or save the picture from Draw Things and use Choose file.`
+      }
       return
     }
     event.preventDefault()
-    const file = imageItem.getAsFile()
-    if (file) addPastePicture(pastePicked, file)
+    addPastePicture(pastePicked, file)
   })
 
   // ---------- This chat's pictures (the middle button on the widget)

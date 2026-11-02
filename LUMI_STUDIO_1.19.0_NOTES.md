@@ -29,3 +29,8 @@ A preset setting that sends adult pictures to Draw Things+ and draws everything 
 - LS now waits while a message's text is still loading, and a picture that is not directly under its paragraph is moved there once the text appears.
 - Anchors also match through curly vs straight quotes, dash styles and leftover * or _ marks.
 - A picture whose words truly are not in the message still goes to the top, as before.
+
+# 1.19.6 — pasting pictures from Mac apps
+- ⌘V, Paste picture and drag-and-drop also accept a picture file that arrives with no type but a picture's name (.png, .jpg, .tiff, .heic…), as some Mac apps send it.
+- When nothing usable arrives, the message now says what the clipboard or drop actually held (for example "text/uri-list, text/plain"), and the same goes to the browser console. A blocked clipboard read shows the browser's own reason.
+- ⌘V in a text box with plain text is left alone.
