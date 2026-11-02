@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.19.2'
+  const EXTENSION_VERSION = '1.19.3'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1255,6 +1255,7 @@ function realSetup(ctx) {
                   <span>Take the character and persona from the chat</span>
                 </label>
                 <div class="ld-help">On, this chat's own character card and persona are used for the two lead roles, so a new chat with a different persona just works. The cast still supplies the supporting characters and everyone's outfits. Off, the cast's own two leads are used — which pins them to every chat that shares the cast.</div>
+                <div class="ld-cast-members" style="margin-top:4px"></div>
                 <div class="ld-help ld-cast-summary" style="margin-top:4px"></div>
                 <div class="ld-help">A cast is <strong>who</strong> is in this story. Your preset is <strong>what the picture looks like</strong> — model, LoRAs, steps, quality. Changing presets no longer changes who is in the scene, and a character the story introduces here stays here.</div>
                 <div class="ld-status ld-cast-status" style="font-size:11px"></div>
@@ -2005,6 +2006,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       chatPersona: $('.ld-chat-persona'),
       fantasy: $('.ld-cast-fantasy'),
       chatLeads: $('.ld-chat-leads'),
+      castMembers: $('.ld-cast-members'),
       castSummary: $('.ld-cast-summary'),
       castStatus: $('.ld-cast-status'),
       wardrobeRefresh: $('[data-act="wardrobe-refresh"]'),
@@ -2121,6 +2123,10 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     castTop.appendChild(field('Cast', inline(controls.castPick, controls.castCopy)))
     castTop.appendChild(field('Playing as', controls.chatPersona, 'Remembered for this chat.'))
     castCard.appendChild(castTop)
+    // Who is actually in this chat. The 1.9.1 layout moved the people list into
+    // Clothing tracking and left this card with only "No saved cast bound", so
+    // the card that says "who is in this story" stopped saying who.
+    if (controls.castMembers) castCard.appendChild(field('In this chat', controls.castMembers))
     castCard.appendChild(field('Add a saved character', inline(controls.wardrobeAdd, controls.wardrobeAddButton)))
     if (controls.castSummary) castCard.appendChild(controls.castSummary)
     if (controls.castStatus) castCard.appendChild(controls.castStatus)
@@ -7699,7 +7705,30 @@ ${entry.prompt || ''}`.trim()
     }, 150)
   }
 
+  function renderCastMembers(rows) {
+    const box = $('.ld-cast-members')
+    if (!box) return
+    const list = (rows || []).filter((row) => row && (row.name || row.ref))
+    if (!list.length) {
+      box.innerHTML = '<div class="ld-help" style="margin:0">Nobody yet. Add someone below, or start the story and Lumi Studio picks up its character and persona.</div>'
+      return
+    }
+    const clean = (value) => String(value || '').replace(/[<>&"]/g, '')
+    box.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px">' + list.map((row) => {
+      const name = clean(row.name || row.ref)
+      const note = row.chatRole === 'character' ? ' <span style="opacity:.55">(chat character)</span>'
+        : row.declared ? ' <span style="opacity:.55">(added by the story)</span>' : ''
+      const open = row.source === 'library' && row.id
+        ? ` data-id="${clean(row.id)}" title="Open ${name}'s sheet"` : ''
+      const link = open ? 'cursor:pointer;text-decoration:underline;' : ''
+      return `<span class="ld-cast-member${open ? ' ld-cast-member-open' : ''}"${open} ` +
+        `style="${link}padding:3px 9px;border-radius:999px;border:1px solid var(--ld-border, rgba(255,255,255,.12));font-size:12px">${name}${note}</span>`
+    }).join('') + '</div>' +
+      '<div class="ld-help" style="margin-top:4px">Change outfits or remove someone under Clothing tracking.</div>'
+  }
+
   function renderWardrobeRows(rows) {
+    renderCastMembers(rows)
     wardrobeReadSequence++
     const box = $('.ld-wardrobe-rows')
     if (!box) return
@@ -7822,7 +7851,7 @@ ${entry.prompt || ''}`.trim()
     if (summary) {
       const who = active
         ? [active.character, active.persona, ...(active.members || [])].filter(Boolean).join(' · ') || 'Nobody in this cast yet.'
-        : 'No saved cast bound — this chat uses its current character/persona plus anyone you add here.'
+        : 'No saved cast picked — that is fine. This chat keeps its own list.'
       // Sharing a cast is legitimate — the same two people really can be in two
       // stories — but it means a character one story introduces joins the other's
       // list too. Copy is the answer, and it is one button away.
@@ -8107,6 +8136,15 @@ ${entry.prompt || ''}`.trim()
         setStatus('.ld-wardrobe-status', e.message, 'err')
       }
     })
+    if ($('.ld-cast-members')) {
+      $('.ld-cast-members').addEventListener('click', (event) => {
+        const open = event.target.closest('.ld-cast-member-open')
+        if (!open) return
+        event.preventDefault()
+        setMainView('presets')
+        openPersonaEditor(open.getAttribute('data-id'), 'character')
+      })
+    }
     $('.ld-wardrobe-rows').addEventListener('click', async (event) => {
       const chatId = currentWardrobeChatId(), epoch = wardrobeViewEpoch
       const swapEl = event.target.closest('.ld-wardrobe-swap')
@@ -9882,6 +9920,8 @@ ${entry.prompt || ''}`.trim()
           if (rows) rows.innerHTML = '<div class="ld-help" style="margin:0">Loading this chat…</div>'
           const summary = $('.ld-cast-summary')
           if (summary) summary.textContent = 'Loading this chat…'
+          const members = $('.ld-cast-members')
+          if (members) members.innerHTML = ''
           setStatus('.ld-wardrobe-status', '', '')
           setStatus('.ld-cast-status', '', '')
 

@@ -15,3 +15,7 @@ A preset setting that sends adult pictures to Draw Things+ and draws everything 
 - MOSS's prompt expansion was already sent as off (confirmed in a live test: with it off, NanoGPT draws from LS's prompt as written).
 - Other models use other names for the same thing. Any of these a model lists in NanoGPT's model list is now switched off too: prompt_expansion, expand_prompt, enhance_prompt, prompt_enhancement, prompt_enhancer, prompt_upsampling, prompt_extend, enable_prompt_optimizer, prompt_optimizer, magic_prompt (magic_prompt_option is set to OFF).
 - If a model rewrites the prompt anyway, its reply says so (actual_prompt / revised_prompt). LS now notices: a warning goes to the Spindle log and the rewritten prompt is saved with the picture, so a report shows what the model actually drew from.
+
+# 1.19.3 — "This chat" lists who is in it again
+- The 1.9.1 layout moved the list of people into Clothing tracking, leaving the "This chat" card with only "No saved cast bound". It now shows an **In this chat** row with everyone the chat is using (the chat character is marked). A saved character's name opens its sheet. Outfits and removing someone stay under Clothing tracking.
+- The no-cast line now reads "No saved cast picked — that is fine. This chat keeps its own list."
