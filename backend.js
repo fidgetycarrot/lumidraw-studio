@@ -26046,7 +26046,7 @@ function compileSimpleImage(image, ctx) {
   }
   if (subjects.length && /\bmirrored\s+/i.test(summary)) summary = summary.replace(/\bmirrored\s+/gi, '')
 
-  const framing = simpleTags(applyBannedToList(image.framing, banned), 3)
+  let framing = simpleTags(applyBannedToList(image.framing, banned), 3)
   const counts = simpleCountLine(subjects)
   const shownAnatomy = []
   const paragraphs = subjects.map(subject => {
@@ -26079,6 +26079,22 @@ function compileSimpleImage(image, ctx) {
       return summaryKey.includes(normalizeIdentityText(line)) ? '' : line
     }),
   ].filter(Boolean))
+
+  // The moment happens at someone's feet or legs, but the parser chose a crop
+  // that cuts them off ("framed from mid-thigh up" for a foot pressed under a
+  // counter, Nov 2026). Widen to full body; the angle stays.
+  // Feet only: legs, knees and calves mostly stay in a mid-thigh frame, and
+  // "rising on his toes" for a kiss is not a reason to pull the camera back.
+  const momentText = [summary, ...actionLines, ...(image.relations || []).flatMap(rel => [rel.actorPart, rel.targetPart])].filter(Boolean).join(' ')
+    .replace(/\b(?:on (?:his|her|their|its|the) (?:toes|tiptoes)|tiptoe\w*)\b/gi, ' ')
+  const LOWER_BODY = /\b(?:foot|feet|toes?|soles?|footjob)\b/i
+  const CROP = /^(?:portrait|headshot|close[- ]?up|extreme close[- ]?up|bust shot|upper body|waist[- ]up(?: shot)?|cowboy shot|medium shot)$/i
+  if (LOWER_BODY.test(momentText) && framing.some(tag => CROP.test(tag)) &&
+    !framing.some(tag => /^(?:full[- ]body|wide shot|very wide shot)$/i.test(tag))) {
+    const cropped = framing.filter(tag => CROP.test(tag))
+    framing = uniqueStrings(['full body', ...framing.filter(tag => !CROP.test(tag))])
+    notes.push(`Framing “${cropped.join(', ')}” would cut off the ${(momentText.match(LOWER_BODY) || ['legs'])[0].toLowerCase()} the moment depends on, so it is full body instead.`)
+  }
 
   // Anatomy defences: same as 1.8, but they see unsaved people's anatomy too.
   const positive = []

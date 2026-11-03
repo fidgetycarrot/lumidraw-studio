@@ -24,3 +24,7 @@
 - "tight crimson running shorts" no longer gets "a".
 - "biting lower lip" becomes "biting her lower lip".
 - The closing moment uses first names once the paragraphs have given the full name.
+
+# 1.20.2 — feet stay in frame
+- When the moment depends on a foot (foot, feet, toes, soles) and the parser chose a crop that cuts feet off (portrait, upper body, cowboy shot / mid-thigh, close-up), LS widens it to full body and keeps the angle. Anima and MOSS prompts both. The picture's notes say when this happened.
+- "Rising on his toes" and tiptoeing don't count, and legs, knees and calves don't trigger it: a mid-thigh frame usually keeps those, and widening a kiss loses the moment.
