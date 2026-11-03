@@ -951,16 +951,26 @@ async function migratePresetPromptingToStorySettings() {
   return { migrated: !!active, preset: active ? active.name : '' }
 }
 
+// Quality tags, the negative prompt and BREAK depend on the model, so a preset
+// may keep its own (1.20.3: set in the preset editor, or on the Story tab while
+// that preset is in use). A preset that never set them uses the Story values.
+function presetOwnPrompt(preset, settings) {
+  const own = key => preset && preset[key] !== undefined && preset[key] !== null
+  return {
+    qualityTags: String(own('storyQualityTags') ? preset.storyQualityTags : settings.storyQualityTags || ''),
+    negativePrompt: String(own('storyNegativePrompt') ? preset.storyNegativePrompt : settings.storyNegativePrompt || ''),
+    useBreakSeparators: own('storyUseBreakSeparators') ? preset.storyUseBreakSeparators === true : settings.storyUseBreakSeparators === true,
+  }
+}
+
 function storyPresetFor(preset, settings) {
   if (!preset) return preset
   return {
     ...preset,
-    qualityTags: String(settings.storyQualityTags || ''),
+    ...presetOwnPrompt(preset, settings),
     promptPrefix: String(settings.storyPromptPrefix || ''),
-    negativePrompt: String(settings.storyNegativePrompt || ''),
     bannedTags: String(settings.storyBannedTags || ''),
     sceneAnchor: String(settings.storySceneAnchor || ''),
-    useBreakSeparators: settings.storyUseBreakSeparators === true,
   }
 }
 
@@ -19132,6 +19142,24 @@ spindle.onFrontendMessage(async (payload, userId) => {
           settings.parserTemperature = Number.isFinite(value) ? Math.max(0, Math.min(2, value)) : 0.2
         }
         if (payload.storyUseBreakSeparators !== undefined) settings.storyUseBreakSeparators = !!payload.storyUseBreakSeparators
+        // The Story tab shows the active preset's own quality tags, negative and
+        // BREAK when it has them; edits there go back to that preset, and the
+        // shared Story values are left for presets without their own.
+        let presetsChanged = null
+        if (['storyQualityTags', 'storyNegativePrompt', 'storyUseBreakSeparators'].some(key => payload[key] !== undefined) && prev.activePreset) {
+          const presetsNow = await getPresets()
+          const activeIndex = presetsNow.findIndex(item => item && item.name === prev.activePreset)
+          const activeOne = activeIndex >= 0 ? presetsNow[activeIndex] : null
+          if (activeOne && ['storyQualityTags', 'storyNegativePrompt', 'storyUseBreakSeparators'].some(key => activeOne[key] !== undefined)) {
+            const updated = { ...activeOne }
+            if (payload.storyQualityTags !== undefined) { updated.storyQualityTags = String(payload.storyQualityTags); settings.storyQualityTags = prev.storyQualityTags }
+            if (payload.storyNegativePrompt !== undefined) { updated.storyNegativePrompt = String(payload.storyNegativePrompt); settings.storyNegativePrompt = prev.storyNegativePrompt }
+            if (payload.storyUseBreakSeparators !== undefined) { updated.storyUseBreakSeparators = !!payload.storyUseBreakSeparators; settings.storyUseBreakSeparators = prev.storyUseBreakSeparators }
+            presetsNow[activeIndex] = updated
+            await savePresets(presetsNow)
+            presetsChanged = presetsNow
+          }
+        }
         if (['storyQualityTags', 'storyPromptPrefix', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor', 'storyUseBreakSeparators']
           .some((key) => payload[key] !== undefined)) settings.storyPromptMigrated = true
         if (payload.stripImageDirectives !== undefined) settings.stripImageDirectives = !!payload.stripImageDirectives
@@ -19166,7 +19194,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           automaticStopped = stopAutomaticScanWork('Automatic illustration was turned off. Queued work was discarded; the active automatic request was cancelled.')
         }
         await spindle.storage.setJson(SETTINGS_FILE, settings, { indent: 2 })
-        reply = ok(payload, requestId, { settings, automaticStopped })
+        reply = ok(payload, requestId, { settings, automaticStopped, ...(presetsChanged ? { presets: presetsChanged } : {}) })
         break
       }
 
@@ -19540,6 +19568,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.mossLayout !== undefined) preset.mossLayout = payload.mossLayout === true
         if (payload.smartSize !== undefined) preset.smartSize = payload.smartSize === true
         if (payload.adultPromptOnly !== undefined) preset.adultPromptOnly = payload.adultPromptOnly === true
+        if (payload.storyQualityTags !== undefined) preset.storyQualityTags = String(payload.storyQualityTags || '').slice(0, 4000)
+        if (payload.storyNegativePrompt !== undefined) preset.storyNegativePrompt = String(payload.storyNegativePrompt || '').slice(0, 4000)
+        if (payload.storyUseBreakSeparators !== undefined) preset.storyUseBreakSeparators = payload.storyUseBreakSeparators === true
         // 1.20: adult pictures go to '' (this preset), '__prompt__' (prompt only) or another preset's name.
         if (payload.adultPreset !== undefined) {
           preset.adultPreset = String(payload.adultPreset || '').slice(0, 200)
@@ -26403,7 +26434,7 @@ async function addPastedPicture(userId, payload) {
 // Where this preset sends NSFW and explicit pictures: drawn here (null),
 // prompt only ('prompt'), or drawn with another saved preset ({ preset }).
 // Before 1.20 the only choice was the "prompt only" checkbox.
-async function adultRoute(preset) {
+async function adultRoute(preset, settings = null) {
   const choice = preset.adultPreset !== undefined ? String(preset.adultPreset || '') : (preset.adultPromptOnly === true ? '__prompt__' : '')
   if (!choice || choice === preset.name) return null
   if (choice === '__prompt__') return 'prompt'
@@ -26412,7 +26443,7 @@ async function adultRoute(preset) {
     spindle.log.warn(`[lumidraw] adult pictures were set to preset "${choice}", which no longer exists — drawing them with "${preset.name}"`)
     return null
   }
-  return { preset: other }
+  return { preset: settings ? storyPresetFor(other, settings) : other }
 }
 
 async function runSimpleStoryScan({ userId, settings, preset, messages, targetIndex, target, chatId, scan, storyDebugMeta = {} }) {
@@ -26438,7 +26469,7 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
   // Adult pictures may be drawn with another preset (1.20). They are written
   // in that preset's prompt style too, so a Krea preset can hand its adult
   // pictures to a MOSS one and each gets the prompt its model wants.
-  const adult = settings.promptOnly === true ? null : await adultRoute(preset)
+  const adult = settings.promptOnly === true ? null : await adultRoute(preset, settings)
   const adultPreset = adult && adult.preset ? adult.preset : null
   const adultPrefix = adultPreset ? await resolveMacros(adultPreset.promptPrefix, userId, chatId) : prefix
   const isAdult = image => ['nsfw', 'explicit'].includes(image.rating)

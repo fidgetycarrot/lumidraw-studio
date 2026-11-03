@@ -28,3 +28,9 @@
 # 1.20.2 — feet stay in frame
 - When the moment depends on a foot (foot, feet, toes, soles) and the parser chose a crop that cuts feet off (portrait, upper body, cowboy shot / mid-thigh, close-up), LS widens it to full body and keeps the angle. Anima and MOSS prompts both. The picture's notes say when this happened.
 - "Rising on his toes" and tiptoeing don't count, and legs, knees and calves don't trigger it: a mid-thigh frame usually keeps those, and widening a kiss loses the moment.
+
+# 1.20.3 — quality tags and negative prompt per preset, in both places
+- The preset editor shows **Quality and style tags**, **Negative prompt** and **Separate each person with BREAK** again when the prompt style is Anima (tags). They had been moved to the Story tab only, which made it impossible to give a second preset (a cloud MOSS preset in tag mode, say) its own.
+- Each preset can now keep its own quality tags, negative prompt and BREAK. Saving a preset in the editor gives it its own. The Story tab shows and edits the values of the preset in use, and switching presets switches them. Presets that never set their own keep using the shared Story values, so nothing changes until you save one.
+- Adult pictures drawn with another preset use that preset's own tags and negative.
+- Removed the stray "Quality tags (always first)" label with no box under it, and the outdated note that MOSS style sentences follow "masterpiece, best quality, anime style."

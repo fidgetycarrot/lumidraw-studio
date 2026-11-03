@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.20.2'
+  const EXTENSION_VERSION = '1.20.3'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2251,7 +2251,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     storyMossStyle.className = 'ld-story-moss-style'
     storyMossStyle.rows = 3
     storyMossStyle.placeholder = MOSS_DEFAULT_STYLE_UI
-    storyMossBox.appendChild(field('Style sentence sent to MOSS', storyMossStyle, 'Opens every MOSS prompt. Sent word-for-word after "masterpiece, best quality, anime style."'))
+    storyMossBox.appendChild(field('Style sentence sent to MOSS', storyMossStyle, 'Opens every MOSS prompt. Sent word-for-word.'))
     const storyMossNegative = document.createElement('textarea')
     storyMossNegative.className = 'ld-story-moss-negative'
     storyMossNegative.rows = 3
@@ -2650,6 +2650,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const saveButton = presetEditor.querySelector('[data-act="ed-save"]')
       const saveRow = saveButton ? saveButton.closest('.ld-row') : null
       if (quality && saveRow) {
+        const qualityLabel = quality.previousElementSibling
+        if (qualityLabel && qualityLabel.classList.contains('ld-label')) qualityLabel.classList.add('ld-reset-hidden-legacy')
         let node = quality
         while (node && node !== saveRow) {
           const next = node.nextElementSibling
@@ -2658,7 +2660,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         }
         if (!presetEditor.querySelector('.ld-reset-generation-note')) {
           const note = make('div', 'ld-help ld-reset-generation-note',
-            'You can also edit your active preset’s Picture style and Negative prompt directly on the Story tab.')
+            'The active preset’s style and negative prompt can also be changed on the Story tab.')
           presetEditor.insertBefore(note, saveRow)
         }
         if (!presetEditor.querySelector('.ld-ed-prompt-style')) {
@@ -2715,9 +2717,25 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           mossBox.appendChild(checkbox(mossLayout, 'Give each person their own box in the picture (MOSS layout, experimental)',
             'Turn off for NanoGPT, and if SwarmUI shows the prompt as text or the picture looks wrong.'))
           box.appendChild(mossBox)
+          // Anima (tags) fields, per preset. Hidden by the 1.18 layout and left
+          // only on the Story tab for the active preset, so a second preset (a
+          // cloud preset that draws adult pictures, say) had no way to set them.
+          const animaBox = make('div', 'ld-ed-anima-box')
+          const negative = presetEditor.querySelector('.ld-ed-negative')
+          const breakBox = presetEditor.querySelector('.ld-ed-break')
+          quality.classList.remove('ld-reset-hidden-legacy')
+          animaBox.appendChild(field('Quality and style tags (always first)', quality, 'Comma-separated tags at the start of every prompt, e.g. masterpiece, best quality.'))
+          if (negative) {
+            negative.classList.remove('ld-reset-hidden-legacy')
+            animaBox.appendChild(field('Negative prompt', negative, 'Tags to keep out of the picture.'))
+          }
+          if (breakBox) animaBox.appendChild(checkbox(breakBox, 'Separate each person with BREAK',
+            'Anima and SwarmUI understand BREAK. Leave it off for MOSS, which reads it as a word.'))
+          box.appendChild(animaBox)
           const syncMoss = () => {
             const isMoss = styleSelect.value === 'moss'
             mossBox.style.display = isMoss ? '' : 'none'
+            animaBox.style.display = isMoss ? 'none' : ''
             if (isMoss) {
               if (!mossStyle.value.trim()) { mossStyle.value = MOSS_DEFAULT_STYLE_UI; syncPick() }
               if (!mossNegative.value.trim()) mossNegative.value = MOSS_DEFAULT_NEGATIVE_UI
@@ -3545,8 +3563,26 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
 
   let lastSyncedStoryPresetName = null
+  // A preset's own quality tags / negative / BREAK, or the shared Story ones.
+  function presetPromptValues(p) {
+    const own = key => p && p[key] !== undefined && p[key] !== null
+    return {
+      quality: own('storyQualityTags') ? p.storyQualityTags : (settings.storyQualityTags || ''),
+      negative: own('storyNegativePrompt') ? p.storyNegativePrompt : (settings.storyNegativePrompt || ''),
+      brk: own('storyUseBreakSeparators') ? p.storyUseBreakSeparators === true : settings.storyUseBreakSeparators === true,
+    }
+  }
+
   function syncStoryPromptCard(force = false) {
     const p = typeof activePresetObj === 'function' ? activePresetObj() : null
+    // Anima fields follow the preset in use, like the MOSS ones below.
+    if (p && (force || lastSyncedStoryPresetName !== p.name)) {
+      const values = presetPromptValues(p)
+      const q = $('.ld-story-quality'), n = $('.ld-story-negative'), b = $('.ld-story-break')
+      if (q && document.activeElement !== q) q.value = values.quality
+      if (n && document.activeElement !== n) n.value = values.negative
+      if (b) b.checked = values.brk
+    }
     const isMoss = !!(p && p.promptStyle === 'moss')
     const mossBox = $('.ld-story-moss-box')
     const animaBox = $('.ld-story-anima-box')
@@ -5837,6 +5873,8 @@ ${entry.prompt || ''}`.trim()
     const preset = presets.find((item) => item.name === name)
     activePreset = preset ? preset.name : null
     call('set_active_preset', { name: activePreset || '' }).catch(() => {})
+    // The Story tab's tags and negative follow the preset now in use.
+    try { syncStoryPromptCard() } catch { /* the Story tab may not be built yet */ }
     if (preset) {
       syncedConfig = { ...preset.config }
       if (!draftConfig || !draftDirty) {
@@ -8801,7 +8839,9 @@ ${entry.prompt || ''}`.trim()
     lbox.innerHTML = ''
     for (const l of c.loras || []) lbox.appendChild(loraRow(l.file || l.name || '', l.weight))
     if (!(c.loras || []).length) lbox.appendChild(loraRow('', 1))
-    $('.ld-ed-quality').value = p ? (p.qualityTags || '') : (seed ? (seed.qualityTags || '') : '')
+    // 1.20.3: the preset's own quality tags / negative / BREAK (or the shared Story ones).
+    const ownPrompt = presetPromptValues(p || null)
+    $('.ld-ed-quality').value = ownPrompt.quality
     const localCharacter = profileFromPreset(p || seed || {}, 'character')
     const characterLibraryId = (p && p.characterLibraryId) || (seed && seed.characterLibraryId) || ''
     renderCharacterLinkSelect(characterLibraryId)
@@ -8819,11 +8859,10 @@ ${entry.prompt || ''}`.trim()
     $('.ld-ed-scene-anchor').value = p ? (p.sceneAnchor || '') : (seed ? (seed.sceneAnchor || '') : '')
     if ($('.ld-ed-break')) {
       const source = p || seed || {}
-      $('.ld-ed-break').checked = source.useBreakSeparators === true ||
-        (source.useBreakSeparators === undefined && /\bBREAK\b/.test(String(source.qualityTags || '')))
+      $('.ld-ed-break').checked = ownPrompt.brk
     }
     $('.ld-ed-prefix').value = p ? (p.promptPrefix || '') : (seed ? (seed.promptPrefix || '') : '')
-    $('.ld-ed-negative').value = p ? (p.negativePrompt || '') : (seed ? (seed.negativePrompt || '') : '')
+    $('.ld-ed-negative').value = ownPrompt.negative
     setStatus('.ld-ed-status', p ? '' : (seed ? 'Starting from the current workspace.' : (syncedConfig ? 'Starting from the last synced recipe.' : 'No synced recipe yet — Sync in Studio first for model/sampler defaults.')))
     if (box.scrollIntoView) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
@@ -9325,6 +9364,9 @@ ${entry.prompt || ''}`.trim()
         extra: editorExtra,
         ...($('.ld-ed-smart-size') ? { smartSize: $('.ld-ed-smart-size').checked } : {}),
         ...($('.ld-ed-adult-preset') ? { adultPreset: $('.ld-ed-adult-preset').value } : {}),
+        storyQualityTags: $('.ld-ed-quality').value,
+        storyNegativePrompt: $('.ld-ed-negative') ? $('.ld-ed-negative').value : '',
+        storyUseBreakSeparators: $('.ld-ed-break') ? $('.ld-ed-break').checked : false,
         ...($('.ld-ed-prompt-style') ? {
           promptStyle: $('.ld-ed-prompt-style').value,
           mossStyle: $('.ld-ed-moss-style').value,
@@ -9634,6 +9676,7 @@ ${entry.prompt || ''}`.trim()
       storyUseBreakSeparators: $('.ld-story-break') ? $('.ld-story-break').checked : false,
     })
     settings = res.settings
+    if (Array.isArray(res.presets)) presets = res.presets
     updateScanLabel()
     if (statusMsg) setStatus('.ld-settings-status', statusMsg, 'good')
     return res
