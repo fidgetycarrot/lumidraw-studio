@@ -27,7 +27,7 @@ import Network
 import UniformTypeIdentifiers
 import _MediaGenerationKit
 
-let helperVersion = "1.0.0"
+let helperVersion = "1.0.1"
 let defaultPort: UInt16 = 7865
 let defaultModel = "moss_image_sft_q8p.ckpt"
 let keychainService = "LS Cloud Helper"
@@ -425,11 +425,16 @@ let port = UInt16(ProcessInfo.processInfo.environment["LS_CLOUD_PORT"] ?? "") ??
 
 switch command {
 case "save-key":
-  print("Paste your Draw Things API key (from api.drawthings.ai/dashboard) when asked, then press Return.")
-  print("It is asked twice. Nothing shows while you paste — that is normal.")
+  // Read here, not by letting `security` prompt: a child started by Process
+  // is not in the Terminal's foreground group, so it can never read the
+  // keyboard and the pasted key just echoed on screen (3 Nov 2026).
+  print("Paste your Draw Things API key (from api.drawthings.ai/dashboard) and press Return.")
+  print("Nothing shows while you paste — that is normal.")
+  guard let raw = getpass("Key: ") else { print("No key read."); exit(1) }
+  let key = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !key.isEmpty else { print("No key entered; nothing saved."); exit(1) }
   let result = runTool("/usr/bin/security",
-    ["add-generic-password", "-U", "-A", "-s", keychainService, "-a", keychainAccount, "-l", keychainService, "-w"],
-    interactive: true)
+    ["add-generic-password", "-U", "-A", "-s", keychainService, "-a", keychainAccount, "-l", keychainService, "-w", key])
   if result.code == 0 {
     print("Saved in the Keychain.")
     if FileManager.default.fileExists(atPath: plistURL().path) {
@@ -437,7 +442,7 @@ case "save-key":
       print("Restarted the installed helper so it uses the new key.")
     }
   } else {
-    print("The key was not saved.")
+    print("The key was not saved: \(result.err)\(result.out)")
     exit(1)
   }
 
