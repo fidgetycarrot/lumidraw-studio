@@ -25604,12 +25604,78 @@ function simpleContext(profiles, memory, card, { banned = '', fantasy = false } 
   ].filter(Boolean).join('\n')
 }
 
+// 1.21: MOSS reads plain English. Turning the tags above into sentences with
+// rules kept producing nonsense ("He has 45 years old", people lined up inside
+// a counter), so for MOSS presets the parser — a language model already reading
+// the story — also writes the scene itself. Looks still come from each
+// person's MOSS description and outfits from clothing memory.
+const MOSS_SCENE_RULES = `
+MOSS PICTURE FIELDS
+This picture is drawn by MOSS Image, which reads plain English. So also write
+the fields below as plain, everyday sentences — the one exception to "no prose".
+Present tense, one instant, only what a camera could see. No tags, no lists, no
+metaphors, no feelings without a visible sign.
+
+Add to each image:
+ "moss_camera": one sentence: how close the camera is and from where, and the
+   light with its source and side. "A wide shot from the side of the kitchen
+   island, in warm afternoon sunlight from a window on the left."
+ "moss_setting": one sentence naming the place and the 2-4 things that matter for
+   where people are. "They are in a bright kitchen with a long granite island,
+   wooden barstools and a hardwood floor."
+ "moss_moment": one sentence for what happens between the people, with first
+   names, saying whose body part touches what and where. Empty for one person.
+Add to each person in "subjects":
+ "moss_place": where they are, as a short phrase that starts with a preposition,
+   with no name and no verb: "On the far side of the island", "On a barstool on
+   the near side of the island", "Beside Lauren, on her own barstool".
+ "moss_action": one or two sentences starting with their first name: what the
+   body does (standing, sitting on what, leaning on what, where the hands are),
+   the face in plain words, and where they look. "David stands behind the
+   counter with both hands flat on a cutting board, his jaw tight and brow
+   furrowed, staring at Lauren."
+
+Rules for these fields:
+- Never describe hair, eyes, skin, body shape, age or clothes: Lumi Studio adds
+  each person's look and outfit. How a garment is worn right now (shirt hanging
+  open, skirt pulled up) may go in moss_action.
+- Every position must be physically possible. Say what each person sits or
+  stands on and what is between people. Nobody shares a seat unless the story
+  says so.
+- Faces in mild everyday words: "a tight jaw" rather than "clenched teeth", "a
+  slight smile". A strong face only when the story makes it strong.
+- The camera must show what the moment depends on: a foot under a counter needs
+  a wide or full-body shot from the side.
+- Each field under 40 words.
+`
+
 function buildSimpleInstruction(profiles, memory, card, options = {}) {
-  return [SIMPLE_RULES.trim(), '', simpleCountRule(options.maxImages), simpleSubjectRule(options.maxSubjects), '',
-    simpleContext(profiles, memory, card, options)].join('\n')
+  return [SIMPLE_RULES.trim(), options.moss ? MOSS_SCENE_RULES.trim() : '', '', simpleCountRule(options.maxImages), simpleSubjectRule(options.maxSubjects), '',
+    simpleContext(profiles, memory, card, options)].filter((part, index) => index !== 1 || part).join('\n')
 }
 
 // ---------- reading the parser reply ---------------------------------------
+
+// A parser-written MOSS sentence: one line, no tag lists, ends with a full stop.
+function mossFieldText(value) {
+  let text = String(value || '').replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim().replace(/^["'`]+|["'`]+$/g, '').trim()
+  if (!text || text.length < 6) return ''
+  if (text.length > 400) text = text.slice(0, 400).replace(/\s+\S*$/, '')
+  // A tag list is not a sentence: three or more commas and no verb-like word.
+  if ((text.match(/,/g) || []).length >= 3 && !/\b(?:is|are|stands?|sits?|leans?|looks?|holds?|presses?|lies|kneels?|walks?|reaches?|faces?|watches?)\b/i.test(text)) return ''
+  text = text.replace(/\bclenched teeth\b/gi, 'a tight jaw').replace(/\bgritted teeth\b/gi, 'a tight jaw')
+  text = text.charAt(0).toUpperCase() + text.slice(1)
+  return /[.!?]$/.test(text) ? text : text + '.'
+}
+
+// "On the far side of the island": a place phrase that can open "… is David".
+function mossPlacePhrase(value) {
+  const text = String(value || '').replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim().replace(/^["'`]+|["'`]+$/g, '').replace(/[.,;:]+$/, '').trim()
+  if (!text || text.length > 120) return ''
+  if (!/^(?:on|in|at|behind|beside|next to|near|across|by|under|against|opposite|between|inside|outside|along|atop|above|below|in front of|to the (?:left|right) of|at the)\b/i.test(text)) return ''
+  if (/\b(?:is|are|stands?|sits?|sitting|standing|leans?|leaning)\b/i.test(text)) return ''
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
 
 function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
   const text = extractParserText(raw)
@@ -25658,6 +25724,8 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
         pose: simpleTags(s.pose, 6),
         expression: simpleTags(s.expression, 4),
         showAnatomy: s.show_anatomy === true || s.include_saved_anatomy === true,
+        mossPlace: mossPlacePhrase(s.moss_place),
+        mossAction: mossFieldText(s.moss_action),
       }))
     if (!subjects.length) continue
     // 1.8-shape replies carry sex only in prose such as "the tall woman on the left".
@@ -25680,6 +25748,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
       framing: simpleTags(item.framing, 3),
       composition: SIMPLE_COMPOSITIONS.includes(String(item.composition || '').trim().toLowerCase()) ? String(item.composition).trim().toLowerCase() : '',
       setting: simpleTags(item.setting, 8),
+      moss: { camera: mossFieldText(item.moss_camera), setting: mossFieldText(item.moss_setting), moment: mossFieldText(item.moss_moment) },
       subjects,
       interactions: (Array.isArray(item.interactions) ? item.interactions : Array.isArray(item.group_interactions) ? item.group_interactions : [])
         .filter(x => x && known(x.actor) && known(x.recipient) && String(x.act || '').trim())
@@ -26289,7 +26358,7 @@ function simpleRemember(memory, compiled, messageId) {
 
 // ---------- shared front half: build input, call the parser ----------------
 
-async function simpleParse({ userId, settings, preset, messages, targetIndex, target, chatId, scan = null, retry = null, outfitOverrides = null }) {
+async function simpleParse({ userId, settings, preset, messages, targetIndex, target, chatId, scan = null, retry = null, outfitOverrides = null, mossFields = false }) {
   const profiles = await getStoryProfiles(preset, settings, userId, chatId)
   const profilesForPrompt = gateDirectProfiles(profiles, directEvidenceFor(messages, targetIndex, settings))
   const memory = await readSimpleCast(chatId)
@@ -26305,7 +26374,8 @@ async function simpleParse({ userId, settings, preset, messages, targetIndex, ta
     setting: memory.setting.length ? memory.setting : anchorTags, lighting: [], outfits: [], clothingDigest: [], simTracker: null })
   let instruction = buildSimpleInstruction(profilesForPrompt, memory, card, {
     maxImages: settings.maxImages || 2, maxSubjects: settings.maxSubjects || 2,
-    banned: preset.bannedTags || '', fantasy: !!profiles.fantasySetting })
+    banned: preset.bannedTags || '', fantasy: !!profiles.fantasySetting,
+    moss: mossFields || presetPromptStyle(preset) === 'moss' })
   if (retry) {
     instruction += `\n\nRETRY ${retry.attempt}: the user rejected this prompt. Pick a meaningfully different moment or framing if the passage supports one:\n${retry.previousPrompt.slice(0, 1500)}`
   }
@@ -26449,7 +26519,9 @@ async function adultRoute(preset, settings = null) {
 async function runSimpleStoryScan({ userId, settings, preset, messages, targetIndex, target, chatId, scan, storyDebugMeta = {} }) {
   const startedAt = Number((scan && scan.startedAt) || Date.now())
   setStoryScanStage(scan, 'parsing', 'Waiting for the parser model (simple pipeline).')
-  const run = await simpleParse({ userId, settings, preset, messages, targetIndex, target, chatId, scan })
+  const adult = settings.promptOnly === true ? null : await adultRoute(preset, settings)
+  const mossFields = presetPromptStyle(preset) === 'moss' || !!(adult && adult.preset && presetPromptStyle(adult.preset) === 'moss')
+  const run = await simpleParse({ userId, settings, preset, messages, targetIndex, target, chatId, scan, mossFields })
   assertStoryScanActive(scan)
   const { profiles, card, parserInput, raw, parsed, images, report, parserMs } = run
   let memory = run.memory
@@ -26469,7 +26541,6 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
   // Adult pictures may be drawn with another preset (1.20). They are written
   // in that preset's prompt style too, so a Krea preset can hand its adult
   // pictures to a MOSS one and each gets the prompt its model wants.
-  const adult = settings.promptOnly === true ? null : await adultRoute(preset, settings)
   const adultPreset = adult && adult.preset ? adult.preset : null
   const adultPrefix = adultPreset ? await resolveMacros(adultPreset.promptPrefix, userId, chatId) : prefix
   const isAdult = image => ['nsfw', 'explicit'].includes(image.rating)
@@ -27022,7 +27093,9 @@ function mossPersonParts(subject) {
     ? (/^adult\b/i.test(personPhrase) ? personPhrase.replace(/^adult\b/i, age) : `${age} ${personPhrase}`) : personPhrase
   const noun = [build.join(', '), agedPhrase].filter(Boolean).join(' ')
   const who = subject.name ? `${subject.name}, ${articleFor(noun)} ${noun}` : `${articleFor(noun)} ${noun}`
-  const place = subject.mossPlace || MOSS_PLACES[subject.position] || ''
+  // "On the left, beside a broken pew, is Vesper": a place with a comma in it needs one after it too.
+  const rawPlace = subject.mossPlace || MOSS_PLACES[subject.position] || ''
+  const place = rawPlace.includes(',') && !/,$/.test(rawPlace) ? rawPlace + ',' : rawPlace
   const lines = []
   if (subject.mossDescription) {
     // The user's own words for this person replace the tag-built sentences.
@@ -27088,6 +27161,12 @@ function mossPersonParts(subject) {
   const isTowering = build.includes('towering') || /\btowering\b/i.test(phrase)
   if (isTowering && poseWords.some(tag => /^standing\b/i.test(tag)) && !poseWords.some(tag => /\btowering\b/i.test(tag))) {
     poseWords.push('towering')
+  }
+  // 1.21: the parser's own sentence for what this person does, when it wrote one.
+  const parserAction = subject.raw && subject.raw.mossAction ? subject.raw.mossAction : ''
+  if (parserAction) {
+    lines.push(parserAction)
+    return { look: lines.slice(0, lookCount), doing: lines.slice(lookCount), pronoun: p, bodyTags, feminineMale }
   }
   const pose = mossPoseSentence(poseWords, p)
   if (pose) lines.push(pose)
@@ -27298,10 +27377,16 @@ function compileMossImage(image, ctx) {
     const lighting = setting.filter(item => MOSS_LIGHT_RE.test(item))
     const places = setting.filter(item => !lighting.includes(item))
     const sides = mossSideOverrides(base.subjects)
-    const personParts = base.subjects.map(subject => mossPersonParts(sides && sides.has(subject) ? { ...subject, mossPlace: sides.get(subject) } : subject))
+    const placeFor = subject => (subject.raw && subject.raw.mossPlace) || (sides && sides.get(subject)) || ''
+    const personParts = base.subjects.map(subject => placeFor(subject) ? mossPersonParts({ ...subject, mossPlace: placeFor(subject) }) : mossPersonParts(subject))
     const camera = [framing.length ? framing.join(', ') : '', lighting.length ? 'in ' + mossList(lighting.map(item => mossPlaceArticle(item))) : '']
       .filter(Boolean).join(', ')
-    const styleLine = [mossSentence(mossPlain(style)), camera ? mossSentence(camera) : '', mossSentence(sceneText)].filter(Boolean).join(' ')
+    // 1.21: the parser's camera, setting and moment sentences when it wrote them.
+    // If LS widened a crop to keep a foot in frame, its own words win.
+    const parserScene = image.moss || {}
+    const widened = (base.parts.framing || []).includes('full body') && !(image.framing || []).some(tag => /full body/i.test(tag))
+    const cameraSentence = parserScene.camera && !widened ? parserScene.camera : camera ? mossSentence(camera) : ''
+    const styleLine = [mossSentence(mossPlain(style)), cameraSentence, mossSentence(sceneText)].filter(Boolean).join(' ')
     let personBlocks = personParts.map(part => [...part.look, ...part.doing].join(' ')).filter(Boolean)
     // Two people "on the barstool" read as one shared stool: each gets one.
     for (const seat of ['barstool', 'bar stool', 'stool', 'chair', 'armchair', 'seat']) {
@@ -27317,7 +27402,8 @@ function compileMossImage(image, ctx) {
       if (!full.includes(' ') || base.subjects.some(other => other !== subject && String(other.name || '').trim().split(/\s+/)[0] === first)) continue
       moment = moment.replace(new RegExp(`\\b${escapeRegExp(full)}\\b`, 'g'), first)
     }
-    prompt = [styleLine, mossSettingSentence(places), ...personBlocks, moment].filter(Boolean).join('\n\n')
+    if (parserScene.moment && base.subjects.length >= 2) moment = parserScene.moment
+    prompt = [styleLine, parserScene.setting || mossSettingSentence(places), ...personBlocks, moment].filter(Boolean).join('\n\n')
   }
 
   const negatives = [String(preset.mossNegative || '').trim() || MOSS_DEFAULT_NEGATIVE]

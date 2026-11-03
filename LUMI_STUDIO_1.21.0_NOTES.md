@@ -1,0 +1,18 @@
+# Lumi Studio 1.21.0 — the parser writes MOSS scenes in plain English
+
+## Why
+MOSS reads plain English. LS used to take the parser's Danbooru tags for poses, expressions and contact and turn them into sentences with rules, and each scene found a new way for that to go wrong ("He has 45 years old", three people lined up inside a counter, "clenched teeth" drawn as a snarl). The parser is already a language model reading the story, so for MOSS it now writes those parts itself.
+
+## What changes
+- When a preset uses the MOSS Image prompt style (or its adult pictures go to one that does), the parser is asked for a few extra plain sentences alongside its usual tags:
+  - **camera**: how close, from where, and the light with its source and side
+  - **setting**: the place and the few things that matter for where people are
+  - **each person's place**: "On the far side of the island", "Beside Lauren, on her own barstool"
+  - **each person's action**: body, hands, face in plain words, where they look
+  - **the moment**: what happens between people, whose body part touches what
+- Rules for those sentences: no looks or clothes (LS adds them), physically possible positions, what each person sits or stands on, nobody sharing a seat, mild everyday words for faces, a camera that shows what the moment depends on.
+- The MOSS prompt is then: style sentence → camera → scene summary → setting → for each person: place, **their MOSS description word-for-word**, what they are wearing (clothing memory), what they are doing → the moment.
+- People without a MOSS description still get a description built from their tags, so writing MOSS descriptions (looks only) for recurring characters gives the best results.
+- If the parser leaves a sentence out, or writes a tag list instead of a sentence, that part falls back to the 1.20 wording.
+- If LS widened a crop to keep a foot in frame, its own camera words are used instead of the parser's.
+- Anima (tags) prompts are unchanged, and Anima presets do not ask the parser for the extra sentences.
