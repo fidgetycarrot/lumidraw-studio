@@ -26586,6 +26586,8 @@ const MOSS_WORDS = {
   'full body': 'full-body shot', portrait: 'portrait framing', pov: 'first-person view', 'from side': 'seen from the side',
   'from above': 'seen from above', 'from below': 'seen from below', 'from behind': 'seen from behind',
   'front view': 'seen from the front', 'dutch angle': 'tilted camera angle',
+  // "clenched teeth" drew a bared-teeth snarl (Nov 2026); the jaw keeps the tension.
+  'clenched teeth': 'a clenched jaw', 'gritted teeth': 'a clenched jaw', 'teeth clenched': 'a clenched jaw',
 }
 // Single describing words that go in front of the noun: "a slim, petite man".
 const MOSS_BUILD_WORDS = new Set(['petite', 'slim', 'slender', 'skinny', 'thin', 'muscular', 'athletic', 'toned', 'tall', 'short',
@@ -26662,7 +26664,7 @@ function mossSentence(text) {
 
 // The word a phrase is about: the last word before "with", "on", "and"...
 function mossHeadWord(phrase) {
-  const core = String(phrase).toLowerCase().split(/\s+(?:with|through|on|in|into|onto|at|of|from|under|over|around|across|along|and|falling|hanging|covering|behind|near|plugged|attached|running)\s+/)[0]
+  const core = String(phrase).toLowerCase().split(/\s+(?:with|through|on|in|into|onto|at|of|from|under|over|around|across|along|and|falling|hanging|covering|behind|near|plugged|attached|running(?=\s+(?:down|along|across|over|from|through|to|up|into|under|around|between)\b))\s+/)[0]
   const words = core.split(/\s+/).filter(Boolean)
   // "robes tangled", "breeches hastily fastened": the noun is before these.
   while (words.length > 1 && /(?:ed|ly|ing)$|^(?:open|undone|off|up|down|loose|askew|aside)$/.test(words[words.length - 1])) words.pop()
@@ -26686,6 +26688,9 @@ function mossNoun(phrase) {
 function mossOwnBody(text, p) {
   return String(text).replace(new RegExp(`\\b(on|across|along|over|around|at|under|below|above|behind|down|between)\\s+(?!(?:his|her|their|the|a|an|one|both|each)\\b)((?:left|right|upper|lower|one)\\s+)?(${MOSS_BODY_PART_RE.source})\\b`, 'gi'),
     (_, prep, side, part) => `${prep} ${p.possessive} ${side || ''}${part}`)
+    // "biting lower lip" → "biting her lower lip".
+    .replace(new RegExp(`^(\\w+ing)\\s+(?!(?:his|her|their|the|a|an|one|both|each)\\b)((?:left|right|upper|lower|bottom|one)\\s+)?(${MOSS_BODY_PART_RE.source})\\b`, 'i'),
+      (_, verb, side, part) => `${verb} ${p.possessive} ${side || ''}${part}`)
 }
 
 // Drop a tag when a longer tag already says it ("scar" inside "scar on nose"),
@@ -26941,9 +26946,13 @@ function mossPersonParts(subject) {
   const franchise = mossFranchise(uniqueStrings([...phraseFranchise, ...mossWords(subject.identity)]))
   const feminineMale = subject.count === '1boy' && franchise.rest.some(tag => MOSS_FEMININE_MALE_RE.test(tag))
   const build = [], features = [], faceDefaults = [], states = []
+  let age = ''
   for (const tag of franchise.rest) {
     if (MOSS_FEMININE_MALE_RE.test(tag)) continue
     const lower = tag.toLowerCase()
+    // "45 years old" read "He has 45 years old"; it belongs in the noun.
+    const ageMatch = /^(\d{2})(?:\s*|-)years?(?:\s*|-)old$/.exec(lower)
+    if (ageMatch) { age = `${ageMatch[1]}-year-old`; continue }
     // One describing word is something they are, not something they have:
     // "clean-shaven", "sweating" read "a clean-shaven, sweating" before.
     if (/^[a-z]+(?:-[a-z]+)?$/.test(lower) && !MOSS_BUILD_WORDS.has(lower) && !MOSS_EXPRESSION_RE.test(tag) &&
@@ -26962,9 +26971,11 @@ function mossPersonParts(subject) {
   const fullMachine = /\b(?:full[- ]body|android|robot|mech|mecha|automaton|machine body)\b/i.test([phrase, ...franchise.rest].join(' '))
   const cyborgPhrase = !fullMachine && /\bcyborg\b/i.test(phrase)
   const personPhrase = cyborgPhrase ? phrase.replace(/\s*\bcyborg\b\s*/i, ' ').replace(/\s+/g, ' ').trim() || 'adult person' : phrase
-  const noun = [build.join(', '), personPhrase].filter(Boolean).join(' ')
+  const agedPhrase = age && !/\b\d{2}-year-old\b/.test(personPhrase)
+    ? (/^adult\b/i.test(personPhrase) ? personPhrase.replace(/^adult\b/i, age) : `${age} ${personPhrase}`) : personPhrase
+  const noun = [build.join(', '), agedPhrase].filter(Boolean).join(' ')
   const who = subject.name ? `${subject.name}, ${articleFor(noun)} ${noun}` : `${articleFor(noun)} ${noun}`
-  const place = MOSS_PLACES[subject.position] || ''
+  const place = subject.mossPlace || MOSS_PLACES[subject.position] || ''
   const lines = []
   if (subject.mossDescription) {
     // The user's own words for this person replace the tag-built sentences.
@@ -27046,6 +27057,31 @@ function mossPersonParts(subject) {
     if (doing.length) lines.push(`${p.subject} ${p.be} ${mossList(doing)}.`)
   }
   return { look: lines.slice(0, lookCount), doing: lines.slice(lookCount), pronoun: p, bodyTags, feminineMale }
+}
+
+// One person behind a counter, island, bar or desk and the rest in front of it:
+// "on the left / in the center / on the right" lined everyone up in a row and
+// MOSS pushed them into the counter (Nov 2026). Say who is on which side.
+const MOSS_DIVIDER_RE = /\bbehind (?:the |a )?((?:kitchen )?island|counter(?:top)?|bar|desk|reception desk|table|workbench|register|stall)\b/i
+function mossSideOverrides(subjects) {
+  const dividers = subjects.map(subject => {
+    const hit = mossWords(subject.pose).map(tag => MOSS_DIVIDER_RE.exec(tag)).find(Boolean)
+    return hit ? hit[1].toLowerCase() : ''
+  })
+  const far = subjects.filter((_, index) => dividers[index])
+  if (!far.length || far.length === subjects.length) return null
+  const noun = dividers.find(Boolean)
+  const order = { left: 0, 'center-left': 1, center: 2, 'center-right': 3, right: 4 }
+  const near = subjects.filter((_, index) => !dividers[index])
+    .sort((a, b) => (order[a.position] ?? 2) - (order[b.position] ?? 2))
+  const out = new Map()
+  for (const subject of far) out.set(subject, `On the far side of the ${noun}, facing across it,`)
+  near.forEach((subject, index) => {
+    const first = near[0]
+    const firstName = first.name ? String(first.name).trim().split(/\s+/)[0] : 'them'
+    out.set(subject, index === 0 ? `On the near side of the ${noun}` : `Beside ${firstName}, on the same side of the ${noun},`)
+  })
+  return out
 }
 
 const MOSS_PLACES = {
@@ -27214,12 +27250,27 @@ function compileMossImage(image, ctx) {
     // 5. cross-character action lines at the end.
     const lighting = setting.filter(item => MOSS_LIGHT_RE.test(item))
     const places = setting.filter(item => !lighting.includes(item))
-    const personParts = base.subjects.map(mossPersonParts)
+    const sides = mossSideOverrides(base.subjects)
+    const personParts = base.subjects.map(subject => mossPersonParts(sides && sides.has(subject) ? { ...subject, mossPlace: sides.get(subject) } : subject))
     const camera = [framing.length ? framing.join(', ') : '', lighting.length ? 'in ' + mossList(lighting.map(item => mossPlaceArticle(item))) : '']
       .filter(Boolean).join(', ')
     const styleLine = [mossSentence(mossPlain(style)), camera ? mossSentence(camera) : '', mossSentence(sceneText)].filter(Boolean).join(' ')
-    const personBlocks = personParts.map(part => [...part.look, ...part.doing].join(' ')).filter(Boolean)
-    prompt = [styleLine, mossSettingSentence(places), ...personBlocks, actions.join(' ')].filter(Boolean).join('\n\n')
+    let personBlocks = personParts.map(part => [...part.look, ...part.doing].join(' ')).filter(Boolean)
+    // Two people "on the barstool" read as one shared stool: each gets one.
+    for (const seat of ['barstool', 'bar stool', 'stool', 'chair', 'armchair', 'seat']) {
+      const re = new RegExp(`\\bon the ${seat}\\b`, 'i')
+      if (personBlocks.filter(block => re.test(block)).length >= 2) personBlocks = personBlocks.map(block => block.replace(new RegExp(`\\bon the ${seat}\\b`, 'gi'), `on ${articleFor(seat)} ${seat}`))
+    }
+    // After each person's paragraph has given the full name, the moment uses
+    // the first name ("Lauren presses…", not "Lauren Vance presses…" twice).
+    let moment = actions.join(' ')
+    for (const subject of base.subjects) {
+      const full = String(subject.name || '').trim()
+      const first = full.split(/\s+/)[0]
+      if (!full.includes(' ') || base.subjects.some(other => other !== subject && String(other.name || '').trim().split(/\s+/)[0] === first)) continue
+      moment = moment.replace(new RegExp(`\\b${escapeRegExp(full)}\\b`, 'g'), first)
+    }
+    prompt = [styleLine, mossSettingSentence(places), ...personBlocks, moment].filter(Boolean).join('\n\n')
   }
 
   const negatives = [String(preset.mossNegative || '').trim() || MOSS_DEFAULT_NEGATIVE]
