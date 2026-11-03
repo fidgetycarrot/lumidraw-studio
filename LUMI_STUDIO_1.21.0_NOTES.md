@@ -16,3 +16,7 @@ MOSS reads plain English. LS used to take the parser's Danbooru tags for poses, 
 - If the parser leaves a sentence out, or writes a tag list instead of a sentence, that part falls back to the 1.20 wording.
 - If LS widened a crop to keep a foot in frame, its own camera words are used instead of the parser's.
 - Anima (tags) prompts are unchanged, and Anima presets do not ask the parser for the extra sentences.
+
+# 1.21.1 — a simpler Illustration mode menu
+- "Parser" and "Direct" ran the same simple pipeline, so the menu is now: Off, Inline, Only when I press Scan, Automatic after replies.
+- A saved Parser mode shows as the matching choice and is saved as Direct the next time settings are saved. Only the old (pre-1.9) pipeline treated them differently.

@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.21.0'
+  const EXTENSION_VERSION = '1.21.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1203,10 +1203,8 @@ function realSetup(ctx) {
             <select class="ld-mode">
               <option value="off">Off — no story pictures</option>
               <option value="inline">Inline — the story model asks for pictures</option>
-              <option value="parser-manual">Parser — only when I press Scan</option>
-              <option value="parser-auto">Parser — automatic after replies</option>
-              <option value="direct-manual">Direct — only when I press Scan</option>
-              <option value="direct-auto">Direct — automatic after replies</option>
+              <option value="direct-manual">Only when I press Scan</option>
+              <option value="direct-auto">Automatic after replies</option>
             </select>
             <div class="ld-mode-note ld-help">Manual uses the Scan buttons; automatic counts new replies while enabled, with no catch-up for replies written while off. Scan latest bypasses the wait.</div>
             <input type="checkbox" class="ld-autoscan" hidden aria-hidden="true" tabindex="-1" />
@@ -1725,10 +1723,12 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     return /-(?:auto)$/.test(String(value || ''))
   }
 
+  // 1.21.1: "Parser" and "Direct" ran the same simple pipeline, so the menu
+  // offers one of them. A saved "parser" mode shows (and saves) as Direct.
   function storyBehaviorFromSettings(mode, autoScan) {
     const normalized = storyModeFromBehavior(mode)
     if (normalized === 'direct' || normalized === 'parser') {
-      return `${normalized}-${autoScan === false ? 'manual' : 'auto'}`
+      return `direct-${autoScan === false ? 'manual' : 'auto'}`
     }
     return normalized
   }
