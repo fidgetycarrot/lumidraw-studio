@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.19.6'
+  const EXTENSION_VERSION = '1.20.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -330,7 +330,17 @@ function realSetup(ctx) {
   let nanoCatalogData = { models: [], samplers: [], loras: [], schedulers: [], loaded: false }
   function usesSwarm(config) { return config && config.renderBackend === 'swarmui' }
   function usesNano(config) { return config && config.renderBackend === 'nanogpt' }
-  function rendererCatalog(config) { return usesSwarm(config) ? swarmCatalogData : usesNano(config) ? nanoCatalogData : catalog }
+  function usesDtCloud(config) { return config && config.renderBackend === 'dtcloud' }
+  // Draw Things cloud through the LS Cloud Helper (1.20). Draw Things' own
+  // sampler names; the helper matches them to the cloud's list.
+  const DT_CLOUD_MODEL = 'moss_image_sft_q8p.ckpt'
+  const dtCloudCatalog = { models: [{ file: DT_CLOUD_MODEL, name: 'MOSS Image' }], loras: [], schedulers: [],
+    samplers: ['Euler A Trailing', 'Euler A', 'Euler', 'DPM++ 2M Karras', 'DPM++ 2M', 'DPM++ SDE Karras', 'DPM++ SDE',
+      'DPM++ 2M SDE Karras', 'DPM++ 2M SDE', 'DPM++ 3M SDE Karras', 'DPM++ 3M SDE', 'DPM++ 2S A Karras', 'DPM++ 2S A',
+      'DDIM', 'UniPC', 'UniPC Trailing', 'DDIM Trailing', 'LCM', 'TCD', 'DPM++ 2M AYS', 'Euler A AYS'] }
+  function rendererCatalog(config) { return usesSwarm(config) ? swarmCatalogData : usesNano(config) ? nanoCatalogData : usesDtCloud(config) ? dtCloudCatalog : catalog }
+  function rendererName(config) { return usesSwarm(config) ? 'SwarmUI' : usesNano(config) ? 'NanoGPT' : usesDtCloud(config) ? 'Draw Things cloud' : 'Draw Things' }
+  function rendererValue(config) { return usesSwarm(config) ? 'swarmui' : usesNano(config) ? 'nanogpt' : usesDtCloud(config) ? 'dtcloud' : 'drawthings' }
   let busy = false
   let defaults = { protocol: '', parserInstruction: '', legacyParserInstruction: '', animaParserInstruction: '' }
   const pending = new Map() // requestId → {resolve, reject}
@@ -1073,7 +1083,7 @@ function realSetup(ctx) {
                 <div class="ld-card">
                   <div class="ld-subtitle">Core generation</div>
                   <span class="ld-label">Image renderer</span>
-                  <select class="ld-draft-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option></select>
+                  <select class="ld-draft-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option><option value="dtcloud">Draw Things cloud</option></select>
                   <div class="ld-swarm-tools" style="display:none;margin-top:8px">
                     <button class="ld-btn" data-act="swarm-reload">Connect / refresh SwarmUI</button>
                     <span class="ld-label">Load settings from a SwarmUI preset</span>
@@ -1387,9 +1397,9 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
           <div class="ld-editor ld-card" style="display:none">
             <div class="ld-subtitle">Preset editor</div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
-            <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option></select>
+            <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option><option value="dtcloud">Draw Things cloud</option></select>
             <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
-            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-status ld-ed-nano-status"></div>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things cloud model — <code>moss_image_sft_q8p.ckpt</code> is MOSS Image. Empty steps, CFG and shift use MOSS’s 50, 4 and 5. LoRAs are not available here yet.</div><div class="ld-status ld-ed-nano-status"></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div class="ld-ed-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler" title="Blank uses SwarmUI's default."></select></div>
@@ -1398,6 +1408,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Steps</span><input class="ld-ed-steps" type="number" min="1" max="150" /></div>
               <div><span class="ld-label">CFG</span><input class="ld-ed-cfg" type="number" step="0.5" min="0" /></div>
+              <div class="ld-ed-shift-field" style="display:none"><span class="ld-label">Shift</span><input class="ld-ed-shift" type="number" step="0.5" min="0" /></div>
             </div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Width</span><input class="ld-ed-w" type="number" step="64" min="256" /></div>
@@ -1405,8 +1416,8 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             </div>
             <label class="ld-check" style="margin-top:7px"><input type="checkbox" class="ld-ed-smart-size" /> Pick the size for each picture</label>
             <div class="ld-hint">Width × height becomes the most it will use. A close-up of one person gets about half the pixels and draws faster; three or more people or a wide shot get the full size. New pipeline only.</div>
-            <label class="ld-check" style="margin-top:7px"><input type="checkbox" class="ld-ed-adult-prompt" /> Adult pictures: prompt only (for Draw Things+)</label>
-            <div class="ld-hint">NSFW and explicit pictures are not drawn here. Their prompt waits in the Prompt only sheet (the clipboard button) with MOSS settings, for you to make in Draw Things+ and paste back. Everything else is drawn with this preset as usual.</div>
+            <span class="ld-label" style="margin-top:7px">Adult pictures (NSFW and explicit)</span><select class="ld-ed-adult-preset"><option value="">Draw with this preset</option><option value="__prompt__">Prompt only (copy into Draw Things+)</option></select>
+            <div class="ld-hint">Choose another preset to draw them with, such as a Draw Things cloud MOSS preset. Everything else is drawn with this preset. Prompt only puts their prompt in the clipboard sheet to make in Draw Things+ and paste back.</div>
             <span class="ld-label" style="margin-top:9px">LoRAs</span>
             <div class="ld-ed-loras" style="display:flex;flex-direction:column;gap:5px"></div>
             <button class="ld-btn ld-compact" data-act="ed-addlora" style="margin-top:5px">＋ LoRA</button>
@@ -1548,6 +1559,12 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-help">Pictures are made on NanoGPT’s servers and paid from your NanoGPT balance. The key is kept in Lumiverse’s secure storage and is not shown again. The same key can also be used by Lumiverse’s own image connection. To use it here, make a preset with NanoGPT as its image app.</div>
             <div class="ld-row" style="margin-top:6px"><button class="ld-btn" data-act="nano-save">Save key</button><button class="ld-btn" data-act="nano-clear">Remove key</button></div>
             <div class="ld-status ld-nano-status"></div>
+          </div>
+          <div data-settings-section="connection" class="ld-card">
+            <div class="ld-subtitle">Draw Things cloud helper</div>
+            <div class="ld-help">A small program on this Mac sends pictures to Draw Things’ cloud with your Draw Things+ key, which stays in the Mac’s Keychain. To use it, make a preset with Draw Things cloud as its image app. Draw Things+ covers 200 cloud pictures a month.</div>
+            <div class="ld-row" style="margin-top:6px"><button class="ld-btn" data-act="dtcloud-check">Check the helper</button></div>
+            <div class="ld-status ld-dtcloud-status"></div>
           </div>
           <div data-settings-section="connection" class="ld-card">
             <div class="ld-subtitle">Draw Things API</div>
@@ -2776,6 +2793,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const cardOf = (selector) => { const node = $(selector); return node ? node.closest('.ld-card') : null }
       const swarmCard = cardOf('.ld-swarm-url')
       const nanoCard = cardOf('.ld-nano-key')
+      const dtCloudCard = cardOf('.ld-dtcloud-status')
       const drawThingsCard = cardOf('.ld-host')
       const bridgeCard = cardOf('.ld-bridge-host')
       const cloudCard = cardOf('.ld-cloud-enabled')
@@ -2789,7 +2807,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       }
       if (cloudCard) {
         const title = cloudCard.querySelector('.ld-subtitle')
-        if (title) title.textContent = 'Draw Things cloud'
+        if (title) title.textContent = 'Draw Things cloud (old relay)'
       }
       if (helpCard) {
         const title = helpCard.querySelector('.ld-subtitle')
@@ -2809,7 +2827,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const parserSection = section('parser')
       const chat = section('chat')
       const help = section('help')
-      for (const node of [swarmCard, nanoCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
+      for (const node of [swarmCard, nanoCard, dtCloudCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
       parserSection.appendChild(parserBinding)
       chat.appendChild(display)
       if (helpCard) help.appendChild(helpCard)
@@ -2918,7 +2936,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
 
   function receiveRendererPreview(payload) {
-    if (payload.renderer !== 'SwarmUI' || !rendererPreviewVisible(payload)) return
+    if (!['SwarmUI', 'Draw Things cloud'].includes(payload.renderer) || !rendererPreviewVisible(payload)) return
+    const rendererLabel = payload.renderer
     const id = typeof payload.generationId === 'string' ? payload.generationId : ''
     const startedAt = payload.startedAt, sequence = payload.sequence
     if (!id || id.length > 200 || !Number.isFinite(startedAt) || !Number.isSafeInteger(sequence) || sequence < 0 ||
@@ -2952,8 +2971,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       schedulePreviewDismissal(value)
     }
     renderLauncherPreview()
-    const label = terminal ? (value.stage === 'error' ? 'SwarmUI generation failed. See the generation error for details.' : 'SwarmUI rendered the image; saving output…')
-      : 'SwarmUI rendering' + (percent == null ? '…' : ' · ' + percent + '%')
+    const label = terminal ? (value.stage === 'error' ? `${rendererLabel} could not make the picture. See the error for details.` : `${rendererLabel} made the picture; saving it…`)
+      : `${rendererLabel} drawing` + (percent == null ? '…' : ' · ' + percent + '%')
     pendingRendererStatus = { value, stage: value.stage, label, kind: value.stage === 'error' ? 'err' : undefined }
     paintRendererStatus()
   }
@@ -3580,7 +3599,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       if (!draftConfig) workspaceEl.textContent = 'Not loaded'
       else {
         const model = String(draftConfig.model || '').replace(/\.ckpt$/i, '')
-        workspaceEl.textContent = `${usesSwarm(draftConfig) ? 'SwarmUI' : usesNano(draftConfig) ? 'NanoGPT' : 'Draw Things'} · ${draftDirty ? 'Modified' : 'Ready'}${model ? ' · ' + model : ''}`
+        workspaceEl.textContent = `${rendererName(draftConfig)} · ${draftDirty ? 'Modified' : 'Ready'}${model ? ' · ' + model : ''}`
       }
     }
 
@@ -4041,6 +4060,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     })).filter((lora) => lora.file)
     if (usesSwarm(config)) config.swarmParams = readSwarmParams('draft')
     else if (usesNano(config)) { delete config.sampler; config.loras = [] }
+    else if (usesDtCloud(config)) config.loras = []
     else readDtSettingsFromControls(config)
     return config
   }
@@ -4049,14 +4069,16 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const config = draftConfig || {}
     const activeCatalog = rendererCatalog(config)
     const nano = usesNano(config)
-    $('[data-act="sync"]').title = nano ? 'Refresh the NanoGPT model list' : usesSwarm(config) ? 'Refresh SwarmUI models and saved presets' : 'Capture the recipe currently shown in Draw Things'
-    $('.ld-draft-backend').value = usesSwarm(config) ? 'swarmui' : nano ? 'nanogpt' : 'drawthings'
+    const cloud = usesDtCloud(config)
+    $('[data-act="sync"]').title = nano ? 'Refresh the NanoGPT model list' : usesSwarm(config) ? 'Refresh SwarmUI models and saved presets' : cloud ? 'Check the LS Cloud Helper' : 'Capture the recipe currently shown in Draw Things'
+    $('.ld-draft-backend').value = rendererValue(config)
     $('.ld-swarm-tools').style.display = usesSwarm(config) ? '' : 'none'
     $('.ld-swarm-settings').style.display = usesSwarm(config) ? '' : 'none'
-    $('.ld-dt-settings').style.display = usesSwarm(config) || nano ? 'none' : ''
-    $('.ld-renderer-settings-title').textContent = nano ? 'NanoGPT' : usesSwarm(config) ? 'SwarmUI settings' : 'Draw Things settings'
+    $('.ld-dt-settings').style.display = usesSwarm(config) || nano || cloud ? 'none' : ''
+    $('.ld-renderer-settings-title').textContent = nano ? 'NanoGPT' : usesSwarm(config) ? 'SwarmUI settings' : cloud ? 'Draw Things cloud' : 'Draw Things settings'
     $('.ld-renderer-settings-help').textContent = nano
       ? 'Made online and paid from your NanoGPT balance. Steps and CFG are sent only when the model takes them; leave them empty for its defaults. For MOSS, write the prompt in plain English. Samplers and LoRAs do not apply.'
+      : cloud ? 'Made on Draw Things’ cloud by the LS Cloud Helper on your Mac, from your Draw Things+ monthly pictures. MOSS uses shift ' + (config.shift ?? 5) + '; change shift in a saved preset. LoRAs do not apply here yet.'
       : usesSwarm(config) ? 'Only SwarmUI-native settings are sent. Draw Things settings and its cloud option do not apply.' : 'Settings captured from Draw Things on the last Sync. Save the workspace to a preset to use them in Story.'
     const samplerRow = $('.ld-draft-sampler') ? $('.ld-draft-sampler').closest('.ld-row') : null
     if (samplerRow) samplerRow.style.display = nano ? 'none' : ''
@@ -5211,7 +5233,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       return
     }
     const c = draftConfig
-    const bits = [usesSwarm(c) ? 'SwarmUI' : usesNano(c) ? 'NanoGPT' : 'Draw Things']
+    const bits = [rendererName(c)]
     if (c.model) bits.push(`model: ${c.model}`)
     if (c.sampler) bits.push(`sampler: ${c.sampler}`)
     if (usesSwarm(c)) bits.push(`scheduler: ${c.swarmParams?.scheduler || 'SwarmUI default'}`)
@@ -5540,7 +5562,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     }
     const shown = libVisible('preset', presets, {
       nameOf: (p) => p.name || '',
-      textOf: (p) => { const c = p.config || {}; return [c.model, c.sampler, usesSwarm(c) ? 'swarmui' : usesNano(c) ? 'nanogpt' : 'draw things', (c.loras || []).map(l => l.file || l.name || '').join(' ')].join(' ') },
+      textOf: (p) => { const c = p.config || {}; return [c.model, c.sampler, rendererName(c).toLowerCase(), (c.loras || []).map(l => l.file || l.name || '').join(' ')].join(' ') },
     })
     libCount(bar, shown.length, presets.length, 'preset')
     if (!shown.length) libEmptyMatch(list, 'preset')
@@ -5550,7 +5572,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const loras = (c.loras || []).length
       list.appendChild(libItem({
         name: p.name,
-        badges: [p.name === activePreset ? 'in use' : '', usesSwarm(c) ? 'SwarmUI' : usesNano(c) ? 'NanoGPT' : 'Draw Things', p.promptStyle === 'moss' ? 'MOSS prompts' : ''],
+        badges: [p.name === activePreset ? 'in use' : '', rendererName(c), p.promptStyle === 'moss' ? 'MOSS prompts' : ''],
         sub: c.model || '',
         tags: [c.sampler, c.steps ? `${c.steps} steps` : '', size, loras ? `${loras} LoRA${loras === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · '),
         active: p.name === activePreset,
@@ -5842,6 +5864,10 @@ ${entry.prompt || ''}`.trim()
       setStatus(statusSel, `${nanoCatalogData.models.length} NanoGPT models loaded.`, 'good')
       return
     }
+    if (usesDtCloud(draftConfig)) {
+      await refreshDtCloudStatus(statusSel)
+      return
+    }
     if (usesSwarm(draftConfig)) {
       await loadSwarmCatalog()
       setStatus(statusSel, 'SwarmUI connected. Choose a saved SwarmUI preset above and load it; browser workspace settings are not exposed by its API.', 'good')
@@ -5888,7 +5914,7 @@ ${entry.prompt || ''}`.trim()
     busy = true
     const btn = $('[data-act="generate"]')
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="ld-spin">◌</span> Generating…' }
-    setStatus('.ld-gen-status', 'Sent to ' + (usesSwarm(draftConfig) ? 'SwarmUI' : usesNano(draftConfig) ? 'NanoGPT' : 'Draw Things') + ' — hold tight…')
+    setStatus('.ld-gen-status', 'Sent to ' + rendererName(draftConfig) + ' — hold tight…')
     try {
       const bundle = currentDraftBundle()
       const seedRaw = $('.ld-seed').value
@@ -8536,20 +8562,36 @@ ${entry.prompt || ''}`.trim()
   // Shows only the fields the chosen image app uses.
   function syncEditorRendererFields() {
     const nano = $('.ld-ed-backend').value === 'nanogpt'
+    const cloud = $('.ld-ed-backend').value === 'dtcloud'
     const samplerRow = $('.ld-ed-sampler') ? $('.ld-ed-sampler').closest('.ld-row') : null
     if (samplerRow) samplerRow.style.display = nano ? 'none' : ''
     const loras = $('.ld-ed-loras')
     if (loras) {
-      loras.style.display = nano ? 'none' : 'flex'
+      loras.style.display = nano || cloud ? 'none' : 'flex'
       const label = loras.previousElementSibling
-      if (label && label.classList.contains('ld-label')) label.style.display = nano ? 'none' : ''
+      if (label && label.classList.contains('ld-label')) label.style.display = nano || cloud ? 'none' : ''
     }
     const addLora = $('[data-act="ed-addlora"]')
-    if (addLora) addLora.style.display = nano ? 'none' : ''
+    if (addLora) addLora.style.display = nano || cloud ? 'none' : ''
+    if ($('.ld-ed-shift-field')) $('.ld-ed-shift-field').style.display = cloud ? '' : 'none'
     fillNanoPicker($('.ld-ed-nano-pick'), $('.ld-ed-model'), nano)
-    if ($('.ld-ed-model-hint')) $('.ld-ed-model-hint').style.display = nano ? 'none' : ''
+    if ($('.ld-ed-model-hint')) $('.ld-ed-model-hint').style.display = nano || cloud ? 'none' : ''
     if ($('.ld-ed-nano-hint')) $('.ld-ed-nano-hint').style.display = nano ? '' : 'none'
-    if (!nano) setStatus('.ld-ed-nano-status', '')
+    if ($('.ld-ed-dtcloud-hint')) $('.ld-ed-dtcloud-hint').style.display = cloud ? '' : 'none'
+    if (cloud) refreshDtCloudStatus('.ld-ed-nano-status')
+    else if (!nano) setStatus('.ld-ed-nano-status', '')
+  }
+
+  // The helper's state and this month's count, in one plain line.
+  async function refreshDtCloudStatus(selector = '.ld-dtcloud-status') {
+    try {
+      const s = await call('dtcloud_status', {}, 15000)
+      const count = s.count ? `${s.count.count} of ${s.count.of} cloud pictures used this month.` : ''
+      if (!s.reachable) setStatus(selector, `The helper is not running on this Mac. ${count}`.trim(), 'err')
+      else if (!s.keySaved) setStatus(selector, `The helper is running, but no Draw Things key is saved. Run: ls-cloud-helper save-key. ${count}`.trim(), 'err')
+      else setStatus(selector, `Helper ready${s.busy ? ' (drawing now)' : ''}. ${count}`.trim(), 'good')
+      return s
+    } catch (e) { setStatus(selector, e.message, 'err') }
   }
 
   // NanoGPT models as a real list to pick from: phones show no suggestions
@@ -8718,11 +8760,11 @@ ${entry.prompt || ''}`.trim()
     editorExtra = p ? (p.extra || null) : (seed ? (seed.extra || null) : null)
     const c = p ? (p.config || {}) : (seed ? (seed.config || {}) : (syncedConfig || {}))
     editorRenderConfig = cloneJson(c)
-    $('.ld-ed-backend').value = usesSwarm(c) ? 'swarmui' : usesNano(c) ? 'nanogpt' : 'drawthings'
+    $('.ld-ed-backend').value = rendererValue(c)
     $('.ld-ed-swarm-settings').style.display = usesSwarm(c) ? '' : 'none'
     $('.ld-ed-scheduler-field').style.display = usesSwarm(c) ? '' : 'none'
     syncEditorRendererFields()
-    try { if (usesSwarm(c)) await loadSwarmCatalog(); else if (usesNano(c)) await loadNanoCatalog(); else await loadCatalog() } catch { /* saved presets remain editable offline */ }
+    try { if (usesSwarm(c)) await loadSwarmCatalog(); else if (usesNano(c)) await loadNanoCatalog(); else if (!usesDtCloud(c)) await loadCatalog() } catch { /* saved presets remain editable offline */ }
     populateDatalist('ld-model-catalog-ed', rendererCatalog(c).models.map(m => m.file))
     labelNanoModels()
     writeSwarmParams('ed', c)
@@ -8740,9 +8782,20 @@ ${entry.prompt || ''}`.trim()
     populateSelect($('.ld-ed-sampler'), rendererCatalog(c).samplers, c.sampler || '', '— choose sampler —')
     $('.ld-ed-steps').value = c.steps !== undefined ? c.steps : ''
     $('.ld-ed-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''
+    if ($('.ld-ed-shift')) $('.ld-ed-shift').value = c.shift !== undefined ? c.shift : ''
     $('.ld-ed-w').value = c.width || ''
     if ($('.ld-ed-smart-size')) $('.ld-ed-smart-size').checked = !!(p && p.smartSize)
-    if ($('.ld-ed-adult-prompt')) $('.ld-ed-adult-prompt').checked = !!(p && p.adultPromptOnly)
+    const adultPick = $('.ld-ed-adult-preset')
+    if (adultPick) {
+      const current = p ? (p.adultPreset !== undefined ? String(p.adultPreset || '') : (p.adultPromptOnly ? '__prompt__' : '')) : ''
+      adultPick.replaceChildren(new Option('Draw with this preset', ''), new Option('Prompt only (copy into Draw Things+)', '__prompt__'))
+      for (const other of presets) {
+        if (!other || other.name === (p && p.name)) continue
+        adultPick.appendChild(new Option(`Draw with “${other.name}” (${rendererName(other.config || {})})`, other.name))
+      }
+      if (current && ![...adultPick.options].some(o => o.value === current)) adultPick.appendChild(new Option(`“${current}” (preset not found)`, current))
+      adultPick.value = current
+    }
     $('.ld-ed-h').value = c.height || ''
     const lbox = $('.ld-ed-loras')
     lbox.innerHTML = ''
@@ -9147,19 +9200,25 @@ ${entry.prompt || ''}`.trim()
     const next = $('.ld-draft-backend').value
     try {
       const previous = readDraftConfigFromControls()
-      rendererDrafts[usesSwarm(previous) ? 'swarmui' : usesNano(previous) ? 'nanogpt' : 'drawthings'] = previous
+      rendererDrafts[rendererValue(previous)] = previous
       draftConfig = cloneJson(rendererDrafts[next] || (next === 'swarmui' ? {renderBackend:'swarmui', swarmParams:{}}
-        : next === 'nanogpt' ? {renderBackend:'nanogpt', model:'fal-ai/moss-image', width:1024, height:1024} : {}))
+        : next === 'nanogpt' ? {renderBackend:'nanogpt', model:'fal-ai/moss-image', width:1024, height:1024}
+        : next === 'dtcloud' ? {renderBackend:'dtcloud', model:DT_CLOUD_MODEL, width:1024, height:1024, steps:50, guidance_scale:4, shift:5} : {}))
       draftDirty = true
       renderDraftControls(); saveDraftLocal(); renderChips()
       if (next === 'swarmui') await loadSwarmCatalog()
       if (next === 'nanogpt') { await loadNanoCatalog(); fillDraftNanoModels() }
+      if (next === 'dtcloud') refreshDtCloudStatus('.ld-draft-status')
       setStatus('.ld-draft-status', 'Renderer changed in the workspace only. Save a new preset to use it for Story images.')
     } catch (error) { setStatus('.ld-draft-status', error.message, 'err'); renderDraftControls() }
   })
   $('[data-act="swarm-reload"]').addEventListener('click', () => {
     try { draftConfig = readDraftConfigFromControls() } catch (e) { setStatus('.ld-draft-status', e.message, 'err'); return }
     loadSwarmCatalog().catch(() => {})
+  })
+  if ($('[data-act="dtcloud-check"]')) $('[data-act="dtcloud-check"]').addEventListener('click', () => {
+    setStatus('.ld-dtcloud-status', 'Checking…')
+    refreshDtCloudStatus('.ld-dtcloud-status')
   })
   $('[data-act="nano-save"]').addEventListener('click', async () => {
     const input = $('.ld-nano-key')
@@ -9193,18 +9252,27 @@ ${entry.prompt || ''}`.trim()
   $('.ld-ed-backend').addEventListener('change', async () => {
     const swarm = $('.ld-ed-backend').value === 'swarmui'
     const nano = $('.ld-ed-backend').value === 'nanogpt'
-    editorRenderConfig = swarm ? {renderBackend:'swarmui',swarmParams:{}} : nano ? {renderBackend:'nanogpt'} : {}
+    const cloud = $('.ld-ed-backend').value === 'dtcloud'
+    editorRenderConfig = swarm ? {renderBackend:'swarmui',swarmParams:{}} : nano ? {renderBackend:'nanogpt'} : cloud ? {renderBackend:'dtcloud'} : {}
     syncEditorRendererFields()
     editorExtra = null
-    for (const field of ['model','steps','cfg','w','h']) $('.ld-ed-' + field).value = ''
+    for (const field of ['model','steps','cfg','w','h','shift']) if ($('.ld-ed-' + field)) $('.ld-ed-' + field).value = ''
+    if (cloud) {
+      // MOSS on the cloud, with MOSS's own settings, as a starting point.
+      $('.ld-ed-model').value = DT_CLOUD_MODEL
+      $('.ld-ed-steps').value = 50; $('.ld-ed-cfg').value = 4; $('.ld-ed-shift').value = 5
+      $('.ld-ed-w').value = 1024; $('.ld-ed-h').value = 1024
+      const style = $('.ld-ed-prompt-style')
+      if (style && style.value !== 'moss') { style.value = 'moss'; style.dispatchEvent(new Event('change')) }
+    }
     $('.ld-ed-loras').innerHTML = ''
     $('.ld-ed-swarm-settings').style.display = swarm ? '' : 'none'
     populateDatalist('ld-model-catalog-ed', rendererCatalog(editorRenderConfig).models.map(m => m.file))
     populateSelect($('.ld-ed-sampler'), rendererCatalog(editorRenderConfig).samplers, '', '— choose sampler —')
     writeSwarmParams('ed', editorRenderConfig)
-    try { if (swarm) await loadSwarmCatalog(); else if (nano) await loadNanoCatalog(); else await loadCatalog() } catch (e) { setStatus(nano ? '.ld-ed-nano-status' : '.ld-ed-status', e.message, 'err') }
+    try { if (swarm) await loadSwarmCatalog(); else if (nano) await loadNanoCatalog(); else if (!cloud) await loadCatalog() } catch (e) { setStatus(nano ? '.ld-ed-nano-status' : '.ld-ed-status', e.message, 'err') }
     writeSwarmParams('ed', editorRenderConfig)
-    if (!nano) $('.ld-ed-loras').appendChild(loraRow('', 1))
+    if (!nano && !cloud) $('.ld-ed-loras').appendChild(loraRow('', 1))
   })
   // NanoGPT presets: a MOSS model wants the MOSS prompt style, an Anima model
   // wants Anima. Switch it for the user and say so.
@@ -9244,18 +9312,19 @@ ${entry.prompt || ''}`.trim()
         }
       const sv = $('.ld-ed-sampler').value.trim(); if (sv && !usesNano(config)) config.sampler = sv; else delete config.sampler
       setIf('.ld-ed-steps', 'steps'); setIf('.ld-ed-cfg', 'guidance_scale', true)
+      if (usesDtCloud(config)) { delete config.shift; setIf('.ld-ed-shift', 'shift', true) }
       setIf('.ld-ed-w', 'width'); setIf('.ld-ed-h', 'height')
       config.loras = [...$('.ld-editor').querySelectorAll('.ld-ed-loras .ld-row')].map((row) => ({
         file: row.querySelector('.ld-lora-file').value.trim(),
         weight: row.querySelector('.ld-lora-weight').value === '' ? 1 : Number(row.querySelector('.ld-lora-weight').value),
       })).filter((l) => l.file)
-      if (usesNano(config)) config.loras = []
+      if (usesNano(config) || usesDtCloud(config)) config.loras = []
       const res = await call('save_preset', {
         name,
         config,
         extra: editorExtra,
         ...($('.ld-ed-smart-size') ? { smartSize: $('.ld-ed-smart-size').checked } : {}),
-        ...($('.ld-ed-adult-prompt') ? { adultPromptOnly: $('.ld-ed-adult-prompt').checked } : {}),
+        ...($('.ld-ed-adult-preset') ? { adultPreset: $('.ld-ed-adult-preset').value } : {}),
         ...($('.ld-ed-prompt-style') ? {
           promptStyle: $('.ld-ed-prompt-style').value,
           mossStyle: $('.ld-ed-moss-style').value,
@@ -10098,6 +10167,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-port').value = settings.port
       $('.ld-swarm-url').value = settings.swarmUrl || 'http://localhost:7801'
       refreshNanoStatus()
+      refreshDtCloudStatus('.ld-dtcloud-status').catch(() => {})
       showPromptOnly(settings.promptOnly === true)
       $('.ld-bridge-host').value = settings.bridgeHost || '127.0.0.1'
       $('.ld-bridge-port').value = settings.bridgePort || 7863

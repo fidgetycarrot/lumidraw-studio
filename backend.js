@@ -2199,6 +2199,7 @@ function sanitizeDrawThingsPayload(payload) {
 function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   if (imageRenderer(config) === 'swarmui') return buildSwarmPayload({ prompt, negativePrompt, seed, config })
   if (imageRenderer(config) === 'nanogpt') return buildNanoPayload({ prompt, negativePrompt, seed, config })
+  if (imageRenderer(config) === 'dtcloud') return buildDtCloudPayload({ prompt, negativePrompt, seed, config })
   const payload = {}
 
   // Every Draw Things setting the workspace holds is sent, not a fixed
@@ -2637,13 +2638,13 @@ async function cloudGenerate(settings, payload) {
 // recipes without the marker remain Draw Things recipes after this upgrade.
 function rendererLabel(config) {
   const renderer = imageRenderer(config)
-  return renderer === 'swarmui' ? 'SwarmUI' : renderer === 'nanogpt' ? 'NanoGPT' : 'Draw Things'
+  return renderer === 'swarmui' ? 'SwarmUI' : renderer === 'nanogpt' ? 'NanoGPT' : renderer === 'dtcloud' ? 'Draw Things cloud' : 'Draw Things'
 }
 
 function imageRenderer(config) {
   const value = config && config.renderBackend
   if (!value || value === 'drawthings') return 'drawthings'
-  if (value === 'swarmui' || value === 'nanogpt') return value
+  if (value === 'swarmui' || value === 'nanogpt' || value === 'dtcloud') return value
   throw new Error('Unknown image renderer: ' + String(value))
 }
 
@@ -2788,15 +2789,15 @@ function swarmPreviewData(value) {
       : bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'
   return valid ? value : null
 }
-function swarmProgressLifecycle(progress, context = {}) {
-  const startedAt = Date.now(), generationId = 'swarm-' + startedAt + '-' + (++swarmGenerationSequence) + '-' + Math.random().toString(36).slice(2, 8)
+function swarmProgressLifecycle(progress, context = {}, renderer = 'SwarmUI') {
+  const startedAt = Date.now(), generationId = (renderer === 'SwarmUI' ? 'swarm-' : 'dtcloud-') + startedAt + '-' + (++swarmGenerationSequence) + '-' + Math.random().toString(36).slice(2, 8)
   const binding = {}
   for (const key of ['chatId', 'scanId']) if (typeof context[key] === 'string' && context[key].length && context[key].length <= 256) binding[key] = context[key]
   for (const key of ['imageIndex', 'imageTotal']) if (Number.isInteger(context[key]) && context[key] > 0 && context[key] <= 100) binding[key] = context[key]
   let sequence = 0, percent = null, terminal = false, lastFrameAt = null, timer = null, pending = null
   const emit = (stage, preview) => {
     if (typeof progress !== 'function') return
-    const packet = { renderer: 'SwarmUI', ...binding, generationId, startedAt, sequence: ++sequence, stage, percent,
+    const packet = { renderer, ...binding, generationId, startedAt, sequence: ++sequence, stage, percent,
       ...(preview ? { preview } : {}) }
     try { const result = progress(packet); if (result && typeof result.catch === 'function') result.catch(() => {}) } catch { /* UI transport is optional. */ }
   }
@@ -3217,12 +3218,150 @@ async function generateNanoImages(settings, payload, progress, context = {}) {
     ...(rewritten ? { rewrittenPrompt: rewritten } : {}) }
 }
 
+// ---------------------------------------------------------------------------
+// Draw Things cloud through the LS Cloud Helper (1.20.0)
+// ---------------------------------------------------------------------------
+// The helper is a small program on Eric's Mac (cloud-helper/ in this repo). It
+// keeps the Draw Things+ API key in the macOS Keychain and talks to Draw
+// Things' cloud, so the key never enters Lumiverse. Lumiverse cuts every
+// extension request off at 30 seconds and a 50-step cloud picture takes about a
+// minute, so LS posts a job and asks after it every few seconds instead of
+// waiting on one long request.
+//
+// The older "Cloud" setting and lumidraw-cloud-relay.mjs are left as they were.
+const DT_CLOUD_DEFAULT_MODEL = 'moss_image_sft_q8p.ckpt'
+const DT_CLOUD_MONTHLY = 200
+const DT_CLOUD_COUNT_FILE = 'dtcloud-count.json'
+const DT_CLOUD_MAX_WAIT_MS = 8 * 60 * 1000
+
+function dtCloudBaseUrl(settings) {
+  const port = Number(settings && settings.dtCloudPort) || 7865
+  return `http://127.0.0.1:${port}`
+}
+
+async function dtCloudFetch(settings, path, options = {}, timeoutMs = 15000) {
+  try {
+    return await hostRequest(dtCloudBaseUrl(settings) + path, { ...options, timeoutMs })
+  } catch (err) {
+    const error = new Error('The LS Cloud Helper is not answering on this Mac (' + ((err && err.message) || err) + '). ' +
+      'Start it with: ls-cloud-helper install')
+    error.helperDown = true
+    throw error
+  }
+}
+
+function buildDtCloudPayload({ prompt, negativePrompt, seed, config }) {
+  const model = String(config.model || '').trim() || DT_CLOUD_DEFAULT_MODEL
+  const n = seed === undefined || seed === null || seed === '' ? -1 : Number(seed)
+  const out = { model, prompt: String(prompt || ''), width: Number(config.width) || 1024, height: Number(config.height) || 1024,
+    seed: Number.isFinite(n) && n >= 0 ? Math.floor(n) : Math.floor(Math.random() * 4294967295) }
+  if (String(negativePrompt || '').trim()) out.negative_prompt = String(negativePrompt).trim()
+  const num = key => config[key] !== undefined && config[key] !== '' && Number.isFinite(Number(config[key])) ? Number(config[key]) : undefined
+  // MOSS's own recommended settings when the preset leaves them empty.
+  const moss = /moss/i.test(model)
+  const steps = num('steps') ?? (moss ? 50 : undefined)
+  const cfg = num('guidance_scale') ?? (moss ? 4 : undefined)
+  const shift = num('shift') ?? (moss ? 5 : undefined)
+  if (steps !== undefined) out.steps = steps
+  if (cfg !== undefined) out.guidance_scale = cfg
+  if (shift !== undefined) out.shift = shift
+  if (String(config.sampler || '').trim()) out.sampler = String(config.sampler).trim()
+  return out
+}
+
+function dtCloudMonth(date = new Date()) {
+  return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0')
+}
+
+async function dtCloudCount() {
+  let stored = null
+  try { stored = await spindle.storage.getJson(DT_CLOUD_COUNT_FILE, { fallback: null }) } catch { /* first use */ }
+  const month = dtCloudMonth()
+  return { month, count: stored && stored.month === month ? Number(stored.count) || 0 : 0, of: DT_CLOUD_MONTHLY }
+}
+
+async function bumpDtCloudCount() {
+  const now = await dtCloudCount()
+  const next = { month: now.month, count: now.count + 1 }
+  try { await spindle.storage.setJson(DT_CLOUD_COUNT_FILE, next) } catch { /* a missed count is not worth failing a picture */ }
+  return { ...next, of: DT_CLOUD_MONTHLY }
+}
+
+async function dtCloudStatus(settings) {
+  const count = await dtCloudCount()
+  try {
+    const res = await dtCloudFetch(settings, '/health', {}, 6000)
+    if (!res.ok || !res.json) return { reachable: false, reason: `the helper answered HTTP ${res.status}`, count, port: Number(settings.dtCloudPort) || 7865 }
+    return { reachable: true, keySaved: !!res.json.keySaved, version: String(res.json.version || ''), busy: !!res.json.busy,
+      queued: Number(res.json.queued) || 0, count, port: Number(settings.dtCloudPort) || 7865 }
+  } catch (err) {
+    return { reachable: false, reason: (err && err.message) || String(err), count, port: Number(settings.dtCloudPort) || 7865 }
+  }
+}
+
+async function generateDtCloudImages(settings, payload, progress, context = {}) {
+  const life = swarmProgressLifecycle(progress, context, 'Draw Things cloud')
+  const started = Date.now()
+  try {
+    spindle.log.info(`[lumidraw] Draw Things cloud · ${payload.model} · ${payload.width}×${payload.height}` +
+      ` · ${payload.steps ?? 'model'} steps · CFG ${payload.guidance_scale ?? 'model'} · shift ${payload.shift ?? 'model'}` +
+      (payload.sampler ? ` · ${payload.sampler}` : '') + ` · seed ${payload.seed}`)
+    const posted = await dtCloudFetch(settings, '/jobs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    }, 15000)
+    if (!posted.ok || !posted.json || !posted.json.id) {
+      throw new Error('The LS Cloud Helper refused the picture: ' + String((posted.json && posted.json.error) || posted.text || `HTTP ${posted.status}`).slice(0, 300))
+    }
+    const id = String(posted.json.id)
+    let misses = 0
+    while (Date.now() - started < DT_CLOUD_MAX_WAIT_MS) {
+      await new Promise(resolve => setTimeout(resolve, 2500))
+      let res
+      try { res = await dtCloudFetch(settings, '/jobs/' + encodeURIComponent(id), {}, 20000) }
+      catch (err) {
+        // A busy Mac can miss one answer; a stopped helper misses them all.
+        if (++misses >= 4) throw err
+        continue
+      }
+      misses = 0
+      const job = res.json || {}
+      if (res.status === 404) throw new Error('The LS Cloud Helper lost the picture (was it restarted?). Try again.')
+      if (job.state === 'running' && Number(job.totalSteps) > 0) life.update({ percent: (Number(job.step) / Number(job.totalSteps)) * 100 })
+      if (job.state === 'failed') {
+        const raw = String(job.error || 'no reason given')
+        if (cloudQuotaExhausted(raw)) {
+          const error = new Error('Draw Things cloud quota is used up for this month. Draw Things+ covers 200 pictures a month.')
+          error.cloudQuota = true
+          throw error
+        }
+        throw new Error('Draw Things cloud could not make the picture: ' + raw.slice(0, 400))
+      }
+      if (job.state === 'done') {
+        const image = String(job.image || '')
+        if (!image) throw new Error('Draw Things cloud finished but sent no picture.')
+        const count = await bumpDtCloudCount()
+        spindle.log.info(`[lumidraw] Draw Things cloud picture in ${Math.round((Date.now() - started) / 1000)}s · ${count.count} of ${count.of} this month`)
+        life.finish('complete')
+        return { images: [image], seed: job.seed }
+      }
+    }
+    throw new Error(`Draw Things cloud did not finish within ${Math.round(DT_CLOUD_MAX_WAIT_MS / 60000)} minutes.`)
+  } catch (err) {
+    life.finish('error')
+    throw err
+  }
+}
+
 async function generateImages(settings, payload, label = 'generation', renderer = 'drawthings', progress = null, context = {}) {
   if (renderer === 'nanogpt') {
     const out = await generateNanoImages(settings, payload, progress, context)
     return { images: out.images, backend: 'nanogpt', mime: out.mime, cost: out.cost, rewrittenPrompt: out.rewrittenPrompt }
   }
   if (renderer === 'swarmui') return { images: await generateSwarmImages(settings, payload, progress, context), backend: 'swarmui' }
+  if (renderer === 'dtcloud') {
+    const out = await generateDtCloudImages(settings, payload, progress, context)
+    return { images: out.images, backend: 'dtcloud', mime: 'image/png' }
+  }
   if (!cloudEnabled(settings)) return { images: await dtGenerate(settings, payload), backend: 'local' }
   try {
     const images = await cloudGenerate(settings, payload)
@@ -18595,7 +18734,7 @@ async function replaceOneImage(userId, payload) {
         if (!preset) throw new Error('No saved recipe for this image and no matching preset to fall back on.')
         config = preset.config
         extra = preset.extra
-        if (source && !['swarmui', 'nanogpt', 'pasted'].includes(source.backend) && imageRenderer(config) !== 'drawthings') {
+        if (source && !['swarmui', 'nanogpt', 'pasted', 'dtcloud'].includes(source.backend) && imageRenderer(config) !== 'drawthings') {
           throw new Error('This older Draw Things image has no stored recipe. Select its original Draw Things preset before regenerating; Lumi Studio will not silently switch it to another app.')
         }
       }
@@ -19267,7 +19406,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const presets = await getPresets()
         const history = await getHistory()
         // One catalog merge, not one disk read/write per preset/history row.
-        const configs = [...presets.map(p => p.config || {}).filter(c => imageRenderer(c) === 'drawthings'), ...history.filter(h => !['swarmui', 'nanogpt', 'pasted'].includes(h.backend)).map(h => ({ model: h.model }))]
+        const configs = [...presets.map(p => p.config || {}).filter(c => imageRenderer(c) === 'drawthings'), ...history.filter(h => !['swarmui', 'nanogpt', 'pasted', 'dtcloud'].includes(h.backend)).map(h => ({ model: h.model }))]
         try {
           await rememberCatalog({ models: configs.flatMap(c => [c.model, c.refiner_model]).filter(Boolean),
             samplers: configs.map(c => c.sampler).filter(Boolean),
@@ -19321,6 +19460,11 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
       case 'nano_status': {
         reply = ok(payload, requestId, await nanoStatus(userId))
+        break
+      }
+
+      case 'dtcloud_status': {
+        reply = ok(payload, requestId, await dtCloudStatus(await getSettings()))
         break
       }
 
@@ -19396,6 +19540,11 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.mossLayout !== undefined) preset.mossLayout = payload.mossLayout === true
         if (payload.smartSize !== undefined) preset.smartSize = payload.smartSize === true
         if (payload.adultPromptOnly !== undefined) preset.adultPromptOnly = payload.adultPromptOnly === true
+        // 1.20: adult pictures go to '' (this preset), '__prompt__' (prompt only) or another preset's name.
+        if (payload.adultPreset !== undefined) {
+          preset.adultPreset = String(payload.adultPreset || '').slice(0, 200)
+          preset.adultPromptOnly = preset.adultPreset === '__prompt__'
+        }
         try { await rememberModels(preset.config || {}) } catch { /* best-effort */ }
         const idx = presets.findIndex((p) => p.name === name)
         if (idx >= 0) presets[idx] = preset
@@ -26235,6 +26384,21 @@ async function addPastedPicture(userId, payload) {
 
 // ---------- story scan -----------------------------------------------------
 
+// Where this preset sends NSFW and explicit pictures: drawn here (null),
+// prompt only ('prompt'), or drawn with another saved preset ({ preset }).
+// Before 1.20 the only choice was the "prompt only" checkbox.
+async function adultRoute(preset) {
+  const choice = preset.adultPreset !== undefined ? String(preset.adultPreset || '') : (preset.adultPromptOnly === true ? '__prompt__' : '')
+  if (!choice || choice === preset.name) return null
+  if (choice === '__prompt__') return 'prompt'
+  const other = (await getPresets()).find(item => item && item.name === choice)
+  if (!other) {
+    spindle.log.warn(`[lumidraw] adult pictures were set to preset "${choice}", which no longer exists — drawing them with "${preset.name}"`)
+    return null
+  }
+  return { preset: other }
+}
+
 async function runSimpleStoryScan({ userId, settings, preset, messages, targetIndex, target, chatId, scan, storyDebugMeta = {} }) {
   const startedAt = Number((scan && scan.startedAt) || Date.now())
   setStoryScanStage(scan, 'parsing', 'Waiting for the parser model (simple pipeline).')
@@ -26255,12 +26419,22 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
   setStoryScanStage(scan, 'compiling', 'Building the Anima prompt.')
   const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
   await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
+  // Adult pictures may be drawn with another preset (1.20). They are written
+  // in that preset's prompt style too, so a Krea preset can hand its adult
+  // pictures to a MOSS one and each gets the prompt its model wants.
+  const adult = settings.promptOnly === true ? null : await adultRoute(preset)
+  const adultPreset = adult && adult.preset ? adult.preset : null
+  const adultPrefix = adultPreset ? await resolveMacros(adultPreset.promptPrefix, userId, chatId) : prefix
+  const isAdult = image => ['nsfw', 'explicit'].includes(image.rating)
   // Each image sees the memory as the previous image left it, so two pictures
   // from one message agree with each other.
   const prepared = []
   for (const image of images) {
-    const compiled = compileStoryImage(image, { preset, profiles, memory, card, prefix, anchorTags: run.anchorTags })
-    prepared.push({ image, compiled })
+    const usePreset = adultPreset && isAdult(image) ? adultPreset : preset
+    const compiled = compileStoryImage(image, { preset: usePreset, profiles, memory, card,
+      prefix: usePreset === preset ? prefix : adultPrefix, anchorTags: run.anchorTags })
+    if (usePreset !== preset) compiled.debug.notes.unshift(`Adult picture: drawn with the preset "${usePreset.name}".`)
+    prepared.push({ image, compiled, preset: usePreset })
     memory = { ...memory, ...simpleRemember(memory, compiled, target.id) }
   }
   const entries = prepared.map(({ image, compiled }) => ({ anchor: image.anchor, prompt: compiled.prompt,
@@ -26279,11 +26453,11 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
   // Things+, everything else is drawn with this preset as usual.
   let queuedAdult = []
   let toDraw = prepared
-  if (preset.adultPromptOnly === true) {
-    const adult = prepared.filter(({ image }) => ['nsfw', 'explicit'].includes(image.rating))
-    if (adult.length) {
-      toDraw = prepared.filter(item => !adult.includes(item))
-      queuedAdult = await queuePastePrompts({ userId, preset, prepared: adult, target, chatId, forMoss: true,
+  if (adult === 'prompt') {
+    const waiting = prepared.filter(({ image }) => isAdult(image))
+    if (waiting.length) {
+      toDraw = prepared.filter(item => !waiting.includes(item))
+      queuedAdult = await queuePastePrompts({ userId, preset, prepared: waiting, target, chatId, forMoss: true,
         troubleshootingFor: (prompt, scene) => simpleTroubleshooting({ target, profiles, settings, chatId, raw, parserInput, report, parserMs,
           startedAt, source: 'story scan (adult picture, prompt only)', entry: { prompt, scene } }) })
     }
@@ -26293,16 +26467,17 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
   for (let index = 0; index < toDraw.length; index++) {
     assertStoryScanActive(scan)
     const { image, compiled } = toDraw[index]
-    setStoryScanStage(scan, 'generating', `Sending image ${index + 1} of ${toDraw.length} to ${rendererLabel(preset.config)}.`)
-    const size = preset.smartSize === true ? simpleSizeShare(image, compiled) : null
-    const dims = aspectDims(preset.config, image.aspect, size ? size.share : 1)
+    const drawWith = toDraw[index].preset || preset
+    setStoryScanStage(scan, 'generating', `Sending image ${index + 1} of ${toDraw.length} to ${rendererLabel(drawWith.config)}.`)
+    const size = drawWith.smartSize === true ? simpleSizeShare(image, compiled) : null
+    const dims = aspectDims(drawWith.config, image.aspect, size ? size.share : 1)
     if (size) compiled.debug.notes.push(`Size ${dims.width}×${dims.height}: ${size.why}, so ${Math.round(size.share * 100)}% of the preset's size.`)
     const scene = { direct: true, simple: true, anchor: image.anchor, sceneSummary: image.scene_summary, rating: image.rating,
       aspect: image.aspect, simplePipeline: compiled.debug }
     const entry = await generateAndUpload({
-      prompt: compiled.prompt, negativePrompt: compiled.negativePrompt, config: preset.config, extra: preset.extra, dims,
+      prompt: compiled.prompt, negativePrompt: compiled.negativePrompt, config: drawWith.config, extra: drawWith.extra, dims,
       progressContext: { imageIndex: index + 1, imageTotal: toDraw.length },
-      origin: { ...origin, mode: 'direct', alt: storyImageAltText(compiled.prompt), swipeId: target.swipeId },
+      origin: { ...origin, presetName: drawWith.name || origin.presetName, mode: 'direct', alt: storyImageAltText(compiled.prompt), swipeId: target.swipeId },
       debug: { trace: compiled.debug.notes.map(note => ({ label: 'simple pipeline', status: 'applied', detail: note })), scene,
         troubleshooting: simpleTroubleshooting({ target, profiles, settings, chatId, raw, parserInput, report, parserMs, startedAt,
           source: 'story scan', entry: { prompt: compiled.prompt, scene } }) },
