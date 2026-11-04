@@ -61,6 +61,10 @@ A file the Draw Things app already converted (`…_lora_f16.ckpt` in its Models 
 
 `ls-cloud-helper loras` lists what has been added.
 
+## Matching the Draw Things app (helper 1.2)
+
+On its own the helper starts from MOSS's built-in defaults, so the same prompt and seed can draw a different picture than the Draw Things app, which also applies seed mode, sharpness, CFG zero star, tea cache and more. To match the app, copy its configuration (Draw Things settings panel → the … menu → Copy Configuration) and paste it into the cloud preset's **Draw Things settings** box in Lumi Studio. The helper then applies those settings; size, seed and prompt still come from Lumi Studio, and LoRAs picked in the preset replace the app's. The helper log lists which settings it applied.
+
 ## Other commands
 
 | Command | What it does |

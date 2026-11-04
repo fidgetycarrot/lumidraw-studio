@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.22.0'
+  const EXTENSION_VERSION = '1.22.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1419,6 +1419,12 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
               <div><span class="ld-label">Steps</span><input class="ld-ed-steps" type="number" min="1" max="150" /></div>
               <div><span class="ld-label">CFG</span><input class="ld-ed-cfg" type="number" step="0.5" min="0" /></div>
               <div class="ld-ed-shift-field" style="display:none"><span class="ld-label">Shift</span><input class="ld-ed-shift" type="number" step="0.5" min="0" /></div>
+            </div>
+            <div class="ld-ed-dtsettings-box" style="display:none;margin-top:7px">
+              <span class="ld-label">Draw Things settings (optional)</span>
+              <textarea class="ld-ed-dtsettings" rows="3" spellcheck="false" placeholder="Paste from Draw Things: settings panel, the … menu, Copy Configuration"></textarea>
+              <div class="ld-hint">Makes cloud pictures match the Draw Things app: its steps, CFG, shift, sampler, seed mode, sharpness and other settings are used as they are. Size, seed and prompt still come from Lumi Studio, and LoRAs picked below replace the app's. Leave empty to use the boxes above.</div>
+              <div class="ld-status ld-ed-dtsettings-status"></div>
             </div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Width</span><input class="ld-ed-w" type="number" step="64" min="256" /></div>
@@ -8627,6 +8633,8 @@ ${entry.prompt || ''}`.trim()
     const addLora = $('[data-act="ed-addlora"]')
     if (addLora) addLora.style.display = nano ? 'none' : ''
     if ($('.ld-ed-shift-field')) $('.ld-ed-shift-field').style.display = cloud ? '' : 'none'
+    if ($('.ld-ed-dtsettings-box')) $('.ld-ed-dtsettings-box').style.display = cloud ? '' : 'none'
+    syncDtSettingsFields()
     fillNanoPicker($('.ld-ed-nano-pick'), $('.ld-ed-model'), nano)
     if ($('.ld-ed-model-hint')) $('.ld-ed-model-hint').style.display = nano || cloud ? 'none' : ''
     if ($('.ld-ed-nano-hint')) $('.ld-ed-nano-hint').style.display = nano ? '' : 'none'
@@ -8634,6 +8642,36 @@ ${entry.prompt || ''}`.trim()
     if (cloud) refreshDtCloudStatus('.ld-ed-nano-status')
     else if (!nano) setStatus('.ld-ed-nano-status', '')
   }
+
+  // Pasted Draw Things settings decide steps, CFG, shift and sampler, so those
+  // boxes step aside while there is something pasted.
+  function readDtSettingsBox() {
+    const box = $('.ld-ed-dtsettings')
+    const text = box ? box.value.trim() : ''
+    if (!text) return { settings: null, error: '' }
+    try {
+      const value = JSON.parse(text)
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return { settings: null, error: 'That is not a Draw Things configuration (expected { … }).' }
+      return { settings: value, error: '' }
+    } catch { return { settings: null, error: 'That is not valid Draw Things configuration text. Copy it again from Draw Things and paste the whole thing.' } }
+  }
+  function syncDtSettingsFields() {
+    const cloud = $('.ld-ed-backend') && $('.ld-ed-backend').value === 'dtcloud'
+    const read = cloud ? readDtSettingsBox() : { settings: null, error: '' }
+    const pasted = !!read.settings
+    const samplerRow = $('.ld-ed-sampler') ? $('.ld-ed-sampler').closest('.ld-row') : null
+    const stepsRow = $('.ld-ed-steps') ? $('.ld-ed-steps').closest('.ld-row') : null
+    if (cloud && samplerRow) samplerRow.style.display = pasted ? 'none' : ''
+    if (stepsRow) stepsRow.style.display = cloud && pasted ? 'none' : ''
+    if (!cloud) return
+    const s = read.settings
+    setStatus('.ld-ed-dtsettings-status', read.error ? read.error
+      : pasted ? `${Object.keys(s).length} Draw Things settings pasted` + (s.steps !== undefined ? ` · ${s.steps} steps` : '') +
+        ((s.guidanceScale ?? s.guidance_scale) !== undefined ? ` · CFG ${s.guidanceScale ?? s.guidance_scale}` : '') +
+        (s.shift !== undefined ? ` · shift ${s.shift}` : '') + (Array.isArray(s.loras) && s.loras.length ? ` · ${s.loras.length} LoRA(s)` : '') + '.'
+      : '', read.error ? 'err' : pasted ? 'good' : '')
+  }
+  if ($('.ld-ed-dtsettings')) $('.ld-ed-dtsettings').addEventListener('input', syncDtSettingsFields)
 
   // The helper's state and this month's count, in one plain line.
   async function refreshDtCloudStatus(selector = '.ld-dtcloud-status') {
@@ -8843,6 +8881,7 @@ ${entry.prompt || ''}`.trim()
     $('.ld-ed-steps').value = c.steps !== undefined ? c.steps : ''
     $('.ld-ed-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''
     if ($('.ld-ed-shift')) $('.ld-ed-shift').value = c.shift !== undefined ? c.shift : ''
+    if ($('.ld-ed-dtsettings')) { $('.ld-ed-dtsettings').value = c.dtSettings ? JSON.stringify(c.dtSettings) : ''; syncDtSettingsFields() }
     $('.ld-ed-w').value = c.width || ''
     if ($('.ld-ed-smart-size')) $('.ld-ed-smart-size').checked = !!(p && p.smartSize)
     const adultPick = $('.ld-ed-adult-preset')
@@ -9317,7 +9356,7 @@ ${entry.prompt || ''}`.trim()
     editorRenderConfig = swarm ? {renderBackend:'swarmui',swarmParams:{}} : nano ? {renderBackend:'nanogpt'} : cloud ? {renderBackend:'dtcloud'} : {}
     syncEditorRendererFields()
     editorExtra = null
-    for (const field of ['model','steps','cfg','w','h','shift']) if ($('.ld-ed-' + field)) $('.ld-ed-' + field).value = ''
+    for (const field of ['model','steps','cfg','w','h','shift','dtsettings']) if ($('.ld-ed-' + field)) $('.ld-ed-' + field).value = ''
     if (cloud) {
       // MOSS on the cloud, with MOSS's own settings, as a starting point.
       $('.ld-ed-model').value = DT_CLOUD_MODEL
@@ -9373,7 +9412,13 @@ ${entry.prompt || ''}`.trim()
         }
       const sv = $('.ld-ed-sampler').value.trim(); if (sv && !usesNano(config)) config.sampler = sv; else delete config.sampler
       setIf('.ld-ed-steps', 'steps'); setIf('.ld-ed-cfg', 'guidance_scale', true)
-      if (usesDtCloud(config)) { delete config.shift; setIf('.ld-ed-shift', 'shift', true) }
+      if (usesDtCloud(config)) {
+        delete config.shift; setIf('.ld-ed-shift', 'shift', true)
+        const read = readDtSettingsBox()
+        if (read.error) throw new Error(read.error)
+        if (read.settings) config.dtSettings = read.settings
+        else delete config.dtSettings
+      } else delete config.dtSettings
       setIf('.ld-ed-w', 'width'); setIf('.ld-ed-h', 'height')
       config.loras = [...$('.ld-editor').querySelectorAll('.ld-ed-loras .ld-row')].map((row) => ({
         file: row.querySelector('.ld-lora-file').value.trim(),

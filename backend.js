@@ -3267,6 +3267,18 @@ function buildDtCloudPayload({ prompt, negativePrompt, seed, config }) {
     seed: Number.isFinite(n) && n >= 0 ? Math.floor(n) : Math.floor(Math.random() * 4294967295) }
   if (String(negativePrompt || '').trim()) out.negative_prompt = String(negativePrompt).trim()
   const num = key => config[key] !== undefined && config[key] !== '' && Number.isFinite(Number(config[key])) ? Number(config[key]) : undefined
+  // 1.22.1: the Draw Things app's own settings, pasted into the preset. They
+  // decide steps, CFG, shift, sampler, seed mode and the rest; LS still sends
+  // size, seed, prompt and any LoRAs picked in the preset.
+  const dtSettings = config.dtSettings && typeof config.dtSettings === 'object' && !Array.isArray(config.dtSettings) ? config.dtSettings : null
+  if (dtSettings) {
+    out.dt_settings = dtSettings
+    const loras = (Array.isArray(config.loras) ? config.loras : [])
+      .map(item => ({ file: String(item && (item.file || item.name) || '').trim(), weight: Number(item && item.weight) }))
+      .filter(item => item.file).map(item => ({ file: item.file, weight: Number.isFinite(item.weight) ? item.weight : 1 }))
+    if (loras.length) out.loras = loras.slice(0, 6)
+    return out
+  }
   // MOSS's own recommended settings when the preset leaves them empty.
   const moss = /moss/i.test(model)
   const steps = num('steps') ?? (moss ? 50 : undefined)
@@ -3331,7 +3343,8 @@ async function generateDtCloudImages(settings, payload, progress, context = {}) 
     spindle.log.info(`[lumidraw] Draw Things cloud · ${payload.model} · ${payload.width}×${payload.height}` +
       ` · ${payload.steps ?? 'model'} steps · CFG ${payload.guidance_scale ?? 'model'} · shift ${payload.shift ?? 'model'}` +
       (payload.sampler ? ` · ${payload.sampler}` : '') + ` · seed ${payload.seed}` +
-      (payload.loras ? ' · LoRAs ' + payload.loras.map(item => `${item.file}@${item.weight}`).join(', ') : ''))
+      (payload.loras ? ' · LoRAs ' + payload.loras.map(item => `${item.file}@${item.weight}`).join(', ') : '') +
+      (payload.dt_settings ? ` · Draw Things settings pasted (${Object.keys(payload.dt_settings).length})` : ''))
     const posted = await dtCloudFetch(settings, '/jobs', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     }, 15000)

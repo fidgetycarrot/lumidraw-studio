@@ -31,7 +31,7 @@ import UniformTypeIdentifiers
 import _MediaGenerationKit
 import DataModels   // LoRA(file:weight:mode:) lives here; it comes with the engine
 
-let helperVersion = "1.1.0"
+let helperVersion = "1.2.0"
 let defaultPort: UInt16 = 7865
 let defaultModel = "moss_image_sft_q8p.ckpt"
 let keychainService = "LS Cloud Helper"
@@ -110,6 +110,77 @@ func samplerNamed<T: RawRepresentable>(_ name: String, like current: T) -> T? wh
     if flatten(String(describing: candidate)) == want { return candidate }
   }
   return nil
+}
+
+// JSON true/false arrive as NSNumber, and on macOS any NSNumber 0 or 1 also
+// answers `is Bool`; only the CFBoolean type tells a real true/false apart.
+func isJSONBool(_ value: Any?) -> Bool {
+  guard let n = value as? NSNumber else { return false }
+  return CFGetTypeID(n as CFTypeRef) == CFBooleanGetTypeID()
+}
+
+// An enum value from Draw Things settings: a number (the app's Copy
+// Configuration) or a name (its HTTP API, "Scale Alike").
+func enumValue<T: RawRepresentable>(_ value: Any?, like current: T) -> T? where T.RawValue: BinaryInteger {
+  if let n = value as? NSNumber, !isJSONBool(value) { return T(rawValue: numericCast(n.intValue)) }
+  if let s = value as? String {
+    if let n = Int(s) { return T(rawValue: numericCast(n)) }
+    return samplerNamed(s, like: current)
+  }
+  return nil
+}
+
+// The Draw Things app's own settings, pasted into the LS preset from Draw
+// Things' Copy Configuration (camelCase) or read from its HTTP API
+// (snake_case). Without these the helper starts from MOSS's built-in defaults,
+// and the same prompt and seed drew a different picture than the app.
+// Size, seed and prompt still come from LS.
+func applyDrawThingsSettings(_ raw: [String: Any], to c: inout MediaGenerationPipeline.Configuration) -> [String] {
+  var d: [String: Any] = [:]
+  for (key, value) in raw { d[flatten(key)] = value }
+  var used: [String] = []
+  func num(_ key: String) -> Double? { isJSONBool(d[key]) ? nil : number(d[key]) }
+  func flag(_ key: String) -> Bool? {
+    if let n = d[key] as? NSNumber { return n.boolValue }
+    if let s = d[key] as? String { return ["true", "yes", "1", "on"].contains(s.lowercased()) }
+    return nil
+  }
+  if let v = num("steps"), v >= 1 { c.steps = min(150, Int(v)); used.append("steps") }
+  if let v = num("guidancescale") ?? num("cfgscale") { c.guidanceScale = Float(v); used.append("CFG") }
+  if let v = num("shift") { c.shift = Float(v); used.append("shift") }
+  if let v = enumValue(d["sampler"], like: c.sampler) { c.sampler = v; used.append("sampler") }
+  if let v = enumValue(d["seedmode"], like: c.seedMode) { c.seedMode = v; used.append("seed mode") }
+  if let v = flag("resolutiondependentshift") { c.resolutionDependentShift = v; used.append("resolution-dependent shift") }
+  if let v = num("sharpness") { c.sharpness = Float(v); used.append("sharpness") }
+  if let v = flag("cfgzerostar") { c.cfgZeroStar = v; used.append("CFG zero star") }
+  if let v = num("cfgzeroinitsteps") { c.cfgZeroInitSteps = Int(v) }
+  if let v = num("stochasticsamplinggamma") { c.stochasticSamplingGamma = Float(v); used.append("sampling gamma") }
+  if let v = flag("zeronegativeprompt") { c.zeroNegativePrompt = v; used.append("zero negative") }
+  if let v = flag("teacache") { c.teaCache = v; used.append("tea cache") }
+  if let v = num("teacachestart") { c.teaCacheStart = Int(v) }
+  if let v = num("teacacheend") { c.teaCacheEnd = Int(v) }
+  if let v = num("teacachethreshold") { c.teaCacheThreshold = Float(v) }
+  if let v = num("teacachemaxskipsteps") { c.teaCacheMaxSkipSteps = Int(v) }
+  if let v = num("guidanceembed") { c.guidanceEmbed = Float(v) }
+  if let v = flag("speedupwithguidanceembed") { c.speedUpWithGuidanceEmbed = v }
+  if let v = num("clipskip"), v >= 1 { c.clipSkip = Int(v) }
+  if let v = num("clipweight") { c.clipWeight = Float(v) }
+  if let v = num("imageguidancescale") { c.imageGuidanceScale = Float(v) }
+  if let v = num("aestheticscore") { c.aestheticScore = Float(v) }
+  if let v = num("negativeaestheticscore") { c.negativeAestheticScore = Float(v) }
+  if let v = flag("hiresfix") { c.hiresFix = v; used.append("hires fix") }
+  if let v = num("hiresfixwidth") ?? num("hiresfixstartwidth") { c.hiresFixWidth = Int(v) }
+  if let v = num("hiresfixheight") ?? num("hiresfixstartheight") { c.hiresFixHeight = Int(v) }
+  if let v = num("hiresfixstrength") { c.hiresFixStrength = Float(v) }
+  if let list = d["loras"] as? [[String: Any]] {
+    let built: [LoRA] = list.compactMap { item in
+      let file = text(item["file"])
+      guard !file.isEmpty else { return nil }
+      return LoRA(file: file, weight: Float32(number(item["weight"]) ?? 1), mode: nil)
+    }
+    if !built.isEmpty { c.loras = built; used.append("\(built.count) LoRA(s)") }
+  }
+  return used
 }
 
 func samplerNames<T: RawRepresentable>(like current: T) -> [String] where T.RawValue: BinaryInteger {
@@ -230,6 +301,11 @@ actor Runner {
       if let base = defaults[model] { pipeline.configuration = base }
 
       var c = pipeline.configuration
+      // The app's settings first; what LS sends explicitly then wins.
+      if let settings = request["dt_settings"] as? [String: Any] {
+        let used = applyDrawThingsSettings(settings, to: &c)
+        log("Job \(job.id): Draw Things settings applied — " + (used.isEmpty ? "none recognised" : used.joined(separator: ", ")))
+      }
       c.width = size64(number(request["width"]), c.width)
       c.height = size64(number(request["height"]), c.height)
       if let steps = number(request["steps"]), steps >= 1 { c.steps = min(150, Int(steps)) }
@@ -261,7 +337,7 @@ actor Runner {
           return LoRA(file: file, weight: Float32(weight), mode: nil)
         }
         if !c.loras.isEmpty { log("Job \(job.id) LoRAs: " + list.map { "\(text($0["file"]))@\(text($0["weight"]))" }.joined(separator: ", ")) }
-      } else {
+      } else if request["dt_settings"] == nil {
         c.loras = []
       }
       c.batchCount = 1
