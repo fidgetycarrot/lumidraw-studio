@@ -46,6 +46,21 @@ swift build -c release
 .build/release/ls-cloud-helper restart
 ```
 
+## LoRAs (helper 1.1)
+
+Draw Things' cloud can only use LoRAs that are in your Draw Things cloud storage, in Draw Things' own format. The helper does both steps:
+
+```
+cd ~/ls-dt-test
+.build/release/ls-cloud-helper add-lora ~/Downloads/my_moss_style.safetensors
+```
+
+(Type `add-lora ` and drag the file onto the Terminal window to fill in its path.) It converts the file with Draw Things' own converter, says which model family the LoRA was made for, uploads it, and remembers it. In Lumi Studio the LoRA then appears in the LoRA list of any Draw Things cloud preset (reopen the preset if it was already open). A LoRA made for another model (SDXL, Flux, Anima) will not work with MOSS; the helper warns when that is the case.
+
+A file the Draw Things app already converted (`…_lora_f16.ckpt` in its Models folder) is uploaded as it is.
+
+`ls-cloud-helper loras` lists what has been added.
+
 ## Other commands
 
 | Command | What it does |

@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.21.4'
+  const EXTENSION_VERSION = '1.22.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1409,7 +1409,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
             <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option><option value="dtcloud">Draw Things cloud</option></select>
             <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
-            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things model file: <code>moss_image_sft_q8p.ckpt</code> is MOSS Image SFT, <code>moss_image_base_q8p.ckpt</code> is MOSS Image Base. Empty steps, CFG and shift use MOSS’s 50, 3 and 5. LoRAs are not available here yet.</div><div class="ld-status ld-ed-nano-status"></div>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things model file: <code>moss_image_sft_q8p.ckpt</code> is MOSS Image SFT, <code>moss_image_base_q8p.ckpt</code> is MOSS Image Base. Empty steps, CFG and shift use MOSS’s 50, 3 and 5. LoRAs must first be added to your Draw Things cloud storage with <code>ls-cloud-helper add-lora</code>; they then appear in the LoRA list.</div><div class="ld-status ld-ed-nano-status"></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div class="ld-ed-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler" title="Blank uses SwarmUI's default."></select></div>
@@ -4111,7 +4111,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     })).filter((lora) => lora.file)
     if (usesSwarm(config)) config.swarmParams = readSwarmParams('draft')
     else if (usesNano(config)) { delete config.sampler; config.loras = [] }
-    else if (usesDtCloud(config)) config.loras = []
+    else if (usesDtCloud(config)) { /* LoRAs come from the cloud list; no Draw Things app settings */ }
     else readDtSettingsFromControls(config)
     return config
   }
@@ -4129,7 +4129,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     $('.ld-renderer-settings-title').textContent = nano ? 'NanoGPT' : usesSwarm(config) ? 'SwarmUI settings' : cloud ? 'Draw Things cloud' : 'Draw Things settings'
     $('.ld-renderer-settings-help').textContent = nano
       ? 'Made online and paid from your NanoGPT balance. Steps and CFG are sent only when the model takes them; leave them empty for its defaults. For MOSS, write the prompt in plain English. Samplers and LoRAs do not apply.'
-      : cloud ? 'Made on Draw Things’ cloud by the LS Cloud Helper on your Mac, from your Draw Things+ monthly pictures. MOSS uses shift ' + (config.shift ?? 5) + '; change shift in a saved preset. LoRAs do not apply here yet.'
+      : cloud ? 'Made on Draw Things’ cloud by the LS Cloud Helper on your Mac, from your Draw Things+ monthly pictures. MOSS uses shift ' + (config.shift ?? 5) + '; change shift in a saved preset. LoRAs come from your Draw Things cloud storage (ls-cloud-helper add-lora).'
       : usesSwarm(config) ? 'Only SwarmUI-native settings are sent. Draw Things settings and its cloud option do not apply.' : 'Settings captured from Draw Things on the last Sync. Save the workspace to a preset to use them in Story.'
     const samplerRow = $('.ld-draft-sampler') ? $('.ld-draft-sampler').closest('.ld-row') : null
     if (samplerRow) samplerRow.style.display = nano ? 'none' : ''
@@ -8620,12 +8620,12 @@ ${entry.prompt || ''}`.trim()
     if (samplerRow) samplerRow.style.display = nano ? 'none' : ''
     const loras = $('.ld-ed-loras')
     if (loras) {
-      loras.style.display = nano || cloud ? 'none' : 'flex'
+      loras.style.display = nano ? 'none' : 'flex'
       const label = loras.previousElementSibling
-      if (label && label.classList.contains('ld-label')) label.style.display = nano || cloud ? 'none' : ''
+      if (label && label.classList.contains('ld-label')) label.style.display = nano ? 'none' : ''
     }
     const addLora = $('[data-act="ed-addlora"]')
-    if (addLora) addLora.style.display = nano || cloud ? 'none' : ''
+    if (addLora) addLora.style.display = nano ? 'none' : ''
     if ($('.ld-ed-shift-field')) $('.ld-ed-shift-field').style.display = cloud ? '' : 'none'
     fillNanoPicker($('.ld-ed-nano-pick'), $('.ld-ed-model'), nano)
     if ($('.ld-ed-model-hint')) $('.ld-ed-model-hint').style.display = nano || cloud ? 'none' : ''
@@ -8639,6 +8639,13 @@ ${entry.prompt || ''}`.trim()
   async function refreshDtCloudStatus(selector = '.ld-dtcloud-status') {
     try {
       const s = await call('dtcloud_status', {}, 15000)
+      if (Array.isArray(s.loras)) {
+        dtCloudCatalog.loras = s.loras.map(item => item.file)
+        // Fill the LoRA pickers already on screen for a cloud preset.
+        if ($('.ld-ed-backend') && $('.ld-ed-backend').value === 'dtcloud') {
+          for (const pick of document.querySelectorAll('.ld-ed-loras .ld-lora-file')) populateSelect(pick, dtCloudCatalog.loras, pick.value, '— choose LoRA —')
+        }
+      }
       const count = s.count ? `${s.count.count} of ${s.count.of} cloud pictures used this month.` : ''
       if (!s.reachable) setStatus(selector, `The helper is not running on this Mac. ${count}`.trim(), 'err')
       else if (!s.keySaved) setStatus(selector, `The helper is running, but no Draw Things key is saved. Run: ls-cloud-helper save-key. ${count}`.trim(), 'err')
@@ -9326,7 +9333,7 @@ ${entry.prompt || ''}`.trim()
     writeSwarmParams('ed', editorRenderConfig)
     try { if (swarm) await loadSwarmCatalog(); else if (nano) await loadNanoCatalog(); else if (!cloud) await loadCatalog() } catch (e) { setStatus(nano ? '.ld-ed-nano-status' : '.ld-ed-status', e.message, 'err') }
     writeSwarmParams('ed', editorRenderConfig)
-    if (!nano && !cloud) $('.ld-ed-loras').appendChild(loraRow('', 1))
+    if (!nano) $('.ld-ed-loras').appendChild(loraRow('', 1))
   })
   // NanoGPT presets: a MOSS model wants the MOSS prompt style, an Anima model
   // wants Anima. Switch it for the user and say so.
@@ -9372,7 +9379,7 @@ ${entry.prompt || ''}`.trim()
         file: row.querySelector('.ld-lora-file').value.trim(),
         weight: row.querySelector('.ld-lora-weight').value === '' ? 1 : Number(row.querySelector('.ld-lora-weight').value),
       })).filter((l) => l.file)
-      if (usesNano(config) || usesDtCloud(config)) config.loras = []
+      if (usesNano(config)) config.loras = []
       const res = await call('save_preset', {
         name,
         config,

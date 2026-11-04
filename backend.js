@@ -3277,6 +3277,12 @@ function buildDtCloudPayload({ prompt, negativePrompt, seed, config }) {
   if (cfg !== undefined) out.guidance_scale = cfg
   if (shift !== undefined) out.shift = shift
   if (String(config.sampler || '').trim()) out.sampler = String(config.sampler).trim()
+  // LoRAs in your Draw Things cloud storage (added with ls-cloud-helper add-lora).
+  const loras = (Array.isArray(config.loras) ? config.loras : [])
+    .map(item => ({ file: String(item && (item.file || item.name) || '').trim(), weight: Number(item && item.weight) }))
+    .filter(item => item.file)
+    .map(item => ({ file: item.file, weight: Number.isFinite(item.weight) ? item.weight : 1 }))
+  if (loras.length) out.loras = loras.slice(0, 6)
   return out
 }
 
@@ -3303,8 +3309,16 @@ async function dtCloudStatus(settings) {
   try {
     const res = await dtCloudFetch(settings, '/health', {}, 6000)
     if (!res.ok || !res.json) return { reachable: false, reason: `the helper answered HTTP ${res.status}`, count, port: Number(settings.dtCloudPort) || 7865 }
+    // LoRAs the helper has added to cloud storage (helper 1.1+; older ones have none).
+    let loras = []
+    try {
+      const listed = await dtCloudFetch(settings, '/loras', {}, 6000)
+      if (listed.ok && listed.json && Array.isArray(listed.json.loras)) {
+        loras = listed.json.loras.map(item => ({ file: String(item.file || ''), name: String(item.name || ''), version: String(item.version || '') })).filter(item => item.file)
+      }
+    } catch { /* an older helper has no list */ }
     return { reachable: true, keySaved: !!res.json.keySaved, version: String(res.json.version || ''), busy: !!res.json.busy,
-      queued: Number(res.json.queued) || 0, count, port: Number(settings.dtCloudPort) || 7865 }
+      queued: Number(res.json.queued) || 0, count, loras, port: Number(settings.dtCloudPort) || 7865 }
   } catch (err) {
     return { reachable: false, reason: (err && err.message) || String(err), count, port: Number(settings.dtCloudPort) || 7865 }
   }
@@ -3316,7 +3330,8 @@ async function generateDtCloudImages(settings, payload, progress, context = {}) 
   try {
     spindle.log.info(`[lumidraw] Draw Things cloud · ${payload.model} · ${payload.width}×${payload.height}` +
       ` · ${payload.steps ?? 'model'} steps · CFG ${payload.guidance_scale ?? 'model'} · shift ${payload.shift ?? 'model'}` +
-      (payload.sampler ? ` · ${payload.sampler}` : '') + ` · seed ${payload.seed}`)
+      (payload.sampler ? ` · ${payload.sampler}` : '') + ` · seed ${payload.seed}` +
+      (payload.loras ? ' · LoRAs ' + payload.loras.map(item => `${item.file}@${item.weight}`).join(', ') : ''))
     const posted = await dtCloudFetch(settings, '/jobs', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     }, 15000)

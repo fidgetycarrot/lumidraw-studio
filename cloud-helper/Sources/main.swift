@@ -20,14 +20,18 @@
 //   ls-cloud-helper restart       restart the installed helper (after a rebuild)
 //   ls-cloud-helper status        is a key saved, is the helper answering
 //   ls-cloud-helper test "prompt" make one picture and save it to the Desktop
+//   ls-cloud-helper add-lora FILE convert a LoRA (.safetensors) if needed, upload it
+//                                 to your Draw Things cloud storage, list it for LS
+//   ls-cloud-helper loras         the LoRAs added so far
 //   ls-cloud-helper serve         run in this window (what the login item runs)
 
 import Foundation
 import Network
 import UniformTypeIdentifiers
 import _MediaGenerationKit
+import DataModels   // LoRA(file:weight:mode:) lives here; it comes with the engine
 
-let helperVersion = "1.0.1"
+let helperVersion = "1.1.0"
 let defaultPort: UInt16 = 7865
 let defaultModel = "moss_image_sft_q8p.ckpt"
 let keychainService = "LS Cloud Helper"
@@ -112,6 +116,72 @@ func samplerNames<T: RawRepresentable>(like current: T) -> [String] where T.RawV
   (0..<128).compactMap { raw in T(rawValue: numericCast(raw)).map { String(describing: $0) } }
 }
 
+// MARK: - LoRAs
+//
+// The cloud can only use a LoRA that is in your Draw Things cloud storage, in
+// Draw Things' own format. add-lora converts a .safetensors file (Civitai's
+// usual format) with Draw Things' converter, uploads it, and remembers it here
+// so LS can offer it in a list. A file already converted by the Draw Things
+// app (…_lora_f16.ckpt in its Models folder) is uploaded as it is.
+
+struct LoRARecord: Codable {
+  var file: String
+  var name: String
+  var version: String
+  var addedAt: Date
+}
+
+func supportURL() -> URL { home.appendingPathComponent("Library/Application Support/LS Cloud Helper") }
+func lorasURL() -> URL { supportURL().appendingPathComponent("loras.json") }
+
+func savedLoRAs() -> [LoRARecord] {
+  guard let data = try? Data(contentsOf: lorasURL()) else { return [] }
+  let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+  return (try? decoder.decode([LoRARecord].self, from: data)) ?? []
+}
+
+func rememberLoRA(_ record: LoRARecord) throws {
+  var list = savedLoRAs().filter { $0.file != record.file }
+  list.append(record)
+  try FileManager.default.createDirectory(at: supportURL(), withIntermediateDirectories: true)
+  let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+  try encoder.encode(list.sorted { $0.name.lowercased() < $1.name.lowercased() }).write(to: lorasURL())
+}
+
+func addLoRA(path: String) async throws -> LoRARecord {
+  let key = savedKey()
+  guard !key.isEmpty else { throw HelperError("No Draw Things API key is saved. Run: ls-cloud-helper save-key") }
+  let source = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
+  guard FileManager.default.fileExists(atPath: source.path) else { throw HelperError("No file at \(source.path)") }
+  let stem = source.deletingPathExtension().lastPathComponent
+  var converted = source
+  var version = "already converted"
+  if source.pathExtension.lowercased() != "ckpt" {
+    let folder = supportURL().appendingPathComponent("LoRAs")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let safeStem = stem.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "_" }.reduce("") { $0 + String($1) }
+    converted = folder.appendingPathComponent("\(safeStem)_lora_f16.ckpt")
+    print("Converting \(source.lastPathComponent) to Draw Things format…")
+    var importer = LoRAImporter(file: source)
+    var lastShown = -1
+    try importer.import(to: converted, scaleFactor: 1.0) { progress in
+      let percent = Int(progress * 100)
+      if percent / 25 != lastShown / 25 { print("  \(percent)%"); lastShown = percent }
+    }
+    version = importer.version.map { String(describing: $0) } ?? "unknown"
+    print("Converted. Model family: \(version)")
+    if !version.lowercased().contains("moss") {
+      print("Warning: this LoRA was made for \(version), not MOSS Image. It will only work with that kind of model.")
+    }
+  }
+  print("Uploading to your Draw Things cloud storage…")
+  let store = try LoRAStore(backend: .cloudCompute(apiKey: key))
+  let uploaded = try await store.upload(try Data(contentsOf: converted), file: converted.lastPathComponent)
+  let record = LoRARecord(file: uploaded.file, name: stem, version: version, addedAt: Date())
+  try rememberLoRA(record)
+  return record
+}
+
 // MARK: - Jobs
 
 final class Job {
@@ -181,6 +251,18 @@ actor Runner {
           log("Sampler \"\(sampler)\" is not one Draw Things knows; using the model's own. Known: " +
             samplerNames(like: c.sampler).joined(separator: ", "))
         }
+      }
+      // LoRAs: [{file, weight}] — files already in your Draw Things cloud storage.
+      if let list = request["loras"] as? [[String: Any]] {
+        c.loras = list.compactMap { item in
+          let file = text(item["file"])
+          guard !file.isEmpty else { return nil }
+          let weight = number(item["weight"]) ?? 1
+          return LoRA(file: file, weight: Float32(weight), mode: nil)
+        }
+        if !c.loras.isEmpty { log("Job \(job.id) LoRAs: " + list.map { "\(text($0["file"]))@\(text($0["weight"]))" }.joined(separator: ", ")) }
+      } else {
+        c.loras = []
       }
       c.batchCount = 1
       c.batchSize = 1
@@ -286,6 +368,11 @@ func route(_ request: Request, _ connection: NWConnection) {
     }
     respond(connection, 200, ["ok": true, "name": "ls-cloud-helper", "version": helperVersion,
                               "keySaved": key, "queued": counts.0, "busy": counts.1, "defaultModel": defaultModel])
+    return
+  }
+  if request.method == "GET" && path == "/loras" {
+    let list = savedLoRAs().map { ["file": $0.file, "name": $0.name, "version": $0.version] }
+    respond(connection, 200, ["loras": list])
     return
   }
   if request.method == "POST" && path == "/jobs" {
@@ -446,6 +533,30 @@ case "save-key":
     exit(1)
   }
 
+case "add-lora":
+  guard arguments.count >= 2 else {
+    print("Usage: ls-cloud-helper add-lora /path/to/lora.safetensors")
+    print("Tip: type \"add-lora \" and then drag the file onto this window to fill in its path.")
+    exit(1)
+  }
+  let path = arguments.dropFirst().joined(separator: " ")
+  Task {
+    do {
+      let record = try await addLoRA(path: path)
+      print("Added. In Lumi Studio pick \"\(record.name)\" (\(record.file)) in a Draw Things cloud preset's LoRA list.")
+      exit(0)
+    } catch {
+      print("FAILED: \(error)")
+      exit(1)
+    }
+  }
+  dispatchMain()
+
+case "loras":
+  let list = savedLoRAs()
+  if list.isEmpty { print("No LoRAs added yet. Add one with: ls-cloud-helper add-lora /path/to/lora.safetensors") }
+  for record in list { print("\(record.name)  —  \(record.file)  (\(record.version))") }
+
 case "install":
   install()
 
@@ -509,6 +620,8 @@ default:
     restart     restart it (after a rebuild)
     status      is a key saved, is the helper answering
     test "…"    make one picture and save it to the Desktop
+    add-lora F  convert and upload a LoRA for cloud pictures
+    loras       the LoRAs added so far
     serve       run in this window
   """)
 }
