@@ -26,3 +26,9 @@ MOSS reads plain English. LS used to take the parser's Danbooru tags for poses, 
 - **CFG 3 by default for Draw Things cloud MOSS** (and the Prompt only suggestion): the official guide uses 3 for long prompts and 5 only for short ones. A CFG already saved in a preset is kept.
 - **No photo words in the parser's camera sentence** (lens, film, 35mm, bokeh, depth of field, "shot on"): they pull MOSS toward a photograph.
 - Not taken from the research: a second style sentence at the end of every prompt (the research's own guess, and it makes every prompt longer), and its NanoGPT-specific notes.
+
+# 1.21.3 — layout mode checked against OpenMOSS's own prompt tool
+- OpenMOSS publishes a prompt-writing skill with a compiler for layout prompts (skills/moss-image-prompt-enhancer, updated 2 Nov 2026). Its layout items are labelled `object`, `character` or `text`; LS labelled people `person`, which is not in that list. Now `character`.
+- The box format already matched (centre-based pixels, y-x-y-x order), as did the summary and field names.
+- Layout mode's overall caption now uses the parser's plain-English camera, setting and moment sentences when it wrote them.
+- The skill's caption rules (cohesive prose, spatial relations in words, subject/action/appearance/setting/camera/medium/light/materials/palette, no quality tags) match what 1.21 already asks the parser for.

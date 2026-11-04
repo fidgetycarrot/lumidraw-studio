@@ -27365,10 +27365,16 @@ function compileMossImage(image, ctx) {
   if (useLayout) {
     const dims = aspectDims(preset.config || {}, image.aspect)
     const boxes = mossBoxes(base.subjects, dims.width, dims.height)
+    // Official layout vocabulary (OpenMOSS prompt-enhancer skill, Nov 2026):
+    // items are labelled object, character or text — "person" was never one.
+    const scene = image.moss || {}
+    const summaryCaption = scene.camera || scene.setting || scene.moment
+      ? [mossSentence(mossPlain(style)), scene.camera, mossSentence(sceneText), scene.setting || settingLine,
+        base.subjects.length >= 2 && scene.moment ? scene.moment : actions.join(' ')].filter(Boolean).join(' ')
+      : [opening, settingLine, ...actions].filter(Boolean).join(' ')
     prompt = JSON.stringify({
-      summary: { meta: ['illustration'], canvas: 'single',
-        caption: [opening, settingLine, ...actions].filter(Boolean).join(' ') },
-      items: base.subjects.map((subject, index) => ({ label: 'person', caption: mossPersonParagraph(subject), bbox: boxes[index] })),
+      summary: { meta: ['illustration'], canvas: 'single', caption: summaryCaption },
+      items: base.subjects.map((subject, index) => ({ label: 'character', caption: mossPersonParagraph(subject), bbox: boxes[index] })),
       bbox_coord_space: 'abs_centralized',
       bbox_format: 'yxyx',
     })
