@@ -27377,7 +27377,10 @@ function compileMossImage(image, ctx) {
   const base = compileSimpleImage(image, ctx)
   const { preset } = ctx
   const chosen = String(preset.mossStyle || '').trim()
-  const style = MOSS_STYLES[chosen.toLowerCase()] || chosen || MOSS_DEFAULT_STYLE
+  // 1.22.2: a style saved empty means no style sentence, so a style LoRA sets
+  // the look. Only a preset that never had a MOSS style gets the default.
+  const neverSet = preset.mossStyle === undefined || preset.mossStyle === null
+  const style = MOSS_STYLES[chosen.toLowerCase()] || chosen || (neverSet ? MOSS_DEFAULT_STYLE : '')
   const parts = base.parts || {}
   const framing = mossWords(parts.framing || image.framing)
   const sceneText = mossPlain(parts.summary || String(image.scene_summary || ''))

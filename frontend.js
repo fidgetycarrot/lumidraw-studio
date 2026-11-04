@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.22.1'
+  const EXTENSION_VERSION = '1.22.2'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2262,15 +2262,15 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const storyMossBox = make('div', 'ld-story-moss-box')
     const storyMossPick = document.createElement('select')
     storyMossPick.className = 'ld-story-moss-style-pick'
-    for (const [value, label] of [['', 'Choose a preset style…'], ...MOSS_STYLES_UI.map(([value, label]) => [value, label]), ['custom', 'Custom (edit sentence below)']]) {
+    for (const [value, label] of [['', 'No style sentence (a LoRA sets the look)'], ...MOSS_STYLES_UI.map(([value, label]) => [value, label]), ['custom', 'Custom (edit sentence below)']]) {
       const option = document.createElement('option'); option.value = value; option.textContent = label; storyMossPick.appendChild(option)
     }
     storyMossBox.appendChild(field('Picture style', storyMossPick, 'Fills the style sentence below. Whatever is in the box below is sent word-for-word.'))
     const storyMossStyle = document.createElement('textarea')
     storyMossStyle.className = 'ld-story-moss-style'
     storyMossStyle.rows = 3
-    storyMossStyle.placeholder = MOSS_DEFAULT_STYLE_UI
-    storyMossBox.appendChild(field('Style sentence sent to MOSS', storyMossStyle, 'Opens every MOSS prompt. Sent word-for-word.'))
+    storyMossStyle.placeholder = 'Empty: no style sentence is sent, for a style LoRA to set the look.'
+    storyMossBox.appendChild(field('Style sentence sent to MOSS', storyMossStyle, 'Opens every MOSS prompt. Sent word-for-word. Leave it empty when a style LoRA should decide the look.'))
     const storyMossNegative = document.createElement('textarea')
     storyMossNegative.className = 'ld-story-moss-negative'
     storyMossNegative.rows = 3
@@ -2292,7 +2292,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const run = async () => {
         const p = typeof activePresetObj === 'function' ? activePresetObj() : null
         if (!p || p.promptStyle !== 'moss') return
-        const nextStyle = storyMossStyle.value.trim() || MOSS_DEFAULT_STYLE_UI
+        // 1.22.2: empty means no style sentence (a style LoRA sets the look).
+        const nextStyle = storyMossStyle.value.trim()
         const nextNeg = storyMossNegative.value.trim() || MOSS_DEFAULT_NEGATIVE_UI
         p.mossStyle = nextStyle
         p.mossNegative = nextNeg
@@ -2695,14 +2696,14 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           const mossBox = make('div', 'ld-ed-moss-box')
           const stylePick = document.createElement('select')
           stylePick.className = 'ld-ed-moss-style-pick'
-          for (const [value, label] of [['', 'Choose a style…'], ...MOSS_STYLES_UI.map(([value, label]) => [value, label]), ['custom', 'My own (type below)']]) {
+          for (const [value, label] of [['', 'No style sentence (a LoRA sets the look)'], ...MOSS_STYLES_UI.map(([value, label]) => [value, label]), ['custom', 'My own (type below)']]) {
             const option = document.createElement('option'); option.value = value; option.textContent = label; stylePick.appendChild(option)
           }
           mossBox.appendChild(field('Picture style', stylePick, 'Fills the style sentence below. Whatever is in the box is sent word-for-word.'))
           const mossStyle = document.createElement('textarea')
           mossStyle.className = 'ld-ed-moss-style'; mossStyle.rows = 3
-          mossStyle.placeholder = MOSS_DEFAULT_STYLE_UI
-          mossBox.appendChild(field('Style sentence sent to MOSS', mossStyle, 'Opens every MOSS prompt. Sent word-for-word.'))
+          mossStyle.placeholder = 'Empty: no style sentence is sent, for a style LoRA to set the look.'
+          mossBox.appendChild(field('Style sentence sent to MOSS', mossStyle, 'Opens every MOSS prompt. Sent word-for-word. Leave it empty when a style LoRA should decide the look.'))
           stylePick.addEventListener('change', () => {
             const found = MOSS_STYLES_UI.find(([value]) => value === stylePick.value)
             if (found) {
@@ -2756,7 +2757,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             mossBox.style.display = isMoss ? '' : 'none'
             animaBox.style.display = isMoss ? 'none' : ''
             if (isMoss) {
-              if (!mossStyle.value.trim()) { mossStyle.value = MOSS_DEFAULT_STYLE_UI; syncPick() }
+              if (!mossStyle.value.trim() && mossStyle.dataset.unset === '1') { mossStyle.value = MOSS_DEFAULT_STYLE_UI; syncPick() }
+              mossStyle.dataset.unset = ''
               if (!mossNegative.value.trim()) mossNegative.value = MOSS_DEFAULT_NEGATIVE_UI
             }
           }
@@ -3626,7 +3628,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const negEl = $('.ld-story-moss-negative')
       const presetChanged = lastSyncedStoryPresetName !== p.name
       if (styleEl && (force || presetChanged || document.activeElement !== styleEl)) {
-        styleEl.value = (p.mossStyle && p.mossStyle.trim()) || defaultStyle
+        // A preset that never had a MOSS style gets the default; one saved empty stays empty.
+        styleEl.value = p.mossStyle === undefined || p.mossStyle === null ? defaultStyle : String(p.mossStyle)
         styleEl.dispatchEvent(new Event('ld-sync'))
       }
       if (negEl && (force || presetChanged || document.activeElement !== negEl)) {
@@ -8870,6 +8873,7 @@ ${entry.prompt || ''}`.trim()
     if ($('.ld-ed-prompt-style')) {
       $('.ld-ed-prompt-style').value = p && p.promptStyle === 'moss' ? 'moss' : 'anima'
       $('.ld-ed-moss-style').value = (p && p.mossStyle) || ''
+      $('.ld-ed-moss-style').dataset.unset = p && p.mossStyle !== undefined && p.mossStyle !== null ? '' : '1'
       $('.ld-ed-moss-style').dispatchEvent(new Event('ld-sync'))
       $('.ld-ed-moss-negative').value = p && p.mossNegative && !MOSS_OLD_NEGATIVES.has(p.mossNegative.trim()) ? p.mossNegative : ''
       $('.ld-ed-moss-layout').checked = !!(p && p.mossLayout)
