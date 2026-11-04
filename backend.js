@@ -3270,7 +3270,8 @@ function buildDtCloudPayload({ prompt, negativePrompt, seed, config }) {
   // MOSS's own recommended settings when the preset leaves them empty.
   const moss = /moss/i.test(model)
   const steps = num('steps') ?? (moss ? 50 : undefined)
-  const cfg = num('guidance_scale') ?? (moss ? 4 : undefined)
+  // CFG 3 for long prompts, per the official MOSS guide (5 is for short ones).
+  const cfg = num('guidance_scale') ?? (moss ? 3 : undefined)
   const shift = num('shift') ?? (moss ? 5 : undefined)
   if (steps !== undefined) out.steps = steps
   if (cfg !== undefined) out.guidance_scale = cfg
@@ -25618,7 +25619,8 @@ metaphors, no feelings without a visible sign.
 
 Add to each image:
  "moss_camera": one sentence: how close the camera is and from where, and the
-   light with its source and side. "A wide shot from the side of the kitchen
+   light with its source and side. No camera or photo words (lens, film, 35mm,
+   bokeh, depth of field, shot on): they pull MOSS toward a photograph. "A wide shot from the side of the kitchen
    island, in warm afternoon sunlight from a window on the left."
  "moss_setting": one sentence naming the place and the 2-4 things that matter for
    where people are. "They are in a bright kitchen with a long granite island,
@@ -26443,7 +26445,7 @@ async function queuePastePrompts({ userId, preset, prepared, target, chatId, tro
       width: dims.width, height: dims.height,
       // What to set in the other app. MOSS's own recommended settings when the
       // preset leaves them empty.
-      steps: Number(config.steps) || (moss ? 50 : ''), cfg: Number(config.guidance_scale) || (moss ? 4 : ''),
+      steps: Number(config.steps) || (moss ? 50 : ''), cfg: Number(config.guidance_scale) || (moss ? 3 : ''),
       shift: moss ? 5 : '',
       presetName: preset.name || '', notes: compiled.debug.notes.slice(0, 12),
       scene: { direct: true, simple: true, anchor: image.anchor, sceneSummary: image.scene_summary, rating: image.rating,
@@ -26684,7 +26686,12 @@ const MOSS_STYLES = {
   'anime poster': 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.',
 }
 const MOSS_DEFAULT_STYLE = MOSS_STYLES.dark
-const MOSS_DEFAULT_NEGATIVE = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin'
+// 1.21.2: the official MOSS guide's short negative (its fifth term, "nsfw", left
+// out because adult pictures are wanted) plus the two hand failures it names.
+// Every word changes a MOSS picture, and the old 19-term list also fought
+// styles that wanted cel shading or realism.
+const MOSS_DEFAULT_NEGATIVE = 'worst quality, bad anatomy, watermark, jpeg artifact, extra fingers, fused fingers'
+const MOSS_OLD_DEFAULT_NEGATIVES = new Set(['worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin', 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, realistic, photorealistic'])
 
 function presetPromptStyle(preset) {
   return preset && preset.promptStyle === 'moss' ? 'moss' : 'anima'
@@ -27406,7 +27413,8 @@ function compileMossImage(image, ctx) {
     prompt = [styleLine, parserScene.setting || mossSettingSentence(places), ...personBlocks, moment].filter(Boolean).join('\n\n')
   }
 
-  const negatives = [String(preset.mossNegative || '').trim() || MOSS_DEFAULT_NEGATIVE]
+  const ownNegative = String(preset.mossNegative || '').trim()
+  const negatives = [ownNegative && !MOSS_OLD_DEFAULT_NEGATIVES.has(ownNegative) ? ownNegative : MOSS_DEFAULT_NEGATIVE]
   if (/\bplate armor\b/.test(base.negativePrompt) && !/\bplate armor\b/.test(String(preset.negativePrompt || ''))) negatives.push('plate armor, full armor')
   if (/\bmirror\b/.test(base.negativePrompt)) negatives.push('mirror, reflection')
   if (base.subjects.length >= 2 && /\bduplicate\b/.test(base.negativePrompt)) negatives.push('twins, identical faces')

@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.21.1'
+  const EXTENSION_VERSION = '1.21.2'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -331,6 +331,8 @@ function realSetup(ctx) {
   function usesSwarm(config) { return config && config.renderBackend === 'swarmui' }
   function usesNano(config) { return config && config.renderBackend === 'nanogpt' }
   function usesDtCloud(config) { return config && config.renderBackend === 'dtcloud' }
+  // The 19-term MOSS negatives used before 1.21.2; a preset still holding one gets the short default.
+  const MOSS_OLD_NEGATIVES = new Set(['worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin', 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, realistic, photorealistic'])
   // Draw Things cloud through the LS Cloud Helper (1.20). Draw Things' own
   // sampler names; the helper matches them to the cloud's list.
   const DT_CLOUD_MODEL = 'moss_image_sft_q8p.ckpt'
@@ -1397,7 +1399,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
             <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option><option value="dtcloud">Draw Things cloud</option></select>
             <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
-            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things cloud model — <code>moss_image_sft_q8p.ckpt</code> is MOSS Image. Empty steps, CFG and shift use MOSS’s 50, 4 and 5. LoRAs are not available here yet.</div><div class="ld-status ld-ed-nano-status"></div>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things cloud model — <code>moss_image_sft_q8p.ckpt</code> is MOSS Image. Empty steps, CFG and shift use MOSS’s 50, 3 and 5. LoRAs are not available here yet.</div><div class="ld-status ld-ed-nano-status"></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div class="ld-ed-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler" title="Blank uses SwarmUI's default."></select></div>
@@ -2063,8 +2065,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       ['anime poster', 'Anime Poster (Cel-Shaded)', 'An anime key-visual poster illustration with clean bold lineart, vivid cel shading, dramatic cinematic lighting and a dynamic composition.'],
     ]
     const MOSS_DEFAULT_STYLE_UI = MOSS_STYLES_UI[1][2]
-    const MOSS_DEFAULT_NEGATIVE_UI = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin'
-    const MOSS_3D_FILM_NEGATIVE_UI = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, realistic, photorealistic'
+    // 1.21.2: the official short MOSS negative (without "nsfw") plus two hand terms.
+    const MOSS_DEFAULT_NEGATIVE_UI = 'worst quality, bad anatomy, watermark, jpeg artifact, extra fingers, fused fingers'
+    const MOSS_3D_FILM_NEGATIVE_UI = 'worst quality, bad anatomy, watermark, jpeg artifact, extra fingers, fused fingers'
 
     // ---------- STORY · 1.18 layout
     // Clean, engine-aware layout:
@@ -3602,7 +3605,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     }
     if (isMoss) {
       const defaultStyle = 'A dark, atmospheric high-detail anime illustration with soft blended shading, rich dramatic lighting, and detailed textures.'
-      const defaultNeg = 'worst quality, low quality, bad anatomy, extra limbs, text, watermark, signature, border, jpeg artifacts, cel shading, flat colors, cartoon, chibi, 3d, realistic, photorealistic, CGI, doll, plastic skin'
+      const defaultNeg = 'worst quality, bad anatomy, watermark, jpeg artifact, extra fingers, fused fingers'
       const styleEl = $('.ld-story-moss-style')
       const negEl = $('.ld-story-moss-negative')
       const presetChanged = lastSyncedStoryPresetName !== p.name
@@ -3611,7 +3614,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         styleEl.dispatchEvent(new Event('ld-sync'))
       }
       if (negEl && (force || presetChanged || document.activeElement !== negEl)) {
-        negEl.value = (p.mossNegative && p.mossNegative.trim()) || defaultNeg
+        // The old 19-term default shows as the new short one (and is sent that way).
+        const ownNeg = p.mossNegative && p.mossNegative.trim()
+        negEl.value = ownNeg && !MOSS_OLD_NEGATIVES.has(ownNeg) ? ownNeg : defaultNeg
       }
       if (presetChanged) setStatus('.ld-story-moss-status', '')
       lastSyncedStoryPresetName = p.name
@@ -8811,7 +8816,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-ed-prompt-style').value = p && p.promptStyle === 'moss' ? 'moss' : 'anima'
       $('.ld-ed-moss-style').value = (p && p.mossStyle) || ''
       $('.ld-ed-moss-style').dispatchEvent(new Event('ld-sync'))
-      $('.ld-ed-moss-negative').value = (p && p.mossNegative) || ''
+      $('.ld-ed-moss-negative').value = p && p.mossNegative && !MOSS_OLD_NEGATIVES.has(p.mossNegative.trim()) ? p.mossNegative : ''
       $('.ld-ed-moss-layout').checked = !!(p && p.mossLayout)
       $('.ld-ed-prompt-style').dispatchEvent(new Event('change'))
     }
@@ -9242,7 +9247,7 @@ ${entry.prompt || ''}`.trim()
       rendererDrafts[rendererValue(previous)] = previous
       draftConfig = cloneJson(rendererDrafts[next] || (next === 'swarmui' ? {renderBackend:'swarmui', swarmParams:{}}
         : next === 'nanogpt' ? {renderBackend:'nanogpt', model:'fal-ai/moss-image', width:1024, height:1024}
-        : next === 'dtcloud' ? {renderBackend:'dtcloud', model:DT_CLOUD_MODEL, width:1024, height:1024, steps:50, guidance_scale:4, shift:5} : {}))
+        : next === 'dtcloud' ? {renderBackend:'dtcloud', model:DT_CLOUD_MODEL, width:1024, height:1024, steps:50, guidance_scale:3, shift:5} : {}))
       draftDirty = true
       renderDraftControls(); saveDraftLocal(); renderChips()
       if (next === 'swarmui') await loadSwarmCatalog()
@@ -9299,7 +9304,7 @@ ${entry.prompt || ''}`.trim()
     if (cloud) {
       // MOSS on the cloud, with MOSS's own settings, as a starting point.
       $('.ld-ed-model').value = DT_CLOUD_MODEL
-      $('.ld-ed-steps').value = 50; $('.ld-ed-cfg').value = 4; $('.ld-ed-shift').value = 5
+      $('.ld-ed-steps').value = 50; $('.ld-ed-cfg').value = 3; $('.ld-ed-shift').value = 5
       $('.ld-ed-w').value = 1024; $('.ld-ed-h').value = 1024
       const style = $('.ld-ed-prompt-style')
       if (style && style.value !== 'moss') { style.value = 'moss'; style.dispatchEvent(new Event('change')) }

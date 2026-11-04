@@ -20,3 +20,9 @@ MOSS reads plain English. LS used to take the parser's Danbooru tags for poses, 
 # 1.21.1 — a simpler Illustration mode menu
 - "Parser" and "Direct" ran the same simple pipeline, so the menu is now: Off, Inline, Only when I press Scan, Automatic after replies.
 - A saved Parser mode shows as the matching choice and is saved as Direct the next time settings are saved. Only the old (pre-1.9) pipeline treated them differently.
+
+# 1.21.2 — from the 3 Nov MOSS research (only the parts the official guide backs)
+- **Shorter MOSS negative.** New default: `worst quality, bad anatomy, watermark, jpeg artifact, extra fingers, fused fingers` — the official short negative without "nsfw" (adult pictures are wanted) plus the two hand failures it names. The old 19-term default is replaced wherever a preset still had it unchanged; a negative you wrote yourself is kept. The old list also fought styles that want cel shading or realism.
+- **CFG 3 by default for Draw Things cloud MOSS** (and the Prompt only suggestion): the official guide uses 3 for long prompts and 5 only for short ones. A CFG already saved in a preset is kept.
+- **No photo words in the parser's camera sentence** (lens, film, 35mm, bokeh, depth of field, "shot on"): they pull MOSS toward a photograph.
+- Not taken from the research: a second style sentence at the end of every prompt (the research's own guess, and it makes every prompt longer), and its NanoGPT-specific notes.
