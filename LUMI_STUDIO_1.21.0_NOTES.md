@@ -32,3 +32,6 @@ MOSS reads plain English. LS used to take the parser's Danbooru tags for poses, 
 - The box format already matched (centre-based pixels, y-x-y-x order), as did the summary and field names.
 - Layout mode's overall caption now uses the parser's plain-English camera, setting and moment sentences when it wrote them.
 - The skill's caption rules (cohesive prose, spatial relations in words, subject/action/appearance/setting/camera/medium/light/materials/palette, no quality tags) match what 1.21 already asks the parser for.
+
+# 1.21.4 — every Draw Things MOSS model in the cloud preset's list
+- The model box for Draw Things cloud now suggests all six of Draw Things' MOSS files: SFT and Base, each as the full 8-bit file and the smaller "8-bit S" and "4-bit S" copies. The default stays `moss_image_sft_q8p.ckpt` (MOSS Image SFT). Any other Draw Things model name can still be typed.

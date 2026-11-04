@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.21.3'
+  const EXTENSION_VERSION = '1.21.4'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -336,7 +336,17 @@ function realSetup(ctx) {
   // Draw Things cloud through the LS Cloud Helper (1.20). Draw Things' own
   // sampler names; the helper matches them to the cloud's list.
   const DT_CLOUD_MODEL = 'moss_image_sft_q8p.ckpt'
-  const dtCloudCatalog = { models: [{ file: DT_CLOUD_MODEL, name: 'MOSS Image' }], loras: [], schedulers: [],
+  // Draw Things' own MOSS entries (ModelZoo, Nov 2026). On the cloud the full
+  // 8-bit files are the ones to use; the "S" files are smaller copies for Macs
+  // short of memory. Any other Draw Things model name can still be typed.
+  const dtCloudCatalog = { models: [
+    { file: 'moss_image_sft_q8p.ckpt', name: 'MOSS Image SFT' },
+    { file: 'moss_image_base_q8p.ckpt', name: 'MOSS Image Base' },
+    { file: 'moss_image_sft_i8x.ckpt', name: 'MOSS Image SFT (8-bit S)' },
+    { file: 'moss_image_sft_i4x.ckpt', name: 'MOSS Image SFT (4-bit S)' },
+    { file: 'moss_image_base_i8x.ckpt', name: 'MOSS Image Base (8-bit S)' },
+    { file: 'moss_image_base_i4x.ckpt', name: 'MOSS Image Base (4-bit S)' },
+  ], loras: [], schedulers: [],
     samplers: ['Euler A Trailing', 'Euler A', 'Euler', 'DPM++ 2M Karras', 'DPM++ 2M', 'DPM++ SDE Karras', 'DPM++ SDE',
       'DPM++ 2M SDE Karras', 'DPM++ 2M SDE', 'DPM++ 3M SDE Karras', 'DPM++ 3M SDE', 'DPM++ 2S A Karras', 'DPM++ 2S A',
       'DDIM', 'UniPC', 'UniPC Trailing', 'DDIM Trailing', 'LCM', 'TCD', 'DPM++ 2M AYS', 'Euler A AYS'] }
@@ -1399,7 +1409,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
             <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option><option value="dtcloud">Draw Things cloud</option></select>
             <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
-            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things cloud model — <code>moss_image_sft_q8p.ckpt</code> is MOSS Image. Empty steps, CFG and shift use MOSS’s 50, 3 and 5. LoRAs are not available here yet.</div><div class="ld-status ld-ed-nano-status"></div>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things model file: <code>moss_image_sft_q8p.ckpt</code> is MOSS Image SFT, <code>moss_image_base_q8p.ckpt</code> is MOSS Image Base. Empty steps, CFG and shift use MOSS’s 50, 3 and 5. LoRAs are not available here yet.</div><div class="ld-status ld-ed-nano-status"></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div class="ld-ed-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler" title="Blank uses SwarmUI's default."></select></div>
