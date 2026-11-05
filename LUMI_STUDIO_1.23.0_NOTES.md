@@ -29,3 +29,8 @@
 - The same prompt drew good faces on NovelAI's website and cartoonish ones through LS. The difference: the website's **Undesired Content preset** (Heavy by default) adds its own words to every picture without showing them — `lowres, artistic error, film grain, worst quality, bad quality, very displeasing, chromatic aberration, …` — and puts `nsfw` first for pictures that are not adult. V5 is trained on those words. LS sent only the typed list.
 - LS now does the same as the website. NovelAI presets have an **Undesired Content preset** menu (Heavy, Light, Human focus, None), Heavy unless changed; existing NovelAI presets use Heavy. Its words go before the preset's negative prompt, with `nsfw` first unless the picture is an adult one.
 - Medium effort uses the Heavy preset, as on the website.
+
+# 1.23.4 — one prompt, like the website
+- Eric's test settled it: LS's own prompt pasted into the website's main box, at the same wide size and settings, drew good faces; the same prompt sent with a Character box per person drew caricatures. Face tags such as "full lips, thick eyebrows, almond-shaped eyes" hit far harder inside a box.
+- NovelAI presets now send the whole text as the main prompt by default, Character lines included, exactly as pasted on the website. The Character lines and the scene sentence still say who is where.
+- **Give each person their own Character box** (off by default) brings back the boxes with their spots.

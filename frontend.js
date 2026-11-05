@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.23.3'
+  const EXTENSION_VERSION = '1.23.4'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1422,7 +1422,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
             <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option><option value="dtcloud">Draw Things cloud</option><option value="novelai">NovelAI (online)</option></select>
             <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
-            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things model file: <code>moss_image_sft_q8p.ckpt</code> is MOSS Image SFT, <code>moss_image_base_q8p.ckpt</code> is MOSS Image Base. Empty steps, CFG and shift use MOSS’s 50, 3 and 5. LoRAs must first be added to your Draw Things cloud storage with <code>ls-cloud-helper add-lora</code>; they then appear in the LoRA list.</div><select class="ld-ed-nai-model" style="display:none" aria-label="NovelAI model"></select><div class="ld-hint ld-ed-novelai-hint" style="display:none">Made on NovelAI’s servers with your NovelAI API token (Settings → Image apps). Each person gets their own Character line with their spot, the way NovelAI’s Character Prompts work. Up to 28 steps at normal size is free on Opus; more costs Anlas. Medium effort is faster and uses NovelAI’s fixed settings (14 steps, no negative prompt). LoRAs do not apply. <button class="ld-btn ld-compact ld-ed-nai-reset" type="button" style="margin-top:5px">Go back to the starting NovelAI style</button><span class="ld-label" style="margin-top:7px">Undesired Content preset</span><select class="ld-ed-nai-uc"><option value="heavy">Heavy (NovelAI’s default)</option><option value="light">Light</option><option value="human">Human focus</option><option value="none">None</option></select><div class="ld-hint">Same as the preset menu under NovelAI’s Undesired Content box: its words are added before the negative prompt below, as the website does.</div></div><div class="ld-status ld-ed-nano-status"></div>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things model file: <code>moss_image_sft_q8p.ckpt</code> is MOSS Image SFT, <code>moss_image_base_q8p.ckpt</code> is MOSS Image Base. Empty steps, CFG and shift use MOSS’s 50, 3 and 5. LoRAs must first be added to your Draw Things cloud storage with <code>ls-cloud-helper add-lora</code>; they then appear in the LoRA list.</div><select class="ld-ed-nai-model" style="display:none" aria-label="NovelAI model"></select><div class="ld-hint ld-ed-novelai-hint" style="display:none">Made on NovelAI’s servers with your NovelAI API token (Settings → Image apps). Each person gets their own Character line saying where they are. Up to 28 steps at normal size is free on Opus; more costs Anlas. Medium effort is faster and uses NovelAI’s fixed settings (14 steps, no negative prompt). LoRAs do not apply. <button class="ld-btn ld-compact ld-ed-nai-reset" type="button" style="margin-top:5px">Go back to the starting NovelAI style</button><span class="ld-label" style="margin-top:7px">Undesired Content preset</span><select class="ld-ed-nai-uc"><option value="heavy">Heavy (NovelAI’s default)</option><option value="light">Light</option><option value="human">Human focus</option><option value="none">None</option></select><div class="ld-hint">Same as the preset menu under NovelAI’s Undesired Content box: its words are added before the negative prompt below, as the website does.</div><label class="ld-check" style="margin-top:7px"><input type="checkbox" class="ld-ed-nai-boxes" /> Give each person their own Character box</label><div class="ld-hint">Off: everything goes in the main prompt, as when you paste LS’s prompt into the website; the Character lines and the scene sentence still say who is where. On: each person gets a Character box with their spot. Boxes can pin places down harder, but face tags in them come out exaggerated.</div></div><div class="ld-status ld-ed-nano-status"></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div class="ld-ed-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler" title="Blank uses SwarmUI's default."></select></div>
@@ -8949,6 +8949,7 @@ ${entry.prompt || ''}`.trim()
     fillNanoPicker($('.ld-ed-nano-pick'), $('.ld-ed-model'), usesNano(c))
     if (usesNovelai(c)) syncEditorRendererFields()
     if ($('.ld-ed-nai-uc')) $('.ld-ed-nai-uc').value = c.novelaiUc || 'heavy'
+    if ($('.ld-ed-nai-boxes')) $('.ld-ed-nai-boxes').checked = c.novelaiBoxes === true
     populateSelect($('.ld-ed-sampler'), rendererCatalog(c).samplers, c.sampler || '', '— choose sampler —')
     $('.ld-ed-steps').value = c.steps !== undefined ? c.steps : ''
     $('.ld-ed-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''
@@ -9455,6 +9456,7 @@ ${entry.prompt || ''}`.trim()
       if ($('.ld-ed-negative') && !$('.ld-ed-negative').value.trim()) $('.ld-ed-negative').value = NOVELAI_DEFAULT_NEGATIVE_UI
       if ($('.ld-ed-break')) $('.ld-ed-break').checked = false
       if ($('.ld-ed-nai-uc')) $('.ld-ed-nai-uc').value = 'heavy'
+      if ($('.ld-ed-nai-boxes')) $('.ld-ed-nai-boxes').checked = false
     }
     syncEditorRendererFields()
     if (cloud) {
@@ -9527,6 +9529,8 @@ ${entry.prompt || ''}`.trim()
       if (usesNano(config) || usesNovelai(config)) config.loras = []
       if (usesNovelai(config) && $('.ld-ed-nai-uc')) config.novelaiUc = $('.ld-ed-nai-uc').value || 'heavy'
       else delete config.novelaiUc
+      if (usesNovelai(config) && $('.ld-ed-nai-boxes') && $('.ld-ed-nai-boxes').checked) config.novelaiBoxes = true
+      else delete config.novelaiBoxes
       const res = await call('save_preset', {
         name,
         config,

@@ -3522,7 +3522,14 @@ function buildNovelaiPayload({ prompt, negativePrompt, seed, config }) {
   const model = NOVELAI_MODELS.some(m => m.id === config.model) ? config.model : NOVELAI_DEFAULT_MODEL
   const n = seed === undefined || seed === null || seed === '' ? -1 : Number(seed)
   if (n >= 0 && !Number.isSafeInteger(n)) throw new Error('Seed must be a safe whole number.')
-  const split = splitNovelaiPrompt(prompt)
+  // 1.23.4: by default the whole text, Character lines included, goes in as the
+  // main prompt — exactly what Eric pasted into the website, which drew good
+  // faces in the same wide picture where Character boxes drew caricatures
+  // (face tags such as "full lips, thick eyebrows" hit far harder inside a
+  // box). The boxes stay available per preset.
+  const boxes = config.novelaiBoxes === true
+  const split = boxes ? splitNovelaiPrompt(prompt)
+    : { main: String(prompt || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).join('\n'), characters: [] }
   if (!split.main && !split.characters.length) throw new Error('The NovelAI prompt is empty.')
   const max = /diffusion-5/.test(model) ? 22 : 6
   const characters = split.characters.slice(0, max)
@@ -3567,7 +3574,7 @@ function buildNovelaiPayload({ prompt, negativePrompt, seed, config }) {
     // prompt text with its Character lines, and the settings used.
     prompt: String(prompt || ''), negative_prompt: negative, seed: parameters.seed, width: size.width, height: size.height,
     steps: parameters.steps, guidance_scale: scale, sampler: parameters.sampler,
-    _ls: { characters: characters.map(c => ({ where: c.where || '(NovelAI chooses)', length: c.prompt.length })), useCoords, dropped: split.characters.length - characters.length } }
+    _ls: { boxes, characters: characters.map(c => ({ where: c.where || '(NovelAI chooses)', length: c.prompt.length })), useCoords, dropped: split.characters.length - characters.length } }
 }
 
 function novelaiError(res) {
@@ -3601,7 +3608,7 @@ async function generateNovelaiImages(settings, payload, progress, context = {}) 
   spindle.log.info('[lumidraw] NovelAI request ' + JSON.stringify({ model: body.model, width: body.parameters.width, height: body.parameters.height,
     steps: body.parameters.steps, scale: body.parameters.scale, sampler: body.parameters.sampler, seed: body.parameters.seed,
     main: body.parameters.prompt.length + ' characters', negative: body.parameters.negative_prompt.length + ' characters', undesiredPreset: body.parameters.ucPresetId,
-    characters: info.characters, spots: info.useCoords ? 'from LS' : 'NovelAI chooses' }) +
+    characters: info.boxes ? info.characters : 'in the main prompt', spots: info.useCoords ? 'from LS' : 'NovelAI chooses' }) +
     (info.dropped ? ` · left out ${info.dropped} character(s) over the model's limit` : ''))
   const started = Date.now()
   let res
