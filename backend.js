@@ -2210,6 +2210,7 @@ function buildPayload({ prompt, negativePrompt, seed, config, extra }) {
   if (imageRenderer(config) === 'swarmui') return buildSwarmPayload({ prompt, negativePrompt, seed, config })
   if (imageRenderer(config) === 'nanogpt') return buildNanoPayload({ prompt, negativePrompt, seed, config })
   if (imageRenderer(config) === 'dtcloud') return buildDtCloudPayload({ prompt, negativePrompt, seed, config })
+  if (imageRenderer(config) === 'novelai') return buildNovelaiPayload({ prompt, negativePrompt, seed, config })
   const payload = {}
 
   // Every Draw Things setting the workspace holds is sent, not a fixed
@@ -2648,13 +2649,13 @@ async function cloudGenerate(settings, payload) {
 // recipes without the marker remain Draw Things recipes after this upgrade.
 function rendererLabel(config) {
   const renderer = imageRenderer(config)
-  return renderer === 'swarmui' ? 'SwarmUI' : renderer === 'nanogpt' ? 'NanoGPT' : renderer === 'dtcloud' ? 'Draw Things cloud' : 'Draw Things'
+  return renderer === 'swarmui' ? 'SwarmUI' : renderer === 'nanogpt' ? 'NanoGPT' : renderer === 'dtcloud' ? 'Draw Things cloud' : renderer === 'novelai' ? 'NovelAI' : 'Draw Things'
 }
 
 function imageRenderer(config) {
   const value = config && config.renderBackend
   if (!value || value === 'drawthings') return 'drawthings'
-  if (value === 'swarmui' || value === 'nanogpt' || value === 'dtcloud') return value
+  if (value === 'swarmui' || value === 'nanogpt' || value === 'dtcloud' || value === 'novelai') return value
   throw new Error('Unknown image renderer: ' + String(value))
 }
 
@@ -3391,12 +3392,226 @@ async function generateDtCloudImages(settings, payload, progress, context = {}) 
   }
 }
 
+// ---------------------------------------------------------------------------
+// NovelAI (1.23.0)
+// ---------------------------------------------------------------------------
+// NovelAI's image models take one main prompt plus a separate prompt for each
+// person, each with an optional spot in the picture. LS keeps all of that in
+// one plain prompt text, so prompt-only, the Studio box, history and redraws
+// keep working with a single string:
+//
+//   painting (medium), anime coloring, ..., 1girl, 1boy, kitchen, night
+//   Character (left): girl, adult woman, black hair, ponytail, sitting on stool
+//   Character (right, back): boy, adult man, apron, source#pouring coffee
+//
+// Spots go to NovelAI only when every person has one; otherwise NovelAI
+// places them itself (its "AI's Choice").
+//
+// The normal endpoint answers with a zip file, which Lumiverse's network proxy
+// will not pass to an extension (it only hands over pictures, sound and text).
+// The streaming endpoint sends the finished picture as base64 text instead.
+const NOVELAI_HOST = 'https://image.novelai.net'
+const NOVELAI_KEY = 'lumidraw_novelai_api_key'
+const NOVELAI_DEFAULT_MODEL = 'nai-diffusion-5-full'
+const NOVELAI_MODELS = [
+  { id: 'nai-diffusion-5-full', label: 'V5 Full (High effort)' },
+  { id: 'nai-diffusion-5-full-medium', label: 'V5 Full (Medium effort)' },
+  { id: 'nai-diffusion-5-curated', label: 'V5 Curated' },
+  { id: 'nai-diffusion-4-5-full', label: 'V4.5 Full' },
+  { id: 'nai-diffusion-4-5-curated', label: 'V4.5 Curated' },
+]
+const NOVELAI_SAMPLERS = [
+  { id: 'k_euler', label: 'Euler' },
+  { id: 'k_euler_ancestral', label: 'Euler Ancestral' },
+  { id: 'k_dpmpp_2m', label: 'DPM++ 2M' },
+  { id: 'k_dpmpp_2s_ancestral', label: 'DPM++ 2S Ancestral' },
+  { id: 'k_dpmpp_sde', label: 'DPM++ SDE' },
+]
+// Default style for a new NovelAI preset: the recipe that won Eric's first
+// test (Nov 2026), from NovelAI gallery pictures he liked.
+const NOVELAI_DEFAULT_STYLE = 'painting (medium), anime coloring, anime, year 2025, year 2026, 1.5::masterpiece, best quality, amazing quality::, very aesthetic, natural skin shading, 1.2::rim lighting::, backlighting, high contrast, depth of field'
+const NOVELAI_DEFAULT_NEGATIVE = 'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page, blurry, bad anatomy, bad hands, sketch, rough, flat color, vector trace, sweat, wet, shiny skin, text, watermark, signature'
+// Where each spot word puts a person on NovelAI's grid (0–1, left to right and
+// top to bottom). Someone further back stands higher in the frame.
+const NOVELAI_ACROSS = { left: 0.3, 'center-left': 0.3, center: 0.5, centre: 0.5, middle: 0.5, 'center-right': 0.7, right: 0.7 }
+const NOVELAI_DEPTH = { back: 0.3, background: 0.3, behind: 0.3, front: 0.7, foreground: 0.7 }
+
+function novelaiAvailable(userId) { return nanoAvailable(userId) }
+
+async function novelaiKey(userId) {
+  if (!novelaiAvailable(userId)) throw new Error('NovelAI needs a current Lumiverse with secure key storage and the network proxy.')
+  let key
+  try { key = await spindle.enclave.get(NOVELAI_KEY, userId) } catch (_) { throw new Error('Lumiverse could not read the saved NovelAI key.') }
+  if (!key) throw new Error('Save your NovelAI API token in Lumi Studio → Settings → Image apps first.')
+  return key
+}
+
+async function novelaiStatus(userId) {
+  const lists = { models: NOVELAI_MODELS, samplers: NOVELAI_SAMPLERS, defaultStyle: NOVELAI_DEFAULT_STYLE, defaultNegative: NOVELAI_DEFAULT_NEGATIVE }
+  if (!novelaiAvailable(userId)) return { available: false, hasKey: false, ...lists }
+  try { return { available: true, hasKey: !!(await spindle.enclave.get(NOVELAI_KEY, userId)), ...lists } }
+  catch (_) { return { available: true, hasKey: false, ...lists } }
+}
+
+async function saveNovelaiKey(payload, userId) {
+  if (!novelaiAvailable(userId)) throw new Error('NovelAI needs a current Lumiverse with secure key storage and the network proxy.')
+  const key = typeof payload.apiKey === 'string' ? payload.apiKey.trim().replace(/^Bearer\s+/i, '') : ''
+  if (payload.clearKey !== true && !key) throw new Error('Paste your NovelAI API token first.')
+  if (key && (key.length > 4096 || /\s/.test(key))) throw new Error('The token must be one piece of text with no spaces.')
+  try {
+    if (payload.clearKey === true) await spindle.enclave.delete(NOVELAI_KEY, userId)
+    else await spindle.enclave.put(NOVELAI_KEY, key, userId)
+  } catch (_) { throw new Error('Lumiverse could not save the NovelAI token.') }
+  return novelaiStatus(userId)
+}
+
+// "left", "right, back", "center front" → a spot on the grid, or null.
+function novelaiSpot(words) {
+  const text = String(words || '').toLowerCase()
+  if (!text.trim()) return null
+  let x = null, y = 0.5
+  for (const [word, value] of Object.entries(NOVELAI_ACROSS)) if (new RegExp('(?:^|[^a-z-])' + word + '(?:$|[^a-z-])').test(text)) x = value
+  for (const [word, value] of Object.entries(NOVELAI_DEPTH)) if (new RegExp('\\b' + word + '\\b').test(text)) y = value
+  if (x === null && y === 0.5) return null
+  return { x: x === null ? 0.5 : x, y }
+}
+
+// One LS prompt text → NovelAI's main prompt and per-person prompts.
+function splitNovelaiPrompt(text) {
+  const main = []
+  const characters = []
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const hit = /^\s*Character\s*\d*\s*(?:\(([^)]*)\))?\s*:\s*(.*)$/i.exec(line)
+    if (hit) characters.push({ prompt: hit[2].trim(), where: (hit[1] || '').trim(), center: novelaiSpot(hit[1]) })
+    else if (line.trim()) main.push(line.trim())
+  }
+  return { main: main.join(', ').replace(/,\s*,/g, ',').replace(/\s+/g, ' ').trim(), characters: characters.filter(c => c.prompt) }
+}
+
+// NovelAI wants sides in steps of 64. Up to about one megapixel is free on
+// Opus; bigger costs Anlas, so LS stays inside it.
+function novelaiSize(width, height) {
+  let w = Number(width) || 832, h = Number(height) || 1216
+  const limit = 1024 * 1024
+  if (w * h > limit) { const scale = Math.sqrt(limit / (w * h)); w *= scale; h *= scale }
+  const snap = value => Math.max(64, Math.floor(value / 64) * 64)
+  return { width: snap(w), height: snap(h) }
+}
+
+function buildNovelaiPayload({ prompt, negativePrompt, seed, config }) {
+  const model = NOVELAI_MODELS.some(m => m.id === config.model) ? config.model : NOVELAI_DEFAULT_MODEL
+  const n = seed === undefined || seed === null || seed === '' ? -1 : Number(seed)
+  if (n >= 0 && !Number.isSafeInteger(n)) throw new Error('Seed must be a safe whole number.')
+  const split = splitNovelaiPrompt(prompt)
+  if (!split.main && !split.characters.length) throw new Error('The NovelAI prompt is empty.')
+  const max = /diffusion-5/.test(model) ? 22 : 6
+  const characters = split.characters.slice(0, max)
+  const useCoords = characters.length >= 2 && characters.every(c => c.center)
+  const size = novelaiSize(config.width, config.height)
+  const medium = model === 'nai-diffusion-5-full-medium'
+  // Presets show NovelAI's own sampler names ("Euler Ancestral"); either form works.
+  const pick = String(config.sampler || '').trim().toLowerCase()
+  const found = NOVELAI_SAMPLERS.find(item => item.id === pick || item.label.toLowerCase() === pick)
+  const sampler = found ? found.id : 'k_euler_ancestral'
+  const steps = Math.max(1, Math.min(50, Math.round(Number(config.steps) || 28)))
+  const scale = Number.isFinite(Number(config.guidance_scale)) && config.guidance_scale !== '' ? Number(config.guidance_scale) : 5
+  const negative = String(negativePrompt || '').trim()
+  const centers = c => (useCoords ? [c.center] : [{ x: 0.5, y: 0.5 }])
+  const parameters = {
+    params_version: /diffusion-5/.test(model) ? 4 : 3,
+    width: size.width, height: size.height,
+    // Medium effort is a faster cut of V5 that runs fixed settings in
+    // NovelAI's own app: 14 steps, Euler Ancestral, no custom undesired content.
+    scale, sampler: medium ? 'k_euler_ancestral' : sampler, steps: medium ? 14 : steps,
+    seed: n >= 0 ? n : Math.floor(Math.random() * 4294967295), n_samples: 1,
+    ucPreset: 4, qualityToggle: false,
+    cfg_rescale: Number(config.cfg_rescale) || 0, noise_schedule: 'karras',
+    dynamic_thresholding: false, deliberate_euler_ancestral_bug: false, prefer_brownian: true,
+    prompt: split.main, negative_prompt: medium ? '' : negative,
+    v4_prompt: { caption: { base_caption: split.main, char_captions: characters.map(c => ({ char_caption: c.prompt, centers: centers(c) })) },
+      use_coords: useCoords, use_order: true },
+    v4_negative_prompt: { caption: { base_caption: medium ? '' : negative, char_captions: characters.map(c => ({ char_caption: '', centers: centers(c) })) },
+      use_coords: useCoords, use_order: true, legacy_uc: false },
+    characterPrompts: characters.map(c => ({ prompt: c.prompt, uc: '', center: centers(c)[0], enabled: true })),
+    use_coords: useCoords,
+    stream: 'sse',
+  }
+  return { model, input: split.main, action: 'generate', parameters,
+    // The rest is for LS (history, redraw, the log) and is not sent: the LS
+    // prompt text with its Character lines, and the settings used.
+    prompt: String(prompt || ''), negative_prompt: negative, seed: parameters.seed, width: size.width, height: size.height,
+    steps: parameters.steps, guidance_scale: scale, sampler: parameters.sampler,
+    _ls: { characters: characters.map(c => ({ where: c.where || '(NovelAI chooses)', length: c.prompt.length })), useCoords, dropped: split.characters.length - characters.length } }
+}
+
+function novelaiError(res) {
+  const json = res.json || {}
+  const said = String(json.message || json.error || res.text || '').replace(/\s+/g, ' ').trim().slice(0, 300)
+  if (res.status === 401) return 'NovelAI turned down the API token. Make a new one in NovelAI → Account Settings → Get Persistent API Token, and save it in Lumi Studio.'
+  if (res.status === 402) return 'NovelAI says this picture needs more Anlas than the account has' + (said ? ' (' + said + ')' : '') + '.'
+  if (res.status === 429) return 'NovelAI is still busy with another picture on this account. Try again in a moment.'
+  return 'NovelAI refused the picture (HTTP ' + res.status + (said ? ': ' + said : '') + ').'
+}
+
+// The stream is lines of "data: {...}"; the last "final" event has the picture.
+function novelaiStreamImage(text) {
+  let final = null, error = null
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (!line.startsWith('data:')) continue
+    const body = line.slice(5).trim()
+    if (!body || body === '[DONE]') continue
+    let event
+    try { event = JSON.parse(body) } catch { continue }
+    if (event.event_type === 'final' && event.image) final = event
+    else if (event.event_type === 'error') error = event
+  }
+  return { final, error }
+}
+
+async function generateNovelaiImages(settings, payload, progress, context = {}) {
+  const key = await novelaiKey(context.userId)
+  const info = payload._ls || {}
+  const body = { input: payload.input, model: payload.model, action: payload.action, parameters: payload.parameters }
+  spindle.log.info('[lumidraw] NovelAI request ' + JSON.stringify({ model: body.model, width: body.parameters.width, height: body.parameters.height,
+    steps: body.parameters.steps, scale: body.parameters.scale, sampler: body.parameters.sampler, seed: body.parameters.seed,
+    main: body.parameters.prompt.length + ' characters', negative: body.parameters.negative_prompt.length + ' characters',
+    characters: info.characters, spots: info.useCoords ? 'from LS' : 'NovelAI chooses' }) +
+    (info.dropped ? ` · left out ${info.dropped} character(s) over the model's limit` : ''))
+  const started = Date.now()
+  let res
+  try {
+    res = await hostRequest(NOVELAI_HOST + '/ai/generate-image-stream', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key, Accept: 'text/event-stream' },
+      body: JSON.stringify(body), timeoutMs: 30000 })
+  } catch (error) {
+    const seconds = Math.round((Date.now() - started) / 1000)
+    if (/timed out/i.test(error.message) && seconds >= 25) throw new Error('NovelAI took longer than the 30 seconds Lumiverse lets an extension wait. Fewer steps or a smaller size will help.')
+    throw new Error('Could not reach NovelAI (' + error.message + ').')
+  }
+  if (!res.ok) throw new Error(novelaiError(res))
+  const { final, error } = novelaiStreamImage(res.text)
+  if (!final) {
+    if (error) throw new Error('NovelAI could not make the picture (' + String(error.message || error.code || 'no reason given').slice(0, 200) + ').')
+    const start = String(res.text || '').slice(0, 120).replace(/\s+/g, ' ')
+    throw new Error('NovelAI answered without a picture' + (start ? ' (reply began: ' + start + ')' : '') + '.')
+  }
+  const bytes = Buffer.from(String(final.image), 'base64')
+  const kind = nanoImageKind(bytes)
+  if (!kind) throw new Error('NovelAI sent something that is not a picture.')
+  spindle.log.info(`[lumidraw] NovelAI picture in ${Math.round((Date.now() - started) / 1000)}s (${kind}, ${Math.round(bytes.length / 1024)} KB)`)
+  return { images: [bytes.toString('base64')], mime: 'image/' + kind, seed: body.parameters.seed }
+}
+
 async function generateImages(settings, payload, label = 'generation', renderer = 'drawthings', progress = null, context = {}) {
   if (renderer === 'nanogpt') {
     const out = await generateNanoImages(settings, payload, progress, context)
     return { images: out.images, backend: 'nanogpt', mime: out.mime, cost: out.cost, rewrittenPrompt: out.rewrittenPrompt }
   }
   if (renderer === 'swarmui') return { images: await generateSwarmImages(settings, payload, progress, context), backend: 'swarmui' }
+  if (renderer === 'novelai') {
+    const out = await generateNovelaiImages(settings, payload, progress, context)
+    return { images: out.images, backend: 'novelai', mime: out.mime }
+  }
   if (renderer === 'dtcloud') {
     const out = await generateDtCloudImages(settings, payload, progress, context)
     return { images: out.images, backend: 'dtcloud', mime: 'image/png' }
@@ -18773,7 +18988,7 @@ async function replaceOneImage(userId, payload) {
         if (!preset) throw new Error('No saved recipe for this image and no matching preset to fall back on.')
         config = preset.config
         extra = preset.extra
-        if (source && !['swarmui', 'nanogpt', 'pasted', 'dtcloud'].includes(source.backend) && imageRenderer(config) !== 'drawthings') {
+        if (source && !['swarmui', 'nanogpt', 'pasted', 'dtcloud', 'novelai'].includes(source.backend) && imageRenderer(config) !== 'drawthings') {
           throw new Error('This older Draw Things image has no stored recipe. Select its original Draw Things preset before regenerating; Lumi Studio will not silently switch it to another app.')
         }
       }
@@ -19463,7 +19678,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const presets = await getPresets()
         const history = await getHistory()
         // One catalog merge, not one disk read/write per preset/history row.
-        const configs = [...presets.map(p => p.config || {}).filter(c => imageRenderer(c) === 'drawthings'), ...history.filter(h => !['swarmui', 'nanogpt', 'pasted', 'dtcloud'].includes(h.backend)).map(h => ({ model: h.model }))]
+        const configs = [...presets.map(p => p.config || {}).filter(c => imageRenderer(c) === 'drawthings'), ...history.filter(h => !['swarmui', 'nanogpt', 'pasted', 'dtcloud', 'novelai'].includes(h.backend)).map(h => ({ model: h.model }))]
         try {
           await rememberCatalog({ models: configs.flatMap(c => [c.model, c.refiner_model]).filter(Boolean),
             samplers: configs.map(c => c.sampler).filter(Boolean),
@@ -19525,6 +19740,14 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'novelai_status': {
+        reply = ok(payload, requestId, await novelaiStatus(userId))
+        break
+      }
+      case 'novelai_save_key': {
+        reply = ok(payload, requestId, await saveNovelaiKey(payload, userId))
+        break
+      }
       case 'nano_save_key': {
         reply = ok(payload, requestId, await saveNanoKey(payload, userId))
         break
@@ -25679,8 +25902,19 @@ Rules for these fields:
 - Each field under 40 words.
 `
 
+const NOVELAI_SCENE_RULES = `
+PLACES IN THE PICTURE
+This picture is drawn by NovelAI, which puts each person on their own spot.
+- "position": with two or more people, say where each one is in the picture:
+  left, center or right. Add " back" for someone clearly further from the viewer
+  than the others: behind a bar or counter, in a doorway, across the room
+  ("right back"). Leave "position" empty when the passage does not make the
+  places clear; NovelAI then places them itself.
+`
+
 function buildSimpleInstruction(profiles, memory, card, options = {}) {
-  return [SIMPLE_RULES.trim(), options.moss ? MOSS_SCENE_RULES.trim() : '', '', simpleCountRule(options.maxImages), simpleSubjectRule(options.maxSubjects), '',
+  const extra = [options.moss ? MOSS_SCENE_RULES.trim() : '', options.novelai ? NOVELAI_SCENE_RULES.trim() : ''].filter(Boolean).join('\n\n')
+  return [SIMPLE_RULES.trim(), extra, '', simpleCountRule(options.maxImages), simpleSubjectRule(options.maxSubjects), '',
     simpleContext(profiles, memory, card, options)].filter((part, index) => index !== 1 || part).join('\n')
 }
 
@@ -25705,6 +25939,16 @@ function mossPlacePhrase(value) {
   if (!/^(?:on|in|at|behind|beside|next to|near|across|by|under|against|opposite|between|inside|outside|along|atop|above|below|in front of|to the (?:left|right) of|at the)\b/i.test(text)) return ''
   if (/\b(?:is|are|stands?|sits?|sitting|standing|leans?|leaning)\b/i.test(text)) return ''
   return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+// "right back" (NovelAI presets ask for it, 1.23) is "right" for everything
+// else plus a note that the person is further from the viewer.
+function simplePositionParts(value) {
+  const text = String(value || '').trim().toLowerCase()
+  const across = /\b(center-left|center-right|left|right|center|centre|middle)\b/.exec(text)
+  const back = /\b(?:back|behind|further|far|background)\b/.test(text)
+  if (across && back) return { position: across[1] === 'centre' || across[1] === 'middle' ? 'center' : across[1], back: true }
+  return { position: String(value || '').trim(), back: text === 'background' }
 }
 
 function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
@@ -25744,7 +25988,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
     const subjects = rawSubjects.filter(s => s && typeof s === 'object' && String(s.name || '').trim()).slice(0, limit)
       .map(s => ({
         name: String(s.name).trim().slice(0, 60),
-        position: String(s.position || '').trim(),
+        ...simplePositionParts(s.position),
         look: String(s.look || '').trim(),
         count: simpleCount(s.count),
         subject: String(s.subject || '').trim().slice(0, 60),
@@ -26300,7 +26544,7 @@ function compileSimpleImage(image, ctx) {
     parsed: JSON.parse(JSON.stringify(image)),
   }
   // parts: the same pieces, for other prompt builders (MOSS). Not used here.
-  return { prompt, negativePrompt, subjects, setting, debug, parts: { summary, framing, actionLines } }
+  return { prompt, negativePrompt, subjects, setting, debug, parts: { summary, framing, actionLines, headerLine } }
 }
 
 // What one finished image teaches the chat's memory. Saved people: outfit and
@@ -26388,7 +26632,7 @@ function simpleRemember(memory, compiled, messageId) {
 
 // ---------- shared front half: build input, call the parser ----------------
 
-async function simpleParse({ userId, settings, preset, messages, targetIndex, target, chatId, scan = null, retry = null, outfitOverrides = null, mossFields = false }) {
+async function simpleParse({ userId, settings, preset, messages, targetIndex, target, chatId, scan = null, retry = null, outfitOverrides = null, mossFields = false, novelaiFields = false }) {
   const profiles = await getStoryProfiles(preset, settings, userId, chatId)
   const profilesForPrompt = gateDirectProfiles(profiles, directEvidenceFor(messages, targetIndex, settings))
   const memory = await readSimpleCast(chatId)
@@ -26405,7 +26649,7 @@ async function simpleParse({ userId, settings, preset, messages, targetIndex, ta
   let instruction = buildSimpleInstruction(profilesForPrompt, memory, card, {
     maxImages: settings.maxImages || 2, maxSubjects: settings.maxSubjects || 2,
     banned: preset.bannedTags || '', fantasy: !!profiles.fantasySetting,
-    moss: mossFields || presetPromptStyle(preset) === 'moss' })
+    moss: mossFields || presetPromptStyle(preset) === 'moss', novelai: novelaiFields || presetUsesNovelai(preset) })
   if (retry) {
     instruction += `\n\nRETRY ${retry.attempt}: the user rejected this prompt. Pick a meaningfully different moment or framing if the passage supports one:\n${retry.previousPrompt.slice(0, 1500)}`
   }
@@ -26551,7 +26795,8 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
   setStoryScanStage(scan, 'parsing', 'Waiting for the parser model (simple pipeline).')
   const adult = settings.promptOnly === true ? null : await adultRoute(preset, settings)
   const mossFields = presetPromptStyle(preset) === 'moss' || !!(adult && adult.preset && presetPromptStyle(adult.preset) === 'moss')
-  const run = await simpleParse({ userId, settings, preset, messages, targetIndex, target, chatId, scan, mossFields })
+  const novelaiFields = presetUsesNovelai(preset) || !!(adult && adult.preset && presetUsesNovelai(adult.preset))
+  const run = await simpleParse({ userId, settings, preset, messages, targetIndex, target, chatId, scan, mossFields, novelaiFields })
   assertStoryScanActive(scan)
   const { profiles, card, parserInput, raw, parsed, images, report, parserMs } = run
   let memory = run.memory
@@ -26565,9 +26810,10 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
     await saveStoryDebug({ ...debugBase, error: parsed.error || 'No usable image.', entries: [], selectedEntryIndex: null, lastCompiledPrompt: '' }, userId)
     throw new Error(parsed.refused ? parsed.error : 'Simple pipeline: ' + (parsed.error || 'the parser returned nothing to draw.'))
   }
-  setStoryScanStage(scan, 'compiling', 'Building the Anima prompt.')
+  setStoryScanStage(scan, 'compiling', presetUsesNovelai(preset) ? 'Building the NovelAI prompt.' : 'Building the Anima prompt.')
   const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
-  await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
+  // The artist list is Anima's; NovelAI knows its own artists.
+  if (!presetUsesNovelai(preset)) await warnOnUnknownArtists(splitArtistTags(normalizeArtistTags(String(preset.qualityTags || ''))).artists)
   // Adult pictures may be drawn with another preset (1.20). They are written
   // in that preset's prompt style too, so a Krea preset can hand its adult
   // pictures to a MOSS one and each gets the prompt its model wants.
@@ -27473,6 +27719,109 @@ function compileMossImage(image, ctx) {
 }
 
 function compileStoryImage(image, ctx) {
+  if (presetUsesNovelai(ctx.preset)) return compileNovelaiImage(image, ctx)
   return presetPromptStyle(ctx.preset) === 'moss' ? compileMossImage(image, ctx) : compileSimpleImage(image, ctx)
+}
+
+// ---------------------------------------------------------------------------
+// NovelAI prompts (1.23.0). Same parser, sheets and memory as Anima; the
+// Anima builder resolves everyone and its tags are regrouped: the style,
+// counts, framing, setting and the scene sentence go in the main prompt, and
+// each person's look, clothes, pose and face go in their own Character line
+// with their spot. Who does what to whom is written the way NovelAI reads it:
+// source#action on the doer, target#action on the other person.
+// ---------------------------------------------------------------------------
+function presetUsesNovelai(preset) {
+  try { return !!(preset && preset.config && imageRenderer(preset.config) === 'novelai') } catch { return false }
+}
+
+const NOVELAI_COUNT_WORD = { '1girl': 'girl', '1boy': 'boy', '1other': 'other' }
+const NOVELAI_ACT_TAGS = { kissing: 'kiss', vaginal: 'vaginal', anal: 'anal', fellatio: 'fellatio', cunnilingus: 'cunnilingus',
+  handjob: 'handjob', paizuri: 'paizuri', masturbation: 'masturbation' }
+
+// The spot words for one person, or '' when the parser gave none.
+function novelaiSpotWords(subject, total) {
+  if (total < 2 || !subject.position) return ''
+  const raw = subject.raw || {}
+  const given = String(raw.position || '').trim().toLowerCase()
+  const across = /^(left|center-left|center|center-right|right)$/.test(given) ? given.replace('center-left', 'left').replace('center-right', 'right') : ''
+  const depth = raw.back === true || given === 'background' ? 'back' : given === 'foreground' ? 'front' : ''
+  if (!across && !depth) return ''
+  return [across || 'center', depth].filter(Boolean).join(', ')
+}
+
+// "pours coffee for" → "pour coffee", the plain form NovelAI's own examples
+// use (source#hug, target#hug).
+function novelaiActionTag(action) {
+  const text = String(action || '').toLowerCase().replace(/[.#,:]+/g, ' ')
+    .replace(/\s+(?:for|to|at|with|on|onto|into|against|toward|towards|from|by|over)$/i, '').replace(/\s+/g, ' ').trim()
+  const [verb, ...rest] = text.split(' ')
+  if (!verb) return ''
+  const base = /(?:ss|sh|ch|x|z)es$/.test(verb) ? verb.slice(0, -2)
+    : /[^aeiou]ies$/.test(verb) ? verb.slice(0, -3) + 'y'
+    : /[^s]s$/.test(verb) && !/(?:us|is)$/.test(verb) ? verb.slice(0, -1) : verb
+  return [base, ...rest].join(' ')
+}
+
+function compileNovelaiImage(image, ctx) {
+  const compiled = compileSimpleImage(image, ctx)
+  const { subjects } = compiled
+  const notes = compiled.debug.notes
+  const total = subjects.length
+  // Names mean nothing to NovelAI, and the scene sentence is in the main
+  // prompt, away from the Character lines. Name people by what they are.
+  const short = subject => String(subject.phrase || NOVELAI_COUNT_WORD[subject.count] || 'person').replace(/^(?:adult|mature|middle-aged|young adult)\s+/i, '')
+  const shorts = subjects.map(short)
+  let summary = String(compiled.parts.summary || '')
+  subjects.forEach((subject, index) => {
+    const twin = shorts.filter(word => word === shorts[index]).length > 1
+    const spot = novelaiSpotWords(subject, total)
+    const call = 'the ' + shorts[index] + (twin && spot ? ' ' + directGroupPositionPhrase(spot.split(',')[0]) : '')
+    for (const form of uniqueStrings([subject.label, subject.name, subject.raw && subject.raw.name, subject.displayName].filter(Boolean)).sort((a, b) => b.length - a.length)) {
+      summary = summary.replace(new RegExp('\\b' + escapeRegExp(form) + '\\b', 'gi'), call)
+    }
+  })
+  summary = upperFirst(summary.replace(/\bthe the\b/gi, 'the').trim())
+
+  // Who does what to whom.
+  const tagsFor = new Map(subjects.map(subject => [subject, []]))
+  const find = name => subjects.find(item => simpleKey(item.raw.name) === simpleKey(name))
+  for (const act of image.interactions || []) {
+    const actor = find(act.actor), recipient = find(act.recipient)
+    const tag = NOVELAI_ACT_TAGS[act.act]
+    if (!actor || !recipient || actor === recipient || !tag) continue
+    if (act.act === 'kissing') { tagsFor.get(actor).push('mutual#' + tag); tagsFor.get(recipient).push('mutual#' + tag) }
+    else { tagsFor.get(actor).push('source#' + tag); tagsFor.get(recipient).push('target#' + tag) }
+  }
+  for (const rel of image.relations || []) {
+    const actor = find(rel.actor), target = find(rel.target)
+    const tag = novelaiActionTag(rel.action)
+    if (!actor || !target || actor === target || !tag || tag.split(' ').length > 5) continue
+    tagsFor.get(actor).push('source#' + tag)
+    tagsFor.get(target).push('target#' + tag)
+  }
+
+  const lines = subjects.map(subject => {
+    const spot = novelaiSpotWords(subject, total)
+    const tags = uniqueStrings([NOVELAI_COUNT_WORD[subject.count] || '', subject.phrase, ...subject.identity, ...(subject.shownAnatomy || []),
+      ...subject.outfit, ...subject.pose, ...subject.expression, ...tagsFor.get(subject)].filter(Boolean))
+    return { subject, spot, text: `Character${spot ? ' (' + spot + ')' : ''}: ${tags.join(', ')}` }
+  })
+  const spotted = lines.filter(line => line.spot).length
+  if (total >= 2) {
+    if (spotted === total) notes.push('Spots: ' + lines.map(line => `${line.subject.displayName} ${line.spot}`).join('; ') + '.')
+    else notes.push('Spots: NovelAI chooses where everyone goes' + (spotted ? ' (the parser placed only some of them).' : ' (the parser did not place them).'))
+  }
+  // NovelAI reads "nsfw" for adult pictures; Anima's other rating words mean
+  // nothing to it.
+  const adult = ['nsfw', 'explicit'].includes(image.rating)
+  let header = String(compiled.parts.headerLine || '').split(',').map(part => part.trim())
+    .filter(part => part && !/^(?:safe|sensitive|general|questionable|explicit|nsfw)$/i.test(part))
+  if (adult) header.push('nsfw')
+  const main = [header.join(', '), [...compiled.parts.framing, ...compiled.setting].join(', '), summary ? summary + '.' : '']
+    .map(part => String(part || '').trim()).filter(Boolean)
+  const prompt = [...main, ...lines.map(line => line.text)].join('\n')
+  compiled.debug.notes.unshift('Written for NovelAI: main prompt plus one Character line per person.')
+  return { ...compiled, prompt }
 }
 // END MOSS IMAGE PROMPTS

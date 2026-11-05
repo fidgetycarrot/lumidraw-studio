@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.22.2'
+  const EXTENSION_VERSION = '1.23.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -350,9 +350,22 @@ function realSetup(ctx) {
     samplers: ['Euler A Trailing', 'Euler A', 'Euler', 'DPM++ 2M Karras', 'DPM++ 2M', 'DPM++ SDE Karras', 'DPM++ SDE',
       'DPM++ 2M SDE Karras', 'DPM++ 2M SDE', 'DPM++ 3M SDE Karras', 'DPM++ 3M SDE', 'DPM++ 2S A Karras', 'DPM++ 2S A',
       'DDIM', 'UniPC', 'UniPC Trailing', 'DDIM Trailing', 'LCM', 'TCD', 'DPM++ 2M AYS', 'Euler A AYS'] }
-  function rendererCatalog(config) { return usesSwarm(config) ? swarmCatalogData : usesNano(config) ? nanoCatalogData : usesDtCloud(config) ? dtCloudCatalog : catalog }
-  function rendererName(config) { return usesSwarm(config) ? 'SwarmUI' : usesNano(config) ? 'NanoGPT' : usesDtCloud(config) ? 'Draw Things cloud' : 'Draw Things' }
-  function rendererValue(config) { return usesSwarm(config) ? 'swarmui' : usesNano(config) ? 'nanogpt' : usesDtCloud(config) ? 'dtcloud' : 'drawthings' }
+  // NovelAI (1.23). The same lists and starting style as backend.js.
+  function usesNovelai(config) { return config && config.renderBackend === 'novelai' }
+  const NOVELAI_MODEL = 'nai-diffusion-5-full'
+  const novelaiCatalog = { models: [
+    { file: 'nai-diffusion-5-full', name: 'V5 Full (High effort)' },
+    { file: 'nai-diffusion-5-full-medium', name: 'V5 Full (Medium effort)' },
+    { file: 'nai-diffusion-5-curated', name: 'V5 Curated' },
+    { file: 'nai-diffusion-4-5-full', name: 'V4.5 Full' },
+    { file: 'nai-diffusion-4-5-curated', name: 'V4.5 Curated' },
+  ], loras: [], schedulers: [], samplers: ['Euler Ancestral', 'Euler', 'DPM++ 2M', 'DPM++ 2S Ancestral', 'DPM++ SDE'] }
+  const NOVELAI_DEFAULT_STYLE_UI = 'painting (medium), anime coloring, anime, year 2025, year 2026, 1.5::masterpiece, best quality, amazing quality::, very aesthetic, natural skin shading, 1.2::rim lighting::, backlighting, high contrast, depth of field'
+  const NOVELAI_DEFAULT_NEGATIVE_UI = 'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page, blurry, bad anatomy, bad hands, sketch, rough, flat color, vector trace, sweat, wet, shiny skin, text, watermark, signature'
+  const NOVELAI_START = { renderBackend: 'novelai', model: NOVELAI_MODEL, width: 832, height: 1216, steps: 28, guidance_scale: 5, sampler: 'Euler Ancestral' }
+  function rendererCatalog(config) { return usesSwarm(config) ? swarmCatalogData : usesNano(config) ? nanoCatalogData : usesDtCloud(config) ? dtCloudCatalog : usesNovelai(config) ? novelaiCatalog : catalog }
+  function rendererName(config) { return usesSwarm(config) ? 'SwarmUI' : usesNano(config) ? 'NanoGPT' : usesDtCloud(config) ? 'Draw Things cloud' : usesNovelai(config) ? 'NovelAI' : 'Draw Things' }
+  function rendererValue(config) { return usesSwarm(config) ? 'swarmui' : usesNano(config) ? 'nanogpt' : usesDtCloud(config) ? 'dtcloud' : usesNovelai(config) ? 'novelai' : 'drawthings' }
   let busy = false
   let defaults = { protocol: '', parserInstruction: '', legacyParserInstruction: '', animaParserInstruction: '' }
   const pending = new Map() // requestId → {resolve, reject}
@@ -1095,7 +1108,7 @@ function realSetup(ctx) {
                 <div class="ld-card">
                   <div class="ld-subtitle">Core generation</div>
                   <span class="ld-label">Image renderer</span>
-                  <select class="ld-draft-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option><option value="dtcloud">Draw Things cloud</option></select>
+                  <select class="ld-draft-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option><option value="dtcloud">Draw Things cloud</option><option value="novelai">NovelAI (online)</option></select>
                   <div class="ld-swarm-tools" style="display:none;margin-top:8px">
                     <button class="ld-btn" data-act="swarm-reload">Connect / refresh SwarmUI</button>
                     <span class="ld-label">Load settings from a SwarmUI preset</span>
@@ -1407,9 +1420,9 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
           <div class="ld-editor ld-card" style="display:none">
             <div class="ld-subtitle">Preset editor</div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
-            <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option><option value="dtcloud">Draw Things cloud</option></select>
+            <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option><option value="dtcloud">Draw Things cloud</option><option value="novelai">NovelAI (online)</option></select>
             <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
-            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things model file: <code>moss_image_sft_q8p.ckpt</code> is MOSS Image SFT, <code>moss_image_base_q8p.ckpt</code> is MOSS Image Base. Empty steps, CFG and shift use MOSS’s 50, 3 and 5. LoRAs must first be added to your Draw Things cloud storage with <code>ls-cloud-helper add-lora</code>; they then appear in the LoRA list.</div><div class="ld-status ld-ed-nano-status"></div>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things model file: <code>moss_image_sft_q8p.ckpt</code> is MOSS Image SFT, <code>moss_image_base_q8p.ckpt</code> is MOSS Image Base. Empty steps, CFG and shift use MOSS’s 50, 3 and 5. LoRAs must first be added to your Draw Things cloud storage with <code>ls-cloud-helper add-lora</code>; they then appear in the LoRA list.</div><select class="ld-ed-nai-model" style="display:none" aria-label="NovelAI model"></select><div class="ld-hint ld-ed-novelai-hint" style="display:none">Made on NovelAI’s servers with your NovelAI API token (Settings → Image apps). Each person gets their own Character line with their spot, the way NovelAI’s Character Prompts work. Up to 28 steps at normal size is free on Opus; more costs Anlas. Medium effort is faster and uses NovelAI’s fixed settings (14 steps, no negative prompt). LoRAs do not apply.</div><div class="ld-status ld-ed-nano-status"></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div class="ld-ed-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler" title="Blank uses SwarmUI's default."></select></div>
@@ -1575,6 +1588,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-help">Pictures are made on NanoGPT’s servers and paid from your NanoGPT balance. The key is kept in Lumiverse’s secure storage and is not shown again. The same key can also be used by Lumiverse’s own image connection. To use it here, make a preset with NanoGPT as its image app.</div>
             <div class="ld-row" style="margin-top:6px"><button class="ld-btn" data-act="nano-save">Save key</button><button class="ld-btn" data-act="nano-clear">Remove key</button></div>
             <div class="ld-status ld-nano-status"></div>
+          </div>
+          <div data-settings-section="connection" class="ld-card">
+            <div class="ld-subtitle">NovelAI (online)</div>
+            <span class="ld-label">API token</span><input class="ld-novelai-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your NovelAI API token" />
+            <div class="ld-help">Get it on novelai.net: Account Settings → Get Persistent API Token. It is kept in Lumiverse’s secure storage and is not shown again. To use it, make a preset with NovelAI as its image app.</div>
+            <div class="ld-row" style="margin-top:6px"><button class="ld-btn" data-act="novelai-save">Save token</button><button class="ld-btn" data-act="novelai-clear">Remove token</button></div>
+            <div class="ld-status ld-novelai-status"></div>
           </div>
           <div data-settings-section="connection" class="ld-card">
             <div class="ld-subtitle">Draw Things cloud helper</div>
@@ -2833,6 +2853,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const swarmCard = cardOf('.ld-swarm-url')
       const nanoCard = cardOf('.ld-nano-key')
       const dtCloudCard = cardOf('.ld-dtcloud-status')
+      const novelaiCard = cardOf('.ld-novelai-key')
       const drawThingsCard = cardOf('.ld-host')
       const bridgeCard = cardOf('.ld-bridge-host')
       const cloudCard = cardOf('.ld-cloud-enabled')
@@ -2866,7 +2887,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const parserSection = section('parser')
       const chat = section('chat')
       const help = section('help')
-      for (const node of [swarmCard, nanoCard, dtCloudCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
+      for (const node of [swarmCard, nanoCard, novelaiCard, dtCloudCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
       parserSection.appendChild(parserBinding)
       chat.appendChild(display)
       if (helpCard) help.appendChild(helpCard)
@@ -4121,6 +4142,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (usesSwarm(config)) config.swarmParams = readSwarmParams('draft')
     else if (usesNano(config)) { delete config.sampler; config.loras = [] }
     else if (usesDtCloud(config)) { /* LoRAs come from the cloud list; no Draw Things app settings */ }
+    else if (usesNovelai(config)) { config.loras = [] }
     else readDtSettingsFromControls(config)
     return config
   }
@@ -4130,13 +4152,16 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const activeCatalog = rendererCatalog(config)
     const nano = usesNano(config)
     const cloud = usesDtCloud(config)
-    $('[data-act="sync"]').title = nano ? 'Refresh the NanoGPT model list' : usesSwarm(config) ? 'Refresh SwarmUI models and saved presets' : cloud ? 'Check the LS Cloud Helper' : 'Capture the recipe currently shown in Draw Things'
+    const nai = usesNovelai(config)
+    $('[data-act="sync"]').title = nano ? 'Refresh the NanoGPT model list' : usesSwarm(config) ? 'Refresh SwarmUI models and saved presets' : cloud ? 'Check the LS Cloud Helper' : nai ? 'Check the NovelAI token' : 'Capture the recipe currently shown in Draw Things'
     $('.ld-draft-backend').value = rendererValue(config)
     $('.ld-swarm-tools').style.display = usesSwarm(config) ? '' : 'none'
     $('.ld-swarm-settings').style.display = usesSwarm(config) ? '' : 'none'
-    $('.ld-dt-settings').style.display = usesSwarm(config) || nano || cloud ? 'none' : ''
-    $('.ld-renderer-settings-title').textContent = nano ? 'NanoGPT' : usesSwarm(config) ? 'SwarmUI settings' : cloud ? 'Draw Things cloud' : 'Draw Things settings'
-    $('.ld-renderer-settings-help').textContent = nano
+    $('.ld-dt-settings').style.display = usesSwarm(config) || nano || cloud || nai ? 'none' : ''
+    $('.ld-renderer-settings-title').textContent = nano ? 'NanoGPT' : usesSwarm(config) ? 'SwarmUI settings' : cloud ? 'Draw Things cloud' : nai ? 'NovelAI' : 'Draw Things settings'
+    $('.ld-renderer-settings-help').textContent = nai
+      ? 'Made online with your NovelAI token. Models: ' + novelaiCatalog.models.map(m => m.file + ' (' + m.name + ')').join(', ') + '. Give each person their own line, like “Character (left): girl, adult woman, …” or “Character (right, back): boy, …”; everything else is the main prompt.'
+      : nano
       ? 'Made online and paid from your NanoGPT balance. Steps and CFG are sent only when the model takes them; leave them empty for its defaults. For MOSS, write the prompt in plain English. Samplers and LoRAs do not apply.'
       : cloud ? 'Made on Draw Things’ cloud by the LS Cloud Helper on your Mac, from your Draw Things+ monthly pictures. MOSS uses shift ' + (config.shift ?? 5) + '; change shift in a saved preset. LoRAs come from your Draw Things cloud storage (ls-cloud-helper add-lora).'
       : usesSwarm(config) ? 'Only SwarmUI-native settings are sent. Draw Things settings and its cloud option do not apply.' : 'Settings captured from Draw Things on the last Sync. Save the workspace to a preset to use them in Story.'
@@ -5920,6 +5945,7 @@ ${entry.prompt || ''}`.trim()
 
   // ------------------------------------------------------------------ actions
   async function doSync(statusSel) {
+    if (usesNovelai(draftConfig)) { await refreshNovelaiStatus(statusSel); return }
     if (usesNano(draftConfig)) {
       await loadNanoCatalog(true)
       fillDraftNanoModels()
@@ -8625,26 +8651,51 @@ ${entry.prompt || ''}`.trim()
   function syncEditorRendererFields() {
     const nano = $('.ld-ed-backend').value === 'nanogpt'
     const cloud = $('.ld-ed-backend').value === 'dtcloud'
+    const nai = $('.ld-ed-backend').value === 'novelai'
     const samplerRow = $('.ld-ed-sampler') ? $('.ld-ed-sampler').closest('.ld-row') : null
     if (samplerRow) samplerRow.style.display = nano ? 'none' : ''
     const loras = $('.ld-ed-loras')
     if (loras) {
-      loras.style.display = nano ? 'none' : 'flex'
+      loras.style.display = nano || nai ? 'none' : 'flex'
       const label = loras.previousElementSibling
-      if (label && label.classList.contains('ld-label')) label.style.display = nano ? 'none' : ''
+      if (label && label.classList.contains('ld-label')) label.style.display = nano || nai ? 'none' : ''
     }
     const addLora = $('[data-act="ed-addlora"]')
-    if (addLora) addLora.style.display = nano ? 'none' : ''
+    if (addLora) addLora.style.display = nano || nai ? 'none' : ''
+    // NovelAI: a list of its models instead of the typed box, and always the
+    // tag prompt style (its Character lines are built from tags).
+    const naiPick = $('.ld-ed-nai-model')
+    if (naiPick) {
+      naiPick.style.display = nai ? '' : 'none'
+      if (nai) {
+        const current = $('.ld-ed-model').value || NOVELAI_MODEL
+        naiPick.replaceChildren(...novelaiCatalog.models.map(m => new Option(m.name, m.file)))
+        if (!novelaiCatalog.models.some(m => m.file === current)) naiPick.appendChild(new Option(current, current))
+        naiPick.value = current
+        $('.ld-ed-model').value = current
+      }
+    }
+    if ($('.ld-ed-novelai-hint')) $('.ld-ed-novelai-hint').style.display = nai ? '' : 'none'
+    const styleSelect = $('.ld-ed-prompt-style')
+    if (styleSelect) {
+      if (nai && styleSelect.value !== 'anima') { styleSelect.value = 'anima'; styleSelect.dispatchEvent(new Event('change')) }
+      const wrap = styleSelect.closest('.ld-reset-field')
+      if (wrap) wrap.style.display = nai ? 'none' : ''
+    }
     if ($('.ld-ed-shift-field')) $('.ld-ed-shift-field').style.display = cloud ? '' : 'none'
     if ($('.ld-ed-dtsettings-box')) $('.ld-ed-dtsettings-box').style.display = cloud ? '' : 'none'
     syncDtSettingsFields()
     fillNanoPicker($('.ld-ed-nano-pick'), $('.ld-ed-model'), nano)
-    if ($('.ld-ed-model-hint')) $('.ld-ed-model-hint').style.display = nano || cloud ? 'none' : ''
+    if ($('.ld-ed-model-hint')) $('.ld-ed-model-hint').style.display = nano || cloud || nai ? 'none' : ''
     if ($('.ld-ed-nano-hint')) $('.ld-ed-nano-hint').style.display = nano ? '' : 'none'
     if ($('.ld-ed-dtcloud-hint')) $('.ld-ed-dtcloud-hint').style.display = cloud ? '' : 'none'
+    // After fillNanoPicker, which sets the typed box's display for NanoGPT.
+    if (nai) $('.ld-ed-model').style.display = 'none'
     if (cloud) refreshDtCloudStatus('.ld-ed-nano-status')
+    else if (nai) refreshNovelaiStatus('.ld-ed-nano-status')
     else if (!nano) setStatus('.ld-ed-nano-status', '')
   }
+  if ($('.ld-ed-nai-model')) $('.ld-ed-nai-model').addEventListener('change', () => { $('.ld-ed-model').value = $('.ld-ed-nai-model').value })
 
   // Pasted Draw Things settings decide steps, CFG, shift and sampler, so those
   // boxes step aside while there is something pasted.
@@ -8767,6 +8818,15 @@ ${entry.prompt || ''}`.trim()
     return nanoCatalogData
   }
 
+  async function refreshNovelaiStatus(selector = '.ld-novelai-status') {
+    try {
+      const status = await call('novelai_status', {})
+      if (!status.available) setStatus(selector, 'This Lumiverse cannot store keys securely yet. Update Lumiverse to use NovelAI.', 'err')
+      else setStatus(selector, status.hasKey ? 'Token saved.' : 'No NovelAI token saved yet' + (selector === '.ld-novelai-status' ? '.' : ' — add it in Settings → Image apps.'), status.hasKey ? 'good' : selector === '.ld-novelai-status' ? '' : 'err')
+      return status
+    } catch (e) { setStatus(selector, e.message, 'err') }
+  }
+
   async function refreshNanoStatus() {
     try {
       const status = await call('nano_status', {})
@@ -8865,7 +8925,7 @@ ${entry.prompt || ''}`.trim()
     $('.ld-ed-swarm-settings').style.display = usesSwarm(c) ? '' : 'none'
     $('.ld-ed-scheduler-field').style.display = usesSwarm(c) ? '' : 'none'
     syncEditorRendererFields()
-    try { if (usesSwarm(c)) await loadSwarmCatalog(); else if (usesNano(c)) await loadNanoCatalog(); else if (!usesDtCloud(c)) await loadCatalog() } catch { /* saved presets remain editable offline */ }
+    try { if (usesSwarm(c)) await loadSwarmCatalog(); else if (usesNano(c)) await loadNanoCatalog(); else if (!usesDtCloud(c) && !usesNovelai(c)) await loadCatalog() } catch { /* saved presets remain editable offline */ }
     populateDatalist('ld-model-catalog-ed', rendererCatalog(c).models.map(m => m.file))
     labelNanoModels()
     writeSwarmParams('ed', c)
@@ -8881,6 +8941,7 @@ ${entry.prompt || ''}`.trim()
     }
     $('.ld-ed-model').value = c.model || ''
     fillNanoPicker($('.ld-ed-nano-pick'), $('.ld-ed-model'), usesNano(c))
+    if (usesNovelai(c)) syncEditorRendererFields()
     populateSelect($('.ld-ed-sampler'), rendererCatalog(c).samplers, c.sampler || '', '— choose sampler —')
     $('.ld-ed-steps').value = c.steps !== undefined ? c.steps : ''
     $('.ld-ed-cfg').value = c.guidance_scale !== undefined ? c.guidance_scale : ''
@@ -8903,7 +8964,7 @@ ${entry.prompt || ''}`.trim()
     const lbox = $('.ld-ed-loras')
     lbox.innerHTML = ''
     for (const l of c.loras || []) lbox.appendChild(loraRow(l.file || l.name || '', l.weight))
-    if (!(c.loras || []).length) lbox.appendChild(loraRow('', 1))
+    if (!(c.loras || []).length && !usesNovelai(c)) lbox.appendChild(loraRow('', 1))
     // 1.20.3: the preset's own quality tags / negative / BREAK (or the shared Story ones).
     const ownPrompt = presetPromptValues(p || null)
     $('.ld-ed-quality').value = ownPrompt.quality
@@ -9307,12 +9368,14 @@ ${entry.prompt || ''}`.trim()
       rendererDrafts[rendererValue(previous)] = previous
       draftConfig = cloneJson(rendererDrafts[next] || (next === 'swarmui' ? {renderBackend:'swarmui', swarmParams:{}}
         : next === 'nanogpt' ? {renderBackend:'nanogpt', model:'fal-ai/moss-image', width:1024, height:1024}
-        : next === 'dtcloud' ? {renderBackend:'dtcloud', model:DT_CLOUD_MODEL, width:1024, height:1024, steps:50, guidance_scale:3, shift:5} : {}))
+        : next === 'dtcloud' ? {renderBackend:'dtcloud', model:DT_CLOUD_MODEL, width:1024, height:1024, steps:50, guidance_scale:3, shift:5}
+        : next === 'novelai' ? {...NOVELAI_START} : {}))
       draftDirty = true
       renderDraftControls(); saveDraftLocal(); renderChips()
       if (next === 'swarmui') await loadSwarmCatalog()
       if (next === 'nanogpt') { await loadNanoCatalog(); fillDraftNanoModels() }
       if (next === 'dtcloud') refreshDtCloudStatus('.ld-draft-status')
+      if (next === 'novelai') refreshNovelaiStatus('.ld-draft-status')
       setStatus('.ld-draft-status', 'Renderer changed in the workspace only. Save a new preset to use it for Story images.')
     } catch (error) { setStatus('.ld-draft-status', error.message, 'err'); renderDraftControls() }
   })
@@ -9331,6 +9394,21 @@ ${entry.prompt || ''}`.trim()
       input.value = ''
       setStatus('.ld-nano-status', status.hasKey ? 'Key saved.' : 'The key did not save.', status.hasKey ? 'good' : 'err')
     } catch (e) { setStatus('.ld-nano-status', e.message, 'err') }
+  })
+  if ($('[data-act="novelai-save"]')) $('[data-act="novelai-save"]').addEventListener('click', async () => {
+    const input = $('.ld-novelai-key')
+    try {
+      const status = await call('novelai_save_key', { apiKey: input.value })
+      input.value = ''
+      setStatus('.ld-novelai-status', status.hasKey ? 'Token saved.' : 'The token did not save.', status.hasKey ? 'good' : 'err')
+    } catch (e) { setStatus('.ld-novelai-status', e.message, 'err') }
+  })
+  if ($('[data-act="novelai-clear"]')) $('[data-act="novelai-clear"]').addEventListener('click', async () => {
+    try {
+      await call('novelai_save_key', { clearKey: true })
+      $('.ld-novelai-key').value = ''
+      setStatus('.ld-novelai-status', 'Token removed.', 'good')
+    } catch (e) { setStatus('.ld-novelai-status', e.message, 'err') }
   })
   $('[data-act="nano-clear"]').addEventListener('click', async () => {
     try {
@@ -9357,10 +9435,20 @@ ${entry.prompt || ''}`.trim()
     const swarm = $('.ld-ed-backend').value === 'swarmui'
     const nano = $('.ld-ed-backend').value === 'nanogpt'
     const cloud = $('.ld-ed-backend').value === 'dtcloud'
-    editorRenderConfig = swarm ? {renderBackend:'swarmui',swarmParams:{}} : nano ? {renderBackend:'nanogpt'} : cloud ? {renderBackend:'dtcloud'} : {}
-    syncEditorRendererFields()
+    const nai = $('.ld-ed-backend').value === 'novelai'
+    editorRenderConfig = swarm ? {renderBackend:'swarmui',swarmParams:{}} : nano ? {renderBackend:'nanogpt'} : cloud ? {renderBackend:'dtcloud'} : nai ? {renderBackend:'novelai'} : {}
     editorExtra = null
     for (const field of ['model','steps','cfg','w','h','shift','dtsettings']) if ($('.ld-ed-' + field)) $('.ld-ed-' + field).value = ''
+    if (nai) {
+      // NovelAI's own starting settings and the style that won the first test.
+      $('.ld-ed-model').value = NOVELAI_START.model
+      $('.ld-ed-steps').value = NOVELAI_START.steps; $('.ld-ed-cfg').value = NOVELAI_START.guidance_scale
+      $('.ld-ed-w').value = NOVELAI_START.width; $('.ld-ed-h').value = NOVELAI_START.height
+      if (!$('.ld-ed-quality').value.trim()) $('.ld-ed-quality').value = NOVELAI_DEFAULT_STYLE_UI
+      if ($('.ld-ed-negative') && !$('.ld-ed-negative').value.trim()) $('.ld-ed-negative').value = NOVELAI_DEFAULT_NEGATIVE_UI
+      if ($('.ld-ed-break')) $('.ld-ed-break').checked = false
+    }
+    syncEditorRendererFields()
     if (cloud) {
       // MOSS on the cloud, with MOSS's own settings, as a starting point.
       $('.ld-ed-model').value = DT_CLOUD_MODEL
@@ -9372,11 +9460,11 @@ ${entry.prompt || ''}`.trim()
     $('.ld-ed-loras').innerHTML = ''
     $('.ld-ed-swarm-settings').style.display = swarm ? '' : 'none'
     populateDatalist('ld-model-catalog-ed', rendererCatalog(editorRenderConfig).models.map(m => m.file))
-    populateSelect($('.ld-ed-sampler'), rendererCatalog(editorRenderConfig).samplers, '', '— choose sampler —')
+    populateSelect($('.ld-ed-sampler'), rendererCatalog(editorRenderConfig).samplers, nai ? NOVELAI_START.sampler : '', '— choose sampler —')
     writeSwarmParams('ed', editorRenderConfig)
-    try { if (swarm) await loadSwarmCatalog(); else if (nano) await loadNanoCatalog(); else if (!cloud) await loadCatalog() } catch (e) { setStatus(nano ? '.ld-ed-nano-status' : '.ld-ed-status', e.message, 'err') }
+    try { if (swarm) await loadSwarmCatalog(); else if (nano) await loadNanoCatalog(); else if (!cloud && !nai) await loadCatalog() } catch (e) { setStatus(nano ? '.ld-ed-nano-status' : '.ld-ed-status', e.message, 'err') }
     writeSwarmParams('ed', editorRenderConfig)
-    if (!nano) $('.ld-ed-loras').appendChild(loraRow('', 1))
+    if (!nano && !nai) $('.ld-ed-loras').appendChild(loraRow('', 1))
   })
   // NanoGPT presets: a MOSS model wants the MOSS prompt style, an Anima model
   // wants Anima. Switch it for the user and say so.
@@ -9428,7 +9516,7 @@ ${entry.prompt || ''}`.trim()
         file: row.querySelector('.ld-lora-file').value.trim(),
         weight: row.querySelector('.ld-lora-weight').value === '' ? 1 : Number(row.querySelector('.ld-lora-weight').value),
       })).filter((l) => l.file)
-      if (usesNano(config)) config.loras = []
+      if (usesNano(config) || usesNovelai(config)) config.loras = []
       const res = await call('save_preset', {
         name,
         config,
@@ -10281,6 +10369,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-port').value = settings.port
       $('.ld-swarm-url').value = settings.swarmUrl || 'http://localhost:7801'
       refreshNanoStatus()
+      refreshNovelaiStatus()
       refreshDtCloudStatus('.ld-dtcloud-status').catch(() => {})
       showPromptOnly(settings.promptOnly === true)
       $('.ld-bridge-host').value = settings.bridgeHost || '127.0.0.1'
