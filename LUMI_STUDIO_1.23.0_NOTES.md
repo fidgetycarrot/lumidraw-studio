@@ -12,3 +12,9 @@
 - NovelAI's normal reply is a zip file, which Lumiverse's network proxy does not pass to extensions, so LS uses NovelAI's streaming endpoint, which sends the picture as text.
 - Clear messages for a refused token, too few Anlas and a busy account.
 - LumiCast needs no change: its sheets are already Danbooru tags.
+
+# 1.23.1 — names stay out of NovelAI prompts; a way back to the starting style
+- First names are swapped too: "Lauren leans against the island" became "The woman in the center leans…" only when the story used her full sheet name, so "Lauren" and "Tara" reached NovelAI as plain words. With two women (or two men) the sentence says which one by spot.
+- Inside a Character line, another person's name becomes "another", as in booru tags: "looking at Lauren Vance" → "looking at another".
+- NovelAI presets have a **Go back to the starting NovelAI style** button: it puts the starting style and negative prompt back (press Save to keep them).
+- The starting negative prompt also has `blush`.

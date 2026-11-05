@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.23.0'
+  const EXTENSION_VERSION = '1.23.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -361,7 +361,7 @@ function realSetup(ctx) {
     { file: 'nai-diffusion-4-5-curated', name: 'V4.5 Curated' },
   ], loras: [], schedulers: [], samplers: ['Euler Ancestral', 'Euler', 'DPM++ 2M', 'DPM++ 2S Ancestral', 'DPM++ SDE'] }
   const NOVELAI_DEFAULT_STYLE_UI = 'painting (medium), anime coloring, anime, year 2025, year 2026, 1.5::masterpiece, best quality, amazing quality::, very aesthetic, natural skin shading, 1.2::rim lighting::, backlighting, high contrast, depth of field'
-  const NOVELAI_DEFAULT_NEGATIVE_UI = 'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page, blurry, bad anatomy, bad hands, sketch, rough, flat color, vector trace, sweat, wet, shiny skin, text, watermark, signature'
+  const NOVELAI_DEFAULT_NEGATIVE_UI = 'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page, blurry, bad anatomy, bad hands, sketch, rough, flat color, vector trace, sweat, wet, shiny skin, blush, text, watermark, signature'
   const NOVELAI_START = { renderBackend: 'novelai', model: NOVELAI_MODEL, width: 832, height: 1216, steps: 28, guidance_scale: 5, sampler: 'Euler Ancestral' }
   function rendererCatalog(config) { return usesSwarm(config) ? swarmCatalogData : usesNano(config) ? nanoCatalogData : usesDtCloud(config) ? dtCloudCatalog : usesNovelai(config) ? novelaiCatalog : catalog }
   function rendererName(config) { return usesSwarm(config) ? 'SwarmUI' : usesNano(config) ? 'NanoGPT' : usesDtCloud(config) ? 'Draw Things cloud' : usesNovelai(config) ? 'NovelAI' : 'Draw Things' }
@@ -1422,7 +1422,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <span class="ld-label">Name</span><input class="ld-ed-name" />
             <span class="ld-label">Image renderer</span><select class="ld-ed-backend"><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT (online)</option><option value="dtcloud">Draw Things cloud</option><option value="novelai">NovelAI (online)</option></select>
             <div class="ld-hint">Renderer is saved with this preset. Switching starts a fresh render configuration; your character library is unchanged.</div>
-            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things model file: <code>moss_image_sft_q8p.ckpt</code> is MOSS Image SFT, <code>moss_image_base_q8p.ckpt</code> is MOSS Image Base. Empty steps, CFG and shift use MOSS’s 50, 3 and 5. LoRAs must first be added to your Draw Things cloud storage with <code>ls-cloud-helper add-lora</code>; they then appear in the LoRA list.</div><select class="ld-ed-nai-model" style="display:none" aria-label="NovelAI model"></select><div class="ld-hint ld-ed-novelai-hint" style="display:none">Made on NovelAI’s servers with your NovelAI API token (Settings → Image apps). Each person gets their own Character line with their spot, the way NovelAI’s Character Prompts work. Up to 28 steps at normal size is free on Opus; more costs Anlas. Medium effort is faster and uses NovelAI’s fixed settings (14 steps, no negative prompt). LoRAs do not apply.</div><div class="ld-status ld-ed-nano-status"></div>
+            <span class="ld-label" style="margin-top:7px">Model</span><input class="ld-ed-model" list="ld-model-catalog-ed" placeholder="— choose or type a model —" /><datalist id="ld-model-catalog-ed"></datalist><input class="ld-ed-nano-search" type="search" placeholder="Search models…" style="display:none" aria-label="Search NanoGPT models" /><select class="ld-ed-nano-pick" style="display:none" aria-label="NanoGPT model"></select><div class="ld-hint ld-ed-model-hint">Installed models autocomplete for the selected renderer. SwarmUI accepts its own model filenames, not Draw Things checkpoints.</div><div class="ld-hint ld-ed-nano-hint" style="display:none">Type or pick a NanoGPT model, for example <code>fal-ai/moss-image</code> for MOSS Image. Steps and CFG are sent only when the model takes them; leave them empty to use NanoGPT’s defaults. LoRAs and samplers are not available online.</div><div class="ld-hint ld-ed-dtcloud-hint" style="display:none">Made on Draw Things’ cloud by the LS Cloud Helper on your Mac. The model is a Draw Things model file: <code>moss_image_sft_q8p.ckpt</code> is MOSS Image SFT, <code>moss_image_base_q8p.ckpt</code> is MOSS Image Base. Empty steps, CFG and shift use MOSS’s 50, 3 and 5. LoRAs must first be added to your Draw Things cloud storage with <code>ls-cloud-helper add-lora</code>; they then appear in the LoRA list.</div><select class="ld-ed-nai-model" style="display:none" aria-label="NovelAI model"></select><div class="ld-hint ld-ed-novelai-hint" style="display:none">Made on NovelAI’s servers with your NovelAI API token (Settings → Image apps). Each person gets their own Character line with their spot, the way NovelAI’s Character Prompts work. Up to 28 steps at normal size is free on Opus; more costs Anlas. Medium effort is faster and uses NovelAI’s fixed settings (14 steps, no negative prompt). LoRAs do not apply. <button class="ld-btn ld-compact ld-ed-nai-reset" type="button" style="margin-top:5px">Go back to the starting NovelAI style</button></div><div class="ld-status ld-ed-nano-status"></div>
             <div class="ld-row" style="margin-top:7px">
               <div><span class="ld-label">Sampler</span><select class="ld-ed-sampler"><option value="">— choose sampler —</option></select></div>
               <div class="ld-ed-scheduler-field" style="display:none"><span class="ld-label">Scheduler</span><select class="ld-ed-scheduler" title="Blank uses SwarmUI's default."></select></div>
@@ -8696,6 +8696,12 @@ ${entry.prompt || ''}`.trim()
     else if (!nano) setStatus('.ld-ed-nano-status', '')
   }
   if ($('.ld-ed-nai-model')) $('.ld-ed-nai-model').addEventListener('change', () => { $('.ld-ed-model').value = $('.ld-ed-nai-model').value })
+  // After a run of edits the good style can be hard to find again (Nov 2026).
+  if ($('.ld-ed-nai-reset')) $('.ld-ed-nai-reset').addEventListener('click', () => {
+    $('.ld-ed-quality').value = NOVELAI_DEFAULT_STYLE_UI
+    if ($('.ld-ed-negative')) $('.ld-ed-negative').value = NOVELAI_DEFAULT_NEGATIVE_UI
+    setStatus('.ld-ed-nano-status', 'Style and negative prompt are back to the starting NovelAI ones. Press Save to keep them.', 'good')
+  })
 
   // Pasted Draw Things settings decide steps, CFG, shift and sampler, so those
   // boxes step aside while there is something pasted.

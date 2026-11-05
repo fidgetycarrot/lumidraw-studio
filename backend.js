@@ -3430,7 +3430,7 @@ const NOVELAI_SAMPLERS = [
 // Default style for a new NovelAI preset: the recipe that won Eric's first
 // test (Nov 2026), from NovelAI gallery pictures he liked.
 const NOVELAI_DEFAULT_STYLE = 'painting (medium), anime coloring, anime, year 2025, year 2026, 1.5::masterpiece, best quality, amazing quality::, very aesthetic, natural skin shading, 1.2::rim lighting::, backlighting, high contrast, depth of field'
-const NOVELAI_DEFAULT_NEGATIVE = 'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page, blurry, bad anatomy, bad hands, sketch, rough, flat color, vector trace, sweat, wet, shiny skin, text, watermark, signature'
+const NOVELAI_DEFAULT_NEGATIVE = 'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page, blurry, bad anatomy, bad hands, sketch, rough, flat color, vector trace, sweat, wet, shiny skin, blush, text, watermark, signature'
 // Where each spot word puts a person on NovelAI's grid (0–1, left to right and
 // top to bottom). Someone further back stands higher in the frame.
 const NOVELAI_ACROSS = { left: 0.3, 'center-left': 0.3, center: 0.5, centre: 0.5, middle: 0.5, 'center-right': 0.7, right: 0.7 }
@@ -27772,16 +27772,31 @@ function compileNovelaiImage(image, ctx) {
   // prompt, away from the Character lines. Name people by what they are.
   const short = subject => String(subject.phrase || NOVELAI_COUNT_WORD[subject.count] || 'person').replace(/^(?:adult|mature|middle-aged|young adult)\s+/i, '')
   const shorts = subjects.map(short)
+  // Every way the story may name someone: full name, sheet name, label, and
+  // the first name alone ("Lauren" for Lauren Vance, Nov 2026), when no one
+  // else shares it.
+  const firstNames = subjects.map(subject => String(subject.displayName || subject.raw && subject.raw.name || '').trim().split(/\s+/)[0] || '')
+  const formsOf = (subject, index) => uniqueStrings([subject.label, subject.name, subject.raw && subject.raw.name, subject.displayName,
+    firstNames[index].length >= 3 && firstNames.filter(name => name.toLowerCase() === firstNames[index].toLowerCase()).length === 1 ? firstNames[index] : '']
+    .filter(Boolean)).sort((a, b) => b.length - a.length)
+  const nameRe = form => new RegExp('\\b' + escapeRegExp(form) + '\\b', 'gi')
   let summary = String(compiled.parts.summary || '')
   subjects.forEach((subject, index) => {
     const twin = shorts.filter(word => word === shorts[index]).length > 1
     const spot = novelaiSpotWords(subject, total)
     const call = 'the ' + shorts[index] + (twin && spot ? ' ' + directGroupPositionPhrase(spot.split(',')[0]) : '')
-    for (const form of uniqueStrings([subject.label, subject.name, subject.raw && subject.raw.name, subject.displayName].filter(Boolean)).sort((a, b) => b.length - a.length)) {
-      summary = summary.replace(new RegExp('\\b' + escapeRegExp(form) + '\\b', 'gi'), call)
-    }
+    for (const form of formsOf(subject, index)) summary = summary.replace(nameRe(form), call)
   })
   summary = upperFirst(summary.replace(/\bthe the\b/gi, 'the').trim())
+  // Inside a Character line another person is "another", as in booru tags:
+  // "looking at Lauren Vance" → "looking at another".
+  const unnamed = (tags, self) => tags.map(tag => {
+    let text = String(tag)
+    subjects.forEach((other, index) => {
+      for (const form of formsOf(other, index)) text = text.replace(nameRe(form), other === self ? '' : 'another')
+    })
+    return text.replace(/\banother another\b/gi, 'another').replace(/\s+/g, ' ').trim()
+  }).filter(Boolean)
 
   // Who does what to whom.
   const tagsFor = new Map(subjects.map(subject => [subject, []]))
@@ -27804,7 +27819,7 @@ function compileNovelaiImage(image, ctx) {
   const lines = subjects.map(subject => {
     const spot = novelaiSpotWords(subject, total)
     const tags = uniqueStrings([NOVELAI_COUNT_WORD[subject.count] || '', subject.phrase, ...subject.identity, ...(subject.shownAnatomy || []),
-      ...subject.outfit, ...subject.pose, ...subject.expression, ...tagsFor.get(subject)].filter(Boolean))
+      ...unnamed([...subject.outfit, ...subject.pose, ...subject.expression], subject), ...tagsFor.get(subject)].filter(Boolean))
     return { subject, spot, text: `Character${spot ? ' (' + spot + ')' : ''}: ${tags.join(', ')}` }
   })
   const spotted = lines.filter(line => line.spot).length
