@@ -3432,6 +3432,21 @@ const NOVELAI_SAMPLERS = [
 const NOVELAI_DEFAULT_STYLE = 'painting (medium), anime coloring, anime, year 2025, year 2026, 1.5::masterpiece, best quality, amazing quality::, very aesthetic, natural skin shading, 1.2::rim lighting::, backlighting, high contrast, depth of field'
 // Eric's own list from the picture he liked (Nov 2026), plus blush.
 const NOVELAI_DEFAULT_NEGATIVE = 'lowres, blurry, shiny skin, jpeg artifacts, bad anatomy, bad hands, sketch, rough, impressionism, flat color, vector trace, blush, text, watermark, signature'
+// NovelAI's own "Undesired Content preset" (1.23.3). The website adds the
+// chosen preset's words to every picture's undesired content without showing
+// them, and V5 was trained to read them ("worst quality", "very displeasing",
+// "artistic error"...). LS sent only the typed list, which is why the same
+// prompt drew cartoonish faces through LS and good ones on the website.
+// Texts from NovelAI's web client (V5 / V4.5 Full). The website also puts
+// "nsfw" first unless the prompt itself asks for nsfw.
+const NOVELAI_UC_PRESETS = {
+  heavy: 'lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page',
+  light: 'lowres, bad hands, bad anatomy, artistic error, sepia, white haze, worst quality, very displeasing, jpeg artifacts, 0::ai-generated::',
+  human: 'lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page, @_@, mismatched pupils, glowing eyes, bad anatomy',
+  none: '',
+}
+const NOVELAI_UC_INDEX = { heavy: 0, light: 1, human: 3, none: 4 }
+
 // Where each spot word puts a person on NovelAI's grid (0–1, left to right and
 // top to bottom). Someone further back stands higher in the frame.
 const NOVELAI_ACROSS = { left: 0.3, 'center-left': 0.3, center: 0.5, centre: 0.5, middle: 0.5, 'center-right': 0.7, right: 0.7 }
@@ -3448,7 +3463,7 @@ async function novelaiKey(userId) {
 }
 
 async function novelaiStatus(userId) {
-  const lists = { models: NOVELAI_MODELS, samplers: NOVELAI_SAMPLERS, defaultStyle: NOVELAI_DEFAULT_STYLE, defaultNegative: NOVELAI_DEFAULT_NEGATIVE }
+  const lists = { models: NOVELAI_MODELS, samplers: NOVELAI_SAMPLERS, defaultStyle: NOVELAI_DEFAULT_STYLE, defaultNegative: NOVELAI_DEFAULT_NEGATIVE, undesiredPresets: Object.keys(NOVELAI_UC_PRESETS) }
   if (!novelaiAvailable(userId)) return { available: false, hasKey: false, ...lists }
   try { return { available: true, hasKey: !!(await spindle.enclave.get(NOVELAI_KEY, userId)), ...lists } }
   catch (_) { return { available: true, hasKey: false, ...lists } }
@@ -3520,7 +3535,13 @@ function buildNovelaiPayload({ prompt, negativePrompt, seed, config }) {
   const sampler = found ? found.id : 'k_euler_ancestral'
   const steps = Math.max(1, Math.min(50, Math.round(Number(config.steps) || 28)))
   const scale = Number.isFinite(Number(config.guidance_scale)) && config.guidance_scale !== '' ? Number(config.guidance_scale) : 5
-  const negative = String(negativePrompt || '').trim()
+  const ucId = Object.prototype.hasOwnProperty.call(NOVELAI_UC_PRESETS, config.novelaiUc) ? config.novelaiUc : 'heavy'
+  // Medium effort always uses the heavy preset and no typed list, as on the website.
+  const presetId = medium ? 'heavy' : ucId
+  const presetText = NOVELAI_UC_PRESETS[presetId]
+  const typed = medium ? '' : String(negativePrompt || '').trim()
+  const nsfwFirst = presetText && !/(?:^|[\s,])nsfw(?:$|[\s,])/i.test(split.main) ? 'nsfw' : ''
+  const negative = joinPromptParts([nsfwFirst, presetText, typed])
   const centers = c => (useCoords ? [c.center] : [{ x: 0.5, y: 0.5 }])
   const parameters = {
     params_version: /diffusion-5/.test(model) ? 4 : 3,
@@ -3529,13 +3550,13 @@ function buildNovelaiPayload({ prompt, negativePrompt, seed, config }) {
     // NovelAI's own app: 14 steps, Euler Ancestral, no custom undesired content.
     scale, sampler: medium ? 'k_euler_ancestral' : sampler, steps: medium ? 14 : steps,
     seed: n >= 0 ? n : Math.floor(Math.random() * 4294967295), n_samples: 1,
-    ucPreset: 4, qualityToggle: false,
+    ucPreset: NOVELAI_UC_INDEX[presetId], ucPresetId: presetId, qualityToggle: false, qualityPresetId: 'none',
     cfg_rescale: Number(config.cfg_rescale) || 0, noise_schedule: 'karras',
     dynamic_thresholding: false, deliberate_euler_ancestral_bug: false, prefer_brownian: true,
-    prompt: split.main, negative_prompt: medium ? '' : negative,
+    prompt: split.main, negative_prompt: negative,
     v4_prompt: { caption: { base_caption: split.main, char_captions: characters.map(c => ({ char_caption: c.prompt, centers: centers(c) })) },
       use_coords: useCoords, use_order: true },
-    v4_negative_prompt: { caption: { base_caption: medium ? '' : negative, char_captions: characters.map(c => ({ char_caption: '', centers: centers(c) })) },
+    v4_negative_prompt: { caption: { base_caption: negative, char_captions: characters.map(c => ({ char_caption: '', centers: centers(c) })) },
       use_coords: useCoords, use_order: true, legacy_uc: false },
     characterPrompts: characters.map(c => ({ prompt: c.prompt, uc: '', center: centers(c)[0], enabled: true })),
     use_coords: useCoords,
@@ -3579,7 +3600,7 @@ async function generateNovelaiImages(settings, payload, progress, context = {}) 
   const body = { input: payload.input, model: payload.model, action: payload.action, parameters: payload.parameters }
   spindle.log.info('[lumidraw] NovelAI request ' + JSON.stringify({ model: body.model, width: body.parameters.width, height: body.parameters.height,
     steps: body.parameters.steps, scale: body.parameters.scale, sampler: body.parameters.sampler, seed: body.parameters.seed,
-    main: body.parameters.prompt.length + ' characters', negative: body.parameters.negative_prompt.length + ' characters',
+    main: body.parameters.prompt.length + ' characters', negative: body.parameters.negative_prompt.length + ' characters', undesiredPreset: body.parameters.ucPresetId,
     characters: info.characters, spots: info.useCoords ? 'from LS' : 'NovelAI chooses' }) +
     (info.dropped ? ` · left out ${info.dropped} character(s) over the model's limit` : ''))
   const started = Date.now()

@@ -24,3 +24,8 @@
 - NovelAI presets always draw at the full size (up to NovelAI's free one megapixel), even with "Pick the size for each picture" on: smaller pictures only made faces smaller.
 - Sizes snap to NovelAI's own shapes (1344×768 for 16:9, not 1344×704).
 - The starting undesired content is Eric's own list from the picture he liked, plus `blush`.
+
+# 1.23.3 — NovelAI's hidden undesired words
+- The same prompt drew good faces on NovelAI's website and cartoonish ones through LS. The difference: the website's **Undesired Content preset** (Heavy by default) adds its own words to every picture without showing them — `lowres, artistic error, film grain, worst quality, bad quality, very displeasing, chromatic aberration, …` — and puts `nsfw` first for pictures that are not adult. V5 is trained on those words. LS sent only the typed list.
+- LS now does the same as the website. NovelAI presets have an **Undesired Content preset** menu (Heavy, Light, Human focus, None), Heavy unless changed; existing NovelAI presets use Heavy. Its words go before the preset's negative prompt, with `nsfw` first unless the picture is an adult one.
+- Medium effort uses the Heavy preset, as on the website.
