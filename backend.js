@@ -3430,7 +3430,8 @@ const NOVELAI_SAMPLERS = [
 // Default style for a new NovelAI preset: the recipe that won Eric's first
 // test (Nov 2026), from NovelAI gallery pictures he liked.
 const NOVELAI_DEFAULT_STYLE = 'painting (medium), anime coloring, anime, year 2025, year 2026, 1.5::masterpiece, best quality, amazing quality::, very aesthetic, natural skin shading, 1.2::rim lighting::, backlighting, high contrast, depth of field'
-const NOVELAI_DEFAULT_NEGATIVE = 'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page, blurry, bad anatomy, bad hands, sketch, rough, flat color, vector trace, sweat, wet, shiny skin, blush, text, watermark, signature'
+// Eric's own list from the picture he liked (Nov 2026), plus blush.
+const NOVELAI_DEFAULT_NEGATIVE = 'lowres, blurry, shiny skin, jpeg artifacts, bad anatomy, bad hands, sketch, rough, impressionism, flat color, vector trace, blush, text, watermark, signature'
 // Where each spot word puts a person on NovelAI's grid (0–1, left to right and
 // top to bottom). Someone further back stands higher in the frame.
 const NOVELAI_ACROSS = { left: 0.3, 'center-left': 0.3, center: 0.5, centre: 0.5, middle: 0.5, 'center-right': 0.7, right: 0.7 }
@@ -3494,8 +3495,12 @@ function novelaiSize(width, height) {
   let w = Number(width) || 832, h = Number(height) || 1216
   const limit = 1024 * 1024
   if (w * h > limit) { const scale = Math.sqrt(limit / (w * h)); w *= scale; h *= scale }
-  const snap = value => Math.max(64, Math.floor(value / 64) * 64)
-  return { width: snap(w), height: snap(h) }
+  // Nearest steps of 64, then trim the height if that went over the limit, so
+  // 16:9 lands on NovelAI's own 1344×768 rather than 1344×704.
+  const outW = Math.max(64, Math.round(w / 64) * 64)
+  let outH = Math.max(64, Math.round(h / 64) * 64)
+  if (outW * outH > limit) outH = Math.max(64, Math.floor(limit / outW / 64) * 64)
+  return { width: outW, height: outH }
 }
 
 function buildNovelaiPayload({ prompt, negativePrompt, seed, config }) {
@@ -25910,6 +25915,13 @@ This picture is drawn by NovelAI, which puts each person on their own spot.
   than the others: behind a bar or counter, in a doorway, across the room
   ("right back"). Leave "position" empty when the passage does not make the
   places clear; NovelAI then places them itself.
+- "framing" (this replaces the framing advice above): the closest shot that
+  still shows what the moment depends on. NovelAI draws faces badly when they
+  are small, so for people talking, touching, hugging, kissing, eating or
+  sitting together use "upper body" or "cowboy shot". Use "full body" when feet,
+  legs or the whole pose matter. Use "wide shot" only when the place itself or
+  the distance between people is the point: someone across the room, arriving
+  in a doorway, a fight, a big landscape.
 `
 
 function buildSimpleInstruction(profiles, memory, card, options = {}) {
@@ -26863,7 +26875,9 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
     const { image, compiled } = toDraw[index]
     const drawWith = toDraw[index].preset || preset
     setStoryScanStage(scan, 'generating', `Sending image ${index + 1} of ${toDraw.length} to ${rendererLabel(drawWith.config)}.`)
-    const size = drawWith.smartSize === true ? simpleSizeShare(image, compiled) : null
+    // NovelAI is free and fast up to its normal size, and its faces fall apart
+    // when small, so it always gets the full size (1.23.2).
+    const size = drawWith.smartSize === true && !presetUsesNovelai(drawWith) ? simpleSizeShare(image, compiled) : null
     const dims = aspectDims(drawWith.config, image.aspect, size ? size.share : 1)
     if (size) compiled.debug.notes.push(`Size ${dims.width}×${dims.height}: ${size.why}, so ${Math.round(size.share * 100)}% of the preset's size.`)
     const scene = { direct: true, simple: true, anchor: image.anchor, sceneSummary: image.scene_summary, rating: image.rating,

@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.23.1'
+  const EXTENSION_VERSION = '1.23.2'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -361,7 +361,7 @@ function realSetup(ctx) {
     { file: 'nai-diffusion-4-5-curated', name: 'V4.5 Curated' },
   ], loras: [], schedulers: [], samplers: ['Euler Ancestral', 'Euler', 'DPM++ 2M', 'DPM++ 2S Ancestral', 'DPM++ SDE'] }
   const NOVELAI_DEFAULT_STYLE_UI = 'painting (medium), anime coloring, anime, year 2025, year 2026, 1.5::masterpiece, best quality, amazing quality::, very aesthetic, natural skin shading, 1.2::rim lighting::, backlighting, high contrast, depth of field'
-  const NOVELAI_DEFAULT_NEGATIVE_UI = 'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page, blurry, bad anatomy, bad hands, sketch, rough, flat color, vector trace, sweat, wet, shiny skin, blush, text, watermark, signature'
+  const NOVELAI_DEFAULT_NEGATIVE_UI = 'lowres, blurry, shiny skin, jpeg artifacts, bad anatomy, bad hands, sketch, rough, impressionism, flat color, vector trace, blush, text, watermark, signature'
   const NOVELAI_START = { renderBackend: 'novelai', model: NOVELAI_MODEL, width: 832, height: 1216, steps: 28, guidance_scale: 5, sampler: 'Euler Ancestral' }
   function rendererCatalog(config) { return usesSwarm(config) ? swarmCatalogData : usesNano(config) ? nanoCatalogData : usesDtCloud(config) ? dtCloudCatalog : usesNovelai(config) ? novelaiCatalog : catalog }
   function rendererName(config) { return usesSwarm(config) ? 'SwarmUI' : usesNano(config) ? 'NanoGPT' : usesDtCloud(config) ? 'Draw Things cloud' : usesNovelai(config) ? 'NovelAI' : 'Draw Things' }
@@ -1444,7 +1444,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
               <div><span class="ld-label">Height</span><input class="ld-ed-h" type="number" step="64" min="256" /></div>
             </div>
             <label class="ld-check" style="margin-top:7px"><input type="checkbox" class="ld-ed-smart-size" /> Pick the size for each picture</label>
-            <div class="ld-hint">Width × height becomes the most it will use. A close-up of one person gets about half the pixels and draws faster; three or more people or a wide shot get the full size. New pipeline only.</div>
+            <div class="ld-hint">Width × height becomes the most it will use. A close-up of one person gets about half the pixels and draws faster; three or more people or a wide shot get the full size. New pipeline only. NovelAI presets always use the full size.</div>
             <span class="ld-label" style="margin-top:7px">Adult pictures (NSFW and explicit)</span><select class="ld-ed-adult-preset"><option value="">Draw with this preset</option><option value="__prompt__">Prompt only (copy into Draw Things+)</option></select>
             <div class="ld-hint">Choose another preset to draw them with, such as a Draw Things cloud MOSS preset. Everything else is drawn with this preset. Prompt only puts their prompt in the clipboard sheet to make in Draw Things+ and paste back.</div>
             <span class="ld-label" style="margin-top:9px">LoRAs</span>

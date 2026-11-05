@@ -18,3 +18,9 @@
 - Inside a Character line, another person's name becomes "another", as in booru tags: "looking at Lauren Vance" → "looking at another".
 - NovelAI presets have a **Go back to the starting NovelAI style** button: it puts the starting style and negative prompt back (press Save to keep them).
 - The starting negative prompt also has `blush`.
+
+# 1.23.2 — closer shots for NovelAI
+- Same prompt, same settings: one person filling the frame came out right, three people in a wide shot got caricature faces about 60 pixels tall. For NovelAI presets the parser now picks the closest shot that still shows the moment: upper body or cowboy shot for people talking, touching or sitting together; full body when feet, legs or the whole pose matter; wide shot only when the place or the distance between people is the point.
+- NovelAI presets always draw at the full size (up to NovelAI's free one megapixel), even with "Pick the size for each picture" on: smaller pictures only made faces smaller.
+- Sizes snap to NovelAI's own shapes (1344×768 for 16:9, not 1344×704).
+- The starting undesired content is Eric's own list from the picture he liked, plus `blush`.
