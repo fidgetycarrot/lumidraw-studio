@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.24.0'
+  const EXTENSION_VERSION = '1.25.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -319,6 +319,10 @@ function realSetup(ctx) {
   let lastSeenChatId = ''
   let scanElapsedTimer = null
   let activePreset = null   // name of selected preset
+  // 1.25: presets per chat. Where the preset in use came from ('chat' = picked
+  // in this chat, 'default' = the preset for chats without their own).
+  let defaultPresetName = ''
+  let presetSource = ''
   let personaEditorId = null
   let syncedConfig = null   // last synced/loaded config powering the form
   let draftConfig = null    // temporary workspace config for manual generation
@@ -459,6 +463,11 @@ function realSetup(ctx) {
     }
     // LumiCast's Update in Lumi Studio saved new sheet fields into a library entry. Show them, and put them
     // into the editor if that entry is open, so a later Save there cannot write the old tags back.
+    if (payload.type === 'active_preset_changed') {
+      const current = String(activeChatIdFromCtx() || '')
+      if (!payload.chatId || !current || String(payload.chatId) === current) applyChatPreset(payload)
+      return
+    }
     if (payload.type === 'lumicast_applied') {
       const entry = payload.entry
       if (!entry || !entry.id) return
@@ -2132,7 +2141,16 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const heroGrid = make('div', 'ld-reset-grid')
     heroGrid.style.marginTop = '10px'
     if (controls.presetSelect) {
-      heroGrid.appendChild(field('Image preset', controls.presetSelect, 'Which image app, model, and prompt engine (MOSS or Anima) to use.'))
+      heroGrid.appendChild(field('Image preset', controls.presetSelect, 'Remembered for this chat: opening the chat switches back to it. Which image app, model and prompt style to use.'))
+      const fallback = make('select', 'ld-default-preset-select')
+      fallback.addEventListener('change', async () => {
+        defaultPresetName = fallback.value
+        try {
+          await call('set_default_preset', { name: fallback.value })
+          syncChatPreset()
+        } catch { /* kept locally until the next load */ }
+      })
+      heroGrid.appendChild(field('Chats without their own preset', fallback, 'Used in any chat where you have not picked a preset, including new chats.'))
     }
     heroGrid.appendChild(field('Drawing mode', controls.mode,
       'Manual: only when you press Scan. Automatic: after story replies. Off: no story pictures.'))
@@ -3672,8 +3690,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const bridgeDot = $('.ld-header-bridge-dot')
     const storyPreset = $('.ld-story-preset-name')
     const presetName = activePreset || 'None'
-    if (presetEl) presetEl.textContent = presetName
-    if (storyPreset) storyPreset.textContent = presetName
+    const whence = !activePreset ? '' : presetSource === 'chat' ? ' (this chat)' : presetSource === 'default' ? ' (default)' : ''
+    if (presetEl) presetEl.textContent = presetName + whence
+    if (storyPreset) storyPreset.textContent = presetName + whence
     syncStoryPromptCard()
 
     if (workspaceEl) {
@@ -5348,6 +5367,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         return o.outerHTML
       }).join('')
     sel.value = current
+    // Chats that never picked a preset use this one.
+    const fallback = $('.ld-default-preset-select')
+    if (fallback) {
+      fallback.innerHTML = '<option value="">— the preset in use —</option>' +
+        presets.map((p) => { const o = document.createElement('option'); o.value = p.name; o.textContent = p.name; return o.outerHTML }).join('')
+      fallback.value = presets.some((p) => p.name === defaultPresetName) ? defaultPresetName : ''
+    }
     renderHeaderState()
   }
 
@@ -5918,10 +5944,16 @@ ${entry.prompt || ''}`.trim()
   document.addEventListener('visibilitychange', flushHistoryViews)
   window.addEventListener('resize', flushHistoryViews)
 
-  function selectPreset(name) {
+  function selectPreset(name, options = {}) {
     const preset = presets.find((item) => item.name === name)
     activePreset = preset ? preset.name : null
-    call('set_active_preset', { name: activePreset || '' }).catch(() => {})
+    if (!options.fromBackend) {
+      // Picked here: remembered for the open chat, or the default with no chat open.
+      const chatId = String(activeChatIdFromCtx() || '')
+      call('set_active_preset', { name: activePreset || '', chatId }).catch(() => {})
+      if (chatId) presetSource = activePreset ? 'chat' : 'default'
+      else { defaultPresetName = activePreset || ''; presetSource = 'default' }
+    }
     // The Story tab's tags and negative follow the preset now in use.
     try { syncStoryPromptCard() } catch { /* the Story tab may not be built yet */ }
     if (preset) {
@@ -5937,6 +5969,22 @@ ${entry.prompt || ''}`.trim()
       }
     }
     renderChips(); renderPresetSelect(); renderPresetList()
+  }
+
+  // The backend switched presets because a chat was opened or a reply arrived.
+  function applyChatPreset(res) {
+    if (!res) return
+    if (typeof res.defaultPreset === 'string') defaultPresetName = res.defaultPreset
+    if (res.source) presetSource = res.source === 'current' ? presetSource : res.source
+    const want = String(res.activePreset || '')
+    if (want && want !== activePreset && presets.some((item) => item.name === want)) selectPreset(want, { fromBackend: true })
+    else renderPresetSelect()
+  }
+
+  function syncChatPreset(chatId) {
+    const id = String(chatId || activeChatIdFromCtx() || '')
+    if (!id) return
+    call('chat_opened', { chatId: id }).then(applyChatPreset).catch(() => {})
   }
 
   function activePresetObj() {
@@ -8618,7 +8666,7 @@ ${entry.prompt || ''}`.trim()
     if (e.target.value) selectPreset(e.target.value)
     else {
       activePreset = null
-      call('set_active_preset', { name: '' }).catch(() => {})
+      call('set_active_preset', { name: '', chatId: String(activeChatIdFromCtx() || '') }).catch(() => {})
       renderPresetList(); renderPresetSelect()
     }
   })
@@ -9549,7 +9597,8 @@ ${entry.prompt || ''}`.trim()
       })
       presets = res.presets
       if (editorOriginalName && editorOriginalName !== name) {
-        const res2 = await call('delete_preset', { name: editorOriginalName })
+        const res2 = await call('delete_preset', { name: editorOriginalName, renamedTo: name })
+        if (defaultPresetName === editorOriginalName) defaultPresetName = name
         presets = res2.presets
       }
       if (!editorOriginalName || activePreset === editorOriginalName || activePreset === name) {
@@ -10284,6 +10333,7 @@ ${entry.prompt || ''}`.trim()
             const id = String(chatId || '')
             if (!id) return
             lastSeenChatId = id
+            syncChatPreset(id)
             renderStoryContinuity(id)
             refreshImagePlacements(id).catch((error) => console.log('[Lumi Studio] image refresh after chat switch failed:', error.message))
             loadCasts({ chatId: id }).catch(() => {})
@@ -10440,6 +10490,7 @@ ${entry.prompt || ''}`.trim()
       if ($('.ld-story-scene-anchor')) $('.ld-story-scene-anchor').value = settings.storySceneAnchor || ''
       if ($('.ld-story-break')) $('.ld-story-break').checked = settings.storyUseBreakSeparators === true
       if (settings.activePreset) { activePreset = settings.activePreset }
+      defaultPresetName = typeof settings.defaultPreset === 'string' ? settings.defaultPreset : (settings.activePreset || '')
       if (activePreset) {
         const p = presets.find((x) => x.name === activePreset)
         if (p) { syncedConfig = { ...p.config } }
@@ -10472,6 +10523,7 @@ ${entry.prompt || ''}`.trim()
       }
       renderCharacterList(); renderPersonaList(); renderPlaces(); renderPresetSelect(); renderPresetList(); renderHistory(); renderChips(); renderStoryDebug(); renderStoryStatus()
       const bootChatId = activeChatIdFromCtx()
+      if (bootChatId) syncChatPreset(bootChatId)
       if (bootChatId) {
         lastSeenChatId = String(bootChatId)
         refreshImagePlacements(bootChatId).catch((error) => console.log('[Lumi Studio] native image placement refresh failed:', error.message))

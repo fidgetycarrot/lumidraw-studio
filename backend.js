@@ -75,6 +75,8 @@ const DEFAULT_SETTINGS = {
   autoScan: true,         // auto-process after each story message (when events are available)
   autoImageEvery: 5,      // new assistant story replies; manual scans bypass cadence
   activePreset: '',       // generation preset used for story-driven generations
+  chatPresets: {},        // 1.25: chat id → the preset picked in that chat
+  // defaultPreset: for chats without their own; set from activePreset the first time (see getSettings)
   storyPromptMigrated: false, // one-time copy of legacy preset prompt fields into Story settings
   storyQualityTags: '',
   storyPromptPrefix: '',
@@ -903,6 +905,10 @@ async function getSettings() {
   settings.useLoomLedger = settings.useLoomLedger !== false
   settings.optimizedPreviews = settings.optimizedPreviews !== false
   settings.deleteImagesWithChats = settings.deleteImagesWithChats !== false
+  // 1.25: presets per chat. Existing installs keep their current preset as the
+  // one for chats that have not picked their own.
+  if (!settings.chatPresets || typeof settings.chatPresets !== 'object' || Array.isArray(settings.chatPresets)) settings.chatPresets = {}
+  if (typeof settings.defaultPreset !== 'string') settings.defaultPreset = String(settings.activePreset || '')
   if (settings.parserEngine === 'anima' && (!stored || !stored.parserInstruction || stored.parserInstruction === LEGACY_DEFAULT_PARSER_INSTRUCTION || stored.parserInstruction === V0181_ANIMA_PARSER_INSTRUCTION)) {
     settings.parserInstruction = ''
   }
@@ -17172,6 +17178,34 @@ function pruneRecentAutoScans() {
   for (const [key, at] of recentAutoScans) if (at < cutoff) recentAutoScans.delete(key)
 }
 
+// ---------------------------------------------------------------------------
+// Presets per chat (1.25). Picking a preset in a chat remembers it for that
+// chat; opening the chat (or a reply arriving in it) switches back to it.
+// Chats that never picked one use the default preset. activePreset stays "the
+// preset in use now", so everything that reads it keeps working.
+// ---------------------------------------------------------------------------
+function presetNameForChat(settings, presets, chatId) {
+  const exists = name => !!name && presets.some(item => item && item.name === name)
+  const own = chatId ? String((settings.chatPresets || {})[chatId] || '') : ''
+  if (exists(own)) return { name: own, source: 'chat' }
+  if (exists(settings.defaultPreset)) return { name: settings.defaultPreset, source: 'default' }
+  return { name: String(settings.activePreset || ''), source: 'current' }
+}
+
+async function syncPresetForChat(userId, chatId) {
+  const id = String(chatId || '')
+  const settings = await getSettings()
+  const presets = await getPresets()
+  const want = presetNameForChat(settings, presets, id)
+  if (id && want.name !== String(settings.activePreset || '')) {
+    settings.activePreset = want.name
+    await spindle.storage.setJson(SETTINGS_FILE, settings, { indent: 2 })
+    spindle.log.info(`[lumidraw] preset for chat ${id}: "${want.name}" (${want.source === 'chat' ? "this chat's own" : 'the default'})`)
+    try { notifyFrontend(userId, 'active_preset_changed', { activePreset: want.name, chatId: id, source: want.source }) } catch { /* panel may be closed */ }
+  }
+  return { activePreset: want.name, source: id ? want.source : 'current', chatPreset: id ? String(settings.chatPresets[id] || '') : '', defaultPreset: settings.defaultPreset }
+}
+
 function scheduleAutoStoryScan(userId, request = {}) {
   const chatId = String(request.chatId || '')
   const messageId = String(request.messageId || '')
@@ -17332,6 +17366,8 @@ const SCAN_TOTAL_LIMIT_MS = 30 * 60000
 
 async function scanStory(userId, options = {}) {
   const requestedMessageId = options && options.messageId ? String(options.messageId) : ''
+  // Draw with this chat's preset even if the panel never saw the chat open.
+  if (options && options.chatId) { try { await syncPresetForChat(userId, options.chatId) } catch (error) { spindle.log.warn('[lumidraw] chat preset: ' + error.message) } }
   // Evict a scan that has plainly died with the lane still held — belt and
   // braces alongside the watchdog, and it also frees lanes stuck from before
   // this version was installed.
@@ -19477,9 +19513,28 @@ spindle.onFrontendMessage(async (payload, userId) => {
 
       case 'set_active_preset': {
         const prev = await getSettings()
-        prev.activePreset = String(payload.name || '')
+        const name = String(payload.name || '')
+        const chatId = String(payload.chatId || '')
+        prev.activePreset = name
+        // Picked inside a chat: remembered for that chat. Picked with no chat
+        // open: becomes the default.
+        if (chatId) { if (name) prev.chatPresets[chatId] = name; else delete prev.chatPresets[chatId] }
+        else prev.defaultPreset = name
         await spindle.storage.setJson(SETTINGS_FILE, prev, { indent: 2 })
-        reply = ok(payload, requestId, { activePreset: prev.activePreset })
+        reply = ok(payload, requestId, { activePreset: prev.activePreset, chatPreset: chatId ? String(prev.chatPresets[chatId] || '') : '', defaultPreset: prev.defaultPreset })
+        break
+      }
+
+      case 'set_default_preset': {
+        const prev = await getSettings()
+        prev.defaultPreset = String(payload.name || '')
+        await spindle.storage.setJson(SETTINGS_FILE, prev, { indent: 2 })
+        reply = ok(payload, requestId, { defaultPreset: prev.defaultPreset })
+        break
+      }
+
+      case 'chat_opened': {
+        reply = ok(payload, requestId, await syncPresetForChat(userId, payload.chatId))
         break
       }
 
@@ -20585,6 +20640,16 @@ spindle.onFrontendMessage(async (payload, userId) => {
       case 'delete_preset': {
         const presets = (await getPresets()).filter((p) => p.name !== payload.name)
         await savePresets(presets)
+        // A rename is a save under the new name, then this delete: chats that
+        // used the old name follow it (1.25).
+        const renamedTo = String(payload.renamedTo || '')
+        if (renamedTo && presets.some(p => p.name === renamedTo)) {
+          const prev = await getSettings()
+          for (const [chat, name] of Object.entries(prev.chatPresets)) if (name === payload.name) prev.chatPresets[chat] = renamedTo
+          if (prev.defaultPreset === payload.name) prev.defaultPreset = renamedTo
+          if (prev.activePreset === payload.name) prev.activePreset = renamedTo
+          await spindle.storage.setJson(SETTINGS_FILE, prev, { indent: 2 })
+        }
         reply = ok(payload, requestId, { presets })
         break
       }
