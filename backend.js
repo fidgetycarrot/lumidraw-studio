@@ -25668,6 +25668,7 @@ OUTPUT:
    "appearance":["permanent body tags"],
    "anatomy":["genital tags"],
    "outfit":["every garment worn right now, one per item"],
+   "hair":["how the hair is worn right now: ponytail, braid, bun, hair down…"],
    "pose":["pose and one-person action tags"],
    "expression":["1-3 vivid facial cues","one gaze cue"],
    "show_anatomy":false
@@ -25733,6 +25734,15 @@ CLOTHING — this is how outfits stay consistent.
 - Clothing that came off is gone: write the remaining items, or ["nude"].
 - Never invent garments the story has not given them; never borrow another
   person's clothes.
+
+HAIR — kept the same way as clothes.
+- "hair" is how each person's hair is worn right now: ponytail, high ponytail,
+  side ponytail, braid, twin braids, bun, messy bun, twintails, hair down, hair
+  over shoulder. Never colour or length: for people with a sheet those come
+  from the sheet.
+- Start from CURRENT HAIR. Change it only when the CURRENT PASSAGE shows the
+  hair worn differently (tied up, let down, braided, pinned up). Otherwise copy
+  CURRENT HAIR. Leave it empty when nothing is known.
 
 POSE AND EXPRESSION
 - "pose": 2-5 tags for that person alone — standing, kneeling, leaning forward,
@@ -25828,6 +25838,43 @@ function simpleOutfitFor(profile, key, memory, card, profiles, name = '') {
   return defaults.length ? { tags: defaults, source: 'sheet default', earlier: [] } : { tags: [], source: '', earlier: [] }
 }
 
+// ---------- hairstyle (1.24.0) ----------------------------------------------
+// How the hair is worn — ponytail, braid, bun, hair down — comes from the
+// story and is remembered like an outfit: stories mention a ponytail once and
+// never again. The sheet keeps colour and length; a hairstyle on the sheet is
+// where a person starts until the story changes it.
+const SIMPLE_HAIRSTYLE_RE = /\b(?:ponytails?|twintails|pigtails|braids?|braided|plaits?|plaited|buns?|updo|chignon|top ?knot|hair down|loose hair|hair loose|hair up|tied hair|hair tied(?: back| up)?|half[- ]up(?: hair)?|hair over (?:one )?shoulder|pulled back hair|hair pulled back|slicked back hair|man bun|cornrows|dreadlocks)\b/i
+// Hair accessories are clothes, not a hairstyle.
+const SIMPLE_HAIR_ACCESSORY_RE = /\b(?:tie|ribbon|bow|scrunchie|clip|pin|band|tie|ornament|flower|stick)s?\b/i
+
+function simpleIsHairstyle(tag) {
+  const text = String(tag || '').trim()
+  return !!text && SIMPLE_HAIRSTYLE_RE.test(text) && !SIMPLE_HAIR_ACCESSORY_RE.test(text) && text.split(/\s+/).length <= 4
+}
+
+function simpleHairFor(profile, key, memory) {
+  const remembered = simpleMemoryFor(memory, key) ||
+    (profile ? simpleMemoryFor(memory, 'npc:' + simpleKey(profile.anchor || '')) : null) || {}
+  if ((remembered.hair || []).length) return { tags: remembered.hair.slice(), source: 'remembered' }
+  const sheet = profile ? directAnchorFor(profile).filter(simpleIsHairstyle) : (remembered.appearance || []).filter(simpleIsHairstyle)
+  return sheet.length ? { tags: sheet, source: profile ? 'sheet' : 'first seen' } : { tags: [], source: '' }
+}
+
+function simpleHairLines(hair) {
+  if (!hair.tags.length) return []
+  return [`  CURRENT HAIR (${hair.source}; keep unless the story changes it): ` + hair.tags.join(', ')]
+}
+
+// Puts the current hairstyle in place of any the body tags carry, next to the
+// other hair tags so "long hair, ponytail" stays together.
+function simpleApplyHair(identity, hair) {
+  const kept = identity.filter(tag => !simpleIsHairstyle(tag))
+  if (!hair.length) return kept
+  let at = -1
+  kept.forEach((tag, index) => { if (/\bhair\b/i.test(tag)) at = index })
+  return at < 0 ? [...kept, ...hair] : [...kept.slice(0, at + 1), ...hair, ...kept.slice(at + 1)]
+}
+
 function simpleOutfitLines(outfit) {
   const lines = []
   if (!outfit.tags.length) return lines
@@ -25858,11 +25905,12 @@ function simpleContext(profiles, memory, card, { banned = '', fantasy = false } 
       const remembered = simpleMemoryFor(memory, key)
       if (remembered && remembered.look) lines.push('  CURRENT LOOK: ' + remembered.look)
     } else {
-      const body = directAnchorFor(profile)
+      const body = directAnchorFor(profile).filter(tag => !simpleIsHairstyle(tag))
       if (body.length) lines.push('  BODY (reference only, already handled): ' + body.join(', '))
     }
     if ((profile.anatomy || []).length) lines.push('  ANATOMY (reference only, already handled): ' + animaTagList(profile.anatomy).join(', '))
     lines.push(...simpleOutfitLines(simpleOutfitFor(profile, key, memory, card, profiles)))
+    lines.push(...simpleHairLines(simpleHairFor(profile, key, memory)))
     blocks.push(lines.join('\n'))
   }
   const remembered = Object.entries((memory && memory.people) || {})
@@ -25872,9 +25920,10 @@ function simpleContext(profiles, memory, card, { banned = '', fantasy = false } 
     const lines = [`${person.name} — REMEMBERED PERSON (no sheet; only draw them if they are physically in the CURRENT PASSAGE, and then copy these exactly)`]
     if (person.count) lines.push('  count: ' + person.count)
     if (person.subject) lines.push('  subject: ' + person.subject)
-    if ((person.appearance || []).length) lines.push('  appearance: ' + person.appearance.join(', '))
+    if ((person.appearance || []).length) lines.push('  appearance: ' + person.appearance.filter(tag => !simpleIsHairstyle(tag)).join(', '))
     if ((person.anatomy || []).length) lines.push('  anatomy: ' + person.anatomy.join(', '))
     lines.push(...simpleOutfitLines(simpleOutfitFor(null, key, memory, card, profiles, person.name)))
+    lines.push(...simpleHairLines(simpleHairFor(null, key, memory)))
     blocks.push(lines.join('\n'))
   }
   const cardText = simpleSceneCardText(card, profiles)
@@ -26035,6 +26084,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
         appearance: simpleTags(s.appearance, 16),
         anatomy: simpleTags(s.anatomy, 6),
         outfit: simpleTags(s.outfit, 14),
+        hair: simpleTags(s.hair, 4).filter(simpleIsHairstyle),
         pose: simpleTags(s.pose, 6),
         expression: simpleTags(s.expression, 4),
         showAnatomy: s.show_anatomy === true || s.include_saved_anatomy === true,
@@ -26126,6 +26176,16 @@ function simpleCoveredBodyTags(identity, outfit) {
   })
 }
 
+// Story first, then what was last seen, then the sheet (1.24.0).
+function simpleResolveHair(out, raw, remembered, start, startSource, banned) {
+  const fromStory = applyBannedToList(raw.hair || [], banned)
+  const fromMemory = applyBannedToList((remembered && remembered.hair) || [], banned)
+  const hair = fromStory.length ? fromStory : fromMemory.length ? fromMemory : start
+  out.hair = uniqueStrings(hair)
+  out.sources.hair = fromStory.length ? 'story (parser)' : fromMemory.length ? 'remembered' : start.length ? startSource : 'none known'
+  out.identity = simpleApplyHair(out.identity, out.hair)
+}
+
 function simpleResolveSubject(raw, index, total, image, ctx, notes) {
   const { profiles, memory, card } = ctx
   const banned = (ctx.preset && ctx.preset.bannedTags) || ''
@@ -26183,6 +26243,7 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
     out.count = count
     out.phrase = simpleAdultPhrase(phrase, count)
     out.identity = identityTags.filter(tag => normalizeIdentityText(tag) !== normalizeIdentityText(out.phrase))
+    simpleResolveHair(out, raw, remembered, out.identity.filter(simpleIsHairstyle), 'sheet', banned)
     out.anatomy = anatomy
     out.sources.body = 'saved sheet'
     if (lookIncludesClothes) {
@@ -26211,6 +26272,7 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
     out.sources.body = (remembered.appearance || []).length ? 'remembered from an earlier image' : raw.appearance.length ? 'story (parser), first time — now remembered' : 'nothing known'
     out.identity = applyBannedToList(simpleTags(appearance, 16), banned)
     if (explicit) out.identity = out.identity.filter(tag => !directGroupYouthCoded(tag))
+    simpleResolveHair(out, raw, remembered, out.identity.filter(simpleIsHairstyle), 'first seen', banned)
     out.anatomy = applyBannedToList(simpleTags((remembered.anatomy || []).length ? remembered.anatomy : raw.anatomy, 6), banned)
     out.phrase = simpleAdultPhrase(remembered.subject || raw.subject, count)
     if (raw.outfit.length) {
@@ -26580,7 +26642,7 @@ function compileSimpleImage(image, ctx) {
     setting: { tags: setting, source: settingSource },
     subjects: subjects.map(subject => ({ name: subject.displayName, saved: !!subject.profile, ref: subject.profile ? subject.profile.ref : '',
       count: subject.count, phrase: subject.phrase, identity: subject.identity, anatomy: subject.anatomy, shownAnatomy: subject.shownAnatomy,
-      outfit: subject.outfit, pose: subject.pose, expression: subject.expression, look: subject.look || '', sources: subject.sources })),
+      outfit: subject.outfit, hair: subject.hair || [], pose: subject.pose, expression: subject.expression, look: subject.look || '', sources: subject.sources })),
     parsed: JSON.parse(JSON.stringify(image)),
   }
   // parts: the same pieces, for other prompt builders (MOSS). Not used here.
@@ -26650,8 +26712,10 @@ function simpleRemember(memory, compiled, messageId) {
       if (steady.length) entry.outfit = steady
     }
     if (subject.look) entry.look = subject.look
+    if ((subject.hair || []).length) entry.hair = subject.hair.slice()
     if (!subject.profile) {
-      if (!(before.appearance || []).length && subject.identity.length) entry.appearance = subject.identity.slice()
+      // The hairstyle is remembered on its own, so it can change.
+      if (!(before.appearance || []).length && subject.identity.length) entry.appearance = subject.identity.filter(tag => !simpleIsHairstyle(tag))
       // Anatomy added only to fit this picture's act is not remembered as theirs.
       const ownAnatomy = subject.anatomy.filter(tag => !(subject.addedAnatomy || []).includes(tag))
       if (!(before.anatomy || []).length && ownAnatomy.length) entry.anatomy = ownAnatomy
