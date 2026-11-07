@@ -19832,6 +19832,14 @@ spindle.onFrontendMessage(async (payload, userId) => {
         reply = ok(payload, requestId, await novelaiStatus(userId))
         break
       }
+      case 'gelbooru_status': {
+        reply = ok(payload, requestId, await gelbooruStatus(userId))
+        break
+      }
+      case 'gelbooru_save': {
+        reply = ok(payload, requestId, await saveGelbooruCredentials(payload, userId))
+        break
+      }
       case 'novelai_save_key': {
         reply = ok(payload, requestId, await saveNovelaiKey(payload, userId))
         break
@@ -19911,6 +19919,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.storyQualityTags !== undefined) preset.storyQualityTags = String(payload.storyQualityTags || '').slice(0, 4000)
         if (payload.storyNegativePrompt !== undefined) preset.storyNegativePrompt = String(payload.storyNegativePrompt || '').slice(0, 4000)
         if (payload.storyUseBreakSeparators !== undefined) preset.storyUseBreakSeparators = payload.storyUseBreakSeparators === true
+        // 1.26: the world this preset's chats take place in.
+        if (payload.setting !== undefined) preset.setting = String(payload.setting || '').slice(0, 2000)
         // 1.20: adult pictures go to '' (this preset), '__prompt__' (prompt only) or another preset's name.
         if (payload.adultPreset !== undefined) {
           preset.adultPreset = String(payload.adultPreset || '').slice(0, 200)
@@ -26067,7 +26077,8 @@ This picture is drawn by NovelAI, which puts each person on their own spot.
 `
 
 function buildSimpleInstruction(profiles, memory, card, options = {}) {
-  const extra = [options.moss ? MOSS_SCENE_RULES.trim() : '', options.novelai ? NOVELAI_SCENE_RULES.trim() : ''].filter(Boolean).join('\n\n')
+  const extra = [options.moss ? MOSS_SCENE_RULES.trim() : '', options.novelai ? NOVELAI_SCENE_RULES.trim() : '',
+    options.setting ? settingRules(options.setting) : ''].filter(Boolean).join('\n\n')
   return [SIMPLE_RULES.trim(), extra, '', simpleCountRule(options.maxImages), simpleSubjectRule(options.maxSubjects), '',
     simpleContext(profiles, memory, card, options)].filter((part, index) => index !== 1 || part).join('\n')
 }
@@ -26093,6 +26104,156 @@ function mossPlacePhrase(value) {
   if (!/^(?:on|in|at|behind|beside|next to|near|across|by|under|against|opposite|between|inside|outside|along|atop|above|below|in front of|to the (?:left|right) of|at the)\b/i.test(text)) return ''
   if (/\b(?:is|are|stands?|sits?|sitting|standing|leans?|leaning)\b/i.test(text)) return ''
   return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+// ---------------------------------------------------------------------------
+// Settings from existing stories (1.26.0): Warhammer 40K, Harry Potter, an
+// anime. A preset's Setting box tells the parser which world the chat is in,
+// so it names creatures, factions, gear and places the way that world does,
+// and marks every named thing with a plain description. LS then looks each
+// name up on Danbooru (Gelbooru when Danbooru is down): a name with plenty of
+// fan art is sent as its tag, since the image model learned it from that art;
+// a name it cannot know is sent as the description.
+// ---------------------------------------------------------------------------
+const BOORU_KNOWN_POSTS = 100           // fewer pictures than this: describe it instead
+const BOORU_CACHE_FILE = 'booru-names.json'
+const BOORU_CACHE_DAYS = 30
+const BOORU_GEL_KEY = 'lumidraw_gelbooru_credentials'
+
+function presetSetting(preset) {
+  return String(preset && preset.setting || '').trim().slice(0, 2000)
+}
+
+function settingRules(setting) {
+  return `SETTING
+This chat takes place in: ${setting}
+- Draw this world as it is known: name creatures, peoples, factions, uniforms,
+  gear, vehicles and places the way this setting does (its own words, not
+  generic ones), and give them their known look.
+- "names": list every named thing that is visible in the picture and that an
+  image model might know by name: a place, a kind of creature or people, a
+  faction, a famous object or vehicle, a canon character from the setting. One
+  entry each: {"name":"the name in its usual written form","looks":"4-10 short
+  visual tags for what it looks like here","who":"the subject's name when this
+  is what that person or creature is, otherwise empty"}. Canon characters: the
+  name as fans write it in full ("hermione granger"). Leave "names" out when
+  nothing in the picture has a name of its own.`
+}
+
+function simpleNamedThings(value) {
+  if (!Array.isArray(value)) return []
+  const out = []
+  for (const entry of value.slice(0, 8)) {
+    if (!entry || typeof entry !== 'object') continue
+    const name = String(entry.name || '').replace(/[_\s]+/g, ' ').trim().toLowerCase().slice(0, 80)
+    if (!name || name.split(' ').length > 6) continue
+    out.push({ name, looks: simpleTags(String(entry.looks || '').split(','), 10), who: String(entry.who || '').trim().slice(0, 80) })
+  }
+  return out
+}
+
+async function booruCache() {
+  try { return (await spindle.storage.getJson(BOORU_CACHE_FILE, { fallback: {} })) || {} } catch { return {} }
+}
+
+async function gelbooruCredentials(userId) {
+  try {
+    const raw = await spindle.enclave.get(BOORU_GEL_KEY, userId)
+    const parsed = raw ? JSON.parse(raw) : null
+    return parsed && parsed.user && parsed.key ? parsed : null
+  } catch { return null }
+}
+
+async function gelbooruStatus(userId) {
+  if (!nanoAvailable(userId)) return { available: false, hasKey: false }
+  return { available: true, hasKey: !!(await gelbooruCredentials(userId)) }
+}
+
+async function saveGelbooruCredentials(payload, userId) {
+  if (!nanoAvailable(userId)) throw new Error('Saving keys needs a current Lumiverse with secure key storage.')
+  if (payload.clear === true) { try { await spindle.enclave.delete(BOORU_GEL_KEY, userId) } catch { /* nothing saved */ } return gelbooruStatus(userId) }
+  // Gelbooru's account page shows both as one string, "&api_key=…&user_id=…".
+  const both = String(payload.key || '') + ' ' + String(payload.user || '')
+  const user = ((/user_id=(\d+)/.exec(both) || [])[1] || String(payload.user || '')).trim()
+  const key = ((/api_key=([^&\s]+)/.exec(both) || [])[1] || String(payload.key || '')).trim()
+  if (!/^\d+$/.test(user)) throw new Error('The Gelbooru user ID is the number on your account page, not your username.')
+  if (!/^[A-Za-z0-9]{16,}$/.test(key)) throw new Error('Paste the API key from Gelbooru → My Account → Options → API Access Credentials.')
+  await spindle.enclave.put(BOORU_GEL_KEY, JSON.stringify({ user, key }), userId)
+  return gelbooruStatus(userId)
+}
+
+// One name → { tag, count, source } from Danbooru, or Gelbooru when Danbooru
+// cannot be reached. null when neither site answered (not cached, so it is
+// tried again next time). count 0 when the sites answered but have no such tag.
+async function lookupBooruName(name, setting, userId) {
+  const tag = name.replace(/\s+/g, '_')
+  const settingWords = String(setting || '').toLowerCase().split(/[^a-z0-9]+/).filter(word => word.length > 2)
+  const pick = rows => {
+    const list = (Array.isArray(rows) ? rows : []).map(row => ({ name: String(row.name || ''), count: Number(row.post_count ?? row.count) || 0, category: Number(row.category ?? row.type) }))
+      .filter(row => row.name && row.category !== 1 && row.category !== 6)
+    const exact = list.find(row => row.name === tag)
+    if (exact) return exact
+    // "ork" → "ork_(warhammer)": a series-qualified tag only when the
+    // qualifier matches the chat's setting, so "ork" never becomes some other
+    // series' ork.
+    const qualified = list.filter(row => row.name.startsWith(tag + '_(') && settingWords.some(word => row.name.slice(tag.length).includes(word)))
+      .sort((a, b) => b.count - a.count)[0]
+    return qualified || null
+  }
+  try {
+    const url = 'https://danbooru.donmai.us/tags.json?' + new URLSearchParams({ 'search[name_or_alias_matches]': tag + '*', 'search[hide_empty]': 'true', 'search[order]': 'count', limit: '20' })
+    const res = await hostRequest(url, { method: 'GET', headers: { Accept: 'application/json' }, timeoutMs: 8000 })
+    if (res.ok && Array.isArray(res.json)) {
+      const hit = pick(res.json)
+      return hit ? { tag: hit.name.replace(/_/g, ' '), count: hit.count, source: 'Danbooru' } : { tag: '', count: 0, source: 'Danbooru' }
+    }
+  } catch { /* try Gelbooru */ }
+  const creds = await gelbooruCredentials(userId)
+  try {
+    const query = { page: 'dapi', s: 'tag', q: 'index', json: '1', limit: '20', orderby: 'count', name_pattern: tag + '%' }
+    if (creds) Object.assign(query, { user_id: creds.user, api_key: creds.key })
+    const res = await hostRequest('https://gelbooru.com/index.php?' + new URLSearchParams(query), { method: 'GET', headers: { Accept: 'application/json' }, timeoutMs: 8000 })
+    if (res.ok && res.json) {
+      const rows = Array.isArray(res.json) ? res.json : Array.isArray(res.json.tag) ? res.json.tag : []
+      const hit = pick(rows)
+      return hit ? { tag: hit.name.replace(/_/g, ' '), count: hit.count, source: 'Gelbooru' } : { tag: '', count: 0, source: 'Gelbooru' }
+    }
+  } catch { /* neither site answered */ }
+  return null
+}
+
+// Looks up every named thing in the pictures (cached for a month) and puts
+// either the tag or the description where it belongs: on the person or
+// creature it names, or with the place tags.
+async function applyNamedThings(images, setting, userId, notes = []) {
+  const wanted = uniqueStrings(images.flatMap(image => (image.names || []).map(entry => entry.name)))
+  if (!wanted.length) return
+  const cache = await booruCache()
+  const now = Date.now()
+  // Per setting: "ork" in a 40K chat is ork (warhammer); in another world it is not.
+  const keyOf = name => name + ' | ' + String(setting || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).slice(0, 6).join(' ')
+  const fresh = entry => entry && now - Number(entry.at || 0) < BOORU_CACHE_DAYS * 86400000
+  const missing = wanted.filter(name => !fresh(cache[keyOf(name)]))
+  let changed = false
+  await Promise.all(missing.map(async name => {
+    const found = await lookupBooruName(name, setting, userId)
+    if (found) { cache[keyOf(name)] = { ...found, at: now }; changed = true }
+  }))
+  if (changed) { try { await spindle.storage.setJson(BOORU_CACHE_FILE, cache, { indent: 1 }) } catch { /* lookups are only a help */ } }
+  for (const image of images) {
+    for (const entry of image.names || []) {
+      const hit = cache[keyOf(entry.name)]
+      const known = !!(hit && hit.tag && hit.count >= BOORU_KNOWN_POSTS)
+      const words = known ? [hit.tag] : entry.looks
+      entry.result = known ? `known (${hit.count.toLocaleString('en-US')} pictures on ${hit.source}): "${hit.tag}"`
+        : hit ? (hit.tag ? `little known (${hit.count} pictures): described` : 'no tag: described') : 'not checked (the tag sites did not answer): described'
+      notes.push(`Name "${entry.name}" → ${entry.result}.`)
+      if (!words.length) continue
+      const subject = entry.who ? (image.subjects || []).find(item => simpleKey(item.name) === simpleKey(entry.who)) : null
+      if (subject) subject.appearance = uniqueStrings([...words, ...(subject.appearance || [])])
+      else image.setting = uniqueStrings([...(image.setting || []), ...words])
+    }
+  }
 }
 
 // "right back" (NovelAI presets ask for it, 1.23) is "right" for everything
@@ -26177,6 +26338,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
       framing: simpleTags(item.framing, 3),
       composition: SIMPLE_COMPOSITIONS.includes(String(item.composition || '').trim().toLowerCase()) ? String(item.composition).trim().toLowerCase() : '',
       setting: simpleTags(item.setting, 8),
+      names: simpleNamedThings(item.names),
       moss: { camera: mossFieldText(item.moss_camera), setting: mossFieldText(item.moss_setting), moment: mossFieldText(item.moss_moment) },
       subjects,
       interactions: (Array.isArray(item.interactions) ? item.interactions : Array.isArray(item.group_interactions) ? item.group_interactions : [])
@@ -26818,7 +26980,7 @@ async function simpleParse({ userId, settings, preset, messages, targetIndex, ta
   let instruction = buildSimpleInstruction(profilesForPrompt, memory, card, {
     maxImages: settings.maxImages || 2, maxSubjects: settings.maxSubjects || 2,
     banned: preset.bannedTags || '', fantasy: !!profiles.fantasySetting,
-    moss: mossFields || presetPromptStyle(preset) === 'moss', novelai: novelaiFields || presetUsesNovelai(preset) })
+    moss: mossFields || presetPromptStyle(preset) === 'moss', novelai: novelaiFields || presetUsesNovelai(preset), setting: presetSetting(preset) })
   if (retry) {
     instruction += `\n\nRETRY ${retry.attempt}: the user rejected this prompt. Pick a meaningfully different moment or framing if the passage supports one:\n${retry.previousPrompt.slice(0, 1500)}`
   }
@@ -26978,6 +27140,12 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
   if (!images.length) {
     await saveStoryDebug({ ...debugBase, error: parsed.error || 'No usable image.', entries: [], selectedEntryIndex: null, lastCompiledPrompt: '' }, userId)
     throw new Error(parsed.refused ? parsed.error : 'Simple pipeline: ' + (parsed.error || 'the parser returned nothing to draw.'))
+  }
+  // 1.26: named things from the chat's setting → their tag when the image
+  // model knows it, their description when it does not.
+  if (presetSetting(preset)) {
+    setStoryScanStage(scan, 'compiling', 'Checking names from the setting.')
+    try { await applyNamedThings(images, presetSetting(preset), userId) } catch (error) { spindle.log.warn('[lumidraw] name lookup: ' + error.message) }
   }
   setStoryScanStage(scan, 'compiling', presetUsesNovelai(preset) ? 'Building the NovelAI prompt.' : 'Building the Anima prompt.')
   const prefix = await resolveMacros(preset.promptPrefix, userId, chatId)
@@ -27890,8 +28058,10 @@ function compileMossImage(image, ctx) {
 }
 
 function compileStoryImage(image, ctx) {
-  if (presetUsesNovelai(ctx.preset)) return compileNovelaiImage(image, ctx)
-  return presetPromptStyle(ctx.preset) === 'moss' ? compileMossImage(image, ctx) : compileSimpleImage(image, ctx)
+  const compiled = presetUsesNovelai(ctx.preset) ? compileNovelaiImage(image, ctx)
+    : presetPromptStyle(ctx.preset) === 'moss' ? compileMossImage(image, ctx) : compileSimpleImage(image, ctx)
+  for (const entry of image.names || []) if (entry.result) compiled.debug.notes.push(`Name "${entry.name}" → ${entry.result}.`)
+  return compiled
 }
 
 // ---------------------------------------------------------------------------

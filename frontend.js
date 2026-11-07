@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.25.0'
+  const EXTENSION_VERSION = '1.26.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1456,6 +1456,8 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <div class="ld-hint">Width × height becomes the most it will use. A close-up of one person gets about half the pixels and draws faster; three or more people or a wide shot get the full size. New pipeline only. NovelAI presets always use the full size.</div>
             <span class="ld-label" style="margin-top:7px">Adult pictures (NSFW and explicit)</span><select class="ld-ed-adult-preset"><option value="">Draw with this preset</option><option value="__prompt__">Prompt only (copy into Draw Things+)</option></select>
             <div class="ld-hint">Choose another preset to draw them with, such as a Draw Things cloud MOSS preset. Everything else is drawn with this preset. Prompt only puts their prompt in the clipboard sheet to make in Draw Things+ and paste back.</div>
+            <span class="ld-label" style="margin-top:9px">Setting</span><textarea class="ld-ed-setting" rows="2" placeholder="e.g. Warhammer 40K — or leave empty for your own worlds"></textarea>
+            <div class="ld-hint">The world this preset’s chats take place in. The parser draws things the way this setting does and lists their names; LS checks each name on Danbooru and sends the name when the image model knows it, or a plain description when it does not. You can add short notes, e.g. “Tyranids: living chitin, no armour.”</div>
             <span class="ld-label" style="margin-top:9px">LoRAs</span>
             <div class="ld-ed-loras" style="display:flex;flex-direction:column;gap:5px"></div>
             <button class="ld-btn ld-compact" data-act="ed-addlora" style="margin-top:5px">＋ LoRA</button>
@@ -1604,6 +1606,14 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-help">Get it on novelai.net: Account Settings → Get Persistent API Token. It is kept in Lumiverse’s secure storage and is not shown again. To use it, make a preset with NovelAI as its image app.</div>
             <div class="ld-row" style="margin-top:6px"><button class="ld-btn" data-act="novelai-save">Save token</button><button class="ld-btn" data-act="novelai-clear">Remove token</button></div>
             <div class="ld-status ld-novelai-status"></div>
+          </div>
+          <div data-settings-section="connection" class="ld-card">
+            <div class="ld-subtitle">Gelbooru (optional)</div>
+            <div class="ld-help">LS checks names from a preset’s Setting on Danbooru, which needs no key. When Danbooru is down it asks Gelbooru instead, which works better with your key. Paste the line from Gelbooru → My Account → Options → API Access Credentials (it has both values).</div>
+            <span class="ld-label">API key (or the whole “&api_key=…&user_id=…” line)</span><input class="ld-gel-key" type="password" autocomplete="off" spellcheck="false" />
+            <span class="ld-label">User ID (the number)</span><input class="ld-gel-user" type="text" autocomplete="off" spellcheck="false" />
+            <div class="ld-row" style="margin-top:6px"><button class="ld-btn" data-act="gel-save">Save</button><button class="ld-btn" data-act="gel-clear">Remove</button></div>
+            <div class="ld-status ld-gel-status"></div>
           </div>
           <div data-settings-section="connection" class="ld-card">
             <div class="ld-subtitle">Draw Things cloud helper</div>
@@ -2872,6 +2882,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const nanoCard = cardOf('.ld-nano-key')
       const dtCloudCard = cardOf('.ld-dtcloud-status')
       const novelaiCard = cardOf('.ld-novelai-key')
+      const gelCard = cardOf('.ld-gel-key')
       const drawThingsCard = cardOf('.ld-host')
       const bridgeCard = cardOf('.ld-bridge-host')
       const cloudCard = cardOf('.ld-cloud-enabled')
@@ -2905,7 +2916,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const parserSection = section('parser')
       const chat = section('chat')
       const help = section('help')
-      for (const node of [swarmCard, nanoCard, novelaiCard, dtCloudCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
+      for (const node of [swarmCard, nanoCard, novelaiCard, gelCard, dtCloudCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
       parserSection.appendChild(parserBinding)
       chat.appendChild(display)
       if (helpCard) help.appendChild(helpCard)
@@ -9005,6 +9016,7 @@ ${entry.prompt || ''}`.trim()
     if ($('.ld-ed-dtsettings')) { $('.ld-ed-dtsettings').value = c.dtSettings ? JSON.stringify(c.dtSettings) : ''; syncDtSettingsFields() }
     $('.ld-ed-w').value = c.width || ''
     if ($('.ld-ed-smart-size')) $('.ld-ed-smart-size').checked = !!(p && p.smartSize)
+    if ($('.ld-ed-setting')) $('.ld-ed-setting').value = p && p.setting ? p.setting : ''
     const adultPick = $('.ld-ed-adult-preset')
     if (adultPick) {
       const current = p ? (p.adultPreset !== undefined ? String(p.adultPreset || '') : (p.adultPromptOnly ? '__prompt__' : '')) : ''
@@ -9451,6 +9463,16 @@ ${entry.prompt || ''}`.trim()
       setStatus('.ld-nano-status', status.hasKey ? 'Key saved.' : 'The key did not save.', status.hasKey ? 'good' : 'err')
     } catch (e) { setStatus('.ld-nano-status', e.message, 'err') }
   })
+  if ($('[data-act="gel-save"]')) $('[data-act="gel-save"]').addEventListener('click', async () => {
+    try {
+      const st = await call('gelbooru_save', { key: $('.ld-gel-key').value, user: $('.ld-gel-user').value })
+      $('.ld-gel-key').value = ''; $('.ld-gel-user').value = ''
+      setStatus('.ld-gel-status', st.hasKey ? 'Key saved.' : 'The key did not save.', st.hasKey ? 'good' : 'err')
+    } catch (e) { setStatus('.ld-gel-status', e.message, 'err') }
+  })
+  if ($('[data-act="gel-clear"]')) $('[data-act="gel-clear"]').addEventListener('click', async () => {
+    try { await call('gelbooru_save', { clear: true }); setStatus('.ld-gel-status', 'Key removed.', 'good') } catch (e) { setStatus('.ld-gel-status', e.message, 'err') }
+  })
   if ($('[data-act="novelai-save"]')) $('[data-act="novelai-save"]').addEventListener('click', async () => {
     const input = $('.ld-novelai-key')
     try {
@@ -9585,6 +9607,7 @@ ${entry.prompt || ''}`.trim()
         extra: editorExtra,
         ...($('.ld-ed-smart-size') ? { smartSize: $('.ld-ed-smart-size').checked } : {}),
         ...($('.ld-ed-adult-preset') ? { adultPreset: $('.ld-ed-adult-preset').value } : {}),
+        ...($('.ld-ed-setting') ? { setting: $('.ld-ed-setting').value.trim() } : {}),
         storyQualityTags: $('.ld-ed-quality').value,
         storyNegativePrompt: $('.ld-ed-negative') ? $('.ld-ed-negative').value : '',
         storyUseBreakSeparators: $('.ld-ed-break') ? $('.ld-ed-break').checked : false,
@@ -10434,6 +10457,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-swarm-url').value = settings.swarmUrl || 'http://localhost:7801'
       refreshNanoStatus()
       refreshNovelaiStatus()
+      call('gelbooru_status', {}).then((st) => setStatus('.ld-gel-status', st.hasKey ? 'Key saved.' : 'No key saved (Danbooru is still used).')).catch(() => {})
       refreshDtCloudStatus('.ld-dtcloud-status').catch(() => {})
       showPromptOnly(settings.promptOnly === true)
       $('.ld-bridge-host').value = settings.bridgeHost || '127.0.0.1'
