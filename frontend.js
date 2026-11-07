@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.26.0'
+  const EXTENSION_VERSION = '1.26.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1019,8 +1019,12 @@ function realSetup(ctx) {
       .ld-lightbox-actions .ld-btn { flex:1; }
     }
     @media (max-width: 520px) {
-      .ld-panel { inset:6px !important; width:auto !important; height:auto !important; max-height:none !important; border-radius:12px; }
+      /* 1.26.1: clear of the iPhone's status bar, Dynamic Island and home bar,
+         where taps go to the phone instead of the page. */
+      .ld-panel { inset:max(6px, env(safe-area-inset-top)) max(6px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left)) !important; width:auto !important; height:auto !important; max-height:none !important; border-radius:12px; }
       .ld-panel.ld-fullscreen { inset:0 !important; }
+      .ld-min, .ld-fullscreen-toggle { min-width:40px; min-height:40px; flex:0 0 auto; }
+      .ld-head-title { flex:1 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis; }
       .ld-head { padding-left:max(8px,env(safe-area-inset-left)); padding-right:max(8px,env(safe-area-inset-right)); }
       .ld-main-tab { padding:7px 8px; }
       .ld-statebar { display:flex; overflow-x:auto; }
@@ -1923,6 +1927,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       /* --- 1.18.1 High-Contrast Visual Hierarchy & Color Coding --- */
       .ld-panel{background:#0f1117!important;color:#f1f4f9!important;font-size:14.5px!important}
       .ld-head{background:#141720!important;border-bottom:1px solid #2b3145!important;padding:10px 14px!important}
+      /* Fullscreen fills the whole screen, so its header steps below the
+         iPhone's status bar (1.26.1); the line above used to undo that. */
+      .ld-panel.ld-fullscreen .ld-head{padding-top:max(10px, env(safe-area-inset-top))!important;padding-left:max(14px, env(safe-area-inset-left))!important;padding-right:max(14px, env(safe-area-inset-right))!important}
       .ld-head-title{font-size:16px!important;font-weight:750!important;color:#ffffff!important;letter-spacing:.01em}
       .ld-main-nav{gap:6px!important}
       .ld-main-tab{font-size:13.5px!important;font-weight:600!important;padding:8px 14px!important;border-radius:9px!important;color:#9aa6be!important;transition:background .15s,color .15s}
