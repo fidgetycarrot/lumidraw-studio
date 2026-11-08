@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.26.1'
+  const EXTENSION_VERSION = '1.26.2'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1616,7 +1616,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <div class="ld-help">LS checks names from a preset’s Setting on Danbooru, which needs no key. When Danbooru is down it asks Gelbooru instead, which works better with your key. Paste the line from Gelbooru → My Account → Options → API Access Credentials (it has both values).</div>
             <span class="ld-label">API key (or the whole “&api_key=…&user_id=…” line)</span><input class="ld-gel-key" type="password" autocomplete="off" spellcheck="false" />
             <span class="ld-label">User ID (the number)</span><input class="ld-gel-user" type="text" autocomplete="off" spellcheck="false" />
-            <div class="ld-row" style="margin-top:6px"><button class="ld-btn" data-act="gel-save">Save</button><button class="ld-btn" data-act="gel-clear">Remove</button></div>
+            <div class="ld-row" style="margin-top:6px"><button class="ld-btn" data-act="gel-save">Save</button><button class="ld-btn" data-act="gel-test">Test connection</button><button class="ld-btn" data-act="gel-clear">Remove</button></div>
             <div class="ld-status ld-gel-status"></div>
           </div>
           <div data-settings-section="connection" class="ld-card">
@@ -9475,6 +9475,18 @@ ${entry.prompt || ''}`.trim()
       const st = await call('gelbooru_save', { key: $('.ld-gel-key').value, user: $('.ld-gel-user').value })
       $('.ld-gel-key').value = ''; $('.ld-gel-user').value = ''
       setStatus('.ld-gel-status', st.hasKey ? 'Key saved.' : 'The key did not save.', st.hasKey ? 'good' : 'err')
+    } catch (e) { setStatus('.ld-gel-status', e.message, 'err') }
+  })
+  if ($('[data-act="gel-test"]')) $('[data-act="gel-test"]').addEventListener('click', async () => {
+    setStatus('.ld-gel-status', 'Asking Danbooru and Gelbooru…')
+    try {
+      const r = await call('booru_test', {})
+      const n = value => Number(value || 0).toLocaleString()
+      const dan = r.danbooru && r.danbooru.ok ? `Danbooru: working (${n(r.danbooru.count)} pictures tagged 1girl).` : `Danbooru: not answering (${(r.danbooru && r.danbooru.error) || 'no reply'}).`
+      const gel = r.gelbooru && r.gelbooru.ok ? `Gelbooru: working${r.gelbooru.withKey ? ' with your key' : ' (no key saved)'} (${n(r.gelbooru.count)} pictures).`
+        : `Gelbooru: not working (${(r.gelbooru && r.gelbooru.error) || 'no reply'}).`
+      const good = !!(r.gelbooru && r.gelbooru.ok && r.gelbooru.withKey)
+      setStatus('.ld-gel-status', dan + ' ' + gel, good ? 'good' : (r.gelbooru && r.gelbooru.ok) || (r.danbooru && r.danbooru.ok) ? '' : 'err')
     } catch (e) { setStatus('.ld-gel-status', e.message, 'err') }
   })
   if ($('[data-act="gel-clear"]')) $('[data-act="gel-clear"]').addEventListener('click', async () => {

@@ -14,3 +14,6 @@
 # 1.26.1 — closing LS on iPhone
 - On phones the panel's top edge sat under the iPhone's status bar and Dynamic Island, where taps go to the phone, so the minimize (–) button could not be pressed — in fullscreen always, and in the normal phone panel when Lumiverse runs full-screen as a web app. A header style from 1.18.1 had also undone the header's own room for the status bar. The panel now keeps clear of the status bar and home bar, and the fullscreen header starts below the status bar.
 - The minimize and fullscreen buttons are bigger on phones (40 × 40, easier to tap) and stay on the title row.
+
+# 1.26.2 — Test connection
+- Settings → Image apps → Gelbooru has a **Test connection** button. It asks Danbooru and Gelbooru for a tag every picture site has and says, for each, whether it works — and for Gelbooru whether your key was used or turned down.

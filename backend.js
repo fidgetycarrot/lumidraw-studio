@@ -19836,6 +19836,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
         reply = ok(payload, requestId, await gelbooruStatus(userId))
         break
       }
+      case 'booru_test': {
+        reply = ok(payload, requestId, await testBooruConnections(userId))
+        break
+      }
       case 'gelbooru_save': {
         reply = ok(payload, requestId, await saveGelbooruCredentials(payload, userId))
         break
@@ -26180,6 +26184,30 @@ async function saveGelbooruCredentials(payload, userId) {
   if (!/^[A-Za-z0-9]{16,}$/.test(key)) throw new Error('Paste the API key from Gelbooru → My Account → Options → API Access Credentials.')
   await spindle.enclave.put(BOORU_GEL_KEY, JSON.stringify({ user, key }), userId)
   return gelbooruStatus(userId)
+}
+
+// Settings → Gelbooru → Test connection (1.26.2): asks both sites for a tag
+// everyone has, so a wrong key or a site that is down shows up at once.
+async function testBooruConnections(userId) {
+  const say = error => String(error && error.message || error || '').replace(/\s+/g, ' ').slice(0, 160)
+  const out = { danbooru: null, gelbooru: null }
+  try {
+    const res = await hostRequest('https://danbooru.donmai.us/tags.json?' + new URLSearchParams({ 'search[name]': '1girl' }), { method: 'GET', headers: { Accept: 'application/json' }, timeoutMs: 10000 })
+    const row = Array.isArray(res.json) ? res.json[0] : null
+    out.danbooru = res.ok && row ? { ok: true, count: Number(row.post_count) || 0 } : { ok: false, error: 'HTTP ' + res.status + (res.text ? ': ' + say(res.text) : '') }
+  } catch (error) { out.danbooru = { ok: false, error: say(error) } }
+  const creds = await gelbooruCredentials(userId)
+  try {
+    const query = { page: 'dapi', s: 'tag', q: 'index', json: '1', name: '1girl' }
+    if (creds) Object.assign(query, { user_id: creds.user, api_key: creds.key })
+    const res = await hostRequest('https://gelbooru.com/index.php?' + new URLSearchParams(query), { method: 'GET', headers: { Accept: 'application/json' }, timeoutMs: 10000 })
+    const rows = res.json ? (Array.isArray(res.json) ? res.json : Array.isArray(res.json.tag) ? res.json.tag : []) : []
+    out.gelbooru = res.ok && rows[0] ? { ok: true, count: Number(rows[0].count) || 0, withKey: !!creds }
+      : { ok: false, withKey: !!creds, status: res.status, error: (res.status === 401 || res.status === 403) ? (creds ? 'Gelbooru turned down the key.' : 'Gelbooru wants a key.')
+        : res.ok ? 'Gelbooru answered but sent no tags back' + (creds ? ', which usually means the key or user ID is wrong' : '')
+        : 'HTTP ' + res.status + (res.text ? ': ' + say(res.text) : '') }
+  } catch (error) { out.gelbooru = { ok: false, withKey: !!creds, error: say(error) } }
+  return out
 }
 
 // One name → { tag, count, source } from Danbooru, or Gelbooru when Danbooru
