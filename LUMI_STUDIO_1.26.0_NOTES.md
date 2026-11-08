@@ -17,3 +17,6 @@
 
 # 1.26.2 — Test connection
 - Settings → Image apps → Gelbooru has a **Test connection** button. It asks Danbooru and Gelbooru for a tag every picture site has and says, for each, whether it works — and for Gelbooru whether your key was used or turned down.
+
+# 1.26.3
+- Test connection says "the site is down right now" instead of showing the web page a down site sends back.

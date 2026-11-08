@@ -26189,7 +26189,8 @@ async function saveGelbooruCredentials(payload, userId) {
 // Settings → Gelbooru → Test connection (1.26.2): asks both sites for a tag
 // everyone has, so a wrong key or a site that is down shows up at once.
 async function testBooruConnections(userId) {
-  const say = error => String(error && error.message || error || '').replace(/\s+/g, ' ').slice(0, 160)
+  // A down site answers with a web page; say that instead of showing its HTML.
+  const say = error => { const text = String(error && error.message || error || '').replace(/\s+/g, ' ').trim(); return /^<|<html/i.test(text) ? 'the site is down right now' : text.slice(0, 160) }
   const out = { danbooru: null, gelbooru: null }
   try {
     const res = await hostRequest('https://danbooru.donmai.us/tags.json?' + new URLSearchParams({ 'search[name]': '1girl' }), { method: 'GET', headers: { Accept: 'application/json' }, timeoutMs: 10000 })
