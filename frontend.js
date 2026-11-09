@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.26.3'
+  const EXTENSION_VERSION = '1.26.4'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -363,7 +363,7 @@ function realSetup(ctx) {
     { file: 'nai-diffusion-5-curated', name: 'V5 Curated' },
     { file: 'nai-diffusion-4-5-full', name: 'V4.5 Full' },
     { file: 'nai-diffusion-4-5-curated', name: 'V4.5 Curated' },
-  ], loras: [], schedulers: [], samplers: ['Euler Ancestral', 'Euler', 'DPM++ 2M', 'DPM++ 2S Ancestral', 'DPM++ SDE'] }
+  ], loras: [], schedulers: [], samplers: ['Euler Ancestral', 'Euler', 'DPM++ 2M', 'DPM++ 2M SDE', 'DPM++ 2S Ancestral', 'DPM++ SDE'] }
   const NOVELAI_DEFAULT_STYLE_UI = 'painting (medium), anime coloring, anime, year 2025, year 2026, 1.5::masterpiece, best quality, amazing quality::, very aesthetic, natural skin shading, 1.2::rim lighting::, backlighting, high contrast, depth of field'
   const NOVELAI_DEFAULT_NEGATIVE_UI = 'lowres, blurry, shiny skin, jpeg artifacts, bad anatomy, bad hands, sketch, rough, impressionism, flat color, vector trace, blush, text, watermark, signature'
   const NOVELAI_START = { renderBackend: 'novelai', model: NOVELAI_MODEL, width: 832, height: 1216, steps: 28, guidance_scale: 5, sampler: 'Euler Ancestral' }

@@ -3430,6 +3430,7 @@ const NOVELAI_SAMPLERS = [
   { id: 'k_euler', label: 'Euler' },
   { id: 'k_euler_ancestral', label: 'Euler Ancestral' },
   { id: 'k_dpmpp_2m', label: 'DPM++ 2M' },
+  { id: 'k_dpmpp_2m_sde', label: 'DPM++ 2M SDE' },
   { id: 'k_dpmpp_2s_ancestral', label: 'DPM++ 2S Ancestral' },
   { id: 'k_dpmpp_sde', label: 'DPM++ SDE' },
 ]

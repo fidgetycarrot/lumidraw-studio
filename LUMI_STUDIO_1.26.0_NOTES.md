@@ -20,3 +20,6 @@
 
 # 1.26.3
 - Test connection says "the site is down right now" instead of showing the web page a down site sends back.
+
+# 1.26.4
+- NovelAI presets can use the **DPM++ 2M SDE** sampler.
