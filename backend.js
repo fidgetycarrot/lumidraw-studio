@@ -25750,7 +25750,7 @@ OUTPUT:
    "outfit":["every garment worn right now, one per item"],
    "hair":["how the hair is worn right now: ponytail, braid, bun, hair down…"],
    "pose":["pose and one-person action tags"],
-   "expression":["1-3 vivid facial cues","one gaze cue"],
+   "expression":["eyes cue","mouth cue","brows cue","optional emotion tag","one gaze cue"],
    "show_anatomy":false
  }],
  "interactions":[{"actor":"name","act":"fellatio|cunnilingus|handjob|vaginal|anal|masturbation|paizuri|fingering|kissing|groping","recipient":"name"}],
@@ -25838,8 +25838,20 @@ POSE AND EXPRESSION
 - Aiming, pointing, shooting or throwing: name the target in that person's pose
   ("aiming at drop pod", "pointing at door"). Without it the image model has them
   aim at whoever else is in the picture.
-- "expression": 1-3 vivid facial cues and one gaze cue. Match the emotional intensity
-  of the moment — never leave faces blank or neutral in dramatic or passionate scenes!
+- "expression" (1.27): build the whole face, not one cue. When the face is
+  visible give one cue each for the EYES (wide-eyed, narrowed eyes, half-closed
+  eyes, closed eyes, teary eyes, sparkling eyes), the MOUTH (smile, grin, smirk,
+  open mouth, parted lips, pressed lips, frown, clenched teeth, biting lip) and
+  the BROWS (raised eyebrows, furrowed brow, knitted brows, relaxed brows), plus
+  at most one plain emotion tag the image model knows from fan art — angry, sad,
+  scared, surprised, shocked, smug, nervous, worried, determined, happy, annoyed,
+  confused, embarrassed, flustered — and one gaze cue. "narrowed eyes, clenched
+  teeth, furrowed brow, angry, looking at Mara" draws a face; "smile" alone
+  draws the model's default face. Match the emotional intensity of the moment —
+  never leave faces blank or neutral in dramatic or passionate scenes!
+- When the face cannot be seen in this picture (turned away, from behind, buried
+  in someone's shoulder, covered by a helmet), leave out eye, mouth and brow cues;
+  the image model otherwise twists the head round to show them.
   - Everyday/dramatic facial cues: faint smile, soft smile, grin, smirk, parted lips,
     open mouth, pressed lips, biting lip, furrowed brow, raised eyebrow, half-closed
     eyes, closed eyes, wide-eyed, narrowed eyes, clenched teeth, tears, scowling,
@@ -25851,7 +25863,8 @@ POSE AND EXPRESSION
     expression, ahegao.
   - Gaze cues: looking at viewer (only for a POV shot), looking at [name], looking
     down, looking up, looking away, eye contact, eyes closed.
-- Never abstract labels like "tense expression"; translate them to face mechanics.
+- Never vague labels like "tense expression" or "guarded look"; translate them to
+  face mechanics. The plain emotion tags listed above are fine.
 
 INTERACTIONS AND RELATIONS
 - Sexual acts go in "interactions", one entry per act. The actor does it, the
@@ -26342,7 +26355,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
         outfit: simpleTags(s.outfit, 14),
         hair: simpleTags(s.hair, 4).filter(simpleIsHairstyle),
         pose: simpleTags(s.pose, 6),
-        expression: simpleTags(s.expression, 4),
+        expression: simpleTags(s.expression, 6),
         showAnatomy: s.show_anatomy === true || s.include_saved_anatomy === true,
         mossPlace: mossPlacePhrase(s.moss_place),
         mossAction: mossFieldText(s.moss_action),
