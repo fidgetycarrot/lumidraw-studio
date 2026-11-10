@@ -26581,7 +26581,26 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
     out.expression = out.expression.filter(tag => !gaze.test(tag) || tag === keep)
     if (out.pose.includes(keep) && out.expression.includes(keep)) out.pose = out.pose.filter(tag => tag !== keep)
   }
+  simpleRearTraits(out, image, notes)
   return out
+}
+
+// ---------- rear traits (1.27.2) -------------------------------------------
+// "bubble butt" on a sheet turned every picture into a pose showing it off
+// (Nov 2026 test: no tag → she faces the camera; the tag or a plain-English
+// phrase → she turns round and looks back). The image models learned these
+// traits from pictures drawn from behind. Send them only when this picture
+// shows the person from behind or the side; from the front they cannot be
+// seen anyway.
+const SIMPLE_REAR_TRAIT_RE = /\b(?:butt|buttocks|ass|booty|rear|glutes|derriere|backside)\b/i
+const SIMPLE_REAR_VIEW_RE = /\b(?:from behind|from side|from the side|side view|profile|looking back|looking over (?:her|his|their|one's)? ?shoulder|over (?:the )?shoulder|bent over|bending over|facing away|turned away|back turned|back to (?:the )?viewer|from below|all fours|on all fours|doggystyle|prone|top-down bottom-up|ass|butt|walking away)\b/i
+function simpleRearTraits(out, image, notes) {
+  const traits = out.identity.filter(tag => SIMPLE_REAR_TRAIT_RE.test(tag))
+  if (!traits.length) return
+  const shot = [...(image.framing || []), ...(out.pose || []), ...((out.raw && out.raw.pose) || [])].join(', ')
+  if (SIMPLE_REAR_VIEW_RE.test(shot)) return
+  out.identity = out.identity.filter(tag => !traits.includes(tag))
+  notes.push(`${out.displayName}: left out “${traits.join(', ')}” — not seen from the front, and that tag turns people round to show it.`)
 }
 
 // "armor" after "road-worn leather armor" is the same garment said vaguely, not

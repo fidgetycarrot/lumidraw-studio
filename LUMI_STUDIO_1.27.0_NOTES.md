@@ -10,3 +10,7 @@ Ideas taken from LumiSwarm Studio's parser prompting (Nov 2026), whose pictures 
 # 1.27.1
 - No crypto library anywhere in the extension: picture ids are made without crypto.randomUUID/getRandomValues, which Lumiverse is blocking for extensions and which fail when Lumiverse is opened remotely over plain http.
 - Removed an old leftover copy of the panel script (frontend-70039a83.js) that was never loaded.
+
+# 1.27.2 — butt traits only when they can be seen
+- A sheet's butt trait ("bubble butt", "(ass:1.3)", "round rear"…) turned people round in every picture to show it off. In Eric's test, no tag kept her facing the camera; both the tag and a plain-English phrase turned her round and looking back (the phrase also enlarged her whole lower half).
+- LS now sends such a trait only when the picture shows the person from behind or the side (from behind, side view, looking back, bent over, all fours, walking away…). From the front it is left out — it cannot be seen there anyway — and the picture's notes say so. This applies to every image app, so Anima prompts drop it in front-facing pictures too.
