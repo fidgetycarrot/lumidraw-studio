@@ -6,3 +6,7 @@ Ideas taken from LumiSwarm Studio's parser prompting (Nov 2026), whose pictures 
 - **One plain emotion tag** on top — angry, sad, scared, surprised, smug, nervous, worried, determined, happy… Vague labels such as "tense expression" are still turned into face details; these emotion tags are real Danbooru tags the image models learned from fan art. Banned words still drop out (e.g. embarrassed if it is on your list).
 - **No face cues when the face is hidden** (turned away, from behind, in someone's shoulder, under a helmet), so the image model does not twist the head round to show it.
 - Room for up to six face tags (eyes, mouth, brows, emotion, gaze) instead of four.
+
+# 1.27.1
+- No crypto library anywhere in the extension: picture ids are made without crypto.randomUUID/getRandomValues, which Lumiverse is blocking for extensions and which fail when Lumiverse is opened remotely over plain http.
+- Removed an old leftover copy of the panel script (frontend-70039a83.js) that was never loaded.

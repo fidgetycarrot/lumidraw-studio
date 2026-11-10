@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.27.0'
+  const EXTENSION_VERSION = '1.27.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -53,13 +53,19 @@ function lumidrawContinuityStatus(continuity) {
   return { tone: 'err', text: 'Story memory pending — established details are retained; it is not confirmed up to date yet.' + (detail ? ' ' + detail : '') }
 }
 
+// A random version-4 UUID without the crypto library (1.27.1): Lumiverse is
+// blocking it for extensions, and it fails when Lumiverse is opened remotely
+// over plain http.
 function makeId() {
-  if (window.crypto && typeof crypto.randomUUID === 'function') {
-    try { return crypto.randomUUID() } catch { /* insecure context */ }
+  const hex = '0123456789abcdef'
+  let out = ''
+  for (let i = 0; i < 36; i++) {
+    if (i === 8 || i === 13 || i === 18 || i === 23) { out += '-'; continue }
+    if (i === 14) { out += '4'; continue }
+    const r = (Math.random() * 16) | 0
+    out += hex[i === 19 ? (r & 3) | 8 : r]
   }
-  const a = new Uint8Array(16)
-  crypto.getRandomValues(a)
-  return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('')
+  return out
 }
 
 // Lumiverse serves its own cached image tiers from the same canonical image
