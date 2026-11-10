@@ -23,3 +23,8 @@ Ideas taken from LumiSwarm Studio's parser prompting (Nov 2026), whose pictures 
 - When an adult woman wears no bra under her top, LS sends `no bra, covered nipples, breasts apart` in every picture of her, whatever its rating. `no bra` alone only changed a detail; the other two stop the image model drawing the held-in shape it learned from clothed pictures.
 - Where it comes from: the story (the parser now writes "no bra" as an outfit item and keeps it until she puts a bra on), what was last seen in the chat, or her sheet — `no bra` in a sheet's look or default outfit applies always.
 - Left out when she wears a bra, bikini or similar, and when she has nothing on top.
+
+# 1.27.5 — "Outfits for this image" works again
+- The picture viewer said "No character outfit snapshot was recorded" for every picture from the current pipeline, because that pipeline never saved what people wore. New pictures now record each sheet character's outfit, so the viewer lists them and you can correct them.
+- "Also correct current story wardrobe" now updates the memory the current pipeline reads, so a corrected outfit (e.g. adding `no bra`) carries into later pictures.
+- Pictures made before this update still have no record; press Re-run parser on them, or use a newer picture.

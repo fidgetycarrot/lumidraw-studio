@@ -18760,6 +18760,12 @@ async function commitImageOutfitsToStory(context, corrections, userId = '') {
   const outfits = Object.fromEntries(Object.entries(corrections).map(([ref, tags]) => [ref, tags.slice()]))
   const outfitMeta = Object.fromEntries(Object.keys(outfits).map((ref) => [ref, { source: 'image-correction', at: Date.now(), messageId: origin.messageId || '' }]))
   await rememberSceneState(origin.chatId, context.preset.name, { outfits, outfitMeta })
+  // The current pipeline keeps what people wear in its own cast memory (1.27.5).
+  try {
+    const cast = await readSimpleCast(origin.chatId)
+    for (const [ref, tags] of Object.entries(outfits)) cast.people['ref:' + ref] = { ...(cast.people['ref:' + ref] || {}), outfit: simpleTags(tags, 14) }
+    await writeSimpleCast(origin.chatId, cast)
+  } catch (error) { spindle.log.warn('[lumidraw] outfit correction (cast memory): ' + error.message) }
   await applyStoryContinuityCorrection({ userId, chatId: origin.chatId, presetName: context.preset.name, outfits, outfitMeta })
   const state = await readSceneMemory(origin.chatId, context.preset.name, userId)
   if (Object.keys(outfits).some((ref) => JSON.stringify(wardrobeTagList((state.outfits || {})[ref])) !== JSON.stringify(outfits[ref]))) throw new Error('The image was generated, but the story wardrobe could not be saved.')
@@ -27161,7 +27167,7 @@ async function queuePastePrompts({ userId, preset, prepared, target, chatId, tro
       shift: moss ? 5 : '',
       presetName: preset.name || '', notes: compiled.debug.notes.slice(0, 12),
       scene: { direct: true, simple: true, anchor: image.anchor, sceneSummary: image.scene_summary, rating: image.rating,
-        aspect: image.aspect, simplePipeline: compiled.debug },
+        aspect: image.aspect, simplePipeline: compiled.debug, ...simpleSceneWardrobe(compiled) },
       troubleshooting: troubleshootingFor ? troubleshootingClean(troubleshootingFor(compiled.prompt, { anchor: image.anchor, sceneSummary: image.scene_summary })) : null,
     })
   }
@@ -27315,7 +27321,7 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
     const dims = aspectDims(drawWith.config, image.aspect, size ? size.share : 1)
     if (size) compiled.debug.notes.push(`Size ${dims.width}×${dims.height}: ${size.why}, so ${Math.round(size.share * 100)}% of the preset's size.`)
     const scene = { direct: true, simple: true, anchor: image.anchor, sceneSummary: image.scene_summary, rating: image.rating,
-      aspect: image.aspect, simplePipeline: compiled.debug }
+      aspect: image.aspect, simplePipeline: compiled.debug, ...simpleSceneWardrobe(compiled) }
     const entry = await generateAndUpload({
       prompt: compiled.prompt, negativePrompt: compiled.negativePrompt, config: drawWith.config, extra: drawWith.extra, dims,
       progressContext: { imageIndex: index + 1, imageTotal: toDraw.length },
@@ -27341,6 +27347,17 @@ async function runSimpleStoryScan({ userId, settings, preset, messages, targetIn
     ...(queuedAdult.length ? { pending: queuedAdult, note: results.length ? `Made ${results.length} picture${results.length === 1 ? '' : 's'}. ${adultNote}` : adultNote } : {}) }
 }
 
+// What each sheet character wore in a picture, for the viewer's "Outfits for
+// this image" (1.27.5; the simple pipeline never recorded it, so the viewer
+// said "No character outfit snapshot was recorded").
+function simpleSceneWardrobe(compiled) {
+  const people = ((compiled && compiled.subjects) || []).filter(subject => subject.profile && subject.profile.ref)
+  return {
+    subjects: people.map(subject => ({ ref: subject.profile.ref, name: subject.profile.anchor || subject.displayName || '' })),
+    wardrobeSnapshot: Object.fromEntries(people.map(subject => [subject.profile.ref, (subject.outfit || []).slice()])),
+  }
+}
+
 // ---------- re-parse from the image viewer ---------------------------------
 
 async function runSimpleReparse({ userId, settings, preset, messages, targetIndex, target, chatId, origin, messageId, source, overrides = {} }) {
@@ -27358,7 +27375,7 @@ async function runSimpleReparse({ userId, settings, preset, messages, targetInde
     const compiled = compileStoryImage(image, { preset, profiles, memory: working, card, prefix, anchorTags: run.anchorTags })
     working = { ...working, ...simpleRemember(working, compiled, target.id) }
     const scene = { direct: true, simple: true, anchor: image.anchor, sceneSummary: image.scene_summary, rating: image.rating,
-      aspect: image.aspect, simplePipeline: compiled.debug }
+      aspect: image.aspect, simplePipeline: compiled.debug, ...simpleSceneWardrobe(compiled) }
     const trace = compiled.debug.notes.map(note => ({ label: 'simple pipeline', status: 'applied', detail: note }))
     const result = { ok: true, anchor: image.anchor, sceneStatement: image.scene_summary, prompt: compiled.prompt,
       negativePrompt: compiled.negativePrompt, aspect: image.aspect, rating: image.rating, trace,
