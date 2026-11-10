@@ -25832,6 +25832,8 @@ CLOTHING — this is how outfits stay consistent.
 - Clothing that came off is gone: write the remaining items, or ["nude"].
 - Never invent garments the story has not given them; never borrow another
   person's clothes.
+- "no bra" is an outfit item: write it when the story says a woman wears no bra
+  under her top, and keep it, like any garment, until the story has her put one on.
 
 HAIR — kept the same way as clothes.
 - "hair" is how each person's hair is worn right now: ponytail, high ponytail,
@@ -26575,6 +26577,7 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
     if (!out.identity.length) notes.push(`${raw.name}: no sheet and the parser gave no body description — they may come out generic. Save a sheet or try again.`)
   }
   out.outfit = applyBannedToList(out.outfit, banned)
+  simpleNoBra(out, profile, remembered, banned, notes)
   if (out.outfit.some(item => SIMPLE_SHORT_BOTTOMS_RE.test(item)) &&
       out.outfit.some(item => /\b(?:thigh[- ]high|over[- ]the[- ]knee)\b/i.test(item)) &&
       !out.outfit.some(item => /\bbare thighs\b/i.test(item))) {
@@ -26601,6 +26604,32 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
   }
   simpleRearTraits(out, image, notes)
   return out
+}
+
+// ---------- no bra (1.27.4) -------------------------------------------------
+// An adult woman with no bra under her top: from the story (the parser's
+// outfit), from what was last seen, or always when her sheet says so. "no bra"
+// alone only changes a detail; "covered nipples, breasts apart" is what stops
+// the image model drawing the held-in shape it learned from clothed pictures
+// (Eric's NovelAI test, Nov 2026).
+const SIMPLE_NO_BRA_RE = /\b(?:no bra|braless|without a bra)\b/i
+const SIMPLE_BRA_RE = /\b(?:bra|bralette|bikini top|bikini|swimsuit|corset|bustier|chest binder|sarashi|bandeau)\b/i
+const SIMPLE_TOPLESS_RE = /\b(?:nude|naked|topless|no shirt|no top|bare breasts|breasts out|open shirt|shirt lift|clothes lift)\b/i
+function simpleNoBra(out, profile, remembered, banned, notes) {
+  if (out.count !== '1girl') return
+  if (!/\b(?:adult|woman|mature|lady|milf|mother)\b/i.test(String(out.phrase || '')) || /\b(?:teen|teenage|teenager|adolescent|child|kid|girlish|loli)\b/i.test(String(out.phrase || ''))) return
+  const says0 = out.outfit.some(tag => SIMPLE_NO_BRA_RE.test(tag))
+  // LS's own additions come back through memory; they are re-added below when they still apply.
+  const worn = out.outfit.filter(tag => !SIMPLE_NO_BRA_RE.test(tag) && !/^(?:covered nipples|breasts apart)$/i.test(tag))
+  const sheet = profile ? [...(profile.defaultOutfit || []), ...directAnchorFor(profile)] : []
+  const says = says0 || sheet.some(tag => SIMPLE_NO_BRA_RE.test(tag)) ||
+    ((remembered && remembered.outfit) || []).some(tag => SIMPLE_NO_BRA_RE.test(tag))
+  out.identity = out.identity.filter(tag => !SIMPLE_NO_BRA_RE.test(tag))
+  if (!says || worn.some(tag => SIMPLE_BRA_RE.test(tag) && !/\bno\b/i.test(tag))) { out.outfit = worn; return }
+  // Nothing on top: the tags are about how a top sits, so they are left out
+  // of the prompt but "no bra" stays in the outfit so it is remembered.
+  if (!worn.length || worn.some(tag => SIMPLE_TOPLESS_RE.test(tag))) { out.outfit = uniqueStrings([...worn, 'no bra']); return }
+  out.outfit = uniqueStrings([...worn, ...applyBannedToList(['no bra', 'covered nipples', 'breasts apart'], banned)])
 }
 
 // ---------- rear traits (1.27.2) -------------------------------------------

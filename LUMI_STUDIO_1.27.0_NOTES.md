@@ -18,3 +18,8 @@ Ideas taken from LumiSwarm Studio's parser prompting (Nov 2026), whose pictures 
 # 1.27.3 — Anima weights work on NovelAI
 - Sheets and style lines written with Anima's weights — `(trap:1.6)`, `(wide hips, thick thighs:1.3)` — are translated to NovelAI's form when a picture goes to NovelAI: `1.6::trap::`, `1.3::wide hips, thick thighs::`. NovelAI ignored the bracket form, so those weights did nothing there. One sheet now works for both.
 - Brackets that are part of a tag name (`ork (warhammer)`, `painting (medium)`) are left alone; `\(` escapes become plain brackets. A weight of 1 just becomes the words.
+
+# 1.27.4 — no bra
+- When an adult woman wears no bra under her top, LS sends `no bra, covered nipples, breasts apart` in every picture of her, whatever its rating. `no bra` alone only changed a detail; the other two stop the image model drawing the held-in shape it learned from clothed pictures.
+- Where it comes from: the story (the parser now writes "no bra" as an outfit item and keeps it until she puts a bra on), what was last seen in the chat, or her sheet — `no bra` in a sheet's look or default outfit applies always.
+- Left out when she wears a bra, bikini or similar, and when she has nothing on top.
