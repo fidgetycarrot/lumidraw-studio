@@ -3525,7 +3525,25 @@ function novelaiSize(width, height) {
   return { width: outW, height: outH }
 }
 
+// Anima-style weights → NovelAI's (1.27.3), so one sheet works for both:
+// "(trap:1.6)" → "1.6::trap::", "(wide hips, thick thighs:1.3)" →
+// "1.3::wide hips, thick thighs::". Brackets that are part of a tag name
+// ("ork (warhammer)", "painting (medium)") have no number and stay as they
+// are; "\(" escapes become plain brackets.
+function novelaiWeights(text) {
+  return String(text || '')
+    .replace(/\(([^():]+?)\s*:\s*(\d+(?:\.\d+)?)\s*\)/g, (all, inner, weight) => {
+      const value = Number(weight)
+      const words = inner.trim()
+      if (!words || !Number.isFinite(value)) return all
+      return Math.abs(value - 1) < 0.001 ? words : `${value}::${words}::`
+    })
+    .replace(/\\([()])/g, '$1')
+}
+
 function buildNovelaiPayload({ prompt, negativePrompt, seed, config }) {
+  prompt = novelaiWeights(prompt)
+  negativePrompt = novelaiWeights(negativePrompt)
   const model = NOVELAI_MODELS.some(m => m.id === config.model) ? config.model : NOVELAI_DEFAULT_MODEL
   const n = seed === undefined || seed === null || seed === '' ? -1 : Number(seed)
   if (n >= 0 && !Number.isSafeInteger(n)) throw new Error('Seed must be a safe whole number.')

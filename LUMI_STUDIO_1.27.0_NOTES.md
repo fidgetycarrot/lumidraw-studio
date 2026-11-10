@@ -14,3 +14,7 @@ Ideas taken from LumiSwarm Studio's parser prompting (Nov 2026), whose pictures 
 # 1.27.2 — butt traits only when they can be seen
 - A sheet's butt trait ("bubble butt", "(ass:1.3)", "round rear"…) turned people round in every picture to show it off. In Eric's test, no tag kept her facing the camera; both the tag and a plain-English phrase turned her round and looking back (the phrase also enlarged her whole lower half).
 - LS now sends such a trait only when the picture shows the person from behind or the side (from behind, side view, looking back, bent over, all fours, walking away…). From the front it is left out — it cannot be seen there anyway — and the picture's notes say so. This applies to every image app, so Anima prompts drop it in front-facing pictures too.
+
+# 1.27.3 — Anima weights work on NovelAI
+- Sheets and style lines written with Anima's weights — `(trap:1.6)`, `(wide hips, thick thighs:1.3)` — are translated to NovelAI's form when a picture goes to NovelAI: `1.6::trap::`, `1.3::wide hips, thick thighs::`. NovelAI ignored the bracket form, so those weights did nothing there. One sheet now works for both.
+- Brackets that are part of a tag name (`ork (warhammer)`, `painting (medium)`) are left alone; `\(` escapes become plain brackets. A weight of 1 just becomes the words.
