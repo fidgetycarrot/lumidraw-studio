@@ -21258,6 +21258,29 @@ if (spindle.rpcPool && typeof spindle.rpcPool.handle === 'function') {
   try { spindle.rpcPool.handle('lumicast.add', ({ requesterExtensionId }) => addFromLumiCast(requesterExtensionId), { requires: [] }) }
   catch (error) { spindle.log.warn('[lumidraw] could not offer adding characters from LumiCast: ' + (error && error.message)) }
 }
+// LumiCast's intro card asks for the style line of a chat: the quality tags and prompt prefix of the preset
+// that chat uses. LumiCast publishes {chatId, userId} at lumicast.intro.request, then reads this endpoint.
+// Read-only: nothing in Lumi Studio changes. Only LumiCast may call it.
+async function styleForLumiCast(requesterExtensionId) {
+  if (requesterExtensionId !== 'lumicast') throw new Error('Only LumiCast can read the style line this way.')
+  let request = {}
+  try { request = await spindle.rpcPool.read('lumicast.intro.request') || {} } catch (error) { /* no chat named: the default preset */ }
+  const chatId = typeof request.chatId === 'string' ? request.chatId.slice(0, 120) : ''
+  const userId = typeof request.userId === 'string' ? request.userId.slice(0, 120) : ''
+  const settings = await getSettings()
+  const presets = await getPresets()
+  const want = presetNameForChat(settings, presets, chatId)
+  const preset = storyPresetFor(presets.find(item => item && item.name === want.name), settings)
+  if (!preset) return { style: '', preset: '' }
+  let prefix = String(preset.promptPrefix || '')
+  try { prefix = await resolveMacros(prefix, userId, chatId) } catch (error) { /* the prefix as written */ }
+  const style = [String(preset.qualityTags || '').trim(), String(prefix || '').trim()].filter(Boolean).join(', ').replace(/,\s*,/g, ',')
+  return { style: style.slice(0, 2000), preset: String(preset.name || ''), source: want.source }
+}
+if (spindle.rpcPool && typeof spindle.rpcPool.handle === 'function') {
+  try { spindle.rpcPool.handle('lumicast.style', ({ requesterExtensionId }) => styleForLumiCast(requesterExtensionId), { requires: [] }) }
+  catch (error) { spindle.log.warn('[lumidraw] could not offer the style line to LumiCast: ' + (error && error.message)) }
+}
 spindle.log.info('[lumidraw] backend loaded v' + ((spindle.manifest && spindle.manifest.version) || 'unknown — no manifest'))
 
 // BEGIN COORDINATED JEV SCENE PLANNER 1.5
