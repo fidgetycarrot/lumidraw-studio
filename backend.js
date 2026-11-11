@@ -21277,6 +21277,37 @@ async function styleForLumiCast(requesterExtensionId) {
   const style = [String(preset.qualityTags || '').trim(), String(prefix || '').trim()].filter(Boolean).join(', ').replace(/,\s*,/g, ',')
   return { style: style.slice(0, 2000), preset: String(preset.name || ''), source: want.source }
 }
+// LumiCast's cast picture asks which of its people Lumi Studio already has, so they look the same there as in
+// story pictures. LumiCast publishes {names} at lumicast.cast.request, then reads this endpoint. Read-only;
+// explicit anatomy is never handed over. Only LumiCast may call it.
+async function libraryForLumiCast(requesterExtensionId) {
+  if (requesterExtensionId !== 'lumicast') throw new Error('Only LumiCast can read the library this way.')
+  let request = {}
+  try { request = await spindle.rpcPool.read('lumicast.cast.request') || {} } catch (error) { return { entries: [] } }
+  const key = value => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
+  const wanted = (Array.isArray(request.names) ? request.names : []).slice(0, 12).map(key).filter(Boolean)
+  if (!wanted.length) return { entries: [] }
+  const text = (value, max = 4000) => typeof value === 'string' ? value.slice(0, max) : ''
+  const entries = []
+  for (const [kind, list] of [['character', await getCharacters()], ['persona', await getPersonas()]]) {
+    for (const item of list) {
+      if (!item || !item.profile) continue
+      const names = [item.name, item.profile.anchor, item.profile.promptName].map(key).filter(Boolean)
+      // The full name, or a first name when that is all either side has.
+      const asked = wanted.find(want => names.some(name => name === want || name.split(' ')[0] === want || want.split(' ')[0] === name))
+      if (!asked || entries.some(entry => entry.asked === asked)) continue
+      const profile = item.profile
+      entries.push({ asked, name: text(item.name, 80), kind, sheet: {
+        countTag: text(profile.countTag, 40), subject: text(profile.subject, 200), always: text(profile.identityTags),
+        appearance: text(profile.appearanceTags), outfit: text(profile.defaultOutfitTags), moss: text(profile.mossDescription, 1500) } })
+    }
+  }
+  return { entries }
+}
+if (spindle.rpcPool && typeof spindle.rpcPool.handle === 'function') {
+  try { spindle.rpcPool.handle('lumicast.library', ({ requesterExtensionId }) => libraryForLumiCast(requesterExtensionId), { requires: [] }) }
+  catch (error) { spindle.log.warn('[lumidraw] could not offer the library to LumiCast: ' + (error && error.message)) }
+}
 if (spindle.rpcPool && typeof spindle.rpcPool.handle === 'function') {
   try { spindle.rpcPool.handle('lumicast.style', ({ requesterExtensionId }) => styleForLumiCast(requesterExtensionId), { requires: [] }) }
   catch (error) { spindle.log.warn('[lumidraw] could not offer the style line to LumiCast: ' + (error && error.message)) }
