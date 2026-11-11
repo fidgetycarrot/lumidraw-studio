@@ -1250,6 +1250,8 @@ async function migratePresetsToCasts() {
 
 // The last character sent with Tweak in LumiCast, so LumiCast's update can only land on that one. Memory only.
 let lastLumiCastSend = null
+// Characters LumiCast looked up for a cast picture, by id, so it can refine one and save it back. Memory only.
+const lumiCastLookups = new Map()
 
 async function getCharacters() {
   const value = await spindle.storage.getJson(CHARACTERS_FILE, { fallback: [] })
@@ -21187,12 +21189,14 @@ spindle.log.info('[lumidraw] spindle API surface: ' + Object.keys(spindle).join(
 // only from LumiCast, and only for the latest send; everything else in the entry stays as it was.
 async function applyFromLumiCast(requesterExtensionId) {
   if (requesterExtensionId !== 'lumicast') throw new Error('Only LumiCast can update characters this way.')
-  const sent = lastLumiCastSend
-  if (!sent) throw new Error('Lumi Studio has no record of sending this character (it may have restarted). Press Tweak in LumiCast on it again.')
   let result
   try { result = await spindle.rpcPool.read('lumicast.tweak.result') } catch (error) { throw new Error('LumiCast has not shared a sheet to save.') }
   if (!result || result.version !== 1 || !result.sheet || typeof result.sheet !== 'object') throw new Error('LumiCast sent a format this Lumi Studio does not understand. Update both extensions.')
-  if (result.id !== sent.id || result.kind !== sent.kind || Number(result.sentAt) !== sent.sentAt) throw new Error('That sheet is for a different send. Press Tweak in LumiCast on the character again.')
+  // The character must be one Lumi Studio handed to LumiCast: the latest Tweak in LumiCast, or one LumiCast
+  // looked up for a cast picture (1.27.8). The id, kind and time all have to match that hand-over.
+  const matches = entry => entry && result.id === entry.id && result.kind === entry.kind && Number(result.sentAt) === entry.sentAt
+  const sent = matches(lastLumiCastSend) ? lastLumiCastSend : matches(lumiCastLookups.get(String(result.id || ''))) ? lumiCastLookups.get(String(result.id)) : null
+  if (!sent) throw new Error(lastLumiCastSend || lumiCastLookups.size ? 'That sheet is for a different send. Load the character into LumiCast again.' : 'Lumi Studio has no record of sending this character (it may have restarted). Load it into LumiCast again.')
   if (sent.userId && result.userId && result.userId !== sent.userId) throw new Error('That sheet belongs to another Lumiverse user.')
   const text = (value, max = 4000) => typeof value === 'string' ? value.slice(0, max).trim() : ''
   const list = sent.kind === 'character' ? await getCharacters() : await getPersonas()
@@ -21278,8 +21282,9 @@ async function styleForLumiCast(requesterExtensionId) {
   return { style: style.slice(0, 2000), preset: String(preset.name || ''), source: want.source }
 }
 // LumiCast's cast picture asks which of its people Lumi Studio already has, so they look the same there as in
-// story pictures. LumiCast publishes {names} at lumicast.cast.request, then reads this endpoint. Read-only;
-// explicit anatomy is never handed over. Only LumiCast may call it.
+// story pictures. LumiCast publishes {names} at lumicast.cast.request, then reads this endpoint. Read-only.
+// Each entry carries its id and the whole sheet, so LumiCast can refine that character and save it back
+// through lumicast.apply; LumiCast keeps the anatomy field out of the picture. Only LumiCast may call it.
 async function libraryForLumiCast(requesterExtensionId) {
   if (requesterExtensionId !== 'lumicast') throw new Error('Only LumiCast can read the library this way.')
   let request = {}
@@ -21297,9 +21302,12 @@ async function libraryForLumiCast(requesterExtensionId) {
       const asked = wanted.find(want => names.some(name => name === want || name.split(' ')[0] === want || want.split(' ')[0] === name))
       if (!asked || entries.some(entry => entry.asked === asked)) continue
       const profile = item.profile
-      entries.push({ asked, name: text(item.name, 80), kind, sheet: {
+      const sentAt = Date.now()
+      lumiCastLookups.set(String(item.id), { id: String(item.id), kind, sentAt, userId: typeof request.userId === 'string' ? request.userId : '' })
+      if (lumiCastLookups.size > 40) lumiCastLookups.delete(lumiCastLookups.keys().next().value)
+      entries.push({ asked, name: text(item.name, 80), kind, id: String(item.id), sentAt, sheet: {
         countTag: text(profile.countTag, 40), subject: text(profile.subject, 200), always: text(profile.identityTags),
-        appearance: text(profile.appearanceTags), outfit: text(profile.defaultOutfitTags), moss: text(profile.mossDescription, 1500) } })
+        appearance: text(profile.appearanceTags), outfit: text(profile.defaultOutfitTags), anatomy: text(profile.anatomyTags), moss: text(profile.mossDescription, 1500) } })
     }
   }
   return { entries }
