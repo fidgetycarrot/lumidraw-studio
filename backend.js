@@ -19375,6 +19375,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (!chatId) throw new Error('Open a chat first.')
         const memory = await readSimpleCast(chatId)
         reply = ok(payload, requestId, { chatId, setting: memory.setting, updatedAt: memory.updatedAt,
+          places: Object.entries(memory.places || {}).map(([key, place]) => ({ key, ...place })).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
           people: Object.entries(memory.people).map(([key, person]) => ({ key, ...person }))
             .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)) })
         break
@@ -19960,6 +19961,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.storyUseBreakSeparators !== undefined) preset.storyUseBreakSeparators = payload.storyUseBreakSeparators === true
         // 1.26: the world this preset's chats take place in.
         if (payload.setting !== undefined) preset.setting = String(payload.setting || '').slice(0, 2000)
+        if (payload.placePictures !== undefined) { if (payload.placePictures === false) preset.placePictures = false; else delete preset.placePictures }
         // 1.20: adult pictures go to '' (this preset), '__prompt__' (prompt only) or another preset's name.
         if (payload.adultPreset !== undefined) {
           preset.adultPreset = String(payload.adultPreset || '').slice(0, 200)
@@ -25646,7 +25648,8 @@ async function readSimpleCast(chatId) {
   for (const person of Object.values(people)) {
     if (person && Array.isArray(person.outfit)) person.outfit = simpleSteadyOutfit(person.outfit)
   }
-  return { version: SIMPLE_VERSION, setting: simpleTags(value.setting || [], 12), people, updatedAt: value.updatedAt || 0 }
+  const places = value.places && typeof value.places === 'object' && !Array.isArray(value.places) ? JSON.parse(JSON.stringify(value.places)) : {}
+  return { version: SIMPLE_VERSION, setting: simpleTags(value.setting || [], 12), people, places, updatedAt: value.updatedAt || 0 }
 }
 
 async function writeSimpleCast(chatId, memory) {
@@ -25832,6 +25835,7 @@ OUTPUT:
  "scene_summary":"one plain sentence, at most 25 words: who does what to whom, using the people's names",
  "framing":["one shot tag","optional angle tag"],
  "composition":"optional single Danbooru position tag",
+ "place":{"name":"what the story calls this place, 1-5 words","looks":["6-10 tags for how the place itself always looks"]},
  "setting":["3-6 short place and lighting tags"],
  "subjects":[{
    "name":"sheet name, or the person's own name if they have no sheet",
@@ -25855,6 +25859,9 @@ CHOOSING THE MOMENT
 - Illustrate only the CURRENT PASSAGE. Earlier context tells you who people are,
   where they are and what they wear; it never supplies the moment.
 - Pick the clearest drawable beat. If the clearest beat is sexual, draw that.
+- Do not reach for the last paragraph by habit. When two beats are about
+  equally clear, take the EARLIER one, so pictures do not all land at the end
+  of the passage.
 - One instant, not a sequence. If the passage does one thing and then another
   (shoulders the door open, then hauls him down the corridor), pick one.
   "scene_summary" and every person's pose describe that same instant. Never mix
@@ -25871,6 +25878,20 @@ CHOOSING THE MOMENT
 - If a counter, desk, table, bar or doorway is between people, say so in
   "scene_summary" ("on opposite sides of the desk"); if they sit side by side
   at it, say that. Otherwise the image model puts them on the same side.
+
+THE PLACE — kept the same every time the story returns to it.
+- "place.name": the place the picture is set in, as the story names it: "the
+  Gilded Stag", "Riley's kitchen", "bridge of the Vigilant", "forest road". A
+  large thing counts when the picture is of it or aboard it: a ship, a ruin, a
+  tower. If KNOWN PLACES lists this place, use that exact name.
+- "place.looks": what is always true of how it looks: what it is built of, its
+  colours, size and shape, and two or three things that mark it out (a long
+  oak bar, a cracked stained-glass window). Never people, light, weather, time
+  of day or what is happening: those go in "setting".
+- A place in KNOWN PLACES already has its looks: leave "looks" empty and do
+  not describe it differently in "setting". Lumi Studio adds the saved looks.
+- "setting" is then only this moment: the spot within the place (corner booth,
+  doorway), the light, weather, time of day, and things in use right now.
 
 WHO IS IN THE PICTURE
 - Every person physically in the moment gets one entry in "subjects", up to the
@@ -26080,6 +26101,34 @@ function simpleOutfitLines(outfit) {
   return lines
 }
 
+// ---------- remembered places (1.29.0) -------------------------------------
+// The first picture set somewhere fixes how that place looks: what it is made
+// of, its colours and the things that mark it out. Every later picture there
+// starts from the same words, so the tavern stays the same tavern.
+const SIMPLE_PLACE_MAX = 24
+function simplePlaceKey(name) {
+  return simpleKey(String(name || '').replace(/^\s*(?:the|a|an)\s+/i, ''))
+}
+function simplePlaceFor(memory, name) {
+  const key = simplePlaceKey(name)
+  const places = (memory && memory.places) || {}
+  if (!key) return null
+  if (places[key]) return { key, ...places[key] }
+  // "the Stag" for "the Gilded Stag", or the other way round.
+  for (const [other, place] of Object.entries(places)) {
+    const a = ' ' + other + ' ', b = ' ' + key + ' '
+    if (key.length >= 4 && other.length >= 4 && (a.includes(b) || b.includes(a))) return { key: other, ...place }
+  }
+  return null
+}
+function simplePlaceLines(memory) {
+  const places = Object.values((memory && memory.places) || {}).filter(place => place && place.name && (place.looks || []).length)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 12)
+  if (!places.length) return ''
+  return ['KNOWN PLACES (already drawn; Lumi Studio adds these looks itself when the picture is set there — use the exact name):',
+    ...places.map(place => `  ${place.name}: ${place.looks.join(', ')}`)].join('\n')
+}
+
 function simpleContext(profiles, memory, card, { banned = '', fantasy = false } = {}) {
   const blocks = []
   const sheetKeys = new Set()
@@ -26126,6 +26175,7 @@ function simpleContext(profiles, memory, card, { banned = '', fantasy = false } 
     chatRoleGuidance(profiles),
     ...blocks,
     memory && memory.setting && memory.setting.length ? 'LAST KNOWN SETTING: ' + memory.setting.join(', ') : '',
+    simplePlaceLines(memory),
     cardText ? 'SCENE CARD — the story model\'s own note of where everyone is and what they are wearing at the END of the current passage. Trust it for clothes and place unless the moment you draw is earlier and the passage says otherwise:\n' + cardText : '',
     banned ? 'BANNED TAGS — never use: ' + banned : '',
     fantasy ? 'This is a fantasy setting. Non-human species are correct.' : '',
@@ -26195,8 +26245,28 @@ This picture is drawn by NovelAI, which puts each person on their own spot.
   in a doorway, a fight, a big landscape.
 `
 
+// 1.29.0: pictures of a place or a thing on its own. The story's people do
+// not have to be in every picture.
+const SCENERY_RULES = `
+PICTURES WITHOUT PEOPLE
+Not every picture needs the story's people in it.
+- When the passage ARRIVES somewhere new, or shows something for the first
+  time (a building, a ship, a landscape, a great machine, a creature), and
+  that sight is the strongest thing in the passage, draw the sight alone, the
+  way the people there see it.
+- A place or thing alone: "subjects": [] and "framing": ["scenery", plus a shot
+  such as "wide shot"]. "scene_summary" says what is seen, with no people in
+  it. Fill "place" and "setting" as usual; put more into "setting" (up to 8).
+- A creature alone: the creature is the only subject, as 1other, without the
+  story's people.
+- At most one such picture per passage. Never when the passage is mainly
+  something happening between people, and never for a place that KNOWN PLACES
+  already lists unless the passage shows it changed.
+`
+
 function buildSimpleInstruction(profiles, memory, card, options = {}) {
   const extra = [options.moss ? MOSS_SCENE_RULES.trim() : '', options.novelai ? NOVELAI_SCENE_RULES.trim() : '',
+    options.scenery ? SCENERY_RULES.trim() : '',
     options.setting ? settingRules(options.setting) : ''].filter(Boolean).join('\n\n')
   return [SIMPLE_RULES.trim(), extra, '', simpleCountRule(options.maxImages), simpleSubjectRule(options.maxSubjects), '',
     simpleContext(profiles, memory, card, options)].filter((part, index) => index !== 1 || part).join('\n')
@@ -26238,6 +26308,11 @@ const BOORU_KNOWN_POSTS = 100           // fewer pictures than this: describe it
 const BOORU_CACHE_FILE = 'booru-names.json'
 const BOORU_CACHE_DAYS = 30
 const BOORU_GEL_KEY = 'lumidraw_gelbooru_credentials'
+
+// Pictures of places and things without people: on unless the preset says no.
+function presetPlacePictures(preset) {
+  return !(preset && preset.placePictures === false)
+}
 
 function presetSetting(preset) {
   return String(preset && preset.setting || '').trim().slice(0, 2000)
@@ -26410,7 +26485,7 @@ function simplePositionParts(value) {
   return { position: String(value || '').trim(), back: text === 'background' }
 }
 
-function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
+function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2, allowNoPeople = false) {
   const text = extractParserText(raw)
   let parsed = null
   try { parsed = JSON.parse(sanitizeJsonText(text)) } catch { /* fall through */ }
@@ -26461,7 +26536,12 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
         mossPlace: mossPlacePhrase(s.moss_place),
         mossAction: mossFieldText(s.moss_action),
       }))
-    if (!subjects.length) continue
+    const placeIn = item.place && typeof item.place === 'object' ? item.place : {}
+    const place = { name: String(placeIn.name || '').replace(/\s+/g, ' ').trim().slice(0, 60), looks: simpleTags(placeIn.looks, 10) }
+    // A picture of a place on its own (1.29.0): no people, but it must say where.
+    const noPeople = !subjects.length && Array.isArray(item.subjects)
+    if (noPeople && !(allowNoPeople && (place.name || simpleTags(item.setting, 8).length) && String(item.scene_summary || '').trim())) continue
+    if (!subjects.length && !noPeople) continue
     // 1.8-shape replies carry sex only in prose such as "the tall woman on the left".
     if (!Array.isArray(item.subjects)) {
       const clause = String(item.spatial_relation || '') + ' ' + String(item.group_scene || '')
@@ -26482,6 +26562,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
       framing: simpleTags(item.framing, 3),
       composition: SIMPLE_COMPOSITIONS.includes(String(item.composition || '').trim().toLowerCase()) ? String(item.composition).trim().toLowerCase() : '',
       setting: simpleTags(item.setting, 8),
+      place,
       names: simpleNamedThings(item.names),
       moss: { camera: mossFieldText(item.moss_camera), setting: mossFieldText(item.moss_setting), moment: mossFieldText(item.moss_moment) },
       subjects,
@@ -26494,7 +26575,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2) {
           target: String(x.target), targetPart: String(x.target_part || '').trim() })).slice(0, 3),
     })
   }
-  if (!images.length) return { images: [], error: 'The parser found no one to draw in this passage.' }
+  if (!images.length) return { images: [], error: allowNoPeople ? 'The parser found nothing to draw in this passage.' : 'The parser found no one to draw in this passage.' }
   return { images }
 }
 
@@ -26966,6 +27047,21 @@ function compileSimpleImage(image, ctx) {
   if (!setting.length && (ctx.anchorTags || []).length) { setting = ctx.anchorTags.slice(); settingSource = 'preset scene anchor' }
   if (!setting.length) settingSource = 'unknown'
   setting = simpleTags(setting, 8)
+  // The place's own look: saved the first time, reused after (1.29.0).
+  let placeUsed = null
+  const placeName = image.place && image.place.name
+  if (placeName) {
+    const known = simplePlaceFor(memory, placeName)
+    const looks = applyBannedToList(known ? known.looks : (image.place.looks || []), banned)
+    if (looks.length) {
+      const has = new Set(looks.map(normalizeIdentityText))
+      setting = uniqueStrings([...looks, ...setting.filter(tag => !has.has(normalizeIdentityText(tag)))]).slice(0, 14)
+      placeUsed = { key: known ? known.key : simplePlaceKey(placeName), name: known ? known.name : placeName, looks, first: !known }
+      notes.push(known ? `Place “${known.name}”: drawn before, so its saved look was used (${looks.join(', ')}).`
+        : `Place “${placeName}”: first picture here. Its look is now remembered for this chat (${looks.join(', ')}).`)
+      if (settingSource === 'unknown') settingSource = 'remembered place'
+    }
+  }
   // Mirrors give the model a second copy of everyone to work with; in the
   // elevator it had Riley kiss his own reflection. Keep them only when the
   // moment is about a mirror.
@@ -27059,6 +27155,9 @@ function compileSimpleImage(image, ctx) {
     positive.push('yaoi')
     notes.push('Added “yaoi”: a sexual scene with only men in it.')
   }
+  // Nobody in the picture, or only creatures: say so, or the model adds people.
+  if (!subjects.length) { positive.push('no humans', 'scenery'); notes.push('A picture of the place on its own: no people.') }
+  else if (subjects.every(subject => subject.count === '1other')) positive.push('no humans')
   if (['nsfw', 'explicit'].includes(image.rating)) {
     negatives.push('child', 'underage', 'teenager', 'preteen', 'toddler', 'shota', 'loli')
     if (shownAnatomy.length) {
@@ -27100,7 +27199,7 @@ function compileSimpleImage(image, ctx) {
     parsed: JSON.parse(JSON.stringify(image)),
   }
   // parts: the same pieces, for other prompt builders (MOSS). Not used here.
-  return { prompt, negativePrompt, subjects, setting, debug, parts: { summary, framing, actionLines, headerLine } }
+  return { prompt, negativePrompt, subjects, setting, place: placeUsed, debug, parts: { summary, framing, actionLines, headerLine } }
 }
 
 // What one finished image teaches the chat's memory. Saved people: outfit and
@@ -27155,8 +27254,18 @@ function simpleRelationSentence(actor, action, target, part) {
 }
 
 function simpleRemember(memory, compiled, messageId) {
-  const next = { setting: memory.setting.slice(), people: JSON.parse(JSON.stringify(memory.people || {})) }
+  const next = { setting: memory.setting.slice(), people: JSON.parse(JSON.stringify(memory.people || {})),
+    places: JSON.parse(JSON.stringify(memory.places || {})) }
   if (compiled.debug.setting.source === 'story (parser)' && compiled.setting.length) next.setting = compiled.setting.slice()
+  if (compiled.place && compiled.place.key) {
+    const before = next.places[compiled.place.key]
+    next.places[compiled.place.key] = before ? { ...before, updatedAt: Date.now() }
+      : { name: compiled.place.name, looks: compiled.place.looks.slice(), updatedAt: Date.now(), messageId: String(messageId || '') }
+    const keys = Object.keys(next.places)
+    if (keys.length > SIMPLE_PLACE_MAX) {
+      for (const key of keys.sort((a, b) => (next.places[a].updatedAt || 0) - (next.places[b].updatedAt || 0)).slice(0, keys.length - SIMPLE_PLACE_MAX)) delete next.places[key]
+    }
+  }
   for (const subject of compiled.subjects) {
     const before = next.people[subject.key] || {}
     const entry = { ...before, name: subject.displayName, ref: subject.profile ? String(subject.profile.ref || '') : '',
@@ -27207,14 +27316,15 @@ async function simpleParse({ userId, settings, preset, messages, targetIndex, ta
   let instruction = buildSimpleInstruction(profilesForPrompt, memory, card, {
     maxImages: settings.maxImages || 2, maxSubjects: settings.maxSubjects || 2,
     banned: preset.bannedTags || '', fantasy: !!profiles.fantasySetting,
-    moss: mossFields || presetPromptStyle(preset) === 'moss', novelai: novelaiFields || presetUsesNovelai(preset), setting: presetSetting(preset) })
+    moss: mossFields || presetPromptStyle(preset) === 'moss', novelai: novelaiFields || presetUsesNovelai(preset), setting: presetSetting(preset),
+    scenery: presetPlacePictures(preset) })
   if (retry) {
     instruction += `\n\nRETRY ${retry.attempt}: the user rejected this prompt. Pick a meaningfully different moment or framing if the passage supports one:\n${retry.previousPrompt.slice(0, 1500)}`
   }
   const report = {}
   const startedAt = Date.now()
   const raw = await quietLLM(instruction, parserInput.input, settings, userId, true, scan, report)
-  const parsed = parseSimpleImages(raw, settings.maxImages || 2, settings.maxSubjects || 2)
+  const parsed = parseSimpleImages(raw, settings.maxImages || 2, settings.maxSubjects || 2, presetPlacePictures(preset))
   const images = orderScenesByPassage(parsed.images, parserInput.currentPassage)
   return { profiles, memory, card, anchorTags, parserInput, instruction, raw, parsed, images, report, parserMs: Date.now() - startedAt }
 }

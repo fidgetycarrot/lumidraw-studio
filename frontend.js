@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.28.0'
+  const EXTENSION_VERSION = '1.29.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1467,7 +1467,7 @@ gym = tank top, shorts | aliases: the gym"></textarea></div>
             <span class="ld-label" style="margin-top:7px">Adult pictures (NSFW and explicit)</span><select class="ld-ed-adult-preset"><option value="">Draw with this preset</option><option value="__prompt__">Prompt only (copy into Draw Things+)</option></select>
             <div class="ld-hint">Choose another preset to draw them with, such as a Draw Things cloud MOSS preset. Everything else is drawn with this preset. Prompt only puts their prompt in the clipboard sheet to make in Draw Things+ and paste back.</div>
             <span class="ld-label" style="margin-top:9px">Setting</span><textarea class="ld-ed-setting" rows="2" placeholder="e.g. Warhammer 40K — or leave empty for your own worlds"></textarea>
-            <div class="ld-hint">The world this preset’s chats take place in. The parser draws things the way this setting does and lists their names; LS checks each name on Danbooru and sends the name when the image model knows it, or a plain description when it does not. You can add short notes, e.g. “Tyranids: living chitin, no armour.”</div>
+            <div class="ld-hint">The world this preset’s chats take place in. The parser draws things the way this setting does and lists their names; LS checks each name on Danbooru and sends the name when the image model knows it, or a plain description when it does not. You can add short notes, e.g. “Tyranids: living chitin, no armour.”</div><label class="ld-check" style="margin-top:7px"><input type="checkbox" class="ld-ed-place-pictures" /> Pictures of places and things on their own</label><div class="ld-hint">When the story arrives somewhere new or shows something for the first time, the picture can be of that alone, with no people in it.</div>
             <span class="ld-label" style="margin-top:9px">LoRAs</span>
             <div class="ld-ed-loras" style="display:flex;flex-direction:column;gap:5px"></div>
             <button class="ld-btn ld-compact" data-act="ed-addlora" style="margin-top:5px">＋ LoRA</button>
@@ -2237,7 +2237,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const memoryBox = make('div', 'ld-simple-memory-box')
     memoryBox.style.marginTop = '10px'
     memoryBox.appendChild(make('div', 'ld-label', 'What Lumi Studio remembers in this chat'))
-    addHelp(memoryBox, 'Looks of people without a sheet, everyone’s current clothes, and the last place. Updated after each picture.')
+    addHelp(memoryBox, 'Looks of people without a sheet, everyone’s current clothes, and how each place looks. Updated after each picture.')
     const simpleList = make('div', 'ld-help ld-simple-memory')
     simpleList.style.whiteSpace = 'pre-wrap'
     simpleList.style.marginTop = '6px'
@@ -2252,7 +2252,12 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       try {
         const got = await call('simple_memory_get', { chatId }, 15000)
         const lines = []
-        if ((got.setting || []).length) lines.push('Place: ' + got.setting.join(', '))
+        if ((got.setting || []).length) lines.push('Last place: ' + got.setting.join(', '))
+        for (const place of got.places || []) {
+          lines.push('')
+          lines.push(place.name + ' (place)')
+          lines.push('  Looks: ' + (place.looks || []).join(', '))
+        }
         for (const person of got.people || []) {
           lines.push('')
           lines.push(person.name + (person.ref ? ' (saved sheet)' : ' (no sheet)'))
@@ -2283,7 +2288,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     memoryBox.appendChild(inline(simpleRefresh, simpleForget))
     memoryBox.appendChild(simpleStatus)
     memoryBox.appendChild(simpleList)
-    addHelp(memoryBox, 'If someone without a sheet came out wrong, press Forget this chat and make the picture again.')
+    addHelp(memoryBox, 'If someone without a sheet, or a place, came out wrong, press Forget this chat and make the picture again.')
     memoryDrawer.body.appendChild(memoryBox)
     castCard.appendChild(memoryDrawer.el)
     const storyMainTab = $('.ld-main-tab[data-tab="story"]')
@@ -9030,6 +9035,7 @@ ${entry.prompt || ''}`.trim()
     $('.ld-ed-w').value = c.width || ''
     if ($('.ld-ed-smart-size')) $('.ld-ed-smart-size').checked = !!(p && p.smartSize)
     if ($('.ld-ed-setting')) $('.ld-ed-setting').value = p && p.setting ? p.setting : ''
+    if ($('.ld-ed-place-pictures')) $('.ld-ed-place-pictures').checked = !(p && p.placePictures === false)
     const adultPick = $('.ld-ed-adult-preset')
     if (adultPick) {
       const current = p ? (p.adultPreset !== undefined ? String(p.adultPreset || '') : (p.adultPromptOnly ? '__prompt__' : '')) : ''
@@ -9633,6 +9639,7 @@ ${entry.prompt || ''}`.trim()
         ...($('.ld-ed-smart-size') ? { smartSize: $('.ld-ed-smart-size').checked } : {}),
         ...($('.ld-ed-adult-preset') ? { adultPreset: $('.ld-ed-adult-preset').value } : {}),
         ...($('.ld-ed-setting') ? { setting: $('.ld-ed-setting').value.trim() } : {}),
+        ...($('.ld-ed-place-pictures') ? { placePictures: $('.ld-ed-place-pictures').checked } : {}),
         storyQualityTags: $('.ld-ed-quality').value,
         storyNegativePrompt: $('.ld-ed-negative') ? $('.ld-ed-negative').value : '',
         storyUseBreakSeparators: $('.ld-ed-break') ? $('.ld-ed-break').checked : false,
