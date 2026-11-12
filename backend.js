@@ -3413,6 +3413,14 @@ async function generateDtCloudImages(settings, payload, progress, context = {}) 
 // Spots go to NovelAI only when every person has one; otherwise NovelAI
 // places them itself (its "AI's Choice").
 //
+// 1.28.0: that is now only for presets with separate Character boxes turned
+// on. By default the people are written with "|" between them, in one prompt:
+//
+//   painting (medium), ..., 1girl, 1boy, kitchen, night
+//   From left to right: the woman with black hair, the man with brown hair.
+//   | 1girl, adult woman, black hair, ponytail, sitting on stool
+//   | 1boy, adult man, apron, source#pour coffee
+//
 // The normal endpoint answers with a zip file, which Lumiverse's network proxy
 // will not pass to an extension (it only hands over pictures, sound and text).
 // The streaming endpoint sends the finished picture as base64 text instead.
@@ -3554,7 +3562,7 @@ function buildNovelaiPayload({ prompt, negativePrompt, seed, config }) {
   // box). The boxes stay available per preset.
   const boxes = config.novelaiBoxes === true
   const split = boxes ? splitNovelaiPrompt(prompt)
-    : { main: String(prompt || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).join('\n'), characters: [] }
+    : { main: String(prompt || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).join('\n').replace(/\n\|/g, ' |'), characters: [] }
   if (!split.main && !split.characters.length) throw new Error('The NovelAI prompt is empty.')
   const max = /diffusion-5/.test(model) ? 22 : 6
   const characters = split.characters.slice(0, max)
@@ -25838,6 +25846,11 @@ WHO IS IN THE PICTURE
   with anatomy "futanari, penis"), hair colour and length, eye colour, skin,
   build, height, species traits (pointy ears, horns, tail), notable marks.
   6-12 real Danbooru tags. Use 1other only for creatures that are not human-like.
+  Hair colour, hair length, eye colour and build are REQUIRED for a human-like
+  person. When the story does not give one (a passing bard, a guard, a
+  barmaid), choose it yourself: plain, fitting the setting, and different from
+  the other people in the picture. A person with no hair colour of their own
+  borrows their neighbour's.
 - "anatomy" is only for people without a sheet and only for what the story
   establishes (penis, futanari, testicles, pussy, large breasts belongs in appearance).
 - "show_anatomy" is true only when that person's genitals are visible in this
@@ -26635,6 +26648,41 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
   return out
 }
 
+// ---------- people without a sheet get a full set of features (1.28.0) ------
+// A background bard with no hair in his tags came out with the elf's silver
+// hair (Nov 2026). The parser is told to choose hair colour, hair length and
+// eye colour when the story gives none; this fills whatever it still left out,
+// with something nobody else in the picture has. It is remembered with the
+// rest of their look, so they stay the same person.
+const SIMPLE_HAIR_COLOUR_RE = /\b(?:black|brown|blond|blonde|red|white|silver|gr[ae]y|pink|blue|green|purple|orange|auburn|ginger|platinum|golden|gold|dark|light|honey|chestnut|copper|lavender|aqua|sandy|strawberry|raven|multicolou?red|two-tone|streaked|gradient)\b[\w\s-]*\bhair\b|\bbald\b|\b(?:brunette|redhead)\b/i
+const SIMPLE_HAIR_LENGTH_RE = /\b(?:very long|long|short|medium|shoulder-length|absurdly long)\b[\w\s-]*\bhair\b|\b(?:bald|buzz cut|bob cut|pixie cut|crew cut|undercut|shaved head)\b/i
+const SIMPLE_EYE_COLOUR_RE = /\b(?:black|brown|blue|green|gr[ae]y|red|purple|violet|yellow|gold|golden|amber|hazel|pink|orange|aqua|silver|white|dark|heterochromia)\b[\w\s-]*\beyes\b/i
+const SIMPLE_FILL_HAIR = ['brown hair', 'black hair', 'blonde hair', 'red hair', 'dark brown hair', 'grey hair']
+const SIMPLE_FILL_LENGTH = ['short hair', 'medium hair', 'long hair']
+const SIMPLE_FILL_EYES = ['brown eyes', 'blue eyes', 'green eyes', 'grey eyes']
+function simpleFillFeatures(subjects, notes) {
+  const hash = text => { let h = 7; for (const ch of String(text || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h }
+  for (const subject of subjects) {
+    if (subject.profile || subject.count === '1other') continue
+    const others = subjects.filter(item => item !== subject).flatMap(item => item.identity || []).join(', ').toLowerCase()
+    const seed = hash(subject.displayName)
+    const pick = (list, salt) => {
+      const free = list.filter(tag => !others.includes(tag.split(' ')[0]))
+      const from = free.length ? free : list
+      return from[(seed + salt) % from.length]
+    }
+    const own = subject.identity
+    const added = []
+    if (!own.some(tag => SIMPLE_HAIR_COLOUR_RE.test(tag))) added.push(pick(SIMPLE_FILL_HAIR, 0))
+    if (!own.some(tag => SIMPLE_HAIR_LENGTH_RE.test(tag)) && !added.includes('bald')) added.push(SIMPLE_FILL_LENGTH[(seed + 1) % SIMPLE_FILL_LENGTH.length])
+    if (!own.some(tag => SIMPLE_EYE_COLOUR_RE.test(tag))) added.push(pick(SIMPLE_FILL_EYES, 2))
+    if (!added.length) continue
+    subject.identity = uniqueStrings([...added, ...own])
+    subject.filledFeatures = added
+    notes.push(`${subject.displayName} has no sheet and the story gave no ${added.map(tag => tag.split(' ').slice(1).join(' ') === 'eyes' ? 'eye colour' : /^(?:short|medium|long)/.test(tag) ? 'hair length' : 'hair colour').join(', ')}: chose “${added.join(', ')}”, and it is remembered for this chat.`)
+  }
+}
+
 // ---------- no bra (1.27.4) -------------------------------------------------
 // An adult woman with no bra under her top: from the story (the parser's
 // outfit), from what was last seen, or always when her sheet says so. "no bra"
@@ -26807,6 +26855,8 @@ function compileSimpleImage(image, ctx) {
   const notes = []
   const total = image.subjects.length
   const subjects = image.subjects.map((raw, index) => simpleResolveSubject(raw, index, total, image, ctx, notes))
+
+  simpleFillFeatures(subjects, notes)
 
   // Two people must never share one label.
   const used = new Map()
@@ -27080,7 +27130,7 @@ function simpleRemember(memory, compiled, messageId) {
     if ((subject.hair || []).length) entry.hair = subject.hair.slice()
     if (!subject.profile) {
       // The hairstyle is remembered on its own, so it can change.
-      if (!(before.appearance || []).length && subject.identity.length) entry.appearance = subject.identity.filter(tag => !simpleIsHairstyle(tag))
+      if ((!(before.appearance || []).length || (subject.filledFeatures || []).length) && subject.identity.length) entry.appearance = subject.identity.filter(tag => !simpleIsHairstyle(tag))
       // Anatomy added only to fit this picture's act is not remembered as theirs.
       const ownAnatomy = subject.anatomy.filter(tag => !(subject.addedAnatomy || []).includes(tag))
       if (!(before.anatomy || []).length && ownAnatomy.length) entry.anatomy = ownAnatomy
@@ -28260,12 +28310,20 @@ function compileNovelaiImage(image, ctx) {
   const total = subjects.length
   // Names mean nothing to NovelAI, and the scene sentence is in the main
   // prompt, away from the Character lines. Name people by what they are.
-  const short = subject => String(subject.phrase || NOVELAI_COUNT_WORD[subject.count] || 'person').replace(/^(?:adult|mature|middle-aged|young adult)\s+/i, '')
+  const pipes = !(ctx.preset && ctx.preset.config && ctx.preset.config.novelaiBoxes === true)
+  // "the man on the left" works against a feminine character: he is a femboy.
+  const feminine = subject => subject.count === '1boy' && /\b(?:trap|otoko ?no ?ko|otokonoko|femboy|feminine (?:male|boy)|girly boy)\b/i.test(subject.identity.join(', '))
+  const short = subject => {
+    const word = String(subject.phrase || NOVELAI_COUNT_WORD[subject.count] || 'person').replace(/^(?:adult|mature|middle-aged|young adult)\s+/i, '')
+    return pipes && feminine(subject) ? word.replace(/\b(?:man|male|boy|guy)\b/i, 'femboy') : word
+  }
   const shorts = subjects.map(short)
   // Every way the story may name someone: full name, sheet name, label, and
   // the first name alone ("Lauren" for Lauren Vance, Nov 2026), when no one
   // else shares it.
-  const firstNames = subjects.map(subject => String(subject.displayName || subject.raw && subject.raw.name || '').trim().split(/\s+/)[0] || '')
+  // Not for "the bard" or "a guard": "the" is not a name.
+  const firstNames = subjects.map(subject => (String(subject.displayName || subject.raw && subject.raw.name || '').trim().split(/\s+/)[0] || '')
+    .replace(/^(?:the|a|an|old|young|big|little|lady|lord|sir|miss|mister|captain|doctor|father|sister|brother|mother)$/i, ''))
   const formsOf = (subject, index) => uniqueStrings([subject.label, subject.name, subject.raw && subject.raw.name, subject.displayName,
     firstNames[index].length >= 3 && firstNames.filter(name => name.toLowerCase() === firstNames[index].toLowerCase()).length === 1 ? firstNames[index] : '']
     .filter(Boolean)).sort((a, b) => b.length - a.length)
@@ -28274,7 +28332,9 @@ function compileNovelaiImage(image, ctx) {
   subjects.forEach((subject, index) => {
     const twin = shorts.filter(word => word === shorts[index]).length > 1
     const spot = novelaiSpotWords(subject, total)
-    const call = 'the ' + shorts[index] + (twin && spot ? ' ' + directGroupPositionPhrase(spot.split(',')[0]) : '')
+    const across = spot ? spot.split(',')[0].trim() : ''
+    const where = across ? ' ' + directGroupPositionPhrase(across) + (/\bback\b/.test(spot) ? ', further back' : '') : ''
+    const call = 'the ' + shorts[index] + (twin && where ? where : '')
     for (const form of formsOf(subject, index)) summary = summary.replace(nameRe(form), call)
   })
   summary = upperFirst(summary.replace(/\bthe the\b/gi, 'the').trim())
@@ -28306,16 +28366,32 @@ function compileNovelaiImage(image, ctx) {
     tagsFor.get(target).push('target#' + tag)
   }
 
-  const lines = subjects.map(subject => {
+  // 1.28.0: people are separated with "|" inside the one prompt, listed from
+  // left to right, with their places said only in the scene sentence. That is
+  // what a good four-person website picture turned out to be (its file showed
+  // one prompt, no character boxes, positions off): the "|" keeps one person's
+  // tags off the next, where "Character (left):" was read as plain words and
+  // a warrior's build and an elf's hair landed on their neighbours. Presets
+  // with "separate Character boxes" on keep the old Character lines.
+  const boxes = !!(ctx.preset && ctx.preset.config && ctx.preset.config.novelaiBoxes === true)
+  const lines = subjects.map((subject, index) => {
     const spot = novelaiSpotWords(subject, total)
-    const tags = uniqueStrings([NOVELAI_COUNT_WORD[subject.count] || '', subject.phrase, ...subject.identity, ...(subject.shownAnatomy || []),
+    const phrase = !boxes && feminine(subject) ? String(subject.phrase || '').replace(/\b(?:man|male|boy|guy)\b/i, 'femboy') : subject.phrase
+    const tags = uniqueStrings([boxes ? NOVELAI_COUNT_WORD[subject.count] || '' : subject.count, phrase, ...subject.identity, ...(subject.shownAnatomy || []),
       ...unnamed([...subject.outfit, ...subject.pose, ...subject.expression], subject), ...tagsFor.get(subject)].filter(Boolean))
-    return { subject, spot, text: `Character${spot ? ' (' + spot + ')' : ''}: ${tags.join(', ')}` }
+    return { subject, index, spot, text: boxes ? `Character${spot ? ' (' + spot + ')' : ''}: ${tags.join(', ')}` : '| ' + tags.join(', ') }
   })
   const spotted = lines.filter(line => line.spot).length
+  if (!boxes && total >= 2 && spotted === total) {
+    const rank = line => {
+      const given = String(line.subject.raw && line.subject.raw.position || '').trim().toLowerCase().split(/[\s,]+/)[0]
+      return ({ left: 0, 'center-left': 1, center: 2, 'center-right': 3, right: 4 })[given] ?? 2
+    }
+    lines.sort((a, b) => rank(a) - rank(b) || a.index - b.index)
+  }
   if (total >= 2) {
-    if (spotted === total) notes.push('Spots: ' + lines.map(line => `${line.subject.displayName} ${line.spot}`).join('; ') + '.')
-    else notes.push('Spots: NovelAI chooses where everyone goes' + (spotted ? ' (the parser placed only some of them).' : ' (the parser did not place them).'))
+    if (spotted === total) notes.push((boxes ? 'Spots: ' : 'Listed left to right: ') + lines.map(line => `${line.subject.displayName} ${line.spot}`).join('; ') + '.')
+    else notes.push((boxes ? 'Spots: NovelAI chooses where everyone goes' : 'Places: NovelAI chooses where everyone goes') + (spotted ? ' (the parser placed only some of them).' : ' (the parser did not place them).'))
   }
   // NovelAI reads "nsfw" for adult pictures; Anima's other rating words mean
   // nothing to it.
@@ -28325,8 +28401,20 @@ function compileNovelaiImage(image, ctx) {
   if (adult) header.push('nsfw')
   const main = [header.join(', '), [...compiled.parts.framing, ...compiled.setting].join(', '), summary ? summary + '.' : '']
     .map(part => String(part || '').trim()).filter(Boolean)
+  // With "|" nothing else says where people are, so one plain sentence does:
+  // "From left to right: the femboy with honey brown hair, the man with dark
+  // hair, the elf femboy with silver-blonde hair." Hair tells them apart.
+  if (!boxes && total >= 2 && spotted === total) {
+    const named = lines.map(line => {
+      const hair = (line.subject.identity.find(tag => SIMPLE_HAIR_COLOUR_RE.test(tag) && /\bhair\b/i.test(tag)) || '')
+        .replace(/\b(?:very long|long|short|medium|shoulder-length|messy|curly|wavy|straight|spiky)\b\s*/gi, '').trim()
+      return 'the ' + shorts[line.index] + (hair ? ' with ' + hair : '') + (/\bback\b/.test(line.spot) ? ' (further back)' : '')
+    })
+    main.push('From left to right: ' + named.join(', ') + '.')
+  }
   const prompt = [...main, ...lines.map(line => line.text)].join('\n')
-  compiled.debug.notes.unshift('Written for NovelAI: main prompt plus one Character line per person.')
+  compiled.debug.notes.unshift(boxes ? 'Written for NovelAI: main prompt plus one Character line per person.'
+    : 'Written for NovelAI: one prompt, with “|” between people.')
   return { ...compiled, prompt }
 }
 // END MOSS IMAGE PROMPTS
