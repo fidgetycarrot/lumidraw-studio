@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.29.3'
+  const EXTENSION_VERSION = '1.30.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -7299,7 +7299,7 @@ ${entry.prompt || ''}`.trim()
       .replace(/[\u2010-\u2015\u2212]/g, '-')
       .replace(/\u2026/g, '...')
       .replace(/[*_~`]+/g, '')
-      .replace(/[\u00a0\u2007\u202f]/g, ' ')
+      .replace(/[\u00a0\u2007\u202f\u2800]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
       .toLowerCase()

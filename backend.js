@@ -4785,8 +4785,35 @@ async function syncWardrobeFromLatestPassage(userId, chatId, preset, settings) {
   }
 }
 
+// ---------- the story's own machinery (1.30.0) -----------------------------
+// Some narrator presets end every reply with a long hidden block of their own
+// bookkeeping (<internal_states>: map, timeline, memories, agendas), wrap status
+// panels in GFX comments, and write U+2800 (a blank braille cell) for every
+// space. A Nov 2026 report had 4,200 characters of story followed by 12,300 of
+// bookkeeping. The passage is clipped to its LAST 6,000 characters, so the
+// parser was sent bookkeeping only and not one word of the reply: it drew from
+// the block's summary lines, anchored the picture to them (which put it at the
+// end of the reply), and the earlier messages it was given were the same.
+// None of that is story. It is removed before the parser sees the reply; the
+// block's place, time and weather are kept as one short note.
+const STORY_MACHINERY_BLOCK_RE = /<(internal_states?|hidden_states?|state_tracker|world_state|story_state|scene_state|scratchpad)\b[^>]*>[\s\S]*?(?:<\/\1>|$)/gi
+function stripStoryMachinery(text) {
+  let value = String(text || '').replace(/\u2800/g, ' ')
+  const notes = {}
+  value = value.replace(STORY_MACHINERY_BLOCK_RE, block => {
+    for (const [key, label] of [['loc', 'Location'], ['time', 'Time'], ['date', 'Date'], ['weather', 'Weather']]) {
+      const found = new RegExp('<' + key + '>([^<]{1,160})</' + key + '>', 'i').exec(block)
+      if (found && !notes[label]) notes[label] = found[1].replace(/\s+/g, ' ').trim()
+    }
+    return ' '
+  })
+  value = value.replace(/<!--\s*GFX_START\s*-->[\s\S]*?(?:<!--\s*GFX_END\s*-->|$)/gi, ' ').replace(/<!--[\s\S]*?-->/g, ' ')
+  return { text: value, notes: Object.entries(notes).map(([label, line]) => label + ': ' + line) }
+}
+
 function buildAnimaParserInput(messages, targetIndex, target, settings, sceneState = null) {
-  const currentPassage = clipParserPassage(target.content)
+  const story = stripStoryMachinery(target.content)
+  const currentPassage = clipParserPassage(story.text)
   const contextCount = Math.max(0, Math.min(4, Number(settings.parserContextMessages) || 0))
   const previous = []
   if (contextCount > 0 && Number.isInteger(targetIndex) && targetIndex > 0) {
@@ -4823,7 +4850,7 @@ function buildAnimaParserInput(messages, targetIndex, target, settings, sceneSta
       if (storyMessages >= contextCount) break
       const bits = messageBits(messages[i])
       if (!bits.contentKey || typeof bits.content !== 'string') continue
-      const cleanAll = cleanParserMessageText(bits.content)
+      const cleanAll = cleanParserMessageText(stripStoryMachinery(bits.content).text)
       if (!cleanAll) continue
       const clean = cleanAll.slice(-Math.min(perMessageChars, remainingChars))
       if (!clean) continue
@@ -4891,6 +4918,7 @@ function buildAnimaParserInput(messages, targetIndex, target, settings, sceneSta
   if (ledgerText) {
     sections.push('----- LATEST LOOM LEDGER — CONTINUITY REFERENCE ONLY -----\nTreat this as state/continuity evidence for attire, accessories, location, and status. Do not illustrate the ledger itself. Do not copy an older action from it. Current passage details override it.\n\n' + ledgerText)
   }
+  if (story.notes.length) sections.push("----- THE STORY'S OWN NOTES FOR THIS PASSAGE -----\n" + story.notes.join('\n'))
   const trackerContext = simTrackerContext(sceneState && sceneState.simTracker)
   if (trackerContext) sections.push('----- SHARED STORY REFERENCE -----\n' + trackerContext)
   sections.push('----- CURRENT PASSAGE — ILLUSTRATE ONLY THIS SECTION -----\nAll image anchors and depicted actions must come from this section.\n\n' + currentPassage)
@@ -25900,17 +25928,14 @@ WHO IS IN THE PICTURE
   "subject", "appearance" and "anatomy" empty — Lumi Studio adds them from the sheet.
 - For a person WITHOUT a sheet you MUST fill "count", "subject" and "appearance",
   because nothing else will describe their body. If a REMEMBERED PERSON entry
-  exists for them, copy its count, subject, appearance and anatomy exactly so they
-  look the same in every picture. Otherwise build them from everything the story
-  has said: sex (1girl for a woman, 1boy for a man; a woman with a penis is 1girl
-  with anatomy "futanari, penis"), hair colour and length, eye colour, skin,
-  build, height, species traits (pointy ears, horns, tail), notable marks.
-  6-12 real Danbooru tags. Use 1other only for creatures that are not human-like.
-  Hair colour, hair length, eye colour and build are REQUIRED for a human-like
-  person. When the story does not give one (a passing bard, a guard, a
-  barmaid), choose it yourself: plain, fitting the setting, and different from
-  the other people in the picture. A person with no hair colour of their own
-  borrows their neighbour's.
+  exists for them, copy its count, subject, appearance and anatomy exactly.
+  Otherwise build them from what the story has said, in 6-12 real Danbooru
+  tags: sex (1girl for a woman, 1boy for a man; a woman with a penis is 1girl
+  with anatomy "futanari, penis"), skin, height, species traits (pointy ears,
+  horns, tail), notable marks, and ALWAYS hair colour, hair length, eye colour
+  and build. When the story does not give one of those four, choose it
+  yourself: plain, fitting the setting, and different from the others in the
+  picture. Use 1other only for creatures that are not human-like.
 - "anatomy" is only for people without a sheet and only for what the story
   establishes (penis, futanari, testicles, pussy, large breasts belongs in appearance).
 - "show_anatomy" is true only when that person's genitals are visible in this
@@ -25950,43 +25975,31 @@ POSE AND EXPRESSION
 - "pose": 2-5 tags for that person alone — standing, kneeling, leaning forward,
   arms around neck, head tilted back, arched back, hand on hip. All of them must
   be true at the same instant.
-- Avoid stiff, frozen mannequin poses: include dynamic body language, weight shift,
-  and physical momentum when the passage supports it (e.g., "leaning in closely",
-  "arching back", "gripping sheets", "shoulders hunched", "striding forward",
-  "head thrown back").
-- Never write vague "hand on weapon" when the character wears more than one weapon
-  (that causes the image model to fuse a gun and sword into one hybrid weapon).
-  Name the specific weapon ("hand on chainsword hilt", "hand on holstered bolter").
-- Aiming, pointing, shooting or throwing: name the target in that person's pose
-  ("aiming at drop pod", "pointing at door"). Without it the image model has them
-  aim at whoever else is in the picture.
-- "expression" (1.27): build the whole face, not one cue. When the face is
-  visible give one cue each for the EYES (wide-eyed, narrowed eyes, half-closed
-  eyes, closed eyes, teary eyes, sparkling eyes), the MOUTH (smile, grin, smirk,
-  open mouth, parted lips, pressed lips, frown, clenched teeth, biting lip) and
-  the BROWS (raised eyebrows, furrowed brow, knitted brows, relaxed brows), plus
-  at most one plain emotion tag the image model knows from fan art — angry, sad,
-  scared, surprised, shocked, smug, nervous, worried, determined, happy, annoyed,
-  confused, embarrassed, flustered — and one gaze cue. "narrowed eyes, clenched
-  teeth, furrowed brow, angry, looking at Mara" draws a face; "smile" alone
-  draws the model's default face. Match the emotional intensity of the moment —
-  never leave faces blank or neutral in dramatic or passionate scenes!
+- Prefer body language with weight and movement when the passage supports it
+  ("leaning in closely", "gripping sheets", "striding forward") over a stiff
+  standing pose.
+- Weapons: name the one being touched ("hand on chainsword hilt"), never "hand
+  on weapon". Aiming, pointing, shooting or throwing: name the target ("aiming
+  at drop pod"), or the image model aims at whoever else is in the picture.
+- "expression": build the whole face, not one cue. When the face is visible
+  give one cue each for the EYES (wide-eyed, narrowed eyes, half-closed eyes,
+  closed eyes, teary eyes), the MOUTH (smile, grin, smirk, open mouth, parted
+  lips, pressed lips, frown, clenched teeth, biting lip) and the BROWS (raised
+  eyebrows, furrowed brow, relaxed brows), at most one plain emotion tag
+  (angry, sad, scared, surprised, shocked, smug, nervous, worried, determined,
+  happy, annoyed, confused, embarrassed, flustered), and one gaze cue (looking
+  at [name], looking down, looking up, looking away, eye contact; looking at
+  viewer only for a POV shot). "narrowed eyes, clenched teeth, furrowed brow,
+  angry, looking at Mara" draws a face; "smile" alone draws the model's default
+  face. Match the intensity of the moment; never a blank face in a dramatic or
+  passionate scene.
+- At the height of passion add 2-3 of: flushed cheeks, heavy blush, panting,
+  heavy breathing, eyes rolled back, sweating, trembling lips, ahegao.
 - When the face cannot be seen in this picture (turned away, from behind, buried
   in someone's shoulder, covered by a helmet), leave out eye, mouth and brow cues;
   the image model otherwise twists the head round to show them.
-  - Everyday/dramatic facial cues: faint smile, soft smile, grin, smirk, parted lips,
-    open mouth, pressed lips, biting lip, furrowed brow, raised eyebrow, half-closed
-    eyes, closed eyes, wide-eyed, narrowed eyes, clenched teeth, tears, scowling,
-    snarling, gasping.
-  - NSFW / passionate / intimate cues (use 2-3 together at the height of passion):
-    flushed cheeks, heavy blush, parted lips, open mouth, panting, heavy breathing,
-    half-lidded bedroom eyes, eyes rolled back, biting lower lip, furrowed brow,
-    pleasure-knitted brows, sweating, bead of sweat, trembling lips, ecstatic
-    expression, ahegao.
-  - Gaze cues: looking at viewer (only for a POV shot), looking at [name], looking
-    down, looking up, looking away, eye contact, eyes closed.
-- Never vague labels like "tense expression" or "guarded look"; translate them to
-  face mechanics. The plain emotion tags listed above are fine.
+- Never vague labels like "tense expression" or "guarded look"; write what the
+  face is doing.
 
 INTERACTIONS AND RELATIONS
 - Sexual acts go in "interactions", one entry per act. The actor does it, the
@@ -26010,10 +26023,8 @@ CAMERA
   or more side by side, use left, center and right for them.
 
 SETTING
-- 3-6 short visual tags for where they are and the light: "stone temple",
-  "moss-covered pillars", "glowing altar", "candlelight". Use the scene card and
-  LAST KNOWN SETTING when the passage does not restate it. Never leave it empty if
-  the place is known.
+- Never leave "setting" empty if the place is known: use the scene card and
+  LAST KNOWN SETTING when the passage does not restate it.
 - Only what a camera could see: no smoke, haze or steam for a smell, a sound or
   a feeling.
 - For the light, name its source and side when the story gives them:
@@ -26024,8 +26035,8 @@ nsfw = nudity; explicit = a sexual act or visible genitals.
 ASPECT: 16:9 wide or two people side by side, 4:3 two close figures, 3:4 one
 standing figure, 1:1 tight shot.
 
-NEVER: a minor or youth-coded descriptor, the same tag twice, tags from the banned
-list, prose outside scene_summary.
+NEVER: a minor or youth-coded descriptor, tags from the banned list, prose
+outside scene_summary.
 `
 
 function simpleCountRule(maxImages) {
