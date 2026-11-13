@@ -25935,10 +25935,11 @@ WHO IS IN THE PICTURE
   and build. When the story does not give one of those four, choose it
   yourself: plain, fitting the setting, and different from the others in the
   picture. Use 1other only for creatures that are not human-like.
-- "anatomy" is only for people without a sheet, and only the ordinary kind:
-  penis for a man, pussy for a woman. Anything else (futanari, a woman with a
-  penis, a man with a pussy) comes only from a character sheet: never write it,
-  whatever the story or an act suggests. Lumi Studio removes it.
+- "anatomy" is only for people without a sheet (a sheet decides for everyone
+  who has one). Write unusual anatomy — a woman with a penis is 1girl with
+  "futanari, penis" — only when the story says so outright about that person.
+  Never work it out from who is doing what in a sexual act, or from someone
+  being dominant or on top.
 - "show_anatomy" is true only when that person's genitals are visible in this
   picture.
 
@@ -26743,16 +26744,10 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
     if (explicit) out.identity = out.identity.filter(tag => !directGroupYouthCoded(tag))
     simpleResolveHair(out, raw, remembered, out.identity.filter(simpleIsHairstyle), 'first seen', banned)
     out.anatomy = applyBannedToList(simpleTags((remembered.anatomy || []).length ? remembered.anatomy : raw.anatomy, 6), banned)
-    // 1.30.2: anatomy that is not the ordinary kind comes from a character
-    // sheet and nowhere else. A person without a sheet never gets it from the
-    // parser or from what was remembered, so there are no surprises.
-    const unusual = tag => count === '1girl' ? directAnatomyTagFamily(tag) === 'penis' || /\b(?:futanari|futa|newhalf|dickgirl|shemale|testicles)\b/i.test(tag)
-      : count === '1boy' ? directAnatomyTagFamily(tag) === 'vulva' || /\b(?:cuntboy|pussy)\b/i.test(tag) : false
-    const dropped = uniqueStrings([...out.anatomy, ...out.identity].filter(unusual))
-    if (dropped.length) {
-      out.anatomy = out.anatomy.filter(tag => !unusual(tag)); out.identity = out.identity.filter(tag => !unusual(tag))
-      notes.push(`${raw.name}: left out “${dropped.join(', ')}”. Unusual anatomy is only used from a character sheet, and ${raw.name} has none.`)
-    }
+    // 1.30.3: for someone WITHOUT a sheet the parser may say a woman has a
+    // penis when the story says so outright (a futanari met in passing), and
+    // that is remembered. With a sheet, the sheet alone decides. An act never
+    // adds one (see simpleDefaultAnatomy).
     out.phrase = simpleAdultPhrase(remembered.subject || raw.subject, count)
     if (raw.outfit.length) {
       const specific = simpleKeepSpecific(raw.outfit, remembered.outfit || [])

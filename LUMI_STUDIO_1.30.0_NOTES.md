@@ -62,3 +62,14 @@ from a character sheet and nowhere else. The parser is told never to write it,
 and if it does for someone without a sheet, or it was remembered from an
 earlier picture, Lumi Studio leaves it out and says so in the report. A
 character who should have it needs it on their sheet.
+
+# 1.30.3
+
+1.30.2 was too strict: a futanari met in passing would have needed a sheet.
+Now:
+
+- A character WITH a sheet: only what the sheet says.
+- Someone WITHOUT a sheet: the parser may give them unusual anatomy when the
+  story says so outright, and it is remembered for the chat.
+- An act alone still never adds it (1.30.1), and the parser is told not to
+  work it out from who is doing what or who is on top.
