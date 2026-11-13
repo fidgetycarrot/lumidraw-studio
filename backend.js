@@ -26575,6 +26575,8 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2, allowNoPeople = 
           target: String(x.target), targetPart: String(x.target_part || '').trim() })).slice(0, 3),
     })
   }
+  // 1.29.1: an empty list is how some models decline without saying so.
+  if (!parsed.images.length) return { images: [], refused: true, error: 'The parser model sent back an empty list. It may have declined this passage. Try again, or pick a different parser model.' }
   if (!images.length) return { images: [], error: allowNoPeople ? 'The parser found nothing to draw in this passage.' : 'The parser found no one to draw in this passage.' }
   return { images }
 }
