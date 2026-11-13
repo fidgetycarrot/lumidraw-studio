@@ -42,3 +42,18 @@ a later picture with people in the same place under a shorter name (saved look
 used, the parser's different description ignored), a creature on its own, and
 the switch turned off. Anima and MOSS prompts were built for a place picture
 too. No real picture has been drawn with this yet.
+
+# 1.29.2
+
+A report showed the parser (Sonnet 5.5) had read the clothes correctly: a man
+in an open shirt and nothing else, a woman in a skirt and stockings with
+nothing on top. The picture was still wrong, for two reasons in LS:
+
+- LS only sent what was worn. An image model fills a gap with ordinary
+  clothes, so "open shirt" alone came out with trousers. In adult pictures LS
+  now adds "bottomless" or "topless" when the story lists nothing worn there
+  and the picture shows that part.
+- The no-bra tags ("covered nipples, breasts apart") were added whenever any
+  clothes were listed, even a skirt alone. They describe how a top sits, so
+  they asked for a top that was not there. They are now added only when a top
+  or a dress is worn.

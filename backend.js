@@ -25725,7 +25725,7 @@ function simpleSteadyGarment(tag) {
 function simpleSteadyOutfit(tags) {
   const out = []
   for (const tag of tags || []) {
-    if (/^(?:nude|naked|barefoot|topless|bottomless|no shoes)$/i.test(String(tag).trim())) continue
+    if (/^(?:nude|naked|barefoot|topless|topless male|bottomless|no shoes)$/i.test(String(tag).trim())) continue
     const steady = simpleSteadyGarment(tag)
     if (steady.length >= 3) out.push(steady)
   }
@@ -26814,6 +26814,30 @@ function simpleFillFeatures(subjects, notes) {
 const SIMPLE_NO_BRA_RE = /\b(?:no bra|braless|without a bra)\b/i
 const SIMPLE_BRA_RE = /\b(?:bra|bralette|bikini top|bikini|swimsuit|corset|bustier|chest binder|sarashi|bandeau)\b/i
 const SIMPLE_TOPLESS_RE = /\b(?:nude|naked|topless|no shirt|no top|bare breasts|breasts out|open shirt|shirt lift|clothes lift)\b/i
+// ---------- what is not worn (1.29.2) --------------------------------------
+// The parser lists what a person has on. An image model fills any gap with
+// ordinary clothes: "open shirt" alone came out as a man in a shirt and
+// trousers. In adult pictures LS now says what is missing.
+const SIMPLE_TOP_WEAR_RE = /\b(?:shirt|blouse|top|sweater|hoodie|jacket|coat|tee|tank|camisole|cardigan|vest|tunic|blazer|bra|bralette|bikini|corset|bustier|sarashi|bandeau|pasties|apron|cloak|poncho|breastplate|armou?r|jersey|sweatshirt|turtleneck|polo|waistcoat|doublet|harness|pullover|jumper)\b/i
+const SIMPLE_FULL_WEAR_RE = /\b(?:dress|gown|robe|kimono|yukata|bodysuit|leotard|jumpsuit|swimsuit|one-piece|uniform|suit|overalls|romper|catsuit|plugsuit|nightgown|negligee|babydoll|chemise|towel|bathrobe|lingerie|pajamas|pyjamas|onesie|habit|toga|sundress|coveralls|blanket|sheet)\b/i
+const SIMPLE_BOTTOM_WEAR_RE = /\b(?:pants|trousers|jeans|shorts|skirt|leggings|slacks|sweatpants|briefs|boxers|panties|underwear|thong|bloomers|pantyhose|tights|breeches|kilt|loincloth|bikini bottom|trunks|chinos|joggers|hakama|g-string|jockstrap|miniskirt)\b/i
+const simpleWorn = (outfit, re) => outfit.some(tag => re.test(tag) && !/^\s*(?:no|without)\b/i.test(tag))
+function simpleBareParts(subject, image, notes) {
+  if (!['nsfw', 'explicit'].includes(image.rating) || !['1girl', '1boy'].includes(subject.count) || !subject.outfit.length) return
+  const outfit = subject.outfit
+  if (outfit.some(tag => /\b(?:nude|naked|topless|bottomless|shirtless)\b/i.test(tag)) || simpleWorn(outfit, SIMPLE_FULL_WEAR_RE)) return
+  const top = simpleWorn(outfit, SIMPLE_TOP_WEAR_RE), bottom = simpleWorn(outfit, SIMPLE_BOTTOM_WEAR_RE)
+  const shown = (subject.shownAnatomy || []).join(', ') + ', ' + outfit.join(', ')
+  const scene = String(image.scene_summary || '')
+  const add = []
+  if (top && !bottom && /\b(?:penis|pussy|vulva|cock|no pants|no panties|no underwear)\b/i.test(shown)) add.push('bottomless')
+  if (!top && (subject.count === '1girl' ? /\b(?:no bra|braless)\b/i.test(shown) || /\bbare (?:breasts?|chest|tits)\b|\btopless\b/i.test(scene)
+    : /\b(?:shirtless|bare chest|bare-chested|topless)\b/i.test(scene))) add.push(subject.count === '1girl' ? 'topless' : 'topless male')
+  if (!add.length) return
+  subject.outfit = uniqueStrings([...add, ...outfit])
+  notes.push(`${subject.displayName}: added “${add.join(', ')}” — the story lists nothing worn there, and the image model would draw ordinary clothes otherwise.`)
+}
+
 function simpleNoBra(out, profile, remembered, banned, notes) {
   if (out.count !== '1girl') return
   if (!/\b(?:adult|woman|mature|lady|milf|mother)\b/i.test(String(out.phrase || '')) || /\b(?:teen|teenage|teenager|adolescent|child|kid|girlish|loli)\b/i.test(String(out.phrase || ''))) return
@@ -26827,7 +26851,9 @@ function simpleNoBra(out, profile, remembered, banned, notes) {
   if (!says || worn.some(tag => SIMPLE_BRA_RE.test(tag) && !/\bno\b/i.test(tag))) { out.outfit = worn; return }
   // Nothing on top: the tags are about how a top sits, so they are left out
   // of the prompt but "no bra" stays in the outfit so it is remembered.
-  if (!worn.length || worn.some(tag => SIMPLE_TOPLESS_RE.test(tag))) { out.outfit = uniqueStrings([...worn, 'no bra']); return }
+  // 1.29.2: a skirt and stockings with no top is also nothing on top;
+  // "covered nipples" there asked the image model for a top that is not worn.
+  if (!worn.length || worn.some(tag => SIMPLE_TOPLESS_RE.test(tag)) || !(simpleWorn(worn, SIMPLE_TOP_WEAR_RE) || simpleWorn(worn, SIMPLE_FULL_WEAR_RE))) { out.outfit = uniqueStrings([...worn, 'no bra']); return }
   out.outfit = uniqueStrings([...worn, ...applyBannedToList(['no bra', 'covered nipples', 'breasts apart'], banned)])
 }
 
@@ -27082,6 +27108,7 @@ function compileSimpleImage(image, ctx) {
     if ((subject.addedAnatomy || []).length) notes.push(`${subject.displayName}: added “${subject.addedAnatomy.join(', ')}” — their sheet lists none for what this picture shows. Fill the sheet's anatomy field only for anything unusual.`)
     shownAnatomy.push(...anatomy)
     subject.shownAnatomy = anatomy
+    simpleBareParts(subject, image, notes)
     const body = uniqueStrings([...subject.identity, ...anatomy])
     const pose = uniqueStrings([...subject.pose, ...subject.expression])
     return [body.length ? `${subject.introduction}: ${body.join(', ')}.` : `${subject.introduction}.`,
