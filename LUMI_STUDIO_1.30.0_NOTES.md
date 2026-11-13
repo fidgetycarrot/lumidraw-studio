@@ -54,3 +54,11 @@ the penis.
   person can have one, the two are swapped, with a note in the report.
 - An act alone never adds a penis to a woman. Her sheet does, or the parser
   for someone without a sheet.
+
+# 1.30.2
+
+Unusual anatomy (futanari, a woman with a penis, a man with a pussy) now comes
+from a character sheet and nowhere else. The parser is told never to write it,
+and if it does for someone without a sheet, or it was remembered from an
+earlier picture, Lumi Studio leaves it out and says so in the report. A
+character who should have it needs it on their sheet.
