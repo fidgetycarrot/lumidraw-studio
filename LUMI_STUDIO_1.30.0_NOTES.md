@@ -41,3 +41,16 @@ rule was removed.
 Lumi Studio's own cleaning was run on the reply saved in the report, before
 and after. The place, no-people and clothing tests from 1.29 still pass. No
 real parser model was run from here.
+
+# 1.30.1
+
+"futanari, penis" was being added to a woman whose sheet has neither. Lumi
+Studio adds missing anatomy from each person's part in a sexual act, and when
+the parser wrote the act the wrong way round (the woman as the one penetrating
+because she is on top, or the man as the one giving paizuri), the woman got
+the penis.
+
+- When the part that needs a penis went to a woman without one and the other
+  person can have one, the two are swapped, with a note in the report.
+- An act alone never adds a penis to a woman. Her sheet does, or the parser
+  for someone without a sheet.

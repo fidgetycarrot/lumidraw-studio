@@ -26958,10 +26958,34 @@ function simpleKeepSpecific(tags, ...knownGroups) {
 // not list. Riley's sheet had none, so "Eric is performing fellatio on Riley"
 // came with no penis on Riley at all, and the picture swapped them.
 function simpleDefaultAnatomy(family, count) {
-  if (family === 'penis') return count === '1girl' ? ['futanari', 'penis'] : ['penis']
+  // 1.30.1: never for a woman. A woman with a penis has it on her sheet, or
+  // from the parser for someone without one; an act alone is not evidence, and
+  // "futanari, penis" was landing on women whose part in an act the parser
+  // had written the wrong way round.
+  if (family === 'penis') return count === '1girl' ? [] : ['penis']
   if (family === 'vulva') return count === '1girl' ? ['pussy'] : []
   if (family === 'anus') return ['anus']
   return []
+}
+
+// The parser sometimes writes an act the wrong way round: "vaginal" with the
+// woman as the one doing it because she is on top, or "paizuri" with the man
+// as actor. When the role that needs a penis went to a woman without one and
+// the other person can have one, the two are swapped (1.30.1).
+function simpleFixActRoles(image, subjects, notes) {
+  const find = name => subjects.find(subject => simpleKey(subject.raw.name) === simpleKey(name) || simpleKey(subject.displayName) === simpleKey(name))
+  const can = subject => !!subject && (subject.count === '1boy' || (subject.anatomy || []).some(tag => directAnatomyTagFamily(tag) === 'penis'))
+  image.interactions = (image.interactions || []).map(act => {
+    const rule = SIMPLE_ACT_ANATOMY[act.act]
+    if (!rule || act.act === 'masturbation') return act
+    const actor = find(act.actor), recipient = find(act.recipient)
+    if (!actor || !recipient || actor === recipient) return act
+    const wrong = ((rule.actor || []).includes('penis') && !can(actor) && can(recipient)) ||
+      ((rule.recipient || []).includes('penis') && !can(recipient) && can(actor))
+    if (!wrong) return act
+    notes.push(`The parser wrote “${act.act}” with ${actor.displayName} and ${recipient.displayName} the wrong way round; swapped.`)
+    return { ...act, actor: act.recipient, recipient: act.actor }
+  })
 }
 
 function simpleSubjectAnatomy(subject, image) {
@@ -27019,6 +27043,7 @@ function compileSimpleImage(image, ctx) {
   const subjects = image.subjects.map((raw, index) => simpleResolveSubject(raw, index, total, image, ctx, notes))
 
   simpleFillFeatures(subjects, notes)
+  simpleFixActRoles(image, subjects, notes)
 
   // Two people must never share one label.
   const used = new Map()
