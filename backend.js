@@ -26236,6 +26236,9 @@ This picture is drawn by NovelAI, which puts each person on their own spot.
   than the others: behind a bar or counter, in a doorway, across the room
   ("right back"). Leave "position" empty when the passage does not make the
   places clear; NovelAI then places them itself.
+  Two people never share left, center or right: "center" and "center back" is
+  the same spot twice. With two people, use left and right, whatever the
+  camera angle.
 - "framing" (this replaces the framing advice above): the closest shot that
   still shows what the moment depends on. NovelAI draws faces badly when they
   are small, so for people talking, touching, hugging, kissing, eating or
