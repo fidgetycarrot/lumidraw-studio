@@ -48,3 +48,16 @@ place's saved look fills the rest. New places are saved with 4-6 tags, not
 Built against a fake parser: a truck scene with and without a shot sentence,
 two people looking at each other, and the earlier place, clothing and anatomy
 tests. No real parser model or picture was run from here.
+
+# 1.32.0
+
+Tapping a picture in the chat opened the viewer with the prompt and tools
+around it, so the picture came out smaller than it was in the chat.
+
+The viewer now opens on the picture alone, filling the screen, with the
+previous/next arrows and zoom. "Details" (top right) brings back the
+troubleshooting, fixes and other tools; "Picture only" in the tools view goes
+back. Whichever you used last is remembered.
+
+Pictures that are no longer in your history still open with the tools, since
+Remove and Delete are what they are for.

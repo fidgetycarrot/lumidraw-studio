@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.31.0'
+  const EXTENSION_VERSION = '1.32.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -913,6 +913,17 @@ function realSetup(ctx) {
       padding:18px; background:rgba(0,0,0,.86); color:var(--lumiverse-text, #eceef4);
     }
     .ld-lightbox.ld-open { display:flex; }
+    /* 1.32.0: picture only. The picture fills the screen; the tools are one tap away. */
+    .ld-lightbox.ld-lightbox-full { padding:0; background:#000; }
+    .ld-lightbox.ld-lightbox-full .ld-lightbox-dialog { width:100%; height:100%; max-height:none; border:0; border-radius:0; background:#000; box-shadow:none; }
+    .ld-lightbox.ld-lightbox-full .ld-lightbox-head, .ld-lightbox.ld-lightbox-full .ld-lightbox-foot,
+    .ld-lightbox.ld-lightbox-full .ld-lightbox-regen { display:none !important; }
+    .ld-lightbox.ld-lightbox-full .ld-lightbox-stage { padding:0; background:#000; }
+    .ld-lightbox-full-tools { display:none; position:absolute; z-index:6; top:calc(10px + env(safe-area-inset-top, 0px)); right:calc(10px + env(safe-area-inset-right, 0px)); gap:6px; }
+    .ld-lightbox.ld-lightbox-full .ld-lightbox-full-tools { display:flex; }
+    .ld-lightbox-full-tools .ld-btn { height:36px; padding:0 12px; background:rgba(17,18,23,.72); backdrop-filter:blur(6px); }
+    .ld-lightbox.ld-lightbox-full .ld-lightbox-zoom-tools { opacity:.55; }
+    .ld-lightbox.ld-lightbox-full .ld-lightbox-zoom-tools:hover { opacity:1; }
     .ld-lightbox-dialog {
       width:min(1180px,100%); height:min(92dvh,960px); min-height:0; display:flex; flex-direction:column;
       overflow:hidden; border:1px solid var(--lumiverse-border, #3d4050); border-radius:12px;
@@ -1702,12 +1713,17 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       <div class="ld-lightbox-dialog" role="dialog" aria-modal="true" aria-label="Generated image viewer">
         <div class="ld-lightbox-head">
           <span class="ld-lightbox-title">Generated image</span>
+          <button class="ld-btn ld-compact ld-lightbox-picture-only" style="flex:0 0 auto" title="Hide the tools and fill the screen with the picture">Picture only</button>
           <button class="ld-x ld-lightbox-close" title="Close image viewer" aria-label="Close image viewer">✕</button>
         </div>
         <div class="ld-lightbox-stage">
           <button class="ld-btn ld-lightbox-nav ld-lightbox-prev" title="Previous image" aria-label="Previous image">‹</button>
           <div class="ld-lightbox-image-wrap"><img class="ld-lightbox-image" alt="Generated image" draggable="false" /></div>
           <button class="ld-btn ld-lightbox-nav ld-lightbox-next" title="Next image" aria-label="Next image">›</button>
+          <div class="ld-lightbox-full-tools">
+            <button class="ld-btn ld-lightbox-show-tools" title="Show the prompt, fixes and other tools for this picture">Details</button>
+            <button class="ld-btn ld-lightbox-full-close" title="Close" aria-label="Close">✕</button>
+          </div>
           <div class="ld-lightbox-zoom-tools" aria-label="Image zoom controls">
             <button class="ld-btn ld-lightbox-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
             <button class="ld-btn ld-lightbox-zoom-level" title="Reset zoom" aria-label="Reset zoom">100%</button>
@@ -3562,10 +3578,23 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     lightboxIndex = found >= 0 ? found : 0
     if (!lightboxItems.length) return false
     renderLightbox()
+    setLightboxPictureOnly(lightboxPictureOnlyWanted())
     lightbox.classList.add('ld-open')
     lightbox.setAttribute('aria-hidden', 'false')
     document.body.classList.add('ld-fullscreen-lock')
     return true
+  }
+
+  // 1.32.0: the viewer opens on the picture alone, filling the screen. It used
+  // to open inside the tools, which made the picture smaller than it was in
+  // the chat. "Details" brings the tools back, and the choice is remembered.
+  const LIGHTBOX_MODE_KEY = 'lumidraw.viewerMode.v1'
+  function lightboxPictureOnlyWanted() {
+    try { return localStorage.getItem(LIGHTBOX_MODE_KEY) !== 'details' } catch { return true }
+  }
+  function setLightboxPictureOnly(on, remember = false) {
+    lightbox.classList.toggle('ld-lightbox-full', !!on)
+    if (remember) { try { localStorage.setItem(LIGHTBOX_MODE_KEY, on ? 'picture' : 'details') } catch { /* best effort */ } }
   }
 
   // A Lumi Studio picture in the chat that has dropped out of history. The
@@ -3575,6 +3604,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     lightboxItems = [{ image: { url: imageUrl, id: '' }, entry: { orphan: true, prompt: '' } }]
     lightboxIndex = 0
     renderLightbox()
+    setLightboxPictureOnly(false)
     lightbox.classList.add('ld-open')
     lightbox.setAttribute('aria-hidden', 'false')
     document.body.classList.add('ld-fullscreen-lock')
@@ -6765,6 +6795,9 @@ ${entry.prompt || ''}`.trim()
     document.body.classList.remove('ld-fullscreen-lock')
   })
   $('.ld-lightbox-close').addEventListener('click', closeLightbox)
+  $('.ld-lightbox-full-close').addEventListener('click', closeLightbox)
+  $('.ld-lightbox-show-tools').addEventListener('click', () => setLightboxPictureOnly(false, true))
+  $('.ld-lightbox-picture-only').addEventListener('click', () => setLightboxPictureOnly(true, true))
   $('.ld-lightbox-done').addEventListener('click', closeLightbox)
   $('.ld-lightbox-prev').addEventListener('click', () => moveLightbox(-1))
   $('.ld-lightbox-next').addEventListener('click', () => moveLightbox(1))
