@@ -25863,7 +25863,7 @@ OUTPUT:
  "scene_summary":"one plain sentence, at most 25 words: who does what to whom, using the people's names",
  "framing":["one shot tag","optional angle tag"],
  "composition":"optional single Danbooru position tag",
- "place":{"name":"what the story calls this place, 1-5 words","looks":["6-10 tags for how the place itself always looks"]},
+ "place":{"name":"what the story calls this place, 1-5 words","looks":["4-6 tags for how the place itself always looks"]},
  "setting":["3-6 short place and lighting tags"],
  "subjects":[{
    "name":"sheet name, or the person's own name if they have no sheet",
@@ -25876,7 +25876,7 @@ OUTPUT:
    "outfit":["every garment worn right now, one per item"],
    "hair":["how the hair is worn right now: ponytail, braid, bun, hair down…"],
    "pose":["pose and one-person action tags"],
-   "expression":["eyes cue","mouth cue","brows cue","optional emotion tag","one gaze cue"],
+   "expression":["1-2 light face cues for a quiet moment, up to 4 for a heightened one","one gaze cue"],
    "show_anatomy":false
  }],
  "interactions":[{"actor":"name","act":"fellatio|cunnilingus|handjob|vaginal|anal|masturbation|paizuri|fingering|kissing|groping","recipient":"name"}],
@@ -25983,18 +25983,24 @@ POSE AND EXPRESSION
 - Weapons: name the one being touched ("hand on chainsword hilt"), never "hand
   on weapon". Aiming, pointing, shooting or throwing: name the target ("aiming
   at drop pod"), or the image model aims at whoever else is in the picture.
-- "expression": build the whole face, not one cue. When the face is visible
-  give one cue each for the EYES (wide-eyed, narrowed eyes, half-closed eyes,
-  closed eyes, teary eyes), the MOUTH (smile, grin, smirk, open mouth, parted
-  lips, pressed lips, frown, clenched teeth, biting lip) and the BROWS (raised
-  eyebrows, furrowed brow, relaxed brows), at most one plain emotion tag
-  (angry, sad, scared, surprised, shocked, smug, nervous, worried, determined,
-  happy, annoyed, confused, embarrassed, flustered), and one gaze cue (looking
-  at [name], looking down, looking up, looking away, eye contact; looking at
-  viewer only for a POV shot). "narrowed eyes, clenched teeth, furrowed brow,
-  angry, looking at Mara" draws a face; "smile" alone draws the model's default
-  face. Match the intensity of the moment; never a blank face in a dramatic or
-  passionate scene.
+- "expression": match the face to the moment. This matters more than any list
+  of cues. Roleplay moments vary; judge each one.
+  Most moments are QUIET: talking, listening, walking, driving, waiting,
+  teasing, working. Give one or two light cues and a gaze: "slight smile,
+  looking at Mara"; "raised eyebrow, smirk, looking at Tom"; "closed mouth,
+  looking ahead". Someone hearing or watching something keeps a calm face: no
+  wide eyes, open mouth or raised brows unless the story says they are
+  startled. Someone speaking has "parted lips" at most; "open mouth" is for
+  shouting, laughing hard or crying out.
+  HEIGHTENED moments get the whole face: a fight, real shock, fury, grief,
+  pain, sex, a birth. Eyes, mouth and brows together, and at most one plain
+  emotion word: "narrowed eyes, clenched teeth, furrowed brow, angry". Emotion
+  words (surprised, shocked, angry, scared, smug) are strong; use one only
+  when the story shows that feeling plainly.
+  Over-acting a quiet moment is as wrong as a blank face in a dramatic one.
+- Gaze: one cue per person (looking at [name], looking down, looking away,
+  looking ahead; looking at viewer only for a POV shot). When two people look
+  at each other, give each "looking at [name]".
 - At the height of passion add 2-3 of: flushed cheeks, heavy blush, panting,
   heavy breathing, eyes rolled back, sweating, trembling lips, ahegao.
 - When the face cannot be seen in this picture (turned away, from behind, buried
@@ -26112,6 +26118,22 @@ function simpleOutfitLines(outfit) {
   lines.push(`  CURRENT OUTFIT (${label}): ` + outfit.tags.join(', '))
   if ((outfit.earlier || []).length) lines.push('  EARLIER DETAIL (remembered; only for colour and material of garments still worn): ' + outfit.earlier.join(', '))
   return lines
+}
+
+// 1.31.0: a saved place plus the moment's tags came to fourteen, several of
+// them the same thing twice ("green bodega awning" and "under green bodega
+// awning", "concrete sidewalk" and "wet concrete sidewalk"). A tag whose words
+// are all in one already kept is dropped, and the list is capped.
+function simpleTidySetting(tags, max) {
+  const words = tag => normalizeIdentityText(tag).split(' ').filter(word => word.length > 2 && !/^(?:the|and|under|near|inside|outside|with|from)$/.test(word))
+  const kept = []
+  for (const tag of uniqueStrings(tags)) {
+    const mine = words(tag)
+    if (!mine.length) continue
+    const clash = kept.findIndex(other => { const theirs = words(other); return mine.every(word => theirs.includes(word)) || theirs.every(word => mine.includes(word)) })
+    if (clash === -1) kept.push(tag)
+  }
+  return kept.slice(0, max)
 }
 
 // ---------- remembered places (1.29.0) -------------------------------------
@@ -26244,14 +26266,22 @@ Rules for these fields:
 const NOVELAI_SCENE_RULES = `
 PLACES IN THE PICTURE
 This picture is drawn by NovelAI, which puts each person on their own spot.
-- "position": with two or more people, say where each one is in the picture:
-  left, center or right. Add " back" for someone clearly further from the viewer
-  than the others: behind a bar or counter, in a doorway, across the room
-  ("right back"). Leave "position" empty when the passage does not make the
-  places clear; NovelAI then places them itself.
-  Two people never share left, center or right: "center" and "center back" is
-  the same spot twice. With two people, use left and right, whatever the
-  camera angle.
+- "shot": add this to every image, and decide it FIRST. Picture the photograph
+  and say it in one plain sentence, at most 30 words, with the people's names:
+  where the camera is and how the people sit in the frame. "Seen from the back
+  seat, between the front seats: David drives on the left, Dina sits turned
+  toward him on the right, her legs across the console." "From across the
+  desk: Mara leans over it toward Tom, who sits back in his chair."
+  It must be a picture a camera could take in that place. Think about the
+  walls, seats and furniture and how much room there is. In a cramped place (a
+  car, a booth, a bed, a lift, a cockpit) there is nowhere to stand beside
+  people: put the camera in front of them, behind them, or close in.
+  "framing" and every "position" must then agree with "shot".
+- "position": left, center or right only when that is where the person is as
+  the camera sees them. When one person is in front of the other, or the shot
+  sentence already makes the layout clear, leave "position" empty; do not
+  force people into a left-to-right row. Add " back" for someone clearly
+  further from the viewer than the others ("right back").
 - "framing" (this replaces the framing advice above): the closest shot that
   still shows what the moment depends on. NovelAI draws faces badly when they
   are small, so for people talking, touching, hugging, kissing, eating or
@@ -26553,7 +26583,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2, allowNoPeople = 
         mossAction: mossFieldText(s.moss_action),
       }))
     const placeIn = item.place && typeof item.place === 'object' ? item.place : {}
-    const place = { name: String(placeIn.name || '').replace(/\s+/g, ' ').trim().slice(0, 60), looks: simpleTags(placeIn.looks, 10) }
+    const place = { name: String(placeIn.name || '').replace(/\s+/g, ' ').trim().slice(0, 60), looks: simpleTags(placeIn.looks, 6) }
     // A picture of a place on its own (1.29.0): no people, but it must say where.
     const noPeople = !subjects.length && Array.isArray(item.subjects)
     if (noPeople && !(allowNoPeople && (place.name || simpleTags(item.setting, 8).length) && String(item.scene_summary || '').trim())) continue
@@ -26575,6 +26605,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2, allowNoPeople = 
       rating: ANIMA_SAFETY_TAGS.includes(String(item.rating || '').toLowerCase()) ? String(item.rating).toLowerCase() : 'sensitive',
       aspect: String(item.aspect || '').trim(),
       scene_summary: String(item.scene_summary || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+      shot: String(item.shot || '').replace(/\s+/g, ' ').trim().slice(0, 260),
       framing: simpleTags(item.framing, 3),
       composition: SIMPLE_COMPOSITIONS.includes(String(item.composition || '').trim().toLowerCase()) ? String(item.composition).trim().toLowerCase() : '',
       setting: simpleTags(item.setting, 8),
@@ -27137,7 +27168,10 @@ function compileSimpleImage(image, ctx) {
     const looks = applyBannedToList(known ? known.looks : (image.place.looks || []), banned)
     if (looks.length) {
       const has = new Set(looks.map(normalizeIdentityText))
-      setting = uniqueStrings([...looks, ...setting.filter(tag => !has.has(normalizeIdentityText(tag)))]).slice(0, 14)
+      // The moment's own tags (the light, the weather, the corner they are in)
+      // are kept; the place's look fills the rest.
+      const moment = simpleTidySetting(setting.filter(tag => !has.has(normalizeIdentityText(tag))), 6)
+      setting = simpleTidySetting([...looks.slice(0, Math.max(4, 10 - moment.length)), ...moment], 10)
       placeUsed = { key: known ? known.key : simplePlaceKey(placeName), name: known ? known.name : placeName, looks, first: !known }
       notes.push(known ? `Place “${known.name}”: drawn before, so its saved look was used (${looks.join(', ')}).`
         : `Place “${placeName}”: first picture here. Its look is now remembered for this chat (${looks.join(', ')}).`)
@@ -28562,16 +28596,29 @@ function compileNovelaiImage(image, ctx) {
     firstNames[index].length >= 3 && firstNames.filter(name => name.toLowerCase() === firstNames[index].toLowerCase()).length === 1 ? firstNames[index] : '']
     .filter(Boolean)).sort((a, b) => b.length - a.length)
   const nameRe = form => new RegExp('\\b' + escapeRegExp(form) + '\\b', 'gi')
-  let summary = String(compiled.parts.summary || '')
-  subjects.forEach((subject, index) => {
-    const twin = shorts.filter(word => word === shorts[index]).length > 1
-    const spot = novelaiSpotWords(subject, total)
-    const across = spot ? spot.split(',')[0].trim() : ''
-    const where = across ? ' ' + directGroupPositionPhrase(across) + (/\bback\b/.test(spot) ? ', further back' : '') : ''
-    const call = 'the ' + shorts[index] + (twin && where ? where : '')
-    for (const form of formsOf(subject, index)) summary = summary.replace(nameRe(form), call)
-  })
-  summary = upperFirst(summary.replace(/\bthe the\b/gi, 'the').trim())
+  const hairOf = subject => (subject.identity.find(tag => SIMPLE_HAIR_COLOUR_RE.test(tag) && /\bhair\b/i.test(tag)) || '')
+    .replace(/\b(?:very long|long|short|medium|shoulder-length|messy|curly|wavy|straight|spiky)\b\s*/gi, '').trim()
+  // A sentence with the names taken out: "the woman", or for two alike,
+  // "the woman with black hair" / "the woman on the left".
+  const nameless = text => {
+    let value = String(text || '')
+    subjects.forEach((subject, index) => {
+      const twin = shorts.filter(word => word === shorts[index]).length > 1
+      const spot = novelaiSpotWords(subject, total)
+      const across = spot ? spot.split(',')[0].trim() : ''
+      const where = across ? ' ' + directGroupPositionPhrase(across) + (/\bback\b/.test(spot) ? ', further back' : '') : ''
+      const hair = hairOf(subject)
+      const call = 'the ' + shorts[index] + (twin ? (hair ? ' with ' + hair : where) : '')
+      for (const form of formsOf(subject, index)) value = value.replace(nameRe(form), call)
+    })
+    return upperFirst(value.replace(/\bthe the\b/gi, 'the').trim())
+  }
+  const summary = nameless(compiled.parts.summary)
+  // 1.31.0: the parser pictures the shot first and says it in a sentence
+  // (where the camera is, how people sit in the frame). It goes in the prompt
+  // in place of LS's own "From left to right" line, which forced a row of
+  // people even inside a truck cab seen from the side.
+  const shot = pipes ? nameless(image.shot).replace(/[.\s]+$/, '') : ''
   // Inside a Character line another person is "another", as in booru tags:
   // "looking at Lauren Vance" → "looking at another".
   const unnamed = (tags, self) => tags.map(tag => {
@@ -28598,6 +28645,14 @@ function compileNovelaiImage(image, ctx) {
     if (!actor || !target || actor === target || !tag || tag.split(' ').length > 5) continue
     tagsFor.get(actor).push('source#' + tag)
     tagsFor.get(target).push('target#' + tag)
+  }
+
+  // Two people looking at each other: say so. "looking at another" on each
+  // does not make their eyes meet (1.31.0).
+  const gazeAt = subject => subjects.filter((other, index) => other !== subject &&
+    subject.expression.some(tag => /\b(?:look|gaz|star|eye contact|glanc|watch)/i.test(tag) && formsOf(other, index).some(form => nameRe(form).test(tag))))
+  for (const subject of subjects) {
+    for (const other of gazeAt(subject)) if (gazeAt(other).includes(subject) && !tagsFor.get(subject).includes('eye contact')) tagsFor.get(subject).unshift('eye contact')
   }
 
   // 1.28.0: people are separated with "|" inside the one prompt, listed from
@@ -28638,10 +28693,10 @@ function compileNovelaiImage(image, ctx) {
   // With "|" nothing else says where people are, so one plain sentence does:
   // "From left to right: the femboy with honey brown hair, the man with dark
   // hair, the elf femboy with silver-blonde hair." Hair tells them apart.
-  if (!boxes && total >= 2 && spotted === total) {
+  if (shot) { main.push(shot + '.'); notes.push('The shot, as the parser pictured it: ' + String(image.shot)) }
+  else if (!boxes && total >= 2 && spotted === total) {
     const named = lines.map(line => {
-      const hair = (line.subject.identity.find(tag => SIMPLE_HAIR_COLOUR_RE.test(tag) && /\bhair\b/i.test(tag)) || '')
-        .replace(/\b(?:very long|long|short|medium|shoulder-length|messy|curly|wavy|straight|spiky)\b\s*/gi, '').trim()
+      const hair = hairOf(line.subject)
       return 'the ' + shorts[line.index] + (hair ? ' with ' + hair : '') + (/\bback\b/.test(line.spot) ? ' (further back)' : '')
     })
     main.push('From left to right: ' + named.join(', ') + '.')
