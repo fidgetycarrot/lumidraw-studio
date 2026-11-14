@@ -73,3 +73,13 @@ Now:
   story says so outright, and it is remembered for the chat.
 - An act alone still never adds it (1.30.1), and the parser is told not to
   work it out from who is doing what or who is on top.
+
+# 1.30.4
+
+A woman remembered as wearing no bra was drawn with her blouse open in an
+ordinary, fully dressed picture. The three tags Lumi Studio adds for that
+("no bra, covered nipples, breasts apart") did it: the same prompt and seed
+with "covered nipples" alone drew the blouse closed.
+
+Pictures that are not adult now get "covered nipples" only. Adult pictures
+keep all three. "No bra" is still remembered either way.

@@ -26761,7 +26761,7 @@ function simpleResolveSubject(raw, index, total, image, ctx, notes) {
     if (!out.identity.length) notes.push(`${raw.name}: no sheet and the parser gave no body description — they may come out generic. Save a sheet or try again.`)
   }
   out.outfit = applyBannedToList(out.outfit, banned)
-  simpleNoBra(out, profile, remembered, banned, notes)
+  simpleNoBra(out, profile, remembered, banned, notes, image)
   if (out.outfit.some(item => SIMPLE_SHORT_BOTTOMS_RE.test(item)) &&
       out.outfit.some(item => /\b(?:thigh[- ]high|over[- ]the[- ]knee)\b/i.test(item)) &&
       !out.outfit.some(item => /\bbare thighs\b/i.test(item))) {
@@ -26858,7 +26858,7 @@ function simpleBareParts(subject, image, notes) {
   notes.push(`${subject.displayName}: added “${add.join(', ')}” — the story lists nothing worn there, and the image model would draw ordinary clothes otherwise.`)
 }
 
-function simpleNoBra(out, profile, remembered, banned, notes) {
+function simpleNoBra(out, profile, remembered, banned, notes, image) {
   if (out.count !== '1girl') return
   if (!/\b(?:adult|woman|mature|lady|milf|mother)\b/i.test(String(out.phrase || '')) || /\b(?:teen|teenage|teenager|adolescent|child|kid|girlish|loli)\b/i.test(String(out.phrase || ''))) return
   const says0 = out.outfit.some(tag => SIMPLE_NO_BRA_RE.test(tag))
@@ -26874,6 +26874,15 @@ function simpleNoBra(out, profile, remembered, banned, notes) {
   // 1.29.2: a skirt and stockings with no top is also nothing on top;
   // "covered nipples" there asked the image model for a top that is not worn.
   if (!worn.length || worn.some(tag => SIMPLE_TOPLESS_RE.test(tag)) || !(simpleWorn(worn, SIMPLE_TOP_WEAR_RE) || simpleWorn(worn, SIMPLE_FULL_WEAR_RE))) { out.outfit = uniqueStrings([...worn, 'no bra']); return }
+  // 1.30.4: in a picture that is not adult, "no bra" and "breasts apart" opened
+  // a buttoned blouse under a suit jacket (Nov 2026: same prompt and seed with
+  // "covered nipples" alone drew it closed). Dressed pictures get that one tag;
+  // "no bra" is still what is remembered.
+  if (image && !['nsfw', 'explicit'].includes(image.rating)) {
+    out.outfit = uniqueStrings([...worn, ...applyBannedToList(['covered nipples'], banned)])
+    out.outfitState = uniqueStrings([...worn, 'no bra'])
+    return
+  }
   out.outfit = uniqueStrings([...worn, ...applyBannedToList(['no bra', 'covered nipples', 'breasts apart'], banned)])
 }
 
@@ -28483,6 +28492,8 @@ function compileStoryImage(image, ctx) {
   const compiled = presetUsesNovelai(ctx.preset) ? compileNovelaiImage(image, ctx)
     : presetPromptStyle(ctx.preset) === 'moss' ? compileMossImage(image, ctx) : compileSimpleImage(image, ctx)
   for (const entry of image.names || []) if (entry.result) compiled.debug.notes.push(`Name "${entry.name}" → ${entry.result}.`)
+  // What is remembered can differ from what was sent to the image model.
+  for (const subject of compiled.subjects || []) if (subject.outfitState) { subject.outfit = subject.outfitState; delete subject.outfitState }
   return compiled
 }
 
