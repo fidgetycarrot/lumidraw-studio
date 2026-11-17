@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.36.0'
+  const EXTENSION_VERSION = '1.36.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -755,7 +755,7 @@ function realSetup(ctx) {
     .ld-studio-shell { min-height:0; flex:1; display:flex; flex-direction:column; }
     /* 1.36.0: NovelAI layout for Studio. Flex rows, not grid (see above). */
     .ld-nai-studio { flex:1; min-height:0; display:flex; gap:0; background:#0e1019; }
-    .ld-nai-left { flex:0 0 340px; min-width:0; min-height:0; display:flex; flex-direction:column; border-right:1px solid var(--lumiverse-border, #2c2f3d); background:#131622; }
+    .ld-nai-left { flex:0 0 400px; min-width:0; min-height:0; display:flex; flex-direction:column; border-right:1px solid var(--lumiverse-border, #2c2f3d); background:#131622; }
     .ld-nai-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:12px; display:flex; flex-direction:column; gap:10px; }
     .ld-nai-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
     .ld-nai-key { font-size:12px; opacity:.75; min-width:44px; }
@@ -768,11 +768,13 @@ function realSetup(ctx) {
     .ld-nai-shape-portrait { width:9px; height:13px; } .ld-nai-shape-landscape { width:13px; height:9px; } .ld-nai-shape-square { width:11px; height:11px; }
     .ld-nai-wh { display:flex; align-items:center; gap:4px; font-size:12px; }
     .ld-panel .ld-nai-wh input { width:84px; padding:4px 6px; font-size:13px !important; min-height:0; height:32px; }
-    .ld-nai-promptbox { border:1px solid var(--lumiverse-border, #2c2f3d); border-radius:10px; background:#191c2a; padding:8px; display:flex; flex-direction:column; gap:6px; }
+    .ld-nai-promptbox { flex:1 0 auto; min-height:320px; border:1px solid var(--lumiverse-border, #2c2f3d); border-radius:10px; background:#191c2a; padding:8px; display:flex; flex-direction:column; gap:6px; }
     .ld-nai-tabs { display:flex; gap:4px; }
     .ld-nai-tab { background:transparent; border:0; color:inherit; padding:4px 8px; border-radius:6px; font-size:13px; opacity:.6; cursor:pointer; }
     .ld-nai-tab.ld-active { opacity:1; font-weight:600; background:#2a2f45; }
-    .ld-panel .ld-nai-promptbox textarea { min-height:300px; resize:vertical; background:transparent; border:0; outline:none; color:inherit; font-family:inherit; font-size:14px !important; line-height:1.55; padding:4px; }
+    .ld-nai-expand { margin-left:auto; background:transparent; border:1px solid var(--lumiverse-border, #2c2f3d); border-radius:6px; color:inherit; cursor:pointer; padding:2px 8px; font-size:14px; opacity:.8; }
+    .ld-nai-expand:hover { opacity:1; }
+    .ld-panel .ld-nai-promptbox textarea { flex:1 1 auto; min-height:240px; resize:none; background:transparent; border:0; outline:none; color:inherit; font-family:inherit; font-size:14px !important; line-height:1.55; padding:4px; }
     .ld-nai-settings { border:1px solid var(--lumiverse-border, #2c2f3d); border-radius:10px; background:#191c2a; }
     .ld-nai-summary { cursor:pointer; padding:9px 12px; font-size:13px; list-style:none; }
     .ld-nai-summary::-webkit-details-marker { display:none; }
@@ -1199,7 +1201,7 @@ function realSetup(ctx) {
                 <div class="ld-nai-seg"><button class="ld-nai-effort" data-effort="medium">Medium</button><button class="ld-nai-effort" data-effort="high">High</button></div>
               </div>
               <div class="ld-nai-promptbox">
-                <div class="ld-nai-tabs"><button class="ld-nai-tab ld-active" data-tab="prompt">Prompt</button><button class="ld-nai-tab" data-tab="undesired">Undesired Content</button></div>
+                <div class="ld-nai-tabs"><button class="ld-nai-tab ld-active" data-tab="prompt">Prompt</button><button class="ld-nai-tab" data-tab="undesired">Undesired Content</button><button class="ld-nai-expand" title="Open this text full screen" aria-label="Open this text full screen">⛶</button></div>
                 <textarea class="ld-nai-prompt" data-ld-expandable="1" spellcheck="false" placeholder="Write your prompt here. Use “|” before each person."></textarea>
                 <textarea class="ld-nai-negative" data-ld-expandable="1" spellcheck="false" placeholder="What you do not want in the picture." style="display:none"></textarea>
               </div>
@@ -5436,6 +5438,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   function textareaTitle(textarea) {
     const titles = [
       ['ld-prompt', 'Generation prompt'],
+      ['ld-nai-prompt', 'Prompt'],
+      ['ld-nai-negative', 'Undesired Content'],
       ['ld-negative', 'Workspace negative prompt'],
       ['ld-ed-chartags', 'Character tags'],
       ['ld-ed-personatags', 'Persona tags'],
@@ -6434,6 +6438,10 @@ ${entry.prompt || ''}`.trim()
     const prompt = b.dataset.tab === 'prompt'
     $('.ld-nai-prompt').style.display = prompt ? '' : 'none'
     $('.ld-nai-negative').style.display = prompt ? 'none' : ''
+  })
+  $('.ld-nai-expand').addEventListener('click', () => {
+    const prompt = $('.ld-nai-prompt').style.display !== 'none'
+    openTextEditor($(prompt ? '.ld-nai-prompt' : '.ld-nai-negative'))
   })
   $('.ld-nai-prompt').addEventListener('input', () => naiSet('.ld-prompt', $('.ld-nai-prompt').value, ['input']))
   $('.ld-nai-negative').addEventListener('input', () => naiSet('.ld-negative', $('.ld-nai-negative').value))

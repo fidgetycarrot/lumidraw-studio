@@ -38,3 +38,13 @@ the normal request; if NovelAI refuses it, the message says so.
 NovelAI's upscaler answers with a zip file, and Lumiverse does not let an
 extension receive zip files from a POST request. Enhance at 1.5× is the way
 to get a larger picture for now.
+
+# 1.36.1
+
+The NovelAI layout's prompt box was cramped:
+
+- The left column is wider (400 px).
+- The prompt box grows to fill the left column instead of leaving empty space
+  under the settings.
+- A ⛶ button on the prompt box opens the Prompt or Undesired Content text
+  full screen; Apply (or Cmd/Ctrl+Enter) puts it back.
