@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.34.0'
+  const EXTENSION_VERSION = '1.35.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -788,6 +788,14 @@ function realSetup(ctx) {
 
     .ld-card { border:1px solid var(--lumiverse-border, #3d4050); border-radius:9px; padding:9px; background:var(--lumiverse-fill, #262833); }
     .ld-card + .ld-card { margin-top:8px; }
+    .ld-cap-pick { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+    .ld-cap-preview { flex:0 0 auto; width:min(260px,100%); min-height:120px; display:flex; align-items:center; justify-content:center; border:1px dashed var(--lumiverse-border, #3d4050); border-radius:8px; overflow:hidden; background:rgba(0,0,0,.2); }
+    .ld-cap-preview.ld-drop { border-color:var(--lumiverse-primary, #8b7cf6); }
+    .ld-cap-img { display:block; max-width:100%; max-height:300px; object-fit:contain; }
+    .ld-cap-pick-side { flex:1 1 200px; display:flex; flex-direction:column; gap:7px; align-items:flex-start; }
+    .ld-cap-recent { display:grid; grid-template-columns:repeat(auto-fill,minmax(64px,1fr)); gap:6px; margin-top:10px; max-height:150px; overflow-y:auto; }
+    .ld-cap-recent img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:6px; cursor:pointer; border:2px solid transparent; }
+    .ld-cap-recent img.ld-active { border-color:var(--lumiverse-primary, #8b7cf6); }
     .ld-subtitle { font-size:12px; font-weight:650; margin-bottom:7px; }
     .ld-help { font-size:11px; line-height:1.4; color:var(--lumiverse-text-muted, #a2a5b4); }
     .ld-label { font-size:11px; color:var(--lumiverse-text-muted, #a2a5b4); margin-bottom:3px; display:block; }
@@ -1102,6 +1110,7 @@ function realSetup(ctx) {
           <button class="ld-main-tab ld-active" data-tab="studio">Studio</button>
           <button class="ld-main-tab" data-tab="story">Story</button>
           <button class="ld-main-tab" data-tab="presets">Cast &amp; presets</button>
+          <button class="ld-main-tab" data-tab="caption">Caption</button>
           <button class="ld-main-tab" data-tab="settings">Settings</button>
         </nav>
         <button class="ld-x ld-fullscreen-toggle" title="Open fullscreen" aria-label="Open fullscreen" aria-pressed="false">⛶</button>
@@ -1582,6 +1591,58 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         </div>
       </section>
 
+      <section class="ld-view" data-view="caption">
+        <div class="ld-form-view">
+          <div class="ld-card">
+            <div class="ld-subtitle">Picture</div>
+            <div class="ld-cap-pick">
+              <div class="ld-cap-preview"><img class="ld-cap-img" alt="Picture to caption" hidden /><div class="ld-cap-empty ld-help">No picture yet.</div></div>
+              <div class="ld-cap-pick-side">
+                <button class="ld-btn ld-cap-file-btn">Choose a file…</button>
+                <input type="file" class="ld-cap-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+                <div class="ld-help">Or drop a picture here, or pick one of your pictures below. In the picture viewer, Details → “Caption this” sends a picture here too.</div>
+              </div>
+            </div>
+            <div class="ld-cap-recent"></div>
+          </div>
+          <div class="ld-card">
+            <div class="ld-subtitle">Prompt</div>
+            <div class="ld-row ld-mobile-stack" style="align-items:flex-end">
+              <div style="flex:1 1 220px"><span class="ld-label">Saved prompts</span><select class="ld-cap-prompt-select"></select></div>
+              <div style="display:flex;gap:6px;flex:0 0 auto">
+                <button class="ld-btn ld-cap-save" title="Save the text below into this prompt">Save</button>
+                <button class="ld-btn ld-cap-save-new" title="Save the text below as a new prompt with its own name">Save as new</button>
+                <button class="ld-btn ld-cap-delete" title="Delete this saved prompt">Delete</button>
+              </div>
+            </div>
+            <div class="ld-cap-name-row" style="display:none;gap:6px;margin-top:7px">
+              <input class="ld-cap-name" placeholder="Name for the new prompt" style="flex:1" />
+              <button class="ld-btn ld-primary ld-cap-name-ok">Save</button>
+              <button class="ld-btn ld-cap-name-cancel">Cancel</button>
+            </div>
+            <textarea class="ld-cap-prompt" spellcheck="false" style="min-height:120px;margin-top:7px" placeholder="What should the model write about the picture?"></textarea>
+            <div class="ld-status ld-cap-prompt-status"></div>
+          </div>
+          <div class="ld-card">
+            <div class="ld-subtitle">Model</div>
+            <div class="ld-row ld-mobile-stack">
+              <div><span class="ld-label">Connection</span><select class="ld-cap-conn"><option value="">Same as the parser</option></select></div>
+              <div><span class="ld-label">Model (leave empty)</span><input class="ld-cap-model" placeholder="leave empty to use the connection's own model" /></div>
+            </div>
+            <div class="ld-help">The model has to be able to see pictures. Your parser model may not.</div>
+          </div>
+          <div class="ld-card">
+            <button class="ld-btn ld-primary ld-cap-run" style="width:100%">Caption</button>
+            <div class="ld-status ld-cap-status" style="margin-top:6px"></div>
+            <textarea class="ld-cap-result" spellcheck="false" style="min-height:140px;margin-top:7px" placeholder="The caption appears here."></textarea>
+            <div class="ld-row" style="margin-top:7px">
+              <button class="ld-btn ld-cap-copy">Copy</button>
+              <button class="ld-btn ld-cap-use" title="Put this into Studio's prompt box">Use in Studio</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="ld-view" data-view="settings">
           <nav class="ld-settings-rail" role="tablist">
             <button class="ld-settings-tab ld-active" data-settings-tab="connection">Connection</button>
@@ -1766,6 +1827,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <button class="ld-btn ld-lightbox-delete" title="Delete this picture everywhere: the chat, your history and the image library.">Delete</button>
             <button class="ld-btn ld-lightbox-report">Troubleshooting…</button>
             <button class="ld-btn ld-lightbox-fix">Fix this image…</button>
+            <button class="ld-btn ld-lightbox-caption" title="Open this picture in Caption">Caption this</button>
             <button class="ld-btn ld-lightbox-insert" title="Adds a SECOND copy of this image at the top of the latest story message. Not needed after a regeneration — that already replaced the image in place.">Add copy to chat</button>
             <button class="ld-btn ld-primary ld-lightbox-done">Done</button>
           </div>
@@ -3651,7 +3713,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   const MOBILE_TAB_KEY = 'lumidraw_mobile_studio_tab_v2'
 
   function setMainView(name, persist = true) {
-    const allowed = new Set(['studio', 'story', 'presets', 'settings'])
+    const allowed = new Set(['studio', 'story', 'presets', 'caption', 'settings'])
     const next = allowed.has(name) ? name : 'studio'
     let activeTab = null
     for (const tab of dom.queryAll('.ld-main-tab')) {
@@ -3669,6 +3731,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     }
     // A character saved elsewhere (or in another window) shows up in the cast list.
     if (next === 'story' && typeof refreshCastAddList === 'function') refreshCastAddList()
+    if (next === 'caption' && typeof openCaptionView === 'function') openCaptionView()
     flushHistoryViews()
   }
 
@@ -6932,6 +6995,193 @@ ${entry.prompt || ''}`.trim()
     const item = lightboxItems[lightboxIndex]
     if (item) appendToChat(item.image, item.entry)
   })
+  // ---------- Caption (1.35.0) ----------------------------------------------
+  // A picture, a saved prompt and a vision model. The picture is shrunk to at
+  // most 1536 px and sent as JPEG; models shrink it further anyway.
+  const caption = { prompts: [], connection: '', model: '', last: '', loaded: false, data: '', mime: '', source: '' }
+  function captionShrink(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, 1536 / Math.max(img.naturalWidth || 1, img.naturalHeight || 1))
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.max(1, Math.round(img.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
+          const g = canvas.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, canvas.width, canvas.height); g.drawImage(img, 0, 0, canvas.width, canvas.height)
+          resolve(canvas.toDataURL('image/jpeg', 0.92))
+        } catch (error) { reject(error) }
+      }
+      img.onerror = () => reject(new Error('That picture could not be opened.'))
+      img.src = src
+    })
+  }
+  async function setCaptionPicture(src, label = '') {
+    setStatus('.ld-cap-status', 'Loading the picture…')
+    try {
+      const dataUrl = await captionShrink(src)
+      caption.data = dataUrl; caption.mime = 'image/jpeg'; caption.source = src
+      const img = $('.ld-cap-img'); img.src = dataUrl; img.hidden = false
+      $('.ld-cap-empty').hidden = true
+      for (const thumb of dom.queryAll('.ld-cap-recent img')) thumb.classList.toggle('ld-active', thumb.dataset.src === src)
+      setStatus('.ld-cap-status', label ? 'Picture: ' + label : '')
+    } catch (error) { setStatus('.ld-cap-status', error.message || String(error), 'err') }
+  }
+  function renderCaptionRecent() {
+    const box = $('.ld-cap-recent')
+    if (!box) return
+    const seen = new Set(), items = []
+    for (const { image } of flattenHistoryImages()) {
+      if (!image || !image.url || seen.has(image.url)) continue
+      seen.add(image.url); items.push(image.url)
+      if (items.length >= 36) break
+    }
+    box.innerHTML = ''
+    for (const url of items) {
+      const img = document.createElement('img')
+      img.src = url; img.dataset.src = url; img.loading = 'lazy'; img.alt = 'Your picture'
+      if (url === caption.source) img.classList.add('ld-active')
+      img.addEventListener('click', () => setCaptionPicture(url, 'one of your pictures'))
+      box.appendChild(img)
+    }
+  }
+  function renderCaptionPrompts(select = caption.last) {
+    const sel = $('.ld-cap-prompt-select')
+    sel.innerHTML = ''
+    for (const item of caption.prompts) sel.add(new Option(item.name, item.name))
+    sel.add(new Option('(new, unsaved)', ''))
+    const found = caption.prompts.find(item => item.name === select)
+    sel.value = found ? found.name : (caption.prompts[0] ? caption.prompts[0].name : '')
+    $('.ld-cap-prompt').value = (caption.prompts.find(item => item.name === sel.value) || { text: '' }).text
+    $('.ld-cap-delete').disabled = !sel.value
+    $('.ld-cap-save').disabled = !sel.value
+  }
+  async function saveCaption(note) {
+    const got = await call('caption_save', { prompts: caption.prompts, connection: caption.connection, model: caption.model, last: caption.last }, 15000)
+    caption.prompts = got.prompts
+    if (note) setStatus('.ld-cap-prompt-status', note, 'good')
+  }
+  async function openCaptionView() {
+    renderCaptionRecent()
+    if (caption.loaded) return
+    try {
+      const got = await call('caption_get', {}, 15000)
+      Object.assign(caption, { prompts: got.prompts || [], connection: got.connection || '', model: got.model || '', last: got.last || '' })
+      caption.loaded = true
+      renderCaptionPrompts()
+      $('.ld-cap-model').value = caption.model
+      try {
+        const cres = await call('list_connections', {}, 10000)
+        const sel = $('.ld-cap-conn')
+        sel.innerHTML = '<option value="">Same as the parser</option>'
+        for (const c of Array.isArray(cres.connections) ? cres.connections : []) sel.add(new Option(c.name + (c.model ? ' — ' + c.model : ''), c.id))
+        sel.value = caption.connection
+        if (sel.value !== caption.connection) sel.value = ''
+      } catch { /* the default still works */ }
+    } catch (error) { setStatus('.ld-cap-prompt-status', 'Could not load saved prompts: ' + (error.message || error), 'err') }
+  }
+  $('.ld-cap-file-btn').addEventListener('click', () => $('.ld-cap-file').click())
+  $('.ld-cap-file').addEventListener('change', () => {
+    const file = $('.ld-cap-file').files && $('.ld-cap-file').files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => setCaptionPicture(String(reader.result), file.name)
+    reader.readAsDataURL(file)
+    $('.ld-cap-file').value = ''
+  })
+  {
+    const drop = $('.ld-cap-preview')
+    drop.addEventListener('dragover', event => { event.preventDefault(); drop.classList.add('ld-drop') })
+    drop.addEventListener('dragleave', () => drop.classList.remove('ld-drop'))
+    drop.addEventListener('drop', event => {
+      event.preventDefault(); drop.classList.remove('ld-drop')
+      const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0]
+      if (!file || !/^image\//.test(file.type)) return
+      const reader = new FileReader()
+      reader.onload = () => setCaptionPicture(String(reader.result), file.name)
+      reader.readAsDataURL(file)
+    })
+  }
+  $('.ld-cap-prompt-select').addEventListener('change', () => {
+    const name = $('.ld-cap-prompt-select').value
+    caption.last = name
+    $('.ld-cap-prompt').value = (caption.prompts.find(item => item.name === name) || { text: '' }).text
+    $('.ld-cap-delete').disabled = !name; $('.ld-cap-save').disabled = !name
+    setStatus('.ld-cap-prompt-status', '')
+    saveCaption().catch(() => {})
+  })
+  $('.ld-cap-save').addEventListener('click', async () => {
+    const name = $('.ld-cap-prompt-select').value
+    const item = caption.prompts.find(entry => entry.name === name)
+    if (!item) return
+    item.text = $('.ld-cap-prompt').value
+    try { await saveCaption('Saved “' + name + '”.') } catch (error) { setStatus('.ld-cap-prompt-status', error.message || String(error), 'err') }
+  })
+  $('.ld-cap-save-new').addEventListener('click', () => {
+    $('.ld-cap-name-row').style.display = 'flex'
+    $('.ld-cap-name').value = ''; $('.ld-cap-name').focus()
+  })
+  const hideCaptionName = () => { $('.ld-cap-name-row').style.display = 'none' }
+  $('.ld-cap-name-cancel').addEventListener('click', hideCaptionName)
+  const saveCaptionNew = async () => {
+    const name = $('.ld-cap-name').value.replace(/\s+/g, ' ').trim()
+    if (!name) { setStatus('.ld-cap-prompt-status', 'Give the prompt a name.', 'err'); return }
+    if (caption.prompts.some(item => item.name.toLowerCase() === name.toLowerCase())) { setStatus('.ld-cap-prompt-status', 'There is already a prompt called “' + name + '”. Pick another name, or choose it and press Save.', 'err'); return }
+    caption.prompts.push({ name, text: $('.ld-cap-prompt').value })
+    caption.last = name
+    try { await saveCaption('Saved “' + name + '”.'); hideCaptionName(); renderCaptionPrompts(name) } catch (error) { setStatus('.ld-cap-prompt-status', error.message || String(error), 'err') }
+  }
+  $('.ld-cap-name-ok').addEventListener('click', saveCaptionNew)
+  $('.ld-cap-name').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); saveCaptionNew() } if (event.key === 'Escape') { event.stopPropagation(); hideCaptionName() } })
+  {
+    let armed = 0
+    $('.ld-cap-delete').addEventListener('click', async () => {
+      const name = $('.ld-cap-prompt-select').value
+      if (!name) return
+      const button = $('.ld-cap-delete')
+      if (!armed) { button.textContent = 'Really delete?'; armed = setTimeout(() => { armed = 0; button.textContent = 'Delete' }, 3000); return }
+      clearTimeout(armed); armed = 0; button.textContent = 'Delete'
+      caption.prompts = caption.prompts.filter(item => item.name !== name)
+      caption.last = caption.prompts[0] ? caption.prompts[0].name : ''
+      try { await saveCaption('Deleted “' + name + '”.'); renderCaptionPrompts() } catch (error) { setStatus('.ld-cap-prompt-status', error.message || String(error), 'err') }
+    })
+  }
+  $('.ld-cap-conn').addEventListener('change', () => { caption.connection = $('.ld-cap-conn').value; saveCaption().catch(() => {}) })
+  $('.ld-cap-model').addEventListener('change', () => { caption.model = $('.ld-cap-model').value.trim(); saveCaption().catch(() => {}) })
+  $('.ld-cap-run').addEventListener('click', async () => {
+    const button = $('.ld-cap-run')
+    if (!caption.data) { setStatus('.ld-cap-status', 'Choose a picture first.', 'err'); return }
+    const prompt = $('.ld-cap-prompt').value.trim()
+    if (!prompt) { setStatus('.ld-cap-status', 'Write or choose a prompt first.', 'err'); return }
+    button.disabled = true
+    setStatus('.ld-cap-status', 'Asking the model…')
+    try {
+      const got = await call('caption_run', { data: caption.data, mime: caption.mime, prompt, connection: $('.ld-cap-conn').value, model: $('.ld-cap-model').value.trim() }, 180000)
+      $('.ld-cap-result').value = got.text
+      setStatus('.ld-cap-status', 'Done in ' + Math.max(1, Math.round((got.ms || 0) / 1000)) + ' s.', 'good')
+    } catch (error) { setStatus('.ld-cap-status', error.message || String(error), 'err') } finally { button.disabled = false }
+  })
+  $('.ld-cap-copy').addEventListener('click', async () => {
+    const text = $('.ld-cap-result').value
+    if (!text) return
+    try { await navigator.clipboard.writeText(text); setStatus('.ld-cap-status', 'Copied.', 'good') }
+    catch { $('.ld-cap-result').select(); setStatus('.ld-cap-status', 'Selected — press Cmd+C to copy.') }
+  })
+  $('.ld-cap-use').addEventListener('click', () => {
+    const text = $('.ld-cap-result').value.trim()
+    if (!text) return
+    $('.ld-prompt').value = text
+    $('.ld-prompt').dispatchEvent(new Event('input', { bubbles: true }))
+    setMainView('studio')
+  })
+  $('.ld-lightbox-caption').addEventListener('click', () => {
+    const item = lightboxItems[lightboxIndex]
+    const url = item && item.image && item.image.url
+    if (!url) return
+    closeLightbox()
+    setMainView('caption')
+    setCaptionPicture(url, 'from the picture viewer')
+  })
+
   $('.ld-lightbox-fix').addEventListener('click', () => {
     const box = $('.ld-lightbox-regen')
     if (box && box.style.display === 'block') closeRegenPanel()

@@ -16540,6 +16540,75 @@ function setStoryScanStage(scan, stage, note = '') {
 // Providers disagree about where the assistant's text lives. Only a non-empty
 // string counts: an empty `content` must fall through to the next candidate
 // rather than being treated as the answer.
+// ---------- Caption (1.35.0) ------------------------------------------------
+// Describe a picture with a vision model, using prompts the user saves and
+// names. Separate from the parser: the parser model may not see pictures.
+const CAPTION_FILE = 'caption.json'
+const CAPTION_STARTERS = [
+  { name: 'Style', text: `Describe only the art style of this picture, as comma-separated Danbooru-style tags an image model would understand: medium (oil painting, digital painting, watercolor, cel shading), line work, colouring, lighting, colour palette, level of detail, and any artist or period the style resembles. Do not describe the people, their clothes or what is happening. Tags only, no sentences.` },
+  { name: 'Character', text: `Describe the main person in this picture as comma-separated Danbooru-style tags for a character sheet: sex (1girl or 1boy), apparent age as "adult" or "mature", build, height, skin, face, hair colour, hair length and style, eye colour, and distinguishing marks. Then, separately after a line "Outfit:", their clothes from head to toe. Leave out pose, expression, background and art style. Tags only, no sentences.` },
+  { name: 'Plain description', text: `Describe this picture in plain natural language, in one or two short paragraphs: who or what is in it, what they look like and are wearing, what they are doing, the setting, the light and the mood. Be concrete and visual; do not guess at a story.` },
+]
+function captionDefaults() {
+  return { prompts: CAPTION_STARTERS.map(item => ({ ...item })), connection: '', model: '', last: 'Style' }
+}
+async function readCaptionSettings(userId) {
+  let saved = null
+  try { saved = await spindle.storage.getJson(CAPTION_FILE, { fallback: null }) } catch { saved = null }
+  const base = captionDefaults()
+  if (!saved || typeof saved !== 'object') return base
+  const prompts = Array.isArray(saved.prompts) ? saved.prompts
+    .filter(item => item && String(item.name || '').trim())
+    .map(item => ({ name: String(item.name).trim().slice(0, 60), text: String(item.text || '').slice(0, 8000) })) : base.prompts
+  return { prompts, connection: String(saved.connection || ''), model: String(saved.model || ''), last: String(saved.last || '') }
+}
+async function writeCaptionSettings(value) {
+  const prompts = []
+  const seen = new Set()
+  for (const item of Array.isArray(value.prompts) ? value.prompts : []) {
+    const name = String(item && item.name || '').replace(/\s+/g, ' ').trim().slice(0, 60)
+    if (!name || seen.has(name.toLowerCase())) continue
+    seen.add(name.toLowerCase())
+    prompts.push({ name, text: String(item.text || '').slice(0, 8000) })
+    if (prompts.length >= 60) break
+  }
+  const out = { prompts, connection: String(value.connection || ''), model: String(value.model || '').trim(), last: String(value.last || '') }
+  await spindle.storage.setJson(CAPTION_FILE, out, { indent: 2 })
+  return out
+}
+async function runCaption(userId, payload) {
+  const generateApi = spindle.generate || spindle.generation || spindle.llm
+  if (!generateApi || typeof generateApi.quiet !== 'function') throw new Error('Lumiverse generation is not available to Lumi Studio.')
+  const data = String(payload.data || '').replace(/^data:[^,]*,/, '')
+  if (!data) throw new Error('Choose a picture first.')
+  if (data.length > 14 * 1024 * 1024) throw new Error('That picture is too large. Try a smaller one.')
+  const prompt = String(payload.prompt || '').trim()
+  if (!prompt) throw new Error('Write or choose a prompt first.')
+  const mime = /^image\/(?:png|jpeg|webp|gif)$/.test(String(payload.mime || '')) ? payload.mime : 'image/jpeg'
+  const settings = await getSettings()
+  const connectionId = String(payload.connection || '') || settings.parserConnection || undefined
+  const model = String(payload.model || '').trim()
+  const opts = {
+    userId,
+    messages: [{ role: 'user', content: [{ type: 'image', data, mime_type: mime }, { type: 'text', text: prompt }] }],
+    parameters: { temperature: 0.3, max_tokens: 3000 },
+  }
+  if (connectionId) opts.connection_id = connectionId
+  if (model) opts.model = model
+  const started = Date.now()
+  let res
+  try { res = await generateApi.quiet(opts) } catch (error) {
+    const message = (error && error.message) || String(error)
+    if (/userId/i.test(message)) res = await generateApi.quiet(opts, userId)
+    else if (/image|vision|multimodal|content type|unsupported/i.test(message)) throw new Error('This model could not read the picture (' + message + '). Pick a model that can see images.')
+    else throw error
+  }
+  const text = String(extractParserText(res) || '').replace(/^```[a-z]*\s*|\s*```$/g, '').trim()
+  if (!text) throw new Error('The model sent back nothing. It may not be able to see pictures, or it declined this one.')
+  spindle.log.info('[lumidraw] caption done in ' + (Date.now() - started) + 'ms · model=' + (model || 'connection default'))
+  return { text, ms: Date.now() - started }
+}
+
 function extractParserText(res) {
   const pick = (value) => (typeof value === 'string' && value.trim() ? value : '')
   if (typeof res === 'string') return res.trim() ? res : ''
@@ -19696,6 +19765,18 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'caption_get': {
+        reply = ok(payload, requestId, await readCaptionSettings(userId))
+        break
+      }
+      case 'caption_save': {
+        reply = ok(payload, requestId, await writeCaptionSettings(payload))
+        break
+      }
+      case 'caption_run': {
+        reply = ok(payload, requestId, await runCaption(userId, payload))
+        break
+      }
       case 'list_connections': {
         let out = []
         try {
