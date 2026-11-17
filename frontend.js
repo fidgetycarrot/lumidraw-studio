@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.32.0'
+  const EXTENSION_VERSION = '1.33.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1263,7 +1263,7 @@ function realSetup(ctx) {
             </select>
             <div class="ld-mode-note ld-help">Manual uses the Scan buttons; automatic counts new replies while enabled, with no catch-up for replies written while off. Scan latest bypasses the wait.</div>
             <input type="checkbox" class="ld-autoscan" hidden aria-hidden="true" tabindex="-1" />
-            <select class="ld-auto-interval" aria-label="Automatic image frequency"><option value="5">Every 5 story replies</option><option value="1">Every story reply</option></select>
+            <select class="ld-auto-interval" aria-label="Automatic image frequency"><option value="1">Every story reply</option><option value="2">Every 2 story replies</option><option value="3">Every 3 story replies</option><option value="4">Every 4 story replies</option><option value="5">Every 5 story replies</option><option value="6">Every 6 story replies</option><option value="7">Every 7 story replies</option><option value="8">Every 8 story replies</option><option value="10">Every 10 story replies</option><option value="12">Every 12 story replies</option><option value="15">Every 15 story replies</option><option value="20">Every 20 story replies</option></select>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-chartags" style="width:auto" /> Use active character image tags when the preset profile is blank</label>
             <label style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px"><input type="checkbox" class="ld-strip-directives" style="width:auto" /> Hide generated images and image-request directives from the story model</label>
             <div class="ld-help">Some presets teach the model to request pictures by writing markdown such as <code>![tags](/api/v1/images/gen)</code>. Those never render, and each one left in the history teaches the model to write another. This removes them from what the model sees for each generation — your stored messages are never modified. Real images, including Lumi Studio's own, are always left alone.</div>
@@ -1749,7 +1749,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           <span class="ld-label" style="margin-top:6px">Negative prompt</span>
           <textarea class="ld-lightbox-regen-negative" spellcheck="false" style="min-height:44px"></textarea>
           <label class="ld-lightbox-regen-seedrow" style="display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px">
-            <input type="checkbox" class="ld-lightbox-regen-seed" checked />
+            <input type="checkbox" class="ld-lightbox-regen-seed" />
             <span>Reuse the original seed <span class="ld-lightbox-regen-seedval"></span></span>
           </label>
           <div class="ld-help">Keeping the seed holds the composition steady so prompt edits show their own effect. Uncheck to roll a completely new image.</div>
@@ -3536,7 +3536,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     $('.ld-lightbox-regen-negative').value = entry.negativePrompt || ''
     const seedKnown = entry.seed !== undefined && entry.seed !== 'random'
     const seedBox = $('.ld-lightbox-regen-seed')
-    seedBox.checked = seedKnown
+    // 1.33.0: starts unticked. A new seed is what most remakes want.
+    seedBox.checked = false
     seedBox.disabled = !seedKnown
     $('.ld-lightbox-regen-seedval').textContent = seedKnown ? `(${entry.seed})` : '(the original seed was random and was not recorded)'
     box.style.display = 'block'
@@ -10534,7 +10535,10 @@ ${entry.prompt || ''}`.trim()
       $('.ld-cloud-fallback').checked = settings.cloudFallback !== false
       $('.ld-mode').value = storyBehaviorFromSettings(settings.mode || 'off', settings.autoScan)
       $('.ld-autoscan').checked = settings.autoScan !== false
-      $('.ld-auto-interval').value = String(settings.autoImageEvery === 1 ? 1 : 5)
+      { const every = Math.min(20, Math.max(1, Math.round(Number(settings.autoImageEvery) || 5)))
+        const box = $('.ld-auto-interval')
+        if (![...box.options].some(option => option.value === String(every))) box.add(new Option('Every ' + every + ' story replies', String(every)))
+        box.value = String(every) }
       $('.ld-maximg').value = settings.maxImages || 2
       $('.ld-minimg').value = settings.minImages || 0
       if ($('.ld-maxsubjects')) $('.ld-maxsubjects').value = String(settings.maxSubjects || 2)

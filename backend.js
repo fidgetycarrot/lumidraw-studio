@@ -17581,8 +17581,13 @@ function reconcileCadenceState(state, messages) {
   return state
 }
 
+// 1.33.0: any number of replies from 1 to 20, not only 1 or 5.
+function normalizeAutoEvery(value) {
+  return Math.min(20, Math.max(1, Math.round(Number(value) || 5)))
+}
+
 function advanceAutoCadence(previous, messageId, every, options = {}) {
-  every = Number(every) === 1 ? 1 : 5
+  every = normalizeAutoEvery(every)
   const state = reconcileCadenceState(cadenceState(previous, every, Number(options.resumeAt) || 0, options.messages), options.messages)
   let row = state.rows.find(row => row.id === messageId)
   const duplicate = !!row
@@ -17812,7 +17817,7 @@ function wardrobeProtectLaterChanges(before, after, meta, position, index) {
 }
 
 async function automaticImageCadence(userId, chatId, target, settings, options = {}) {
-  const every = Number(settings.autoImageEvery) === 1 ? 1 : 5
+  const every = normalizeAutoEvery(settings.autoImageEvery)
   if (!target.isAssistant || !target.id) return { due: false, note: 'Only new assistant story replies advance the image schedule.' }
   const key = JSON.stringify([userId, chatId])
   const prior = autoCadenceLocks.get(key) || Promise.resolve()
@@ -19505,7 +19510,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.cloudFallback !== undefined) settings.cloudFallback = !!payload.cloudFallback
         if (payload.autoScan !== undefined) settings.autoScan = !!payload.autoScan
         if (payload.promptOnly !== undefined) settings.promptOnly = !!payload.promptOnly
-        if (payload.autoImageEvery !== undefined) settings.autoImageEvery = Number(payload.autoImageEvery) === 1 ? 1 : 5
+        if (payload.autoImageEvery !== undefined) settings.autoImageEvery = normalizeAutoEvery(payload.autoImageEvery)
         if (payload.simplePipeline !== undefined) settings.simplePipeline = !!payload.simplePipeline
         if (payload.experimentalSceneCore !== undefined) settings.experimentalSceneCore = !!payload.experimentalSceneCore
         if (payload.experimentalJevPlanner !== undefined) settings.experimentalJevPlanner = !!payload.experimentalJevPlanner
@@ -26295,19 +26300,32 @@ This picture is drawn by NovelAI, which puts each person on their own spot.
 // not have to be in every picture.
 const SCENERY_RULES = `
 PICTURES WITHOUT PEOPLE
-Not every picture needs the story's people in it.
-- When the passage ARRIVES somewhere new, or shows something for the first
-  time (a building, a ship, a landscape, a great machine, a creature), and
-  that sight is the strongest thing in the passage, draw the sight alone, the
-  way the people there see it.
-- A place or thing alone: "subjects": [] and "framing": ["scenery", plus a shot
-  such as "wide shot"]. "scene_summary" says what is seen, with no people in
-  it. Fill "place" and "setting" as usual; put more into "setting" (up to 8).
+Not every picture needs the story's people in it. Roleplay is more than faces:
+the place, the mood and the things that matter are part of the story too.
+- Draw the sight alone, the way the people there see it, when the passage
+  lingers on it:
+  * a place: arriving somewhere, or a place shown in a new light or weather
+    (the city at night through rain, the tavern empty at dawn);
+  * the mood: what sets the scene's feeling (a storm over the sea, candles
+    burning low, a battlefield after the fight);
+  * a thing that matters: something the story turns on or reveals (a letter,
+    a key, a weapon, a strange device, a glowing orb in an open chest, a body
+    on the floor). Close in on it: "close-up" or "still life", with just
+    enough of its surroundings to place it.
+  * a creature on its own.
+- When the passage gives such a sight AND a people moment of about the same
+  weight, prefer the sight about one time in three; when you are allowed more
+  than one picture, one of them can be the sight.
+- A place or thing alone: "subjects": [] and "framing": ["scenery" for a place,
+  or "close-up" / "still life" for a thing, plus a shot such as "wide shot"].
+  "scene_summary" says what is seen, with no people in it. Fill "place" and
+  "setting" as usual; put more into "setting" (up to 8).
 - A creature alone: the creature is the only subject, as 1other, without the
   story's people.
-- At most one such picture per passage. Never when the passage is mainly
-  something happening between people, and never for a place that KNOWN PLACES
-  already lists unless the passage shows it changed.
+- A sexual passage is the exception: if anything sexual is happening in the
+  passage, draw the people and the act, never a place or a thing alone.
+- Never when the passage is only people talking or acting with nothing shown
+  worth a picture of its own.
 `
 
 function buildSimpleInstruction(profiles, memory, card, options = {}) {
@@ -26624,6 +26642,12 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2, allowNoPeople = 
   }
   // 1.29.1: an empty list is how some models decline without saying so.
   if (!parsed.images.length) return { images: [], refused: true, error: 'The parser model sent back an empty list. It may have declined this passage. Try again, or pick a different parser model.' }
+  // 1.33.0: in a sexual passage the pictures are of the people and the act.
+  // If any picture from this passage is adult or has an act, a picture of a
+  // place or thing alone from the same passage is dropped.
+  const sexual = images.some(image => ['nsfw', 'explicit'].includes(image.rating) || (image.interactions || []).length)
+  const kept = sexual ? images.filter(image => image.subjects.length) : images
+  if (kept.length) return { images: kept }
   if (!images.length) return { images: [], error: allowNoPeople ? 'The parser found nothing to draw in this passage.' : 'The parser found no one to draw in this passage.' }
   return { images }
 }
