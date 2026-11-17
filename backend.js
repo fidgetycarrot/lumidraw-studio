@@ -3523,9 +3523,8 @@ function splitNovelaiPrompt(text) {
 
 // NovelAI wants sides in steps of 64. Up to about one megapixel is free on
 // Opus; bigger costs Anlas, so LS stays inside it.
-function novelaiSize(width, height) {
+function novelaiSize(width, height, limit = 1024 * 1024) {
   let w = Number(width) || 832, h = Number(height) || 1216
-  const limit = 1024 * 1024
   if (w * h > limit) { const scale = Math.sqrt(limit / (w * h)); w *= scale; h *= scale }
   // Nearest steps of 64, then trim the height if that went over the limit, so
   // 16:9 lands on NovelAI's own 1344×768 rather than 1344×704.
@@ -3569,7 +3568,8 @@ function buildNovelaiPayload({ prompt, negativePrompt, seed, config }) {
   const max = /diffusion-5/.test(model) ? 22 : 6
   const characters = split.characters.slice(0, max)
   const useCoords = characters.length >= 2 && characters.every(c => c.center)
-  const size = novelaiSize(config.width, config.height)
+  // Enhance at 1.5x goes past the 1 MP that Opus makes free (1.36.0).
+  const size = novelaiSize(config.width, config.height, config.novelaiEnhance ? 1600 * 1600 : 1024 * 1024)
   const medium = model === 'nai-diffusion-5-full-medium'
   // Presets show NovelAI's own sampler names ("Euler Ancestral"); either form works.
   const pick = String(config.sampler || '').trim().toLowerCase()
@@ -20847,13 +20847,33 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (!payloadOut.model) {
           spindle.log.info('[lumidraw] Studio generation sent with no model — Draw Things will use the model selected in its own UI')
         }
+        // Enhance (1.36.0): NovelAI redraws a picture from itself, the way the
+        // website's Enhance does: image-to-image with the same prompt, often
+        // 1.5x larger. The picture is sent once and never kept in history.
+        const enhance = payload.enhance && imageRenderer(payload.config) === 'novelai' && typeof payload.enhance.image === 'string' ? payload.enhance : null
+        if (enhance) {
+          const image = enhance.image.replace(/^data:[^,]*,/, '')
+          if (!image || image.length > 24 * 1024 * 1024) throw new Error('The picture to enhance is missing or too large.')
+          payloadOut.action = 'img2img'
+          Object.assign(payloadOut.parameters, {
+            image, strength: Math.max(0.05, Math.min(0.95, Number(enhance.strength) || 0.5)),
+            noise: Math.max(0, Math.min(0.99, Number(enhance.noise) || 0)), extra_noise_seed: payloadOut.parameters.seed, color_correct: true,
+          })
+          spindle.log.info('[lumidraw] NovelAI enhance · ' + payloadOut.parameters.width + 'x' + payloadOut.parameters.height + ' · strength ' + payloadOut.parameters.strength + ' · noise ' + payloadOut.parameters.noise)
+        }
         const started = Date.now()
         let renderChatId = String(payload.chatId || '')
         if (!renderChatId && imageRenderer(payload.config) === 'swarmui') {
           try { renderChatId = String(await resolveActiveChatId(userId) || '') } catch { /* Studio rendering does not require a story chat. */ }
         }
-        const { images, backend, fellBackFrom, mime } = await generateImages(settings, payloadOut, 'Studio generation', imageRenderer(payload.config),
-          progress => notifyFrontend(userId, 'renderer_progress', progress), { chatId: renderChatId, imageIndex: 1, imageTotal: 1, userId })
+        let rendered
+        try {
+          rendered = await generateImages(settings, payloadOut, 'Studio generation', imageRenderer(payload.config),
+            progress => notifyFrontend(userId, 'renderer_progress', progress), { chatId: renderChatId, imageIndex: 1, imageTotal: 1, userId })
+        } finally {
+          if (enhance) delete payloadOut.parameters.image
+        }
+        const { images, backend, fellBackFrom, mime } = rendered
 
         // Persist to Lumiverse's image library (tagged to this extension).
         // Operator-scoped installs require an explicit userId on user-owned
@@ -20890,6 +20910,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           backend,
           ...(fellBackFrom ? { fellBackFrom } : {}),
           recipe: { config: payload.config || null, extra: null },
+          ...(enhance ? { enhancedFrom: String(enhance.sourceUrl || ''), enhance: { strength: payloadOut.parameters.strength, noise: payloadOut.parameters.noise } } : {}),
           generationRequest: troubleshootingClean(payloadOut),
         }
         const history = await pushHistory(entry, userId)

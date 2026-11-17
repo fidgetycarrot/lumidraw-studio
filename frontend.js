@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.35.1'
+  const EXTENSION_VERSION = '1.36.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -753,6 +753,67 @@ function realSetup(ctx) {
     .ld-mobile-tab.ld-active { background:var(--lumiverse-fill, #262833); border-color:var(--lumiverse-border, #3d4050); color:var(--lumiverse-text, #eceef4); }
 
     .ld-studio-shell { min-height:0; flex:1; display:flex; flex-direction:column; }
+    /* 1.36.0: NovelAI layout for Studio. Flex rows, not grid (see above). */
+    .ld-nai-studio { flex:1; min-height:0; display:flex; gap:0; background:#0e1019; }
+    .ld-nai-left { flex:0 0 340px; min-width:0; min-height:0; display:flex; flex-direction:column; border-right:1px solid var(--lumiverse-border, #2c2f3d); background:#131622; }
+    .ld-nai-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:12px; display:flex; flex-direction:column; gap:10px; }
+    .ld-nai-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .ld-nai-key { font-size:12px; opacity:.75; min-width:44px; }
+    .ld-nai-pill { display:flex; align-items:center; gap:6px; padding:4px 8px; border:1px solid var(--lumiverse-border, #2c2f3d); border-radius:8px; background:#191c2a; font-size:12px; }
+    .ld-panel .ld-nai-pill select { background:transparent; border:0; color:inherit; font-weight:600; padding:2px 0; width:auto; min-width:0; font-size:13px !important; }
+    .ld-nai-seg { display:inline-flex; border:1px solid var(--lumiverse-border, #2c2f3d); border-radius:8px; overflow:hidden; background:#191c2a; }
+    .ld-nai-seg button { background:transparent; border:0; color:inherit; padding:5px 10px; font-size:12px; cursor:pointer; opacity:.7; }
+    .ld-nai-seg button.ld-active { background:#2a2f45; opacity:1; font-weight:600; }
+    .ld-nai-shape { display:inline-block; border:1.5px solid currentColor; border-radius:2px; vertical-align:middle; }
+    .ld-nai-shape-portrait { width:9px; height:13px; } .ld-nai-shape-landscape { width:13px; height:9px; } .ld-nai-shape-square { width:11px; height:11px; }
+    .ld-nai-wh { display:flex; align-items:center; gap:4px; font-size:12px; }
+    .ld-panel .ld-nai-wh input { width:84px; padding:4px 6px; font-size:13px !important; min-height:0; height:32px; }
+    .ld-nai-promptbox { border:1px solid var(--lumiverse-border, #2c2f3d); border-radius:10px; background:#191c2a; padding:8px; display:flex; flex-direction:column; gap:6px; }
+    .ld-nai-tabs { display:flex; gap:4px; }
+    .ld-nai-tab { background:transparent; border:0; color:inherit; padding:4px 8px; border-radius:6px; font-size:13px; opacity:.6; cursor:pointer; }
+    .ld-nai-tab.ld-active { opacity:1; font-weight:600; background:#2a2f45; }
+    .ld-panel .ld-nai-promptbox textarea { min-height:300px; resize:vertical; background:transparent; border:0; outline:none; color:inherit; font-family:inherit; font-size:14px !important; line-height:1.55; padding:4px; }
+    .ld-nai-settings { border:1px solid var(--lumiverse-border, #2c2f3d); border-radius:10px; background:#191c2a; }
+    .ld-nai-summary { cursor:pointer; padding:9px 12px; font-size:13px; list-style:none; }
+    .ld-nai-summary::-webkit-details-marker { display:none; }
+    .ld-nai-summary b { font-weight:600; margin-right:12px; }
+    .ld-nai-settings-body { display:flex; flex-wrap:wrap; gap:8px; padding:0 12px 12px; }
+    .ld-nai-settings-body label { flex:1 1 130px; display:flex; flex-direction:column; }
+    .ld-panel .ld-nai-settings-body input, .ld-panel .ld-nai-settings-body select { padding:6px 8px; }
+    .ld-nai-save-line { justify-content:space-between; }
+    .ld-nai-genwrap { flex:0 0 auto; padding:10px 12px 12px; border-top:1px solid var(--lumiverse-border, #2c2f3d); }
+    .ld-nai-generate { width:100%; min-height:44px; font-size:15px; font-weight:700; }
+    .ld-nai-stage { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
+    .ld-nai-toolbar { flex:0 0 auto; display:flex; justify-content:center; gap:6px; padding:10px; }
+    .ld-nai-enhance { flex:0 0 auto; margin:0 auto 8px; padding:10px 12px; border:1px solid var(--lumiverse-border, #2c2f3d); border-radius:10px; background:#191c2a; display:flex; flex-direction:column; gap:8px; }
+    .ld-nai-canvas { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:0 16px; overflow:hidden; }
+    .ld-nai-img { max-width:100%; max-height:100%; object-fit:contain; border-radius:6px; cursor:zoom-in; box-shadow:0 10px 40px rgba(0,0,0,.45); }
+    .ld-nai-empty { opacity:.5; font-size:14px; }
+    .ld-nai-bar { flex:0 0 auto; display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; padding:10px 16px; font-size:12px; }
+    .ld-nai-meta { opacity:.75; }
+    .ld-nai-actions { display:flex; gap:6px; flex-wrap:wrap; }
+    .ld-nai-history { flex:0 0 132px; min-height:0; display:flex; flex-direction:column; border-left:1px solid var(--lumiverse-border, #2c2f3d); background:#131622; }
+    .ld-nai-history.ld-collapsed { flex-basis:36px; }
+    .ld-nai-history.ld-collapsed .ld-nai-strip { display:none; }
+    .ld-nai-history.ld-collapsed .ld-nai-history-toggle { writing-mode:vertical-rl; padding:10px 0; }
+    .ld-nai-history-head { flex:0 0 auto; padding:8px; }
+    .ld-nai-history-toggle { background:transparent; border:0; color:inherit; font-weight:600; cursor:pointer; width:100%; text-align:left; font-size:13px; }
+    .ld-nai-strip { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:0 8px 8px; display:flex; flex-direction:column; gap:8px; }
+    .ld-nai-strip button { display:block; padding:0; border:2px solid transparent; border-radius:6px; background:#191c2a; cursor:pointer; overflow:hidden; flex:0 0 auto; }
+    .ld-nai-strip button.ld-active { border-color:var(--lumiverse-primary, #8b7cf6); }
+    .ld-nai-strip img { display:block; width:100%; height:auto; aspect-ratio:var(--ld-ar, 1); object-fit:cover; }
+    @media (max-width: 840px) {
+      .ld-nai-studio { flex-direction:column; overflow-y:auto; }
+      .ld-nai-left, .ld-nai-stage, .ld-nai-history { flex:0 0 auto; border:0; }
+      .ld-nai-stage { order:-1; }
+      .ld-nai-canvas { height:60vh; flex:0 0 auto; }
+      .ld-nai-scroll { overflow:visible; }
+      .ld-nai-history { flex-basis:auto; }
+      .ld-nai-strip { flex-direction:row; overflow-x:auto; overflow-y:hidden; }
+      .ld-nai-strip button { width:84px; }
+      .ld-nai-history.ld-collapsed .ld-nai-history-toggle { writing-mode:horizontal-tb; }
+    }
+
     /* Desktop deliberately uses plain nested flex rows instead of CSS Grid.
        Safari 27 beta can oscillate hit-testing when independently scrolling
        grid children and replaced images share a fixed-position ancestor. */
@@ -1126,6 +1187,70 @@ function realSetup(ctx) {
       <div class="ld-status ld-boot-status" role="status" style="padding:0 14px">Loading saved Lumi Studio data…</div>
 
       <section class="ld-view ld-active" data-view="studio">
+        <div class="ld-nai-studio" style="display:none">
+          <aside class="ld-nai-left">
+            <div class="ld-nai-scroll">
+              <div class="ld-nai-line">
+                <label class="ld-nai-pill"><span>App</span><select class="ld-nai-app" title="Image app for Studio"><option value="novelai">NovelAI</option><option value="drawthings">Draw Things</option><option value="swarmui">SwarmUI</option><option value="nanogpt">NanoGPT</option><option value="dtcloud">Draw Things cloud</option></select></label>
+                <label class="ld-nai-pill"><span>Model</span><select class="ld-nai-model"><option value="nai-diffusion-5-full">V5 Full</option><option value="nai-diffusion-5-curated">V5 Curated</option><option value="nai-diffusion-4-5-full">V4.5 Full</option><option value="nai-diffusion-4-5-curated">V4.5 Curated</option></select></label>
+              </div>
+              <div class="ld-nai-line ld-nai-effort-line">
+                <span class="ld-nai-key">Effort</span>
+                <div class="ld-nai-seg"><button class="ld-nai-effort" data-effort="medium">Medium</button><button class="ld-nai-effort" data-effort="high">High</button></div>
+              </div>
+              <div class="ld-nai-promptbox">
+                <div class="ld-nai-tabs"><button class="ld-nai-tab ld-active" data-tab="prompt">Prompt</button><button class="ld-nai-tab" data-tab="undesired">Undesired Content</button></div>
+                <textarea class="ld-nai-prompt" data-ld-expandable="1" spellcheck="false" placeholder="Write your prompt here. Use “|” before each person."></textarea>
+                <textarea class="ld-nai-negative" data-ld-expandable="1" spellcheck="false" placeholder="What you do not want in the picture." style="display:none"></textarea>
+              </div>
+              <div class="ld-nai-line">
+                <span class="ld-nai-key">Size</span>
+                <div class="ld-nai-seg"><button class="ld-nai-size" data-w="832" data-h="1216" title="Portrait 832×1216"><span class="ld-nai-shape ld-nai-shape-portrait"></span></button><button class="ld-nai-size" data-w="1216" data-h="832" title="Landscape 1216×832"><span class="ld-nai-shape ld-nai-shape-landscape"></span></button><button class="ld-nai-size" data-w="1024" data-h="1024" title="Square 1024×1024"><span class="ld-nai-shape ld-nai-shape-square"></span></button></div>
+                <div class="ld-nai-wh"><input class="ld-nai-w" type="number" step="64" min="64" aria-label="Width" /><span>×</span><input class="ld-nai-h" type="number" step="64" min="64" aria-label="Height" /></div>
+              </div>
+              <details class="ld-nai-settings">
+                <summary class="ld-nai-summary"></summary>
+                <div class="ld-nai-settings-body">
+                  <label><span class="ld-label">Steps</span><input class="ld-nai-steps" type="number" min="1" max="50" /></label>
+                  <label><span class="ld-label">Guidance</span><input class="ld-nai-cfg" type="number" step="0.5" min="0" /></label>
+                  <label><span class="ld-label">Seed (empty = random)</span><span style="display:flex;gap:4px"><input class="ld-nai-seed" type="number" min="0" placeholder="random" style="flex:1" /><button class="ld-btn ld-compact ld-nai-seed-clear" title="Random seed">✕</button></span></label>
+                  <label><span class="ld-label">Sampler</span><select class="ld-nai-sampler"></select></label>
+                </div>
+              </details>
+              <div class="ld-nai-line ld-nai-save-line">
+                <span class="ld-help">These settings are for Studio only.</span>
+                <button class="ld-btn ld-compact ld-nai-save-preset" title="Save these settings into the selected preset, so story pictures use them">Update preset</button>
+              </div>
+            </div>
+            <div class="ld-nai-genwrap"><button class="ld-btn ld-primary ld-nai-generate">Generate</button><div class="ld-status ld-nai-status"></div></div>
+          </aside>
+          <main class="ld-nai-stage">
+            <div class="ld-nai-toolbar">
+              <button class="ld-btn ld-compact ld-nai-enhance-btn" title="Redraw this picture from itself, sharper and optionally larger">✦ Enhance</button>
+              <button class="ld-btn ld-compact ld-nai-open" title="View full screen">⛶ Full screen</button>
+            </div>
+            <div class="ld-nai-enhance" style="display:none">
+              <div class="ld-nai-line"><span class="ld-nai-key">Size</span><div class="ld-nai-seg"><button class="ld-nai-enh-size ld-active" data-scale="1">Same size</button><button class="ld-nai-enh-size" data-scale="1.5">1.5× larger</button></div></div>
+              <div class="ld-nai-line"><span class="ld-nai-key">Change</span><div class="ld-nai-seg"><button class="ld-nai-enh-str" data-strength="0.35">Light</button><button class="ld-nai-enh-str ld-active" data-strength="0.5">Medium</button><button class="ld-nai-enh-str" data-strength="0.65">Strong</button></div></div>
+              <div class="ld-help ld-nai-enh-note">Same size is free on Opus. 1.5× larger uses Anlas.</div>
+              <div class="ld-nai-line"><button class="ld-btn ld-primary ld-compact ld-nai-enh-run">Enhance</button><button class="ld-btn ld-compact ld-nai-enh-cancel">Cancel</button></div>
+            </div>
+            <div class="ld-nai-canvas"><img class="ld-nai-img" alt="Generated image" draggable="false" style="display:none" /><div class="ld-nai-empty">Your pictures appear here.</div></div>
+            <div class="ld-nai-bar">
+              <span class="ld-nai-meta"></span>
+              <span class="ld-nai-actions">
+                <button class="ld-btn ld-compact ld-nai-use-seed" title="Use this picture's seed for the next one">Reuse seed</button>
+                <button class="ld-btn ld-compact ld-nai-use-prompt" title="Put this picture's prompt in the prompt box">Use prompt</button>
+                <button class="ld-btn ld-compact ld-nai-to-chat" title="Add a copy of this picture to the latest story message">Add to chat</button>
+                <button class="ld-btn ld-compact ld-nai-delete" title="Delete this picture everywhere">Delete</button>
+              </span>
+            </div>
+          </main>
+          <aside class="ld-nai-history">
+            <div class="ld-nai-history-head"><button class="ld-nai-history-toggle" title="Show or hide history">History <span class="ld-nai-caret">▸</span></button></div>
+            <div class="ld-nai-strip"></div>
+          </aside>
+        </div>
         <div class="ld-studio-shell">
           <div class="ld-mobile-tabs" aria-label="Studio panels">
             <button class="ld-mobile-tab ld-active" data-mobile-tab="create">Create</button>
@@ -4305,6 +4430,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const nai = usesNovelai(config)
     $('[data-act="sync"]').title = nano ? 'Refresh the NanoGPT model list' : usesSwarm(config) ? 'Refresh SwarmUI models and saved presets' : cloud ? 'Check the LS Cloud Helper' : nai ? 'Check the NovelAI token' : 'Capture the recipe currently shown in Draw Things'
     $('.ld-draft-backend').value = rendererValue(config)
+    if (typeof setNaiLayout === 'function') setNaiLayout(nai)
     $('.ld-swarm-tools').style.display = usesSwarm(config) ? '' : 'none'
     $('.ld-swarm-settings').style.display = usesSwarm(config) ? '' : 'none'
     $('.ld-dt-settings').style.display = usesSwarm(config) || nano || cloud || nai ? 'none' : ''
@@ -5949,6 +6075,7 @@ ${entry.prompt || ''}`.trim()
     historyGalleryDirty = true
     renderCurrentOutput()
     flushHistoryGallery()
+    if (typeof renderNaiStudio === 'function') renderNaiStudio()
   }
 
   function flushHistoryGallery() {
@@ -6159,7 +6286,264 @@ ${entry.prompt || ''}`.trim()
     setStatus(statusSel, `Captured ${res.captured.model || '(no model)'} · ${settingCount} setting${settingCount === 1 ? '' : 's'}`, 'good')
   }
 
-  async function doGenerate() {
+
+  // ---------- NovelAI layout (1.36.0) ---------------------------------------
+  // When Studio's image app is NovelAI, Studio looks like NovelAI's own page:
+  // settings and prompt on the left, the picture large in the middle, a
+  // thin history strip on the right. It is a second face on the same
+  // controls: every field here writes into the regular Studio field and
+  // Generate runs the regular Studio generation.
+  // var, not const: renderDraftControls can run before this block does.
+  var naiRoot = $('.ld-nai-studio')
+  var naiOn = false
+  var naiWanted // no initializer: setNaiLayout may have set it already
+  var naiSelected = null
+  var naiThumbs = new Map()
+  var NAI_HISTORY_KEY = 'lumidraw.naiHistoryCollapsed.v1'
+  const naiSet = (sel, value, events = ['input', 'change']) => {
+    const el = $(sel)
+    if (!el) return
+    el.value = value
+    for (const type of events) el.dispatchEvent(new Event(type, { bubbles: true }))
+  }
+  function naiModelParts(model) {
+    const id = String(model || 'nai-diffusion-5-full')
+    return id === 'nai-diffusion-5-full-medium' ? { base: 'nai-diffusion-5-full', effort: 'medium' } : { base: id, effort: 'high' }
+  }
+  function naiSummary() {
+    const steps = $('.ld-nai-steps').value || '28', cfg = $('.ld-nai-cfg').value || '5'
+    const seed = $('.ld-nai-seed').value || 'random', sampler = $('.ld-nai-sampler').value || 'Euler Ancestral'
+    const box = $('.ld-nai-summary')
+    box.innerHTML = ''
+    for (const [k, v] of [['Steps', steps], ['Guidance', cfg], ['Seed', seed], ['Sampler', sampler]]) {
+      const b = document.createElement('b'); b.textContent = v
+      const span = document.createElement('span'); span.style.opacity = '.7'; span.textContent = k + ' '
+      box.append(span, b)
+    }
+  }
+  function naiFillFromStudio() {
+    const parts = naiModelParts($('.ld-draft-model').value)
+    $('.ld-nai-app').value = 'novelai'
+    $('.ld-nai-model').value = [...$('.ld-nai-model').options].some(o => o.value === parts.base) ? parts.base : 'nai-diffusion-5-full'
+    $('.ld-nai-effort-line').style.display = parts.base === 'nai-diffusion-5-full' ? '' : 'none'
+    for (const b of dom.queryAll('.ld-nai-effort')) b.classList.toggle('ld-active', b.dataset.effort === parts.effort)
+    if (document.activeElement !== $('.ld-nai-prompt')) $('.ld-nai-prompt').value = $('.ld-prompt').value
+    if (document.activeElement !== $('.ld-nai-negative')) $('.ld-nai-negative').value = $('.ld-negative').value
+    $('.ld-nai-w').value = $('.ld-draft-w').value; $('.ld-nai-h').value = $('.ld-draft-h').value
+    for (const b of dom.queryAll('.ld-nai-size')) b.classList.toggle('ld-active', b.dataset.w === $('.ld-nai-w').value && b.dataset.h === $('.ld-nai-h').value)
+    $('.ld-nai-steps').value = $('.ld-draft-steps').value; $('.ld-nai-cfg').value = $('.ld-draft-cfg').value
+    $('.ld-nai-seed').value = $('.ld-seed').value
+    const sampler = $('.ld-nai-sampler')
+    if (!sampler.options.length) for (const name of novelaiCatalog.samplers) sampler.add(new Option(name, name))
+    const current = $('.ld-draft-sampler').value || 'Euler Ancestral'
+    if (![...sampler.options].some(o => o.value === current)) sampler.add(new Option(current, current))
+    sampler.value = current
+    naiSummary()
+  }
+  function naiItems() {
+    const out = [], seen = new Set()
+    for (const item of flattenHistoryImages()) {
+      if (!item.image || !item.image.url || seen.has(item.image.url)) continue
+      seen.add(item.image.url); out.push(item)
+    }
+    return out
+  }
+  function naiCurrent() {
+    const items = naiItems()
+    return items.find(item => item.image.url === naiSelected) || items[0] || null
+  }
+  function renderNaiStage() {
+    if (!naiOn) return
+    const item = naiCurrent()
+    const img = $('.ld-nai-img')
+    $('.ld-nai-empty').style.display = item ? 'none' : ''
+    img.style.display = item ? '' : 'none'
+    for (const b of dom.queryAll('.ld-nai-actions button, .ld-nai-toolbar button')) b.disabled = !item
+    if (!item) { $('.ld-nai-meta').textContent = ''; return }
+    naiSelected = item.image.url
+    if (img.dataset.lumidrawOriginalUrl !== item.image.url) setPreviewImageSource(img, item.image.url, 'lg')
+    const e = item.entry || {}
+    const cfg = e.recipe && e.recipe.config || {}
+    const size = cfg.width && cfg.height ? cfg.width + ' × ' + cfg.height : ''
+    $('.ld-nai-meta').textContent = [size, e.seed !== undefined && e.seed !== 'random' ? 'seed ' + e.seed : '', e.enhancedFrom ? 'enhanced' : '',
+      e.durationMs ? (e.durationMs / 1000).toFixed(1) + 's' : ''].filter(Boolean).join(' · ')
+    for (const [url, button] of naiThumbs) button.classList.toggle('ld-active', url === naiSelected)
+  }
+  function renderNaiStrip() {
+    if (!naiOn) return
+    const strip = $('.ld-nai-strip')
+    const items = naiItems().slice(0, 300)
+    const keep = new Set()
+    let cursor = strip.firstChild
+    for (const item of items) {
+      const url = item.image.url
+      keep.add(url)
+      let button = naiThumbs.get(url)
+      if (!button) {
+        button = document.createElement('button')
+        button.type = 'button'
+        button.title = (item.entry && item.entry.prompt || '').slice(0, 300)
+        const cfg = item.entry && item.entry.recipe && item.entry.recipe.config || {}
+        if (cfg.width && cfg.height) button.style.setProperty('--ld-ar', cfg.width + ' / ' + cfg.height)
+        const im = document.createElement('img')
+        im.loading = 'lazy'; im.decoding = 'async'; im.draggable = false; im.alt = ''
+        setPreviewImageSource(im, url, 'sm')
+        button.appendChild(im)
+        button.addEventListener('click', () => { naiSelected = url; renderNaiStage() })
+        naiThumbs.set(url, button)
+      }
+      if (button !== cursor) strip.insertBefore(button, cursor)
+      else cursor = cursor.nextSibling
+    }
+    for (const [url, button] of naiThumbs) if (!keep.has(url)) { button.remove(); naiThumbs.delete(url) }
+  }
+  function renderNaiStudio() {
+    if (!naiOn || !naiThumbs) return
+    renderNaiStrip()
+    renderNaiStage()
+  }
+  function setNaiLayout(on) {
+    on = !!on
+    naiWanted = on
+    if (!naiRoot || !naiThumbs) return
+    if (on === naiOn && naiRoot.style.display === (on ? 'flex' : 'none')) { if (on) naiFillFromStudio(); return }
+    naiOn = on
+    naiRoot.style.display = on ? 'flex' : 'none'
+    $('.ld-studio-shell').style.display = on ? 'none' : ''
+    if (on) {
+      try { $('.ld-nai-history').classList.toggle('ld-collapsed', localStorage.getItem(NAI_HISTORY_KEY) === '1') } catch { /* default open */ }
+      naiFillFromStudio()
+      renderNaiStudio()
+    }
+  }
+  // Fields → the regular Studio fields.
+  $('.ld-nai-app').addEventListener('change', () => naiSet('.ld-draft-backend', $('.ld-nai-app').value, ['change']))
+  const naiApplyModel = () => {
+    const base = $('.ld-nai-model').value
+    const medium = base === 'nai-diffusion-5-full' && $('.ld-nai-effort.ld-active') && $('.ld-nai-effort.ld-active').dataset.effort === 'medium'
+    $('.ld-nai-effort-line').style.display = base === 'nai-diffusion-5-full' ? '' : 'none'
+    naiSet('.ld-draft-model', medium ? 'nai-diffusion-5-full-medium' : base)
+  }
+  $('.ld-nai-model').addEventListener('change', naiApplyModel)
+  for (const b of dom.queryAll('.ld-nai-effort')) b.addEventListener('click', () => {
+    for (const other of dom.queryAll('.ld-nai-effort')) other.classList.toggle('ld-active', other === b)
+    naiApplyModel()
+  })
+  for (const b of dom.queryAll('.ld-nai-tab')) b.addEventListener('click', () => {
+    for (const other of dom.queryAll('.ld-nai-tab')) other.classList.toggle('ld-active', other === b)
+    const prompt = b.dataset.tab === 'prompt'
+    $('.ld-nai-prompt').style.display = prompt ? '' : 'none'
+    $('.ld-nai-negative').style.display = prompt ? 'none' : ''
+  })
+  $('.ld-nai-prompt').addEventListener('input', () => naiSet('.ld-prompt', $('.ld-nai-prompt').value, ['input']))
+  $('.ld-nai-negative').addEventListener('input', () => naiSet('.ld-negative', $('.ld-nai-negative').value))
+  for (const b of dom.queryAll('.ld-nai-size')) b.addEventListener('click', () => {
+    $('.ld-nai-w').value = b.dataset.w; $('.ld-nai-h').value = b.dataset.h
+    naiSet('.ld-draft-w', b.dataset.w); naiSet('.ld-draft-h', b.dataset.h)
+    for (const other of dom.queryAll('.ld-nai-size')) other.classList.toggle('ld-active', other === b)
+  })
+  for (const [mine, theirs] of [['.ld-nai-w', '.ld-draft-w'], ['.ld-nai-h', '.ld-draft-h'], ['.ld-nai-steps', '.ld-draft-steps'], ['.ld-nai-cfg', '.ld-draft-cfg'], ['.ld-nai-seed', '.ld-seed'], ['.ld-nai-sampler', '.ld-draft-sampler']]) {
+    $(mine).addEventListener('change', () => {
+      naiSet(theirs, $(mine).value); naiSummary()
+      for (const b of dom.queryAll('.ld-nai-size')) b.classList.toggle('ld-active', b.dataset.w === $('.ld-nai-w').value && b.dataset.h === $('.ld-nai-h').value)
+    })
+  }
+  $('.ld-nai-seed-clear').addEventListener('click', event => { event.preventDefault(); $('.ld-nai-seed').value = ''; naiSet('.ld-seed', ''); naiSummary() })
+  $('.ld-nai-save-preset').addEventListener('click', () => { const b = $('[data-act="draft-save-active"]'); if (b) b.click() })
+  $('.ld-nai-history-toggle').addEventListener('click', () => {
+    const box = $('.ld-nai-history')
+    box.classList.toggle('ld-collapsed')
+    $('.ld-nai-caret').textContent = box.classList.contains('ld-collapsed') ? '◂' : '▸'
+    try { localStorage.setItem(NAI_HISTORY_KEY, box.classList.contains('ld-collapsed') ? '1' : '0') } catch { /* best effort */ }
+  })
+  // Generate: the regular Studio generation, with this layout's button busy.
+  async function naiGenerate(extra = null) {
+    if (busy) return
+    const button = $('.ld-nai-generate')
+    button.disabled = true
+    const label = button.textContent
+    button.textContent = extra ? 'Enhancing…' : 'Generating…'
+    setStatus('.ld-nai-status', '')
+    try { await doGenerate(extra) }
+    finally {
+      button.disabled = false; button.textContent = label
+      naiSelected = selectedOutputUrl || naiSelected
+      $('.ld-nai-seed').value = $('.ld-seed').value
+      renderNaiStudio()
+    }
+  }
+  $('.ld-nai-generate').addEventListener('click', () => naiGenerate())
+  $('.ld-nai-prompt').addEventListener('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); naiGenerate() } })
+  // Picture actions.
+  $('.ld-nai-img').addEventListener('click', () => { if (naiSelected) openLightbox(naiSelected) })
+  $('.ld-nai-open').addEventListener('click', () => { if (naiSelected) openLightbox(naiSelected) })
+  $('.ld-nai-use-seed').addEventListener('click', () => {
+    const item = naiCurrent(); const seed = item && item.entry && item.entry.seed
+    if (seed === undefined || seed === 'random') return
+    $('.ld-nai-seed').value = seed; naiSet('.ld-seed', String(seed)); naiSummary()
+    setStatus('.ld-nai-status', 'Seed ' + seed + ' will be used for the next picture.', 'good')
+  })
+  $('.ld-nai-use-prompt').addEventListener('click', () => {
+    const item = naiCurrent(); if (!item || !item.entry) return
+    $('.ld-nai-prompt').value = item.entry.prompt || ''
+    naiSet('.ld-prompt', $('.ld-nai-prompt').value, ['input'])
+    setStatus('.ld-nai-status', 'Loaded this picture’s prompt.', 'good')
+  })
+  $('.ld-nai-to-chat').addEventListener('click', () => { const item = naiCurrent(); if (item) appendToChat(item.image, item.entry) })
+  {
+    let armed = 0
+    $('.ld-nai-delete').addEventListener('click', async () => {
+      const item = naiCurrent(); if (!item) return
+      const button = $('.ld-nai-delete')
+      if (!armed) { button.textContent = 'Really delete?'; armed = setTimeout(() => { armed = 0; button.textContent = 'Delete' }, 3000); return }
+      clearTimeout(armed); armed = 0; button.textContent = 'Delete'
+      const items = naiItems(); const at = items.findIndex(x => x.image.url === item.image.url)
+      try {
+        const res = await call('delete_image', { imageUrl: item.image.url, imageId: item.image.id })
+        history = res.history
+        const next = items[at + 1] || items[at - 1]
+        naiSelected = next ? next.image.url : null
+        renderHistory()
+      } catch (error) { setStatus('.ld-nai-status', error.message, 'err') }
+    })
+  }
+  // Enhance: redraw the picture from itself, as on NovelAI's page.
+  const naiEnh = { scale: 1, strength: 0.5 }
+  $('.ld-nai-enhance-btn').addEventListener('click', () => { const box = $('.ld-nai-enhance'); box.style.display = box.style.display === 'none' ? 'flex' : 'none' })
+  $('.ld-nai-enh-cancel').addEventListener('click', () => { $('.ld-nai-enhance').style.display = 'none' })
+  for (const b of dom.queryAll('.ld-nai-enh-size')) b.addEventListener('click', () => { naiEnh.scale = Number(b.dataset.scale); for (const o of dom.queryAll('.ld-nai-enh-size')) o.classList.toggle('ld-active', o === b) })
+  for (const b of dom.queryAll('.ld-nai-enh-str')) b.addEventListener('click', () => { naiEnh.strength = Number(b.dataset.strength); for (const o of dom.queryAll('.ld-nai-enh-str')) o.classList.toggle('ld-active', o === b) })
+  function naiPictureData(url, width, height) {
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height)
+          resolve(canvas.toDataURL('image/png').replace(/^data:[^,]*,/, ''))
+        } catch (error) { reject(error) }
+      }
+      img.onerror = () => reject(new Error('The picture could not be loaded for enhancing.'))
+      img.src = url
+    })
+  }
+  $('.ld-nai-enh-run').addEventListener('click', async () => {
+    const item = naiCurrent(); if (!item) return
+    const cfg = item.entry && item.entry.recipe && item.entry.recipe.config || {}
+    const img = $('.ld-nai-img')
+    let w = Number(cfg.width) || img.naturalWidth || 1024, h = Number(cfg.height) || img.naturalHeight || 1024
+    w = Math.round(w * naiEnh.scale / 64) * 64; h = Math.round(h * naiEnh.scale / 64) * 64
+    $('.ld-nai-enhance').style.display = 'none'
+    setStatus('.ld-nai-status', 'Preparing the picture…')
+    let data
+    try { data = await naiPictureData(item.image.url, w, h) } catch (error) { setStatus('.ld-nai-status', error.message, 'err'); return }
+    const prompt = item.entry && item.entry.prompt || $('.ld-nai-prompt').value
+    setStatus('.ld-nai-status', '')
+    await naiGenerate({ enhance: { image: data, strength: naiEnh.strength, noise: 0.1, sourceUrl: item.image.url }, prompt, width: w, height: h })
+  })
+  if (naiWanted) { naiOn = false; setNaiLayout(true) }
+
+  async function doGenerate(enhanceRequest = null) {
     if (busy) return
     try { draftConfig = readDraftConfigFromControls() }
     catch (error) { setStatus('.ld-gen-status', error.message, 'err'); return }
@@ -6184,10 +6568,12 @@ ${entry.prompt || ''}`.trim()
     setStatus('.ld-gen-status', 'Sent to ' + rendererName(draftConfig) + ' — hold tight…')
     try {
       const bundle = currentDraftBundle()
-      const seedRaw = $('.ld-seed').value
+      const seedRaw = enhanceRequest ? '' : $('.ld-seed').value
+      if (enhanceRequest) Object.assign(bundle.config, { width: enhanceRequest.width, height: enhanceRequest.height, novelaiEnhance: true })
       const res = await call('generate', {
         chatId: activeChatIdFromCtx() || '',
-        prompt: $('.ld-prompt').value,
+        prompt: enhanceRequest ? enhanceRequest.prompt : $('.ld-prompt').value,
+        ...(enhanceRequest ? { enhance: enhanceRequest.enhance } : {}),
         // Studio is fully isolated. Add any quality tags, subjects, or other
         // prompt text manually in the prompt field when you want them.
         negativePrompt: bundle.negativePrompt,
