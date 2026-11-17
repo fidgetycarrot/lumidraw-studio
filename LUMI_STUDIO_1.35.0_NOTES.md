@@ -23,3 +23,10 @@ model on a connection you already have works.
 Checked in a browser with a fake backend (choosing a file, saving, a new
 prompt, deleting, running, Use in Studio) and the backend part with a fake
 model. Not yet run against a real model.
+
+# 1.35.1
+
+Caption has a box for what you already know about the picture ("the person is
+a femboy, not a woman"). It is sent before the prompt as fact, and the model
+is told to build its answer around it even where the picture is unclear. It
+clears when you pick another picture.

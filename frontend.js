@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.35.0'
+  const EXTENSION_VERSION = '1.35.1'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1604,6 +1604,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
               </div>
             </div>
             <div class="ld-cap-recent"></div>
+            <span class="ld-label" style="margin-top:10px">What you already know about it (optional)</span>
+            <textarea class="ld-cap-facts" spellcheck="true" style="min-height:52px" placeholder="e.g. The person is a femboy, not a woman. The setting is Warhammer 40K."></textarea>
+            <div class="ld-help">Treated as fact, even where the picture is unclear. Cleared when you pick another picture.</div>
           </div>
           <div class="ld-card">
             <div class="ld-subtitle">Prompt</div>
@@ -7019,6 +7022,7 @@ ${entry.prompt || ''}`.trim()
     setStatus('.ld-cap-status', 'Loading the picture…')
     try {
       const dataUrl = await captionShrink(src)
+      if (caption.source && caption.source !== src) $('.ld-cap-facts').value = ''
       caption.data = dataUrl; caption.mime = 'image/jpeg'; caption.source = src
       const img = $('.ld-cap-img'); img.src = dataUrl; img.hidden = false
       $('.ld-cap-empty').hidden = true
@@ -7155,7 +7159,7 @@ ${entry.prompt || ''}`.trim()
     button.disabled = true
     setStatus('.ld-cap-status', 'Asking the model…')
     try {
-      const got = await call('caption_run', { data: caption.data, mime: caption.mime, prompt, connection: $('.ld-cap-conn').value, model: $('.ld-cap-model').value.trim() }, 180000)
+      const got = await call('caption_run', { data: caption.data, mime: caption.mime, prompt, facts: $('.ld-cap-facts').value.trim(), connection: $('.ld-cap-conn').value, model: $('.ld-cap-model').value.trim() }, 180000)
       $('.ld-cap-result').value = got.text
       setStatus('.ld-cap-status', 'Done in ' + Math.max(1, Math.round((got.ms || 0) / 1000)) + ' s.', 'good')
     } catch (error) { setStatus('.ld-cap-status', error.message || String(error), 'err') } finally { button.disabled = false }

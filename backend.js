@@ -16576,6 +16576,16 @@ async function writeCaptionSettings(value) {
   await spindle.storage.setJson(CAPTION_FILE, out, { indent: 2 })
   return out
 }
+// What the user already knows about the picture comes first, as fact, so the
+// model builds its answer around it instead of guessing (1.35.1).
+function captionText(prompt, facts) {
+  const known = String(facts || '').trim().slice(0, 2000)
+  if (!known) return prompt
+  return 'Facts about this picture, from the person who knows it. Treat them as true and build your answer around them, ' +
+    'even where the picture looks ambiguous or seems to suggest otherwise. Do not contradict them or mention that you were told:\n' +
+    known + '\n\n' + prompt
+}
+
 async function runCaption(userId, payload) {
   const generateApi = spindle.generate || spindle.generation || spindle.llm
   if (!generateApi || typeof generateApi.quiet !== 'function') throw new Error('Lumiverse generation is not available to Lumi Studio.')
@@ -16590,7 +16600,7 @@ async function runCaption(userId, payload) {
   const model = String(payload.model || '').trim()
   const opts = {
     userId,
-    messages: [{ role: 'user', content: [{ type: 'image', data, mime_type: mime }, { type: 'text', text: prompt }] }],
+    messages: [{ role: 'user', content: [{ type: 'image', data, mime_type: mime }, { type: 'text', text: captionText(prompt, payload.facts) }] }],
     parameters: { temperature: 0.3, max_tokens: 3000 },
   }
   if (connectionId) opts.connection_id = connectionId
