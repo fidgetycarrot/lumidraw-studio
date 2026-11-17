@@ -30,3 +30,23 @@ of a place or thing alone from that reply is dropped.
 
 The switch is unchanged: "Pictures of places and things on their own" under
 Setting in the preset.
+
+# 1.34.0
+
+## Important things stay the same, like places
+
+The parser now names up to two objects the story turns on in each picture (a
+letter, a key, a named sword, the orb in the chest), with 3-5 tags for how
+each looks. The first time one is drawn, Lumi Studio saves that look under its
+name for the chat. Every later picture with it, on its own or in someone's
+hand, uses the saved look, and its tags go first so a busy room cannot crowd
+them out.
+
+Ordinary props (cups, chairs, phones) and clothing are left out.
+
+Saved things are listed under "What Lumi Studio remembers in this chat",
+marked "(thing)". "Forget this chat" clears them. Up to 24 per chat.
+
+Checked with a fake parser: an orb drawn alone, then held by a person while the
+parser described it as a "golden sphere". The second picture used the saved
+pale blue cracked crystal.

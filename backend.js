@@ -19409,6 +19409,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const memory = await readSimpleCast(chatId)
         reply = ok(payload, requestId, { chatId, setting: memory.setting, updatedAt: memory.updatedAt,
           places: Object.entries(memory.places || {}).map(([key, place]) => ({ key, ...place })).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
+          things: Object.entries(memory.things || {}).map(([key, thing]) => ({ key, ...thing })).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
           people: Object.entries(memory.people).map(([key, person]) => ({ key, ...person }))
             .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)) })
         break
@@ -25682,7 +25683,8 @@ async function readSimpleCast(chatId) {
     if (person && Array.isArray(person.outfit)) person.outfit = simpleSteadyOutfit(person.outfit)
   }
   const places = value.places && typeof value.places === 'object' && !Array.isArray(value.places) ? JSON.parse(JSON.stringify(value.places)) : {}
-  return { version: SIMPLE_VERSION, setting: simpleTags(value.setting || [], 12), people, places, updatedAt: value.updatedAt || 0 }
+  const things = value.things && typeof value.things === 'object' && !Array.isArray(value.things) ? JSON.parse(JSON.stringify(value.things)) : {}
+  return { version: SIMPLE_VERSION, setting: simpleTags(value.setting || [], 12), people, places, things, updatedAt: value.updatedAt || 0 }
 }
 
 async function writeSimpleCast(chatId, memory) {
@@ -25869,6 +25871,7 @@ OUTPUT:
  "framing":["one shot tag","optional angle tag"],
  "composition":"optional single Danbooru position tag",
  "place":{"name":"what the story calls this place, 1-5 words","looks":["4-6 tags for how the place itself always looks"]},
+ "things":[{"name":"what the story calls it, 1-4 words","looks":["3-5 tags for how it always looks"]}],
  "setting":["3-6 short place and lighting tags"],
  "subjects":[{
    "name":"sheet name, or the person's own name if they have no sheet",
@@ -25925,6 +25928,18 @@ THE PLACE — kept the same every time the story returns to it.
   not describe it differently in "setting". Lumi Studio adds the saved looks.
 - "setting" is then only this moment: the spot within the place (corner booth,
   doorway), the light, weather, time of day, and things in use right now.
+
+THINGS THAT MATTER — kept the same every time they are shown.
+- "things": up to 2 objects the story turns on that are clearly visible in this
+  picture: a letter, a key, a sword with a name, a strange device, the orb in
+  the chest, a ship's figurehead. Not ordinary props (cups, chairs, phones) and
+  not clothing.
+- "name": as the story calls it ("the brass key", "Mara's letter"). If KNOWN
+  THINGS lists it, use that exact name and leave "looks" empty: Lumi Studio
+  adds the saved look.
+- "looks": 3-5 tags for how it always looks: colour, material, shape, size,
+  glow or markings. Never where it is or who holds it.
+- Leave "things" empty when nothing like that is in the picture.
 
 WHO IS IN THE PICTURE
 - Every person physically in the moment gets one entry in "subjects", up to the
@@ -26161,6 +26176,19 @@ function simplePlaceFor(memory, name) {
   }
   return null
 }
+// Things that matter (1.34.0): saved and reused like places.
+const SIMPLE_THING_MAX = 24
+function simpleThingFor(memory, name) {
+  return simplePlaceFor({ places: (memory && memory.things) || {} }, name)
+}
+function simpleThingLines(memory) {
+  const things = Object.values((memory && memory.things) || {}).filter(thing => thing && thing.name && (thing.looks || []).length)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 12)
+  if (!things.length) return ''
+  return ['KNOWN THINGS (already drawn; Lumi Studio adds these looks itself whenever they are in the picture — use the exact name):',
+    ...things.map(thing => `  ${thing.name}: ${thing.looks.join(', ')}`)].join('\n')
+}
+
 function simplePlaceLines(memory) {
   const places = Object.values((memory && memory.places) || {}).filter(place => place && place.name && (place.looks || []).length)
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 12)
@@ -26216,6 +26244,7 @@ function simpleContext(profiles, memory, card, { banned = '', fantasy = false } 
     ...blocks,
     memory && memory.setting && memory.setting.length ? 'LAST KNOWN SETTING: ' + memory.setting.join(', ') : '',
     simplePlaceLines(memory),
+    simpleThingLines(memory),
     cardText ? 'SCENE CARD — the story model\'s own note of where everyone is and what they are wearing at the END of the current passage. Trust it for clothes and place unless the moment you draw is earlier and the passage says otherwise:\n' + cardText : '',
     banned ? 'BANNED TAGS — never use: ' + banned : '',
     fantasy ? 'This is a fantasy setting. Non-human species are correct.' : '',
@@ -26602,6 +26631,9 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2, allowNoPeople = 
       }))
     const placeIn = item.place && typeof item.place === 'object' ? item.place : {}
     const place = { name: String(placeIn.name || '').replace(/\s+/g, ' ').trim().slice(0, 60), looks: simpleTags(placeIn.looks, 6) }
+    const things = (Array.isArray(item.things) ? item.things : []).filter(thing => thing && typeof thing === 'object')
+      .map(thing => ({ name: String(thing.name || '').replace(/\s+/g, ' ').trim().slice(0, 50), looks: simpleTags(thing.looks, 5) }))
+      .filter(thing => thing.name).slice(0, 2)
     // A picture of a place on its own (1.29.0): no people, but it must say where.
     const noPeople = !subjects.length && Array.isArray(item.subjects)
     if (noPeople && !(allowNoPeople && (place.name || simpleTags(item.setting, 8).length) && String(item.scene_summary || '').trim())) continue
@@ -26628,6 +26660,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2, allowNoPeople = 
       composition: SIMPLE_COMPOSITIONS.includes(String(item.composition || '').trim().toLowerCase()) ? String(item.composition).trim().toLowerCase() : '',
       setting: simpleTags(item.setting, 8),
       place,
+      things,
       names: simpleNamedThings(item.names),
       moss: { camera: mossFieldText(item.moss_camera), setting: mossFieldText(item.moss_setting), moment: mossFieldText(item.moss_moment) },
       subjects,
@@ -27202,6 +27235,18 @@ function compileSimpleImage(image, ctx) {
       if (settingSource === 'unknown') settingSource = 'remembered place'
     }
   }
+  // Things that matter: saved the first time, reused after (1.34.0). Their
+  // look goes first in the setting, so a cluttered room cannot crowd it out.
+  const thingsUsed = []
+  for (const thing of image.things || []) {
+    const known = simpleThingFor(memory, thing.name)
+    const looks = applyBannedToList(known ? known.looks : thing.looks, banned).slice(0, 5)
+    if (!looks.length) continue
+    thingsUsed.push({ key: known ? known.key : simplePlaceKey(thing.name), name: known ? known.name : thing.name, looks, first: !known })
+    notes.push(known ? `Thing “${known.name}”: drawn before, so its saved look was used (${looks.join(', ')}).`
+      : `Thing “${thing.name}”: first picture of it. Its look is now remembered for this chat (${looks.join(', ')}).`)
+  }
+  if (thingsUsed.length) setting = simpleTidySetting([...thingsUsed.flatMap(thing => thing.looks), ...setting], 14)
   // Mirrors give the model a second copy of everyone to work with; in the
   // elevator it had Riley kiss his own reflection. Keep them only when the
   // moment is about a mirror.
@@ -27340,7 +27385,7 @@ function compileSimpleImage(image, ctx) {
     parsed: JSON.parse(JSON.stringify(image)),
   }
   // parts: the same pieces, for other prompt builders (MOSS). Not used here.
-  return { prompt, negativePrompt, subjects, setting, place: placeUsed, debug, parts: { summary, framing, actionLines, headerLine } }
+  return { prompt, negativePrompt, subjects, setting, place: placeUsed, things: thingsUsed, debug, parts: { summary, framing, actionLines, headerLine } }
 }
 
 // What one finished image teaches the chat's memory. Saved people: outfit and
@@ -27396,7 +27441,15 @@ function simpleRelationSentence(actor, action, target, part) {
 
 function simpleRemember(memory, compiled, messageId) {
   const next = { setting: memory.setting.slice(), people: JSON.parse(JSON.stringify(memory.people || {})),
-    places: JSON.parse(JSON.stringify(memory.places || {})) }
+    places: JSON.parse(JSON.stringify(memory.places || {})), things: JSON.parse(JSON.stringify(memory.things || {})) }
+  for (const thing of compiled.things || []) {
+    if (!thing.key) continue
+    const before = next.things[thing.key]
+    next.things[thing.key] = before ? { ...before, updatedAt: Date.now() }
+      : { name: thing.name, looks: thing.looks.slice(), updatedAt: Date.now(), messageId: String(messageId || '') }
+  }
+  { const keys = Object.keys(next.things)
+    if (keys.length > SIMPLE_THING_MAX) for (const key of keys.sort((a, b) => (next.things[a].updatedAt || 0) - (next.things[b].updatedAt || 0)).slice(0, keys.length - SIMPLE_THING_MAX)) delete next.things[key] }
   if (compiled.debug.setting.source === 'story (parser)' && compiled.setting.length) next.setting = compiled.setting.slice()
   if (compiled.place && compiled.place.key) {
     const before = next.places[compiled.place.key]

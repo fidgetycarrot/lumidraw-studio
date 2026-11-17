@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.33.0'
+  const EXTENSION_VERSION = '1.34.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2253,7 +2253,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const memoryBox = make('div', 'ld-simple-memory-box')
     memoryBox.style.marginTop = '10px'
     memoryBox.appendChild(make('div', 'ld-label', 'What Lumi Studio remembers in this chat'))
-    addHelp(memoryBox, 'Looks of people without a sheet, everyone’s current clothes, and how each place looks. Updated after each picture.')
+    addHelp(memoryBox, 'Looks of people without a sheet, everyone’s current clothes, and how each place and important thing looks. Updated after each picture.')
     const simpleList = make('div', 'ld-help ld-simple-memory')
     simpleList.style.whiteSpace = 'pre-wrap'
     simpleList.style.marginTop = '6px'
@@ -2273,6 +2273,11 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
           lines.push('')
           lines.push(place.name + ' (place)')
           lines.push('  Looks: ' + (place.looks || []).join(', '))
+        }
+        for (const thing of got.things || []) {
+          lines.push('')
+          lines.push(thing.name + ' (thing)')
+          lines.push('  Looks: ' + (thing.looks || []).join(', '))
         }
         for (const person of got.people || []) {
           lines.push('')
