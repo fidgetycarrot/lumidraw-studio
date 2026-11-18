@@ -26179,8 +26179,14 @@ NEVER: a minor or youth-coded descriptor, tags from the banned list, prose
 outside scene_summary.
 `
 
-function simpleCountRule(maxImages) {
+// 1.36.2: the "fewest pictures per reply" setting was only read by the old
+// parser; this one always said "usually one".
+function simpleCountRule(maxImages, minImages = 0) {
   const max = Math.max(1, Math.min(4, Number(maxImages) || 1))
+  const min = Math.max(0, Math.min(max, Math.round(Number(minImages) || 0)))
+  if (min >= 2) return min === max
+    ? `HOW MANY IMAGES: exactly ${max}, each a different moment of the passage (a different beat, angle, place, act or set of people). Find ${max} even when one moment dominates: show what led to it or what follows.`
+    : `HOW MANY IMAGES: at least ${min} and at most ${max}, each a different moment of the passage (a different beat, angle, place, act or set of people). Find ${min} even when one moment dominates: show what led to it or what follows.`
   if (max === 1) return 'HOW MANY IMAGES: exactly one — the moment that carries this passage.'
   return `HOW MANY IMAGES: usually one. Add another (up to ${max}) only for a clearly different moment in the passage — a different place, act or set of people. Never pad.`
 }
@@ -26473,7 +26479,7 @@ function buildSimpleInstruction(profiles, memory, card, options = {}) {
   const extra = [options.moss ? MOSS_SCENE_RULES.trim() : '', options.novelai ? NOVELAI_SCENE_RULES.trim() : '',
     options.scenery ? SCENERY_RULES.trim() : '',
     options.setting ? settingRules(options.setting) : ''].filter(Boolean).join('\n\n')
-  return [SIMPLE_RULES.trim(), extra, '', simpleCountRule(options.maxImages), simpleSubjectRule(options.maxSubjects), '',
+  return [SIMPLE_RULES.trim(), extra, '', simpleCountRule(options.maxImages, options.minImages), simpleSubjectRule(options.maxSubjects), '',
     simpleContext(profiles, memory, card, options)].filter((part, index) => index !== 1 || part).join('\n')
 }
 
@@ -27620,7 +27626,7 @@ async function simpleParse({ userId, settings, preset, messages, targetIndex, ta
   const parserInput = buildAnimaParserInput(messages, targetIndex, target, settings, {
     setting: memory.setting.length ? memory.setting : anchorTags, lighting: [], outfits: [], clothingDigest: [], simTracker: null })
   let instruction = buildSimpleInstruction(profilesForPrompt, memory, card, {
-    maxImages: settings.maxImages || 2, maxSubjects: settings.maxSubjects || 2,
+    maxImages: settings.maxImages || 2, minImages: settings.minImages || 0, maxSubjects: settings.maxSubjects || 2,
     banned: preset.bannedTags || '', fantasy: !!profiles.fantasySetting,
     moss: mossFields || presetPromptStyle(preset) === 'moss', novelai: novelaiFields || presetUsesNovelai(preset), setting: presetSetting(preset),
     scenery: presetPlacePictures(preset) })

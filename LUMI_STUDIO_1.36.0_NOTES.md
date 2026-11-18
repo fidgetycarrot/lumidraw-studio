@@ -48,3 +48,11 @@ The NovelAI layout's prompt box was cramped:
   under the settings.
 - A ⛶ button on the prompt box opens the Prompt or Undesired Content text
   full screen; Apply (or Cmd/Ctrl+Enter) puts it back.
+
+# 1.36.2
+
+"Fewest pictures per reply" was only read by the old parser. The current one
+always told the model "usually one", so a minimum of 2 was ignored. The parser
+is now told the minimum: with 2 it must find two different moments in the
+reply (what led to the main moment, or what follows), up to the maximum. The
+minimum cannot be higher than "Most pictures per reply".
