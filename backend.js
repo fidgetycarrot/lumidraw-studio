@@ -26062,10 +26062,15 @@ THE PLACE — kept the same every time the story returns to it.
   Gilded Stag", "Riley's kitchen", "bridge of the Vigilant", "forest road". A
   large thing counts when the picture is of it or aboard it: a ship, a ruin, a
   tower. If KNOWN PLACES lists this place, use that exact name.
+  Inside a building, the place is the ROOM or area the picture is in, not the
+  whole building: "Oak Lane kitchen", "Oak Lane upstairs hall", "Riley's
+  bedroom". Each room is its own place with its own look.
 - "place.looks": what is always true of how it looks: what it is built of, its
   colours, size and shape, and two or three things that mark it out (a long
   oak bar, a cracked stained-glass window). Never people, light, weather, time
-  of day or what is happening: those go in "setting".
+  of day or what is happening: those go in "setting". For a room, describe the
+  room; never the building's outside ("two-story house", "brick building"):
+  an image model draws those words as a house in the picture.
 - A place in KNOWN PLACES already has its looks: leave "looks" empty and do
   not describe it differently in "setting". Lumi Studio adds the saved looks.
 - "setting" is then only this moment: the spot within the place (corner booth,
@@ -26323,6 +26328,10 @@ function simpleTidySetting(tags, max) {
   }
   return kept.slice(0, max)
 }
+
+const SIMPLE_INDOOR_RE = /\b(?:indoors|interior|inside|room|bedroom|bathroom|kitchen|hall|hallway|corridor|landing|foyer|staircase|stairs|stairwell|office|attic|basement|cellar|lobby|study|library|den|closet|cabin interior|parlou?r|suite|apartment|ward|cockpit|bridge of|cab interior|truck cab|car interior)\b/i
+const SIMPLE_OUTDOOR_RE = /\b(?:outdoors|outside|exterior|street|yard|garden|porch|lawn|driveway|sidewalk|rooftop|field|forest|beach|sky)\b/i
+const SIMPLE_BUILDING_RE = /\b(?:(?:one|two|three|four|multi|\d+)[- ]?stor(?:e?y|ies)|suburban|victorian|colonial|ranch-style|craftsman|brick|stone|clapboard)\b[\w\s-]*\b(?:house|home|building|mansion|cottage|townhouse)\b|^\s*(?:house|building|mansion|cottage|townhouse|apartment building|office building)\s*$|\b(?:house|building) exterior\b|\bfacade\b/i
 
 // ---------- remembered places (1.29.0) -------------------------------------
 // The first picture set somewhere fixes how that place looks: what it is made
@@ -27423,6 +27432,22 @@ function compileSimpleImage(image, ctx) {
       : `Thing “${thing.name}”: first picture of it. Its look is now remembered for this chat (${looks.join(', ')}).`)
   }
   if (thingsUsed.length) setting = simpleTidySetting([...thingsUsed.flatMap(thing => thing.looks), ...setting], 14)
+  // 1.37.2: a place saved as the whole house ("two-story suburban house,
+  // wooden banister staircase, …") was added to every room, and NovelAI drew
+  // the outside of a house in the upstairs hallway. Indoors, words for a whole
+  // building are dropped and "indoors" is said.
+  {
+    const all = [...setting, ...(image.framing || []), String(image.scene_summary || ''), String(image.shot || ''), String(image.place && image.place.name || '')].join(' ')
+    const inside = SIMPLE_INDOOR_RE.test(all) && !SIMPLE_OUTDOOR_RE.test(setting.join(' '))
+    if (inside) {
+      const dropped = setting.filter(tag => SIMPLE_BUILDING_RE.test(tag) && !/\b(?:interior|indoors|inside)\b/i.test(tag))
+      if (dropped.length) {
+        setting = setting.filter(tag => !dropped.includes(tag))
+        notes.push('Indoors: left out “' + dropped.join(', ') + '”, words for the outside of a building.')
+      }
+      if (!setting.some(tag => /\bindoors\b/i.test(tag))) setting = [...setting, 'indoors']
+    }
+  }
   // Mirrors give the model a second copy of everyone to work with; in the
   // elevator it had Riley kiss his own reflection. Keep them only when the
   // moment is about a mirror.

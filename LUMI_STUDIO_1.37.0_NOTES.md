@@ -52,3 +52,19 @@ reply is used as it was.
 
 Checked on three saved replies from two presets: the parser now gets the
 story text (about 3,000 characters each) where it got only status blocks.
+
+# 1.37.2
+
+Backgrounds made no sense inside a house. A report showed why: the house was
+remembered as one place, "Oak Lane house", with the look "two-story suburban
+house, oak plank floor, wooden banister staircase, warm cream walls, wall pegs
+by the stairs", and that look was added to every picture anywhere in the
+house. "Two-story suburban house" made NovelAI draw the outside of a house
+behind the people in the upstairs hallway, and every room got a staircase.
+
+- The parser now treats each room as its own place ("Oak Lane kitchen", "Oak
+  Lane upstairs hall") and describes the room, never the building's outside.
+- Indoors, Lumi Studio drops words for a whole building ("two-story house",
+  "brick building", "facade") from the setting, including from places saved
+  before this update, and adds "indoors". Outdoors (a porch, the street) they
+  are kept.
