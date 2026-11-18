@@ -25796,7 +25796,8 @@ async function readSimpleCast(chatId) {
   }
   const places = value.places && typeof value.places === 'object' && !Array.isArray(value.places) ? JSON.parse(JSON.stringify(value.places)) : {}
   const things = value.things && typeof value.things === 'object' && !Array.isArray(value.things) ? JSON.parse(JSON.stringify(value.things)) : {}
-  return { version: SIMPLE_VERSION, setting: simpleTags(value.setting || [], 12), people, places, things, updatedAt: value.updatedAt || 0 }
+  const recentCutaways = (Array.isArray(value.recentCutaways) ? value.recentCutaways : []).filter(kind => SIMPLE_CUTAWAYS.includes(kind)).slice(0, 4)
+  return { version: SIMPLE_VERSION, setting: simpleTags(value.setting || [], 12), people, places, things, recentCutaways, updatedAt: value.updatedAt || 0 }
 }
 
 async function writeSimpleCast(chatId, memory) {
@@ -26179,14 +26180,34 @@ NEVER: a minor or youth-coded descriptor, tags from the banned list, prose
 outside scene_summary.
 `
 
-// 1.36.2: the "fewest pictures per reply" setting was only read by the old
-// parser; this one always said "usually one".
-function simpleCountRule(maxImages, minImages = 0) {
+// 1.37.0: with a minimum of 2, the extra pictures are cutaways, as in a film:
+// a different KIND of picture, not a second, weaker moment of the same people
+// (Nov 2026 reports: "Dina nudges her glasses at a coat peg" as filler).
+const SIMPLE_CUTAWAYS = ['detail', 'pov', 'establishing', 'thing', 'mood']
+function simpleCountRule(maxImages, minImages = 0, options = {}) {
   const max = Math.max(1, Math.min(4, Number(maxImages) || 1))
   const min = Math.max(0, Math.min(max, Math.round(Number(minImages) || 0)))
-  if (min >= 2) return min === max
-    ? `HOW MANY IMAGES: exactly ${max}, each a different moment of the passage (a different beat, angle, place, act or set of people). Find ${max} even when one moment dominates: show what led to it or what follows.`
-    : `HOW MANY IMAGES: at least ${min} and at most ${max}, each a different moment of the passage (a different beat, angle, place, act or set of people). Find ${min} even when one moment dominates: show what led to it or what follows.`
+  if (min >= 2) {
+    const kinds = [
+      '"detail": a close-up of a small real thing in the moment: hands around a cup, glasses pushed up, a drink sweating on the counter, keys dropped on a table, fingers on a sleeve. Framing "close-up"; any person shows only in part.',
+      '"pov": what the user\'s character sees, through their eyes: the others facing the camera, "looking at viewer", "pov". Leave the user\'s character out of "subjects" (their hands may show).',
+      ...(options.scenery ? [
+        '"establishing": where they are, seen from outside or from afar: the house at night with one lit window, the street in the rain, the building at dusk. No people.',
+        '"thing": the object the scene is about (a letter, a case file, a weapon, a device), on its own, close.',
+        '"mood": the feeling of the place: rain on the window, a lamp burning low, an empty hallway. No people.',
+      ] : []),
+    ]
+    return `HOW MANY IMAGES: ${min === max ? 'exactly ' + max : 'at least ' + min + ' and at most ' + max}.
+- The FIRST image is the main moment: what the people are doing.
+- Every other image is a CUTAWAY, as in a film: a different kind of picture
+  that makes the scene feel real. Never a second wide shot of the same people,
+  and never a weaker moment invented to fill the count. Pick the kind that fits
+  this passage best, and avoid the kinds in RECENT CUTAWAYS. Kinds:
+${kinds.map(line => '  * ' + line).join('\n')}
+- Mark each cutaway with "cutaway": its kind. The main image has no "cutaway".
+- In a sexual passage every cutaway stays on the people and the act ("detail"
+  or "pov" only).`
+  }
   if (max === 1) return 'HOW MANY IMAGES: exactly one — the moment that carries this passage.'
   return `HOW MANY IMAGES: usually one. Add another (up to ${max}) only for a clearly different moment in the passage — a different place, act or set of people. Never pad.`
 }
@@ -26363,6 +26384,7 @@ function simpleContext(profiles, memory, card, { banned = '', fantasy = false } 
     memory && memory.setting && memory.setting.length ? 'LAST KNOWN SETTING: ' + memory.setting.join(', ') : '',
     simplePlaceLines(memory),
     simpleThingLines(memory),
+    memory && (memory.recentCutaways || []).length ? 'RECENT CUTAWAYS (newest first): ' + memory.recentCutaways.join(', ') : '',
     cardText ? 'SCENE CARD — the story model\'s own note of where everyone is and what they are wearing at the END of the current passage. Trust it for clothes and place unless the moment you draw is earlier and the passage says otherwise:\n' + cardText : '',
     banned ? 'BANNED TAGS — never use: ' + banned : '',
     fantasy ? 'This is a fantasy setting. Non-human species are correct.' : '',
@@ -26428,6 +26450,12 @@ This picture is drawn by NovelAI, which puts each person on their own spot.
   walls, seats and furniture and how much room there is. In a cramped place (a
   car, a booth, a bed, a lift, a cockpit) there is nowhere to stand beside
   people: put the camera in front of them, behind them, or close in.
+  Keep it SIMPLE: NovelAI draws one plane well and fails at staged depth.
+  People who are talking, touching or otherwise together stay within arm's
+  reach of each other in the shot. Never people on different floors or
+  levels, never one seen through a doorway or window while another is in
+  front, never someone far behind the others. If the moment has people far
+  apart, pick the one who matters and frame on them.
   "framing" and every "position" must then agree with "shot".
 - "position": left, center or right only when that is where the person is as
   the camera sees them. When one person is in front of the other, or the shot
@@ -26479,7 +26507,7 @@ function buildSimpleInstruction(profiles, memory, card, options = {}) {
   const extra = [options.moss ? MOSS_SCENE_RULES.trim() : '', options.novelai ? NOVELAI_SCENE_RULES.trim() : '',
     options.scenery ? SCENERY_RULES.trim() : '',
     options.setting ? settingRules(options.setting) : ''].filter(Boolean).join('\n\n')
-  return [SIMPLE_RULES.trim(), extra, '', simpleCountRule(options.maxImages, options.minImages), simpleSubjectRule(options.maxSubjects), '',
+  return [SIMPLE_RULES.trim(), extra, '', simpleCountRule(options.maxImages, options.minImages, { scenery: options.scenery }), simpleSubjectRule(options.maxSubjects), '',
     simpleContext(profiles, memory, card, options)].filter((part, index) => index !== 1 || part).join('\n')
 }
 
@@ -26774,6 +26802,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2, allowNoPeople = 
       aspect: String(item.aspect || '').trim(),
       scene_summary: String(item.scene_summary || '').replace(/\s+/g, ' ').trim().slice(0, 300),
       shot: String(item.shot || '').replace(/\s+/g, ' ').trim().slice(0, 260),
+      cutaway: SIMPLE_CUTAWAYS.includes(String(item.cutaway || '').trim().toLowerCase()) ? String(item.cutaway).trim().toLowerCase() : '',
       framing: simpleTags(item.framing, 3),
       composition: SIMPLE_COMPOSITIONS.includes(String(item.composition || '').trim().toLowerCase()) ? String(item.composition).trim().toLowerCase() : '',
       setting: simpleTags(item.setting, 8),
@@ -27503,7 +27532,8 @@ function compileSimpleImage(image, ctx) {
     parsed: JSON.parse(JSON.stringify(image)),
   }
   // parts: the same pieces, for other prompt builders (MOSS). Not used here.
-  return { prompt, negativePrompt, subjects, setting, place: placeUsed, things: thingsUsed, debug, parts: { summary, framing, actionLines, headerLine } }
+  if (image.cutaway) notes.push('Cutaway: ' + image.cutaway + '.')
+  return { prompt, negativePrompt, subjects, setting, place: placeUsed, things: thingsUsed, cutaway: image.cutaway || '', debug, parts: { summary, framing, actionLines, headerLine } }
 }
 
 // What one finished image teaches the chat's memory. Saved people: outfit and
@@ -27559,7 +27589,8 @@ function simpleRelationSentence(actor, action, target, part) {
 
 function simpleRemember(memory, compiled, messageId) {
   const next = { setting: memory.setting.slice(), people: JSON.parse(JSON.stringify(memory.people || {})),
-    places: JSON.parse(JSON.stringify(memory.places || {})), things: JSON.parse(JSON.stringify(memory.things || {})) }
+    places: JSON.parse(JSON.stringify(memory.places || {})), things: JSON.parse(JSON.stringify(memory.things || {})),
+    recentCutaways: (compiled.cutaway ? [compiled.cutaway] : []).concat(memory.recentCutaways || []).slice(0, 4) }
   for (const thing of compiled.things || []) {
     if (!thing.key) continue
     const before = next.things[thing.key]
