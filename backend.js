@@ -4808,7 +4808,36 @@ function stripStoryMachinery(text) {
     return ' '
   })
   value = value.replace(/<!--\s*GFX_START\s*-->[\s\S]*?(?:<!--\s*GFX_END\s*-->|$)/gi, ' ').replace(/<!--[\s\S]*?-->/g, ' ')
+  // 1.37.1: other presets name their blocks differently (<sola_hud>,
+  // <monitor>, <chatterbox>, <hud_summary>…). A report had 3,000 characters of
+  // story then a 13,000-character <sola_hud>; the parser saw only the HUD and
+  // anchored both pictures to its summary lines, which are not shown in the
+  // chat, so the pictures went to the top of the reply. Any long custom-tag
+  // block is now treated as machinery, unless its name says it holds the story.
+  const before = value
+  value = stripLongCustomBlocks(value, notes)
+  if (simpleProseLength(value) < 200 && simpleProseLength(before) > 1500) value = before
   return { text: value, notes: Object.entries(notes).map(([label, line]) => label + ': ' + line) }
+}
+const STORY_WRAPPER_TAG_RE = /^(?:story|narrative|narration|prose|response|reply|content|scene|text|novel|output|main|body|chapter|writing|roleplay|rp|p|div|span|section|article|em|strong|i|b|u|blockquote|font|center|h[1-6]|ul|ol|li|a|small|big|sup|sub|q|cite|mark)$/i
+const MACHINERY_TAG_RE = /(?:hud|state|tracker|monitor|summary|status|panel|stats?|easel|notes?|memo|plan|scratch|chatter|ledger|info|meta|debug|think|thought|analysis|ooc|system|details|log|recap|board|sheet|map|inventory|quest)/i
+function simpleProseLength(text) {
+  return String(text || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().length
+}
+function stripLongCustomBlocks(text, notes) {
+  return String(text || '').replace(/<([a-zA-Z_][\w:.-]*)\b[^>]*>([\s\S]*?)<\/\1\s*>/g, (block, name, inner) => {
+    if (STORY_WRAPPER_TAG_RE.test(name)) {
+      const open = block.slice(0, block.indexOf('>') + 1)
+      return open + stripLongCustomBlocks(inner, notes) + '</' + name + '>'
+    }
+    const long = simpleProseLength(inner) > 400
+    if (!long && !(MACHINERY_TAG_RE.test(name) && simpleProseLength(inner) > 80)) return block
+    for (const [key, label] of [['loc', 'Location'], ['location', 'Location'], ['time', 'Time'], ['date', 'Date'], ['weather', 'Weather']]) {
+      const found = new RegExp('<' + key + '>([^<]{1,160})</' + key + '>', 'i').exec(block)
+      if (found && !notes[label]) notes[label] = found[1].replace(/\s+/g, ' ').trim()
+    }
+    return ' '
+  })
 }
 
 function buildAnimaParserInput(messages, targetIndex, target, settings, sceneState = null) {

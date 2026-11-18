@@ -31,3 +31,24 @@ lined everyone up facing the camera instead. The parser is now told to keep
 the shot simple: people who are together stay within arm's reach, never on
 different levels or behind a doorway, and if people are far apart, frame on
 the one who matters. Camera angles are otherwise its own choice.
+
+# 1.37.1
+
+Pictures were going to the top of the reply in a chat using a different
+narrator preset. Its replies are about 3,000 characters of story followed by a
+13,000-character status block (<sola_hud>, plus <monitor> and <chatterbox>).
+1.30.0 only removed blocks with names like <internal_states>, so the parser was
+again sent the last 6,000 characters: the status block, and none of the story.
+It picked its moments from the block's summary lines and tied the pictures to
+them; those lines are not shown in the chat, so the pictures had nowhere to go
+and landed at the top. It likely also explains the odd moments the parser
+picked in that chat.
+
+Any long block in a custom tag is now treated as machinery and removed before
+the parser sees the reply, unless its name says it holds the story (<story>,
+<narrative>, <response> and so on). Place, time, date and weather inside it are
+still kept as a short note. If removing blocks would leave almost no text, the
+reply is used as it was.
+
+Checked on three saved replies from two presets: the parser now gets the
+story text (about 3,000 characters each) where it got only status blocks.
