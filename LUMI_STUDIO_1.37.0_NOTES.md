@@ -85,3 +85,21 @@ frame: skin, the garments and small things the moment names (the shirt, the
 belt, a watch), and the pose, with "close-up, head out of frame" and "hand
 focus" when hands are the point. Faces, hair, bodies and other clothes are
 left out.
+
+# 1.37.5
+
+Pictures still landed at the top or the bottom of replies. The anchors are in
+the story text now (1.37.1), so the likely cause is how the reply is laid out
+on screen: if a preset shows paragraphs split by line breaks inside one big
+block, "after the paragraph" meant after the whole message (bottom); if no
+paragraph-like block held the sentence, the picture went to the top.
+
+Placement now goes after the line break that follows the sentence when the
+block is most of the message, or after the smallest element that holds the
+sentence. Checked in a browser on four layouts (one <p> per paragraph, line
+breaks in a <div>, line breaks in a <p>, sentences in <span>s).
+
+Troubleshooting reports now record how each picture was placed (paragraph,
+line break, smallest holder, or "sentence not in the shown message"), with
+counts of paragraphs and line breaks in the shown message, so the next report
+confirms the layout.

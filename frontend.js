@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.37.4'
+  const EXTENSION_VERSION = '1.37.5'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -8004,21 +8004,90 @@ ${entry.prompt || ''}`.trim()
   // The parser anchor is copied verbatim from the story passage. Markdown may
   // split that sentence across <em>/<strong>/links, so compare each rendered
   // block's textContent rather than looking for one literal DOM text node.
+  // 1.37.5: placement went to the top or the bottom in replies from a narrator
+  // preset whose story is not laid out as one <p> per paragraph. If the
+  // block that holds the sentence is most of the message (paragraphs split
+  // only by <br>), the picture goes after the line break that follows the
+  // sentence, not after the whole block (the bottom). If no paragraph-like
+  // block holds it, the smallest element that does is used, not the top.
+  const anchorTextLength = el => normalizeAnchorText(el && el.textContent).length
+  function anchorTooBig(el, root) {
+    const own = anchorTextLength(el), all = anchorTextLength(root)
+    return own > 1200 && own > all * 0.6
+  }
+  function anchorLineBreak(el, wanted) {
+    if (!el || !el.childNodes) return null
+    const kids = [...el.childNodes]
+    let acc = ''
+    for (let i = 0; i < kids.length; i++) {
+      acc += kids[i].textContent || ''
+      if (!normalizeAnchorText(acc).includes(wanted)) continue
+      for (let j = i; j < kids.length; j++) {
+        const kid = kids[j]
+        if (kid.nodeName === 'BR') { lastAnchorHow = 'line break'; return kid }
+        if (j > i && kid.nodeType === 1 && /^(?:P|DIV|BLOCKQUOTE|LI|UL|OL|H[1-6]|PRE|HR)$/.test(kid.nodeName)) { lastAnchorHow = 'before next block'; return kids[j - 1].nodeType === 1 ? kids[j - 1] : null }
+      }
+      return null
+    }
+    return null
+  }
+  var lastAnchorHow = ''
+  function smallestHolder(start, wanted) {
+    let el = start
+    for (;;) {
+      const next = [...(el.children || [])].find(child => !(child.matches && child.matches('.ld-message-image-host')) && normalizeAnchorText(child.textContent).includes(wanted))
+      if (!next) return el
+      el = next
+    }
+  }
   function findAnchorBlock(contentRoot, anchor) {
     const wanted = normalizeAnchorText(anchor)
+    lastAnchorHow = ''
     if (!contentRoot || !wanted || wanted.length < 5) return null
+    const settle = block => {
+      if (!anchorTooBig(block, contentRoot)) { lastAnchorHow = lastAnchorHow || ('paragraph <' + block.nodeName.toLowerCase() + '>'); return block }
+      const br = anchorLineBreak(block, wanted)
+      if (br) return br
+      const inner = smallestHolder(block, wanted)
+      if (inner !== block && !anchorTooBig(inner, contentRoot)) { lastAnchorHow = 'smallest holder <' + inner.nodeName.toLowerCase() + '>'; return inner }
+      lastAnchorHow = 'whole block <' + block.nodeName.toLowerCase() + '>'
+      return block
+    }
     const selector = 'p,li,blockquote,pre,h1,h2,h3,h4,h5,h6'
     const candidates = contentRoot.querySelectorAll ? [...contentRoot.querySelectorAll(selector)] : []
     for (const block of candidates) {
-      if (normalizeAnchorText(block.textContent).includes(wanted)) return block
+      if (normalizeAnchorText(block.textContent).includes(wanted)) return settle(block)
     }
     // Some themes/renderers use plain immediate divs instead of <p>. Limit this
     // fallback to direct children so we don't choose the entire message wrapper.
     for (const block of [...(contentRoot.children || [])]) {
       if (block.matches && block.matches('.ld-message-image-host')) continue
-      if (normalizeAnchorText(block.textContent).includes(wanted)) return block
+      if (normalizeAnchorText(block.textContent).includes(wanted)) { lastAnchorHow = 'child <' + block.nodeName.toLowerCase() + '>'; return settle(block) }
     }
+    // The smallest element that holds the whole sentence.
+    if (!normalizeAnchorText(contentRoot.textContent).includes(wanted)) { lastAnchorHow = 'sentence not in the shown message'; return null }
+    const el = smallestHolder(contentRoot, wanted)
+    if (el !== contentRoot && !anchorTooBig(el, contentRoot)) { lastAnchorHow = 'smallest holder <' + el.nodeName.toLowerCase() + '>'; return el }
+    const br = anchorLineBreak(el, wanted)
+    if (br) return br
+    lastAnchorHow = 'sentence found but no paragraph break near it'
     return null
+  }
+  // For troubleshooting reports: how each picture in a message was placed.
+  function placementDiagnostics(imageUrl) {
+    const out = []
+    for (const [messageId, items] of placementMessageIndex()) {
+      for (const item of items) {
+        if (imageUrl && item.url !== imageUrl) continue
+        const node = findMountedMessageElement(messageId)
+        const root = node ? messageContentRoot(node) : null
+        const where = node ? placementInjectionTarget(node, item) : null
+        out.push({ messageId, anchor: item.anchor || '', mounted: !!node, anchored: !!(where && where.anchored), how: lastAnchorHow || (where && where.pending ? 'text still loading' : ''),
+          shownText: root ? anchorTextLength(root) : 0, paragraphs: root && root.querySelectorAll ? root.querySelectorAll('p').length : 0,
+          lineBreaks: root && root.querySelectorAll ? root.querySelectorAll('br').length : 0, rootChildren: root && root.children ? root.children.length : 0 })
+      }
+    }
+    return out.slice(0, 8)
   }
 
   // Lumiverse (staging, 31 Oct 2026) mounts a scrolled-to row EMPTY first —
@@ -9877,6 +9946,7 @@ ${entry.prompt || ''}`.trim()
         const report = res.report
         report.userNote = note
         report.frontend = { version: EXTENSION_VERSION, viewport: { width: window.innerWidth, height: window.innerHeight }, online: navigator.onLine }
+        try { report.frontend.placement = placementDiagnostics(imageUrl) } catch (error) { report.frontend.placement = 'failed: ' + error.message }
         let imageData = ''
         if (includeImage && imageUrl) {
           const controller = new AbortController()
