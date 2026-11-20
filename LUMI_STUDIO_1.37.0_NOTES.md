@@ -103,3 +103,6 @@ Troubleshooting reports now record how each picture was placed (paragraph,
 line break, smallest holder, or "sentence not in the shown message"), with
 counts of paragraphs and line breaks in the shown message, so the next report
 confirms the layout.
+
+## 1.37.6
+- Troubleshooting reports now say which parser model read the story, first thing under "What happened" (for example "Parser model: anthropic/claude-opus-5.5 (openrouter) · 22 s"). It was always saved with each picture, just buried in the data.

@@ -19378,6 +19378,10 @@ function troubleshootingSummary(report) {
   const omissions = core.compilation && core.compilation.omissions || []
   const clarity = scene.finalClarityReview || core.finalClarityReview || entry.finalClarityReview || null
   const highlights = []
+  // Which model read the story for this picture (1.37.6). It was always in the
+  // parser record but buried; put it first so a model switch is visible.
+  if (debug.model) highlights.push('Parser model: ' + debug.model + (debug.provider ? ' (' + debug.provider + ')' : '') +
+    (debug.parserMs ? ' · ' + Math.round(debug.parserMs / 1000) + ' s' : ''))
   const simple = scene.simplePipeline || entry.simplePipeline || null
   if (simple) {
     highlights.push('Simple pipeline: one parser call, no Jev or evidence checks.')
