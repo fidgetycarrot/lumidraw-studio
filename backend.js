@@ -26170,9 +26170,12 @@ POSE AND EXPRESSION
   words (surprised, shocked, angry, scared, smug) are strong; use one only
   when the story shows that feeling plainly.
   Over-acting a quiet moment is as wrong as a blank face in a dramatic one.
-- Gaze: one cue per person (looking at [name], looking down, looking away,
-  looking ahead; looking at viewer only for a POV shot). When two people look
-  at each other, give each "looking at [name]".
+- Gaze: one cue for EVERY person whose face shows, even in the quietest
+  moment (looking at [name], looking down, looking away, looking ahead;
+  looking at viewer only for a POV shot). Without one the image model makes
+  them stare at the camera. When two people look at each other, give each
+  "looking at [name]". Every face that shows also gets at least one face cue;
+  never leave "expression" empty unless the face is hidden.
 - At the height of passion add 2-3 of: flushed cheeks, heavy blush, panting,
   heavy breathing, eyes rolled back, sweating, trembling lips, ahegao.
 - When the face cannot be seen in this picture (turned away, from behind, buried
@@ -26484,8 +26487,11 @@ const NOVELAI_SCENE_RULES = `
 PLACES IN THE PICTURE
 This picture is drawn by NovelAI, which puts each person on their own spot.
 - "shot": add this to every image, and decide it FIRST. Picture the photograph
-  and say it in one plain sentence, at most 30 words, with the people's names:
-  where the camera is and how the people sit in the frame. "Seen from the back
+  and say it in one short plain sentence, at most 20 words: where the camera
+  is, in camera words (from the front, from the side, from behind, from above,
+  over the shoulder, from the back seat), then how the people sit in the
+  frame. Use names only for people IN the picture; never name someone outside
+  it (in a POV shot the camera is "the viewer"). "Seen from the back
   seat, between the front seats: David drives on the left, Dina sits turned
   toward him on the right, her legs across the console." "From across the
   desk: Mara leans over it toward Tom, who sits back in his chair."
@@ -26500,11 +26506,11 @@ This picture is drawn by NovelAI, which puts each person on their own spot.
   front, never someone far behind the others. If the moment has people far
   apart, pick the one who matters and frame on them.
   "framing" and every "position" must then agree with "shot".
-- "position": left, center or right only when that is where the person is as
-  the camera sees them. When one person is in front of the other, or the shot
-  sentence already makes the layout clear, leave "position" empty; do not
-  force people into a left-to-right row. Add " back" for someone clearly
-  further from the viewer than the others ("right back").
+- "position": left, center or right for every person, as the camera sees
+  them, whenever they are side by side in the frame (this includes a driver
+  and passenger seen from the front). Leave it empty for everyone only when
+  one person is in front of or behind another. Add " back" for someone
+  clearly further from the viewer than the others ("right back").
 - "framing" (this replaces the framing advice above): the closest shot that
   still shows what the moment depends on. NovelAI draws faces badly when they
   are small, so for people talking, touching, hugging, kissing, eating or
@@ -28941,7 +28947,18 @@ function compileNovelaiImage(image, ctx) {
   // (where the camera is, how people sit in the frame). It goes in the prompt
   // in place of LS's own "From left to right" line, which forced a row of
   // people even inside a truck cab seen from the side.
-  const shot = pipes ? nameless(image.shot).replace(/[.\s]+$/, '') : ''
+  // 1.38.0: someone outside the picture (David on the landing, seeing it all)
+  // is "the viewer" in a POV shot and "someone" otherwise. His name in the
+  // sentence meant nothing to NovelAI.
+  const drawnForms = new Set(subjects.flatMap((subject, index) => formsOf(subject, index)).map(form => form.toLowerCase()))
+  const outsideNames = uniqueStrings([...allKnownProfiles(ctx.profiles).map(profile => profile.anchor),
+    ...Object.values((ctx.memory && ctx.memory.people) || {}).map(person => person && person.name)]
+    .flatMap(name => { const full = String(name || '').trim(); const first = full.split(/\s+/)[0]; return [full, first.length >= 3 ? first : ''] })
+    .filter(name => name && !drawnForms.has(name.toLowerCase()) && !/^(?:the|a|an)$/i.test(name))).sort((a, b) => b.length - a.length)
+  const pov = (compiled.parts.framing || []).some(tag => /\bpov\b/i.test(tag))
+  const outsideless = text => outsideNames.reduce((value, name) =>
+    value.replace(new RegExp('\\b' + escapeRegExp(name) + "(?:'s|’s)?\\b", 'gi'), match => (pov ? 'the viewer' : 'someone') + (/s$/i.test(match) && /['’]/.test(match) ? "'s" : '')), String(text || ''))
+  const shot = pipes ? nameless(outsideless(image.shot)).replace(/[.\s]+$/, '') : ''
   // Inside a Character line another person is "another", as in booru tags:
   // "looking at Lauren Vance" → "looking at another".
   const unnamed = (tags, self) => tags.map(tag => {
@@ -28976,6 +28993,22 @@ function compileNovelaiImage(image, ctx) {
     subject.expression.some(tag => /\b(?:look|gaz|star|eye contact|glanc|watch)/i.test(tag) && formsOf(other, index).some(form => nameRe(form).test(tag))))
   for (const subject of subjects) {
     for (const other of gazeAt(subject)) if (gazeAt(other).includes(subject) && !tagsFor.get(subject).includes('eye contact')) tagsFor.get(subject).unshift('eye contact')
+  }
+  // 1.38.0: a face with nowhere to look stares at the camera (Katy tugging
+  // David's shirt hem, Nov 20). Someone acting with another person looks at
+  // them unless the parser said otherwise. Hidden faces and close detail
+  // shots are left alone.
+  const facesHidden = image.cutaway === 'detail' ||
+    /\b(?:from behind|head out of frame|faceless)\b/i.test([...(compiled.parts.framing || []), image.shot].join(' '))
+  if (!facesHidden && total >= 2) {
+    for (const subject of subjects) {
+      const said = [...subject.pose, ...subject.expression].join(', ')
+      if (/\b(?:look\w*|gaz\w*|star(?:e|es|ing)|glanc\w*|watch\w*|eye contact|closed eyes|eyes closed|eyes rolled back|blindfold\w*)\b/i.test(said)) continue
+      if (/\b(?:from behind|facing away|back to (?:the )?(?:viewer|camera)|face (?:buried|hidden|covered|down)|head out of frame|helmet|mask)\b/i.test(said)) continue
+      if (!tagsFor.get(subject).length) continue
+      tagsFor.get(subject).push('looking at another')
+      notes.push(`${subject.displayName || 'Someone'} had nowhere to look; added “looking at another” so they do not stare at the camera.`)
+    }
   }
 
   // 1.28.0: people are separated with "|" inside the one prompt, listed from
@@ -29016,8 +29049,14 @@ function compileNovelaiImage(image, ctx) {
   // With "|" nothing else says where people are, so one plain sentence does:
   // "From left to right: the femboy with honey brown hair, the man with dark
   // hair, the elf femboy with silver-blonde hair." Hair tells them apart.
-  if (shot) { main.push(shot + '.'); notes.push('The shot, as the parser pictured it: ' + String(image.shot)) }
-  else if (!boxes && total >= 2 && spotted === total) {
+  // 1.38.0: the short left-to-right line comes back whenever everyone has a
+  // side (it was what the good pictures had before 1.31.0). The parser's own
+  // camera sentence is used only when that line cannot be: one person, or
+  // people in front of and behind each other.
+  const leftToRight = !boxes && total >= 2 && spotted === total
+  if (shot && !leftToRight) { main.push(shot + '.'); notes.push('The shot, as the parser pictured it: ' + String(image.shot)) }
+  else if (leftToRight) {
+    if (shot) notes.push('Used the left-to-right line instead of the parser\'s shot sentence: ' + String(image.shot))
     const named = lines.map(line => {
       const hair = hairOf(line.subject)
       return 'the ' + shorts[line.index] + (hair ? ' with ' + hair : '') + (/\bback\b/.test(line.spot) ? ' (further back)' : '')
