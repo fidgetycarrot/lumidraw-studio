@@ -26126,6 +26126,7 @@ CLOTHING — this is how outfits stay consistent.
   passage or scene card just says "armor", write "leather armor". Only replace a
   garment when the story describes a different one.
 - Clothing that came off is gone: write the remaining items, or ["nude"].
+  When trousers or a skirt came off but a top stays on, add "no pants".
 - Never invent garments the story has not given them; never borrow another
   person's clothes.
 - "no bra" is an outfit item: write it when the story says a woman wears no bra
@@ -27116,7 +27117,20 @@ const SIMPLE_FULL_WEAR_RE = /\b(?:dress|gown|robe|kimono|yukata|bodysuit|leotard
 const SIMPLE_BOTTOM_WEAR_RE = /\b(?:pants|trousers|jeans|shorts|skirt|leggings|slacks|sweatpants|briefs|boxers|panties|underwear|thong|bloomers|pantyhose|tights|breeches|kilt|loincloth|bikini bottom|trunks|chinos|joggers|hakama|g-string|jockstrap|miniskirt)\b/i
 const simpleWorn = (outfit, re) => outfit.some(tag => re.test(tag) && !/^\s*(?:no|without)\b/i.test(tag))
 function simpleBareParts(subject, image, notes) {
-  if (!['nsfw', 'explicit'].includes(image.rating) || !['1girl', '1boy'].includes(subject.count) || !subject.outfit.length) return
+  if (!['1girl', '1boy'].includes(subject.count) || !subject.outfit.length) return
+  // 1.37.3: any rating. A man whose trousers were "pooled on the rug" was
+  // written correctly as shirt and shoes, and NovelAI put trousers on him.
+  // When the story says the legs are bare, say "no pants".
+  if (!['nsfw', 'explicit'].includes(image.rating)) {
+    const said = [image.scene_summary, image.shot, ...subject.pose, ...subject.outfit].join(' ')
+    const bareLegs = /\b(?:bare (?:legs|thighs)|no (?:pants|trousers|slacks)|pantsless|without (?:his |her |their )?(?:pants|trousers|slacks)|(?:pants|trousers|slacks) (?:off|down|on the floor|pooled))\b/i
+    const top = simpleWorn(subject.outfit, SIMPLE_TOP_WEAR_RE), bottom = simpleWorn(subject.outfit, SIMPLE_BOTTOM_WEAR_RE)
+    if (top && !bottom && !simpleWorn(subject.outfit, SIMPLE_FULL_WEAR_RE) && bareLegs.test(said) && !subject.outfit.some(tag => /\bno pants\b/i.test(tag))) {
+      subject.outfit = uniqueStrings([...subject.outfit, 'no pants', 'bare legs'])
+      notes.push(`${subject.displayName}: added “no pants, bare legs” — the story says the legs are bare, and the image model would draw trousers otherwise.`)
+    }
+    return
+  }
   const outfit = subject.outfit
   if (outfit.some(tag => /\b(?:nude|naked|topless|bottomless|shirtless)\b/i.test(tag)) || simpleWorn(outfit, SIMPLE_FULL_WEAR_RE)) return
   const top = simpleWorn(outfit, SIMPLE_TOP_WEAR_RE), bottom = simpleWorn(outfit, SIMPLE_BOTTOM_WEAR_RE)
