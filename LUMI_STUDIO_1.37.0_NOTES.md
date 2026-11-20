@@ -68,3 +68,20 @@ behind the people in the upstairs hallway, and every room got a staircase.
   "brick building", "facade") from the setting, including from places saved
   before this update, and adds "indoors". Outdoors (a porch, the street) they
   are kept.
+
+# 1.37.3
+
+When the story says someone's legs are bare (trousers pooled on the rug) and
+they still wear a top, Lumi Studio adds "no pants, bare legs" at any rating.
+NovelAI drew trousers on a man written as "shirt, shoes" otherwise. The parser
+is also told to write "no pants" itself.
+
+# 1.37.4
+
+A "detail" cutaway of a hand tugging a shirt hem sent both people's whole
+descriptions, so NovelAI drew two whole people, a woman facing the camera with
+her hand in the wrong place. A detail cutaway now sends only what is in the
+frame: skin, the garments and small things the moment names (the shirt, the
+belt, a watch), and the pose, with "close-up, head out of frame" and "hand
+focus" when hands are the point. Faces, hair, bodies and other clothes are
+left out.

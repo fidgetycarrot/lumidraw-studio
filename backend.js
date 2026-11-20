@@ -27116,6 +27116,30 @@ const SIMPLE_TOP_WEAR_RE = /\b(?:shirt|blouse|top|sweater|hoodie|jacket|coat|tee
 const SIMPLE_FULL_WEAR_RE = /\b(?:dress|gown|robe|kimono|yukata|bodysuit|leotard|jumpsuit|swimsuit|one-piece|uniform|suit|overalls|romper|catsuit|plugsuit|nightgown|negligee|babydoll|chemise|towel|bathrobe|lingerie|pajamas|pyjamas|onesie|habit|toga|sundress|coveralls|blanket|sheet)\b/i
 const SIMPLE_BOTTOM_WEAR_RE = /\b(?:pants|trousers|jeans|shorts|skirt|leggings|slacks|sweatpants|briefs|boxers|panties|underwear|thong|bloomers|pantyhose|tights|breeches|kilt|loincloth|bikini bottom|trunks|chinos|joggers|hakama|g-string|jockstrap|miniskirt)\b/i
 const simpleWorn = (outfit, re) => outfit.some(tag => re.test(tag) && !/^\s*(?:no|without)\b/i.test(tag))
+// 1.37.4: a "detail" cutaway (Katy's hand tugging a shirt hem) still sent
+// both people's whole descriptions, and NovelAI drew two whole people: a
+// bottomless woman facing the camera with her hand at her groin. In a
+// close-up only what is in the frame is sent: skin, the garments and small
+// things the moment names, and the pose. Faces, hair and bodies are left out.
+function simpleDetailTrim(subject, image, notes) {
+  const said = [image.scene_summary, image.shot, ...subject.pose].join(' ').toLowerCase()
+  const hands = /\b(?:hand|hands|finger|fingers|palm|grip|gripping|holding|touch|tug|wrist|knuckle)/.test(said)
+  const named = item => {
+    const words = normalizeIdentityText(item).split(' ').filter(word => word.length > 2)
+    const noun = words[words.length - 1] || ''
+    return noun && said.includes(noun)
+  }
+  const keepIdentity = subject.identity.filter(tag => /\b(?:skin|tan|tanned|dark-skinned|pale|tattoo|nail polish|nails)\b/i.test(tag))
+  const keepOutfit = subject.outfit.filter(item => named(item) || (hands && /\b(?:watch|wristwatch|ring|bracelet|glove|gloves|sleeve|sleeves|cuff|cuffs)\b/i.test(item)))
+  const dropped = subject.identity.length - keepIdentity.length + subject.outfit.length - keepOutfit.length
+  subject.identity = keepIdentity
+  subject.outfit = keepOutfit
+  subject.shownAnatomy = []
+  subject.expression = []
+  subject.pose = uniqueStrings([...subject.pose, 'close-up', 'head out of frame', ...(hands ? ['hand focus'] : [])])
+  if (dropped) notes.push(`${subject.displayName}: close-up, so only what is in the frame was sent (${dropped} tags for face, hair, body and other clothes left out).`)
+}
+
 function simpleBareParts(subject, image, notes) {
   if (!['1girl', '1boy'].includes(subject.count) || !subject.outfit.length) return
   // 1.37.3: any rating. A man whose trousers were "pooled on the rug" was
@@ -27481,6 +27505,7 @@ function compileSimpleImage(image, ctx) {
     shownAnatomy.push(...anatomy)
     subject.shownAnatomy = anatomy
     simpleBareParts(subject, image, notes)
+    if (image.cutaway === 'detail') simpleDetailTrim(subject, image, notes)
     const body = uniqueStrings([...subject.identity, ...anatomy])
     const pose = uniqueStrings([...subject.pose, ...subject.expression])
     return [body.length ? `${subject.introduction}: ${body.join(', ')}.` : `${subject.introduction}.`,
