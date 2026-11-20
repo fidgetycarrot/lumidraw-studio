@@ -16572,6 +16572,104 @@ function setStoryScanStage(scan, stage, note = '') {
 // ---------- Caption (1.35.0) ------------------------------------------------
 // Describe a picture with a vision model, using prompts the user saves and
 // names. Separate from the parser: the parser model may not see pictures.
+// ---------- marked pictures (1.39.0) ----------------------------------------
+// A quick 👍 or 👎 on a chat picture, with optional reasons, so a picture with
+// a small problem can be noted without leaving the scene. The full
+// troubleshooting report is saved at the moment of the tap: a later swipe,
+// edit or re-parse cannot change what was marked. Saved all at once later as
+// one file.
+const MARKS_FILE = 'marks.json'
+const MARKS_MAX = 60
+const MARK_REASONS = ['Clothes', 'Pose', 'Face', 'Background', 'Wrong people', 'Other']
+const markFile = id => 'mark-' + String(id).replace(/[^a-z0-9_-]/gi, '') + '.json'
+function markStore(userId) {
+  if (userId && spindle.userStorage && spindle.userStorage.getJson && spindle.userStorage.setJson) {
+    return { get: (file, fallback) => spindle.userStorage.getJson(file, { fallback, userId }),
+      set: (file, value) => spindle.userStorage.setJson(file, value, { userId }) }
+  }
+  return { get: (file, fallback) => spindle.storage.getJson(file, { fallback }), set: (file, value) => spindle.storage.setJson(file, value) }
+}
+async function readMarks(userId) {
+  try { const list = await markStore(userId).get(MARKS_FILE, []); return Array.isArray(list) ? list : [] } catch { return [] }
+}
+// One change at a time: a reason tapped while the report is still being
+// saved waits for it instead of racing it.
+let marksQueue = Promise.resolve()
+function marksTask(work) {
+  const run = marksQueue.then(work, work)
+  marksQueue = run.catch(() => {})
+  return run
+}
+const markSummary = list => list.map(({ id, url, rating, reasons, at, chatId, messageId }) => ({ id, url, rating, reasons: reasons || [], at, chatId, messageId }))
+
+async function setMark(userId, payload) {
+  const url = String(payload.imageUrl || '')
+  const rating = ['up', 'down'].includes(payload.rating) ? payload.rating : ''
+  if (!url) throw new Error('No picture given.')
+  const store = markStore(userId)
+  let list = await readMarks(userId)
+  const found = list.find(mark => mark.url === url)
+  if (!rating) {
+    if (found) {
+      list = list.filter(mark => mark !== found)
+      try { await store.set(markFile(found.id), null) } catch { /* best effort */ }
+    }
+  } else if (found) {
+    if (found.rating !== rating) { found.rating = rating; found.reasons = [] }
+  } else {
+    const id = 'mk' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+    let report = null, problem = ''
+    try {
+      report = await buildTroubleshootingReport(userId, { imageUrl: url, includePassage: true })
+      // Not about this picture, and large: the latest wardrobe review and the
+      // settings as they are now.
+      delete report.latestWardrobeReview
+      delete report.currentSettings
+    } catch (error) { problem = error && error.message || String(error) }
+    const thumb = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(String(payload.thumb || '')) && payload.thumb.length < 400000 ? payload.thumb : ''
+    await store.set(markFile(id), { report, problem, thumb })
+    list.push({ id, url, rating, reasons: [], at: Date.now(), chatId: String(payload.chatId || ''), messageId: String(payload.messageId || '') })
+    while (list.length > MARKS_MAX) {
+      const old = list.shift()
+      try { await store.set(markFile(old.id), null) } catch { /* best effort */ }
+    }
+  }
+  await store.set(MARKS_FILE, list)
+  return { marks: markSummary(list) }
+}
+
+async function setMarkReason(userId, payload) {
+  const url = String(payload.imageUrl || '')
+  const reason = MARK_REASONS.find(name => name === payload.reason)
+  const list = await readMarks(userId)
+  const found = list.find(mark => mark.url === url)
+  if (found && reason) {
+    const reasons = new Set(found.reasons || [])
+    if (reasons.has(reason)) reasons.delete(reason); else reasons.add(reason)
+    found.reasons = MARK_REASONS.filter(name => reasons.has(name))
+    await markStore(userId).set(MARKS_FILE, list)
+  }
+  return { marks: markSummary(list) }
+}
+
+async function getMark(userId, payload) {
+  const list = await readMarks(userId)
+  const found = list.find(mark => mark.id === String(payload.id || ''))
+  if (!found) throw new Error('That mark is gone.')
+  const saved = await markStore(userId).get(markFile(found.id), null) || {}
+  return { mark: { ...markSummary([found])[0], report: saved.report || null, problem: saved.problem || '', thumb: saved.thumb || '' } }
+}
+
+async function clearMarks(userId, payload) {
+  const store = markStore(userId)
+  let list = await readMarks(userId)
+  const only = payload && payload.id ? String(payload.id) : ''
+  for (const mark of list) if (!only || mark.id === only) { try { await store.set(markFile(mark.id), null) } catch { /* best effort */ } }
+  list = only ? list.filter(mark => mark.id !== only) : []
+  await store.set(MARKS_FILE, list)
+  return { marks: markSummary(list) }
+}
+
 const CAPTION_FILE = 'caption.json'
 const CAPTION_STARTERS = [
   { name: 'Style', text: `Describe only the art style of this picture, as comma-separated Danbooru-style tags an image model would understand: medium (oil painting, digital painting, watercolor, cel shading), line work, colouring, lighting, colour palette, level of detail, and any artist or period the style resembles. Do not describe the people, their clothes or what is happening. Tags only, no sentences.` },
@@ -19808,6 +19906,26 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'marks_list': {
+        reply = ok(payload, requestId, { marks: markSummary(await readMarks(userId)) })
+        break
+      }
+      case 'mark_set': {
+        reply = ok(payload, requestId, await marksTask(() => setMark(userId, payload)))
+        break
+      }
+      case 'mark_reason': {
+        reply = ok(payload, requestId, await marksTask(() => setMarkReason(userId, payload)))
+        break
+      }
+      case 'mark_get': {
+        reply = ok(payload, requestId, await getMark(userId, payload))
+        break
+      }
+      case 'marks_clear': {
+        reply = ok(payload, requestId, await marksTask(() => clearMarks(userId, payload)))
+        break
+      }
       case 'caption_get': {
         reply = ok(payload, requestId, await readCaptionSettings(userId))
         break

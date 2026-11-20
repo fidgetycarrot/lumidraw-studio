@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.38.0'
+  const EXTENSION_VERSION = '1.39.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1883,6 +1883,16 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <label class="ld-label">Latest review (all chats; check message and candidate below)</label>
             <textarea class="ld-jev-report" readonly style="min-height:300px;resize:vertical;font-family:monospace"></textarea>
           </div>
+          <div class="ld-card ld-marks-card">
+            <div class="ld-subtitle">Marked pictures</div>
+            <div class="ld-help">Tap 👍 or 👎 in the corner of a picture in the chat. 👎 shows a few reasons you can tap, or ignore. Everything Claude needs is saved right then, so you can keep playing. When you have time, save them all as one file and send it.</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">
+              <button class="ld-btn" data-act="marks-save">Save all as one file</button>
+              <button class="ld-btn" data-act="marks-clear">Clear all</button>
+            </div>
+            <div class="ld-status ld-marks-status"></div>
+            <div class="ld-marks-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-top:8px"></div>
+          </div>
           <div data-settings-section="advanced" class="ld-card">
             <div class="ld-subtitle">Diagnostics</div>
             <button class="ld-btn" data-act="restore-chat-images">Restore chat images</button>
@@ -3118,6 +3128,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const bridgeCard = cardOf('.ld-bridge-host')
       const cloudCard = cardOf('.ld-cloud-enabled')
       const helpCard = cardOf('[data-act="diagnose"]')
+      const marksCard = $('.ld-marks-card')
       const settingsStatus = $('.ld-settings-status')
       if (drawThingsCard) {
         const dtCompat = details('Settings Draw Things refused', 'If Draw Things rejects a setting, Lumi Studio leaves it out of later requests. Clear this after updating Draw Things.')
@@ -3141,12 +3152,17 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         ['apps', 'Image apps'],
         ['parser', 'Parser'],
         ['chat', 'Chat pictures'],
+        ['marked', 'Marked'],
         ['help', 'Help & legacy'],
       ], 'lumidraw.settingsSection.v3', 'apps')
+      const markedTab = settingsRail.querySelector('[data-reset-tab="marked"]')
+      if (markedTab) markedTab.addEventListener('click', () => { if (typeof loadMarks === 'function') loadMarks() })
       const apps = section('apps')
       const parserSection = section('parser')
       const chat = section('chat')
       const help = section('help')
+      const marked = section('marked')
+      if (marksCard) marked.appendChild(marksCard)
       for (const node of [swarmCard, nanoCard, novelaiCard, gelCard, dtCloudCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
       parserSection.appendChild(parserBinding)
       chat.appendChild(display)
@@ -3155,7 +3171,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       legacyDrawer.el.style.marginTop = '8px'
       for (const node of [oldIntro, coreCard, jevCard, trackedClothing, oldDebug]) if (node) legacyDrawer.body.appendChild(node)
       help.appendChild(legacyDrawer.el)
-      settingsForm.replaceChildren(settingsRail, apps, parserSection, chat, help, ...(settingsStatus ? [settingsStatus] : []))
+      settingsForm.replaceChildren(settingsRail, apps, parserSection, chat, marked, help, ...(settingsStatus ? [settingsStatus] : []))
       let savedSettingsTab = 'apps'
       try { savedSettingsTab = localStorage.getItem('lumidraw.settingsSection.v3') || 'apps' } catch { /* best effort */ }
       if (savedSettingsTab === 'old') savedSettingsTab = 'help'
@@ -7811,8 +7827,22 @@ ${entry.prompt || ''}`.trim()
       display:block; width:100%; max-width:100%; margin:12px 0; box-sizing:border-box;
     }
     .ld-chat-image-item {
-      display:block; max-width:100%; margin:0 auto; box-sizing:border-box;
+      display:block; max-width:100%; margin:0 auto; box-sizing:border-box; position:relative;
     }
+    /* 1.39.0: quiet 👍 / 👎 in the picture's corner, shown on hover. */
+    .ld-rate { position:absolute; right:8px; bottom:8px; display:flex; gap:4px; opacity:0; transition:opacity .15s; z-index:2; }
+    .ld-chat-image-item:hover .ld-rate, .ld-rate.ld-open { opacity:1; }
+    .ld-rate.ld-has { opacity:.7; }
+    .ld-rate.ld-has:not(.ld-open) button:not(.ld-on) { display:none; }
+    .ld-chat-image-item:hover .ld-rate.ld-has button { display:inline-block; }
+    @media (hover:none) { .ld-rate { opacity:.5; } }
+    .ld-rate button, .ld-reasons button { border:0; border-radius:999px; background:rgba(15,15,20,.55); color:#fff; cursor:pointer;
+      font:13px/1 system-ui, sans-serif; padding:6px 8px; margin:0; backdrop-filter:blur(4px); }
+    .ld-rate button { filter:grayscale(1); }
+    .ld-rate button.ld-on { filter:none; background:rgba(15,15,20,.8); }
+    .ld-reasons { position:absolute; left:8px; right:8px; bottom:42px; display:flex; flex-wrap:wrap; gap:5px; justify-content:flex-end; z-index:2; }
+    .ld-reasons button { font-size:12px; padding:5px 10px; border:1px solid rgba(255,255,255,.25); }
+    .ld-reasons button.ld-on { background:#8b5cf6; border-color:#8b5cf6; }
     .ld-chat-image {
       display:block; width:100%; max-width:100%; height:auto; max-height:none;
       object-fit:contain; box-sizing:border-box; border-radius:8px; cursor:pointer;
@@ -7941,9 +7971,121 @@ ${entry.prompt || ''}`.trim()
           data-lumidraw-chat-id="${escapeAttr(item.chatId || '')}" data-lumidraw-message-id="${escapeAttr(item.messageId || '')}"
           data-lumidraw-original-url="${escapeAttr(originalUrl)}" src="${escapeAttr(displayUrl)}" alt="${escapeAttr(item.alt || 'Generated image')}"
           width="${width}" height="${height}" loading="lazy" decoding="async" />
+        ${rateMarkup(originalUrl)}
       </div>
     </div>`
   }
+
+  // ------------------------------------------------------------------ marked pictures (1.39.0)
+  // 👍 / 👎 on each chat picture. One tap marks it; for 👎 a row of reasons
+  // shows for a few seconds and goes away on its own. The backend saves the
+  // full report at that moment. "var": placementMarkup can run before this
+  // part of the file has (1.36.0's dead-zone lesson).
+  var markedByUrl = new Map()
+  var MARK_REASONS = ['Clothes', 'Pose', 'Face', 'Background', 'Wrong people', 'Other']
+  function rateMarkup(url) {
+    const mark = markedByUrl.get(String(url || ''))
+    const on = rating => mark && mark.rating === rating ? ' ld-on' : ''
+    return `<div class="ld-rate${mark ? ' ld-has' : ''}" data-ld-rate-url="${escapeAttr(url)}">` +
+      `<button type="button" class="ld-rate-btn${on('up')}" data-ld-rate="up" title="I like this picture" aria-label="I like this picture">👍</button>` +
+      `<button type="button" class="ld-rate-btn${on('down')}" data-ld-rate="down" title="Something is off in this picture" aria-label="Something is off in this picture">👎</button></div>`
+  }
+  function paintMarks(root = document) {
+    for (const bar of root.querySelectorAll('.ld-rate[data-ld-rate-url]')) {
+      const mark = markedByUrl.get(bar.getAttribute('data-ld-rate-url') || '')
+      bar.classList.toggle('ld-has', !!mark)
+      for (const button of bar.querySelectorAll('[data-ld-rate]')) button.classList.toggle('ld-on', !!mark && mark.rating === button.getAttribute('data-ld-rate'))
+      const row = bar.parentElement && bar.parentElement.querySelector('.ld-reasons')
+      if (row) for (const button of row.querySelectorAll('[data-ld-reason]')) button.classList.toggle('ld-on', !!mark && (mark.reasons || []).includes(button.getAttribute('data-ld-reason')))
+    }
+  }
+  function takeMarks(list) {
+    markedByUrl = new Map((Array.isArray(list) ? list : []).map(mark => [mark.url, mark]))
+    paintMarks()
+    if (typeof renderMarksPanel === 'function') renderMarksPanel()
+  }
+  async function loadMarks() {
+    try { const res = await call('marks_list', {}, 20000); takeMarks(res.marks) } catch { /* the panel can load them later */ }
+  }
+  function markThumb(img) {
+    try {
+      const width = Math.min(768, img.naturalWidth || 0)
+      if (!width) return ''
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = Math.round((img.naturalHeight || width) * width / img.naturalWidth)
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+      return canvas.toDataURL('image/jpeg', 0.82)
+    } catch { return '' }
+  }
+  const reasonTimers = new WeakMap()
+  function hideReasons(item) {
+    const row = item.querySelector('.ld-reasons')
+    if (row) row.remove()
+    const bar = item.querySelector('.ld-rate')
+    if (bar) bar.classList.remove('ld-open')
+  }
+  function keepReasons(item) {
+    clearTimeout(reasonTimers.get(item))
+    reasonTimers.set(item, setTimeout(() => hideReasons(item), 6000))
+  }
+  function showReasons(item, url) {
+    hideReasons(item)
+    const row = document.createElement('div')
+    row.className = 'ld-reasons'
+    const mark = markedByUrl.get(url)
+    for (const reason of MARK_REASONS) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = reason
+      button.setAttribute('data-ld-reason', reason)
+      if (mark && (mark.reasons || []).includes(reason)) button.classList.add('ld-on')
+      row.appendChild(button)
+    }
+    item.appendChild(row)
+    const bar = item.querySelector('.ld-rate')
+    if (bar) bar.classList.add('ld-open')
+    keepReasons(item)
+  }
+  async function onRateClick(event) {
+    const target = event.target && event.target.closest ? event.target.closest('[data-ld-rate], [data-ld-reason]') : null
+    if (!target) return
+    const item = target.closest('.ld-chat-image-item')
+    if (!item) return
+    event.preventDefault()
+    event.stopPropagation()
+    const img = item.querySelector('img.ld-chat-image')
+    const url = (img && img.getAttribute('data-lumidraw-original-url')) || (item.querySelector('.ld-rate') || { getAttribute: () => '' }).getAttribute('data-ld-rate-url') || ''
+    if (!url) return
+    const before = markedByUrl.get(url)
+    if (target.hasAttribute('data-ld-reason')) {
+      if (!before) return
+      const reason = target.getAttribute('data-ld-reason')
+      const reasons = new Set(before.reasons || [])
+      if (reasons.has(reason)) reasons.delete(reason); else reasons.add(reason)
+      markedByUrl.set(url, { ...before, reasons: MARK_REASONS.filter(name => reasons.has(name)) })
+      paintMarks()
+      keepReasons(item)
+      try { takeMarks((await call('mark_reason', { imageUrl: url, reason }, 120000)).marks) } catch (error) { console.warn('[Lumi Studio] reason not saved:', error && error.message) }
+      return
+    }
+    const rating = target.getAttribute('data-ld-rate')
+    const next = before && before.rating === rating ? '' : rating
+    if (next) markedByUrl.set(url, { ...(before || {}), url, rating: next, reasons: before && before.rating === next ? before.reasons || [] : [] })
+    else markedByUrl.delete(url)
+    paintMarks()
+    if (next === 'down') showReasons(item, url); else hideReasons(item)
+    try {
+      const res = await call('mark_set', { imageUrl: url, rating: next, thumb: !before && next && img ? markThumb(img) : '',
+        chatId: (img && img.getAttribute('data-lumidraw-chat-id')) || '', messageId: (img && img.getAttribute('data-lumidraw-message-id')) || '' }, 120000)
+      takeMarks(res.marks)
+    } catch (error) {
+      console.warn('[Lumi Studio] mark not saved:', error && error.message)
+      if (before) markedByUrl.set(url, before); else markedByUrl.delete(url)
+      paintMarks()
+    }
+  }
+  document.addEventListener('click', onRateClick, true)
 
   function configuredChatImageWidth(intrinsic = 0) {
     const enabled = !!($('.ld-size-images') && $('.ld-size-images').checked)
@@ -7957,6 +8099,7 @@ ${entry.prompt || ''}`.trim()
 
   function applyNativeImageSizingToMount(mount) {
     if (!mount || !mount.querySelectorAll) return
+    paintMarks(mount)
     const size = (node, name, value) => {
       if (node.style.getPropertyValue(name) !== value || node.style.getPropertyPriority(name) !== 'important') {
         node.style.setProperty(name, value, 'important')
@@ -10022,6 +10165,96 @@ ${entry.prompt || ''}`.trim()
     if (item && item.image) openTroubleshooting(item.image.url)
   })
   $('[data-act="troubleshooting"]').addEventListener('click', () => openTroubleshooting())
+
+  // ---- Marked tab (1.39.0)
+  function renderMarksPanel() {
+    const grid = $('.ld-marks-grid'), status = $('.ld-marks-status')
+    if (!grid) return
+    const marks = [...markedByUrl.values()].sort((a, b) => (b.at || 0) - (a.at || 0))
+    const down = marks.filter(mark => mark.rating === 'down').length
+    if (status) status.textContent = marks.length ? `${marks.length} marked: ${marks.length - down} 👍, ${down} 👎.` : 'Nothing marked yet.'
+    grid.replaceChildren()
+    for (const mark of marks) {
+      const tile = document.createElement('div')
+      tile.style.cssText = 'display:flex;flex-direction:column;gap:4px;position:relative'
+      const img = document.createElement('img')
+      img.src = previewUrl(mark.url, 'sm')
+      img.alt = 'Marked picture'
+      img.loading = 'lazy'
+      img.style.cssText = 'width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:7px;cursor:pointer;background:rgba(127,127,127,.15)'
+      img.onerror = () => { img.removeAttribute('src'); img.alt = 'Picture deleted (saved copy is kept)' }
+      img.addEventListener('click', () => { if (findHistoryImage(mark.url)) openLightbox(mark.url); else openLightboxForChatOnly(mark.url) })
+      const label = document.createElement('div')
+      label.style.cssText = 'font-size:12px;opacity:.85'
+      label.textContent = (mark.rating === 'up' ? '👍' : '👎') + (mark.reasons && mark.reasons.length ? ' ' + mark.reasons.join(', ') : '')
+      const remove = document.createElement('button')
+      remove.className = 'ld-x'
+      remove.type = 'button'
+      remove.title = 'Remove this mark'
+      remove.textContent = '×'
+      remove.style.cssText = 'position:absolute;top:4px;right:4px'
+      remove.addEventListener('click', async () => {
+        try { takeMarks((await call('marks_clear', { id: mark.id }, 20000)).marks) } catch (error) { if (status) status.textContent = 'Could not remove: ' + error.message }
+      })
+      tile.append(img, label, remove)
+      grid.appendChild(tile)
+    }
+  }
+
+  function marksFileHtml(entries) {
+    const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+    const sections = entries.map((mark, index) => {
+      const report = mark.report || {}
+      const highlights = report.diagnosticSummary && report.diagnosticSummary.highlights || []
+      const prompt = report.imageRecord && report.imageRecord.prompt || ''
+      const thumb = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(mark.thumb || '') ? '<img alt="Marked picture" src="' + mark.thumb + '">' : '<p><i>No saved picture.</i></p>'
+      return '<section><h2>' + (index + 1) + '. ' + (mark.rating === 'up' ? '👍 Liked' : '👎 Something off') +
+        (mark.reasons && mark.reasons.length ? ': ' + escape(mark.reasons.join(', ')) : '') + '</h2>' +
+        '<p>Marked ' + escape(new Date(mark.at || 0).toLocaleString()) + (report.version ? ' · LS ' + escape(report.version) : '') + '</p>' + thumb +
+        (mark.problem ? '<p><b>Report problem:</b> ' + escape(mark.problem) + '</p>' : '') +
+        (highlights.length ? '<ul>' + highlights.map(line => '<li>' + escape(line) + '</li>').join('') + '</ul>' : '') +
+        (prompt ? '<h3>Prompt</h3><pre>' + escape(prompt) + '</pre>' : '') +
+        '<details><summary>Full report</summary><pre>' + escape(JSON.stringify({ mark: { rating: mark.rating, reasons: mark.reasons, url: mark.url, chatId: mark.chatId, messageId: mark.messageId, at: mark.at }, report }, null, 2)) + '</pre></details></section>'
+    })
+    const down = entries.filter(mark => mark.rating === 'down').length
+    return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">' +
+      '<title>Lumi Studio marked pictures</title><style>body{font:16px system-ui;margin:24px;max-width:1100px}img{max-width:100%;max-height:700px;display:block}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}section{border-top:2px solid #8884;margin-top:28px;padding-top:8px}</style></head><body>' +
+      '<h1>Lumi Studio marked pictures</h1><p data-ld-marks-file="1">' + entries.length + ' pictures: ' + (entries.length - down) + ' 👍, ' + down + ' 👎. Private: contains prompts and story text.</p>' +
+      sections.join('') + '</body></html>'
+  }
+
+  $('[data-act="marks-save"]').addEventListener('click', async () => {
+    const status = $('.ld-marks-status'), button = $('[data-act="marks-save"]')
+    const marks = [...markedByUrl.values()].sort((a, b) => (a.at || 0) - (b.at || 0))
+    if (!marks.length) { status.textContent = 'Nothing marked yet.'; return }
+    button.disabled = true
+    try {
+      const entries = []
+      for (const [index, mark] of marks.entries()) {
+        status.textContent = `Gathering ${index + 1} of ${marks.length}…`
+        try { entries.push((await call('mark_get', { id: mark.id }, 30000)).mark) }
+        catch (error) { entries.push({ ...mark, problem: error.message }) }
+      }
+      const name = 'lumi-studio-marked-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.html'
+      const file = new File([marksFileHtml(entries)], name, { type: 'text/html' })
+      const url = URL.createObjectURL(file), link = document.createElement('a')
+      link.href = url; link.download = name; document.body.appendChild(link); link.click(); link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      status.textContent = 'Saved ' + name + '. Send that one file to Claude.'
+    } catch (error) { status.textContent = 'Could not save: ' + error.message }
+    finally { button.disabled = false }
+  })
+
+  let marksClearArmed = 0
+  $('[data-act="marks-clear"]').addEventListener('click', async () => {
+    const status = $('.ld-marks-status'), button = $('[data-act="marks-clear"]')
+    if (!markedByUrl.size) return
+    if (Date.now() - marksClearArmed > 4000) { marksClearArmed = Date.now(); button.textContent = 'Tap again to clear'; setTimeout(() => { button.textContent = 'Clear all' }, 4000); return }
+    marksClearArmed = 0; button.textContent = 'Clear all'
+    try { takeMarks((await call('marks_clear', {}, 30000)).marks) } catch (error) { status.textContent = 'Could not clear: ' + error.message }
+  })
+  loadMarks().then(() => { if (!markedByUrl.size) setTimeout(loadMarks, 5000) })
 
   $('[data-act="safe-report"]').addEventListener('click', async () => {
     try {
