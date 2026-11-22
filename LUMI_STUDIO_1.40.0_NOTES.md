@@ -12,3 +12,7 @@ From Eric's first 👎 marks (Illya's feet on David's chair rung).
 - A close detail shot of feet now stays close ("lower body, feet focus"). Before, LS widened it to full body while the people had already been trimmed down for a close-up, so NovelAI made up their clothes and who they were.
 - In a close-up, what kind of person someone is (femboy, trap, androgynous) is kept, so Illya stays Illya.
 - Garments the story names are matched by their stem ("lace-stockinged" keeps the stockings, "boot" keeps the boots). In a close-up of feet, what's worn below the waist is kept too.
+
+## 1.40.2
+From Eric's second 👎 (three at the Oak Lane table, legs stretched out "like stickers").
+- When the people whose feet the moment is about are sitting, LS no longer widens the picture to full body to show their feet. Widening made NovelAI pull their legs out in front of the table. The parser's framing is kept and the feet poses are left out; a close detail shot is the place for them.

@@ -27743,6 +27743,22 @@ function compileSimpleImage(image, ctx) {
     framing = uniqueStrings([...framing.filter(tag => !/^(?:full[- ]body|cowboy shot|upper body|portrait|bust shot)$/i.test(tag)), 'lower body', 'feet focus'])
     notes.push('A close detail of feet: drawn as “lower body, feet focus”, not full body.')
   } else if (LOWER_BODY.test(momentText) && framing.some(tag => CROP.test(tag)) &&
+    !framing.some(tag => /^(?:full[- ]body|wide shot|very wide shot)$/i.test(tag)) &&
+    subjects.filter(subject => LOWER_BODY.test(subject.pose.join(', '))).length &&
+    subjects.filter(subject => LOWER_BODY.test(subject.pose.join(', '))).every(subject => /\b(?:sitting|seated|sits)\b/i.test(subject.pose.join(', ')))) {
+    // 1.40.1: people sitting with their feet under a table. Widening to full
+    // body made NovelAI pull their legs out in front of the table to show the
+    // feet, like stickers on the picture (footsie at the Oak Lane table,
+    // Nov 21). Keep the parser's framing and leave the feet out of the poses;
+    // a close detail shot is the place for them.
+    for (const subject of subjects) {
+      const kept = subject.pose.filter(tag => !LOWER_BODY.test(tag))
+      if (kept.length !== subject.pose.length) {
+        notes.push(`${subject.displayName}: sitting, feet out of frame, so “${subject.pose.filter(tag => LOWER_BODY.test(tag)).join(', ')}” was left out.`)
+        subject.pose = kept
+      }
+    }
+  } else if (LOWER_BODY.test(momentText) && framing.some(tag => CROP.test(tag)) &&
     !framing.some(tag => /^(?:full[- ]body|wide shot|very wide shot)$/i.test(tag))) {
     const cropped = framing.filter(tag => CROP.test(tag))
     framing = uniqueStrings(['full body', ...framing.filter(tag => !CROP.test(tag))])
