@@ -27308,13 +27308,20 @@ const simpleWorn = (outfit, re) => outfit.some(tag => re.test(tag) && !/^\s*(?:n
 function simpleDetailTrim(subject, image, notes) {
   const said = [image.scene_summary, image.shot, ...subject.pose].join(' ').toLowerCase()
   const hands = /\b(?:hand|hands|finger|fingers|palm|grip|gripping|holding|touch|tug|wrist|knuckle)/.test(said)
+  // The garment's main word, matched by its stem: "stockings" for
+  // "lace-stockinged feet", "boots" for "the man's leather boot" (1.40.1).
   const named = item => {
     const words = normalizeIdentityText(item).split(' ').filter(word => word.length > 2)
     const noun = words[words.length - 1] || ''
-    return noun && said.includes(noun)
+    return noun && said.includes(noun.length > 5 ? noun.slice(0, noun.length - 2) : noun.replace(/s$/, ''))
   }
-  const keepIdentity = subject.identity.filter(tag => /\b(?:skin|tan|tanned|dark-skinned|pale|tattoo|nail polish|nails)\b/i.test(tag))
-  const keepOutfit = subject.outfit.filter(item => named(item) || (hands && /\b(?:watch|wristwatch|ring|bracelet|glove|gloves|sleeve|sleeves|cuff|cuffs)\b/i.test(item)))
+  // Skin and nails show in a close-up; so does what kind of person this is (a
+  // femboy's legs are drawn differently from a man's), so those stay too.
+  const keepIdentity = subject.identity.filter(tag => /\b(?:skin|tan|tanned|dark-skinned|pale|tattoo|nail polish|nails|trap|otoko ?no ?ko|otokonoko|femboy|androgynous|futanari)\b/i.test(tag))
+  // A close-up of feet shows the legs too: what is worn below the waist stays.
+  const feet = /\b(?:foot|feet|toes?|soles?|ankles?)\b/.test(said)
+  const keepOutfit = subject.outfit.filter(item => named(item) || (hands && /\b(?:watch|wristwatch|ring|bracelet|glove|gloves|sleeve|sleeves|cuff|cuffs)\b/i.test(item)) ||
+    (feet && (SIMPLE_BOTTOM_WEAR_RE.test(item) || SIMPLE_FULL_WEAR_RE.test(item) || /\b(?:stockings?|thighhighs?|thigh-highs?|socks?|tights|pantyhose|boots?|shoes?|sneakers?|heels|sandals?|slippers?|barefoot)\b/i.test(item))))
   const dropped = subject.identity.length - keepIdentity.length + subject.outfit.length - keepOutfit.length
   subject.identity = keepIdentity
   subject.outfit = keepOutfit
@@ -27729,7 +27736,13 @@ function compileSimpleImage(image, ctx) {
     .replace(/\b(?:on (?:his|her|their|its|the) (?:toes|tiptoes)|tiptoe\w*)\b/gi, ' ')
   const LOWER_BODY = /\b(?:foot|feet|toes?|soles?|footjob)\b/i
   const CROP = /^(?:portrait|headshot|close[- ]?up|extreme close[- ]?up|bust shot|upper body|waist[- ]up(?: shot)?|cowboy shot|medium shot)$/i
-  if (LOWER_BODY.test(momentText) && framing.some(tag => CROP.test(tag)) &&
+  // 1.40.1: a close detail shot of feet stays close. Widening it drew whole
+  // people from tags trimmed down for a close-up, so NovelAI made up their
+  // clothes and who they were (Illya's feet on David's chair rung, Nov 21).
+  if (image.cutaway === 'detail' && LOWER_BODY.test(momentText)) {
+    framing = uniqueStrings([...framing.filter(tag => !/^(?:full[- ]body|cowboy shot|upper body|portrait|bust shot)$/i.test(tag)), 'lower body', 'feet focus'])
+    notes.push('A close detail of feet: drawn as “lower body, feet focus”, not full body.')
+  } else if (LOWER_BODY.test(momentText) && framing.some(tag => CROP.test(tag)) &&
     !framing.some(tag => /^(?:full[- ]body|wide shot|very wide shot)$/i.test(tag))) {
     const cropped = framing.filter(tag => CROP.test(tag))
     framing = uniqueStrings(['full body', ...framing.filter(tag => !CROP.test(tag))])

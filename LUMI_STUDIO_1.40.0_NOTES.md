@@ -6,3 +6,9 @@
 - **More room:** a place on its own gets up to 12 setting tags (people pictures stay at 8).
 - **Small figure from behind.** When someone arrives before something big or stops to take in a view, the parser can draw that person small, from behind, looking at it.
 - **Scenery style.** Pictures with nobody in them keep the style line's look (artist, colouring, light, quality) but leave out its words for faces and bodies, and the artist is turned down to 60%. For Eric's style that gives exactly the "trimmed" test prompt. People pictures use the full style line as before.
+
+## 1.40.1
+From Eric's first 👎 marks (Illya's feet on David's chair rung).
+- A close detail shot of feet now stays close ("lower body, feet focus"). Before, LS widened it to full body while the people had already been trimmed down for a close-up, so NovelAI made up their clothes and who they were.
+- In a close-up, what kind of person someone is (femboy, trap, androgynous) is kept, so Illya stays Illya.
+- Garments the story names are matched by their stem ("lace-stockinged" keeps the stockings, "boot" keeps the boots). In a close-up of feet, what's worn below the waist is kept too.
