@@ -26443,6 +26443,40 @@ function simpleOutfitLines(outfit) {
 // them the same thing twice ("green bodega awning" and "under green bodega
 // awning", "concrete sidewalk" and "wet concrete sidewalk"). A tag whose words
 // are all in one already kept is dropped, and the list is capped.
+// The style line for a picture with nobody in it (1.40.0). Splits on commas
+// but keeps NovelAI weight groups ("0.8::a, b::") together.
+const SCENERY_STYLE_PEOPLE_RE = /\b(?:proportions?|posture|nose|skin|faces?|facial|eyes?|lips|bod(?:y|ies)|anatomy|hands?|fingers?|muscles?|muscular|figures?|portrait|abs|breasts?|\d*girls?|\d*boys?|male|female|wom[ae]n|m[ae]n|person|people|solo|character)\b/i
+function simpleSceneryStyle(text) {
+  const source = String(text || '')
+  const groups = []
+  let inWeight = false, start = 0
+  for (let index = 0; index <= source.length; index++) {
+    if (source.startsWith('::', index)) {
+      // "1.2::" opens a weight group; the next bare "::" closes it.
+      if (!inWeight && /(?:^|,)\s*-?\d*\.?\d+\s*$/.test(source.slice(start, index))) inWeight = true
+      else if (inWeight) inWeight = false
+      index++
+      continue
+    }
+    if (index === source.length || (source[index] === ',' && !inWeight)) {
+      const group = source.slice(start, index).trim()
+      if (group) groups.push(group)
+      start = index + 1
+    }
+  }
+  const out = []
+  for (const group of groups) {
+    const weighted = group.match(/^(-?\d*\.?\d+)::([\s\S]*?)::$/)
+    const weight = weighted ? Number(weighted[1]) : 1
+    const items = (weighted ? weighted[2] : group).split(',').map(item => item.trim()).filter(Boolean)
+      .filter(item => !SCENERY_STYLE_PEOPLE_RE.test(item))
+    if (!items.length) continue
+    if (items.every(item => /^artist:/i.test(item))) out.push(`${Math.round(weight * 0.6 * 100) / 100}::${items.join(', ')}::`)
+    else out.push(weighted ? `${weighted[1]}::${items.join(', ')}::` : items.join(', '))
+  }
+  return out.join(', ')
+}
+
 function simpleTidySetting(tags, max) {
   const words = tag => normalizeIdentityText(tag).split(' ').filter(word => word.length > 2 && !/^(?:the|and|under|near|inside|outside|with|from)$/.test(word))
   const kept = []
@@ -26659,9 +26693,31 @@ the place, the mood and the things that matter are part of the story too.
   weight, prefer the sight about one time in three; when you are allowed more
   than one picture, one of them can be the sight.
 - A place or thing alone: "subjects": [] and "framing": ["scenery" for a place,
-  or "close-up" / "still life" for a thing, plus a shot such as "wide shot"].
-  "scene_summary" says what is seen, with no people in it. Fill "place" and
-  "setting" as usual; put more into "setting" (up to 8).
+  or "close-up" / "still life" for a thing, plus a shot such as "wide shot" or
+  "from below"]. "scene_summary" says what is seen, with no people in it, as
+  one plain picture sentence ("a colossal ice tree on a frozen lake at
+  night"). Fill "place" as usual.
+- Make it a picture, not a list. "setting" (up to 12) is NOT an inventory of
+  the room. Build it from:
+  * the one main thing the picture is about;
+  * where the light comes from, and what glows (a lamp, a window, embers,
+    moonlight, a glowing orb);
+  * the sky or the weather, if it can be seen (rain on the glass, a red
+    sunset, stars, fog);
+  * two colours that play against each other (warm lamp light against blue
+    evening, teal glow against gold);
+  * something in the air (dust in a sunbeam, steam, snow, drifting embers,
+    sparkles only if there is magic);
+  * a few things that place it, only as many as it needs.
+  All of it from what the story says or plainly means (the time, the weather,
+  the lamps that are lit). A quiet everyday place gets a quiet version: warm
+  window light, steam off a pot, rain outside. Never add creatures,
+  buildings, magic or wonders the story has not shown.
+- A person in the place: when someone arrives before something big or
+  stops to take in a view, the picture can be that person, small in the
+  frame and seen from behind, looking at it: one subject, "framing":
+  ["scenery", "wide shot", "from behind"]. Use this instead of a place alone
+  when it matters who is looking.
 - A creature alone: the creature is the only subject, as 1other, without the
   story's people.
 - A sexual passage is the exception: if anything sexual is happening in the
@@ -26972,7 +27028,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2, allowNoPeople = 
       cutaway: SIMPLE_CUTAWAYS.includes(String(item.cutaway || '').trim().toLowerCase()) ? String(item.cutaway).trim().toLowerCase() : '',
       framing: simpleTags(item.framing, 3),
       composition: SIMPLE_COMPOSITIONS.includes(String(item.composition || '').trim().toLowerCase()) ? String(item.composition).trim().toLowerCase() : '',
-      setting: simpleTags(item.setting, 8),
+      setting: simpleTags(item.setting, noPeople ? 12 : 8),
       place,
       things,
       names: simpleNamedThings(item.names),
@@ -27567,7 +27623,10 @@ function compileSimpleImage(image, ctx) {
   if (!setting.length && card && card.location) { setting = simpleTags(card.location, 4); settingSource = 'scene card' }
   if (!setting.length && (ctx.anchorTags || []).length) { setting = ctx.anchorTags.slice(); settingSource = 'preset scene anchor' }
   if (!setting.length) settingSource = 'unknown'
-  setting = simpleTags(setting, 8)
+  // A picture of a place alone carries its atmosphere in the setting (light,
+  // sky, colours, the air), so it gets more room (1.40.0).
+  const sceneryOnly = !(image.subjects || []).length
+  setting = simpleTags(setting, sceneryOnly ? 12 : 8)
   // The place's own look: saved the first time, reused after (1.29.0).
   let placeUsed = null
   const placeName = image.place && image.place.name
@@ -27578,8 +27637,9 @@ function compileSimpleImage(image, ctx) {
       const has = new Set(looks.map(normalizeIdentityText))
       // The moment's own tags (the light, the weather, the corner they are in)
       // are kept; the place's look fills the rest.
-      const moment = simpleTidySetting(setting.filter(tag => !has.has(normalizeIdentityText(tag))), 6)
-      setting = simpleTidySetting([...looks.slice(0, Math.max(4, 10 - moment.length)), ...moment], 10)
+      const moment = simpleTidySetting(setting.filter(tag => !has.has(normalizeIdentityText(tag))), sceneryOnly ? 10 : 6)
+      const room = sceneryOnly ? 14 : 10
+      setting = simpleTidySetting([...looks.slice(0, Math.max(4, room - moment.length)), ...moment], room)
       placeUsed = { key: known ? known.key : simplePlaceKey(placeName), name: known ? known.name : placeName, looks, first: !known }
       notes.push(known ? `Place “${known.name}”: drawn before, so its saved look was used (${looks.join(', ')}).`
         : `Place “${placeName}”: first picture here. Its look is now remembered for this chat (${looks.join(', ')}).`)
@@ -27726,8 +27786,19 @@ function compileSimpleImage(image, ctx) {
     }
   }
 
-  const header = reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), image.rating).split(/\bBREAK\b/)
+  let header = reconcileSafetyTags(joinPromptParts([preset.qualityTags, prefix]), image.rating).split(/\bBREAK\b/)
     .map(part => part.replace(/^[\s,.]+|[\s,.]+$/g, '')).filter(Boolean).join(', ')
+  // 1.40.0: a picture with nobody in it keeps the style's look (the artist,
+  // the colouring, the light) but not its words for faces and bodies, which
+  // pull a person into the frame, and the artist is turned down so the
+  // place's own light and colour can lead.
+  if (!subjects.length) {
+    const trimmed = simpleSceneryStyle(header)
+    if (trimmed !== header) {
+      notes.push('Scenery picture: kept the style\'s look, left out its words for people and turned the artist down: ' + trimmed)
+      header = trimmed
+    }
+  }
   const headerLine = joinPromptParts([header, image.rating, ...positive, ...counts, image.composition])
   const sceneLine = [summary ? `Scene: ${summary}.` : '', framing.length ? framing.join(', ') + '.' : ''].filter(Boolean).join(' ')
   const settingLine = setting.length ? `Setting: ${setting.join(', ')}.` : ''
