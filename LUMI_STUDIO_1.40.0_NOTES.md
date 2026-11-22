@@ -16,3 +16,6 @@ From Eric's first 👎 marks (Illya's feet on David's chair rung).
 ## 1.40.2
 From Eric's second 👎 (three at the Oak Lane table, legs stretched out "like stickers").
 - When the people whose feet the moment is about are sitting, LS no longer widens the picture to full body to show their feet. Widening made NovelAI pull their legs out in front of the table. The parser's framing is kept and the feet poses are left out; a close detail shot is the place for them.
+
+## 1.40.3
+- A close detail shot of a mouth keeps the face around it. The person giving an oral act, or anyone kissing, keeps their hair, ears, lips, eyes, moles and the like, and the cues for their mouth and cheeks, and is no longer marked "head out of frame". Before, Illya's fellatio close-up lost everything that made him Illya. Hands and feet close-ups still leave the head out.

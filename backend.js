@@ -27317,7 +27317,19 @@ function simpleDetailTrim(subject, image, notes) {
   }
   // Skin and nails show in a close-up; so does what kind of person this is (a
   // femboy's legs are drawn differently from a man's), so those stay too.
-  const keepIdentity = subject.identity.filter(tag => /\b(?:skin|tan|tanned|dark-skinned|pale|tattoo|nail polish|nails|trap|otoko ?no ?ko|otokonoko|femboy|androgynous|futanari)\b/i.test(tag))
+  // 1.40.3: a close-up of a mouth shows the face around it: hair, ears, lips,
+  // eyes. Trimming those made a femboy's fellatio close-up a stranger's
+  // (Illya, Nov 22). Hands and feet close-ups still leave the head out.
+  // Whose face: their own pose says so ("giving fellatio",
+  // "tongue out"; not "receiving fellatio"), or they give the oral act, or
+  // they kiss.
+  const own = subject.pose.join(', ').toLowerCase().replace(/\breceiv\w*\s+\w+/g, ' ')
+  const myName = subject.raw && subject.raw.name
+  const face = /\b(?:mouth|lips?|tongue|kiss\w*|fellatio|blowjob|cunnilingus|oral|lick\w*|suck\w*|face|cheeks?|deepthroat)\b/.test(own) ||
+    (image.interactions || []).some(act => (/^(?:fellatio|cunnilingus|blowjob|oral)/i.test(String(act.act || '')) && act.actor === myName) ||
+      (/^kiss/i.test(String(act.act || '')) && [act.actor, act.recipient].includes(myName)))
+  const keepIdentity = subject.identity.filter(tag => /\b(?:skin|tan|tanned|dark-skinned|pale|tattoo|nail polish|nails|trap|otoko ?no ?ko|otokonoko|femboy|androgynous|futanari)\b/i.test(tag) ||
+    (face && /\b(?:hair|bangs|sidelocks?|ponytail|braids?|twintails|bun|ears?|elf|lips|lip gloss|lipstick|eyes|eyelashes|eyebrows|mole|freckles|beard|stubble|glasses|earrings?|makeup|eyeliner|scar|horns?)\b/i.test(tag)))
   // A close-up of feet shows the legs too: what is worn below the waist stays.
   const feet = /\b(?:foot|feet|toes?|soles?|ankles?)\b/.test(said)
   const keepOutfit = subject.outfit.filter(item => named(item) || (hands && /\b(?:watch|wristwatch|ring|bracelet|glove|gloves|sleeve|sleeves|cuff|cuffs)\b/i.test(item)) ||
@@ -27326,8 +27338,9 @@ function simpleDetailTrim(subject, image, notes) {
   subject.identity = keepIdentity
   subject.outfit = keepOutfit
   subject.shownAnatomy = []
-  subject.expression = []
-  subject.pose = uniqueStrings([...subject.pose, 'close-up', 'head out of frame', ...(hands ? ['hand focus'] : [])])
+  // A face in the frame keeps the cues for the mouth and cheeks.
+  subject.expression = face ? subject.expression.filter(tag => /\b(?:blush|flushed|cheeks?|saliva|drool|tongue|lips|mouth|sweat|tears?|eyes)\b/i.test(tag)) : []
+  subject.pose = uniqueStrings([...subject.pose, 'close-up', ...(face ? [] : ['head out of frame']), ...(hands && !face ? ['hand focus'] : [])])
   if (dropped) notes.push(`${subject.displayName}: close-up, so only what is in the frame was sent (${dropped} tags for face, hair, body and other clothes left out).`)
 }
 
