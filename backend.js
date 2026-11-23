@@ -6984,6 +6984,9 @@ function normalizeProfile(raw, fallbackTags, fallbackRef) {
     anatomyMode: normalizeAnatomyMode(source.anatomyMode),
     // Plain-English face and body for MOSS presets; Anima never reads it.
     mossDescription: String(source.mossDescription || '').replace(/\s+/g, ' ').trim().slice(0, 1500),
+    // How they come across (1.41.0): a light guide for the parser's posture
+    // and face choices, never pasted into a prompt.
+    attitude: String(source.attitude || '').replace(/\s+/g, ' ').trim().slice(0, 200),
     appearanceStates,
     defaultAppearanceState: normalizeDefaultAppearanceState(source.defaultAppearanceState || source.defaultForm || '', appearanceStates),
     looks,
@@ -7015,6 +7018,7 @@ async function resolveProfile(profile, userId, chatId) {
     }))), `${profile.ref} visual alias`),
     anatomy: normalizeConditionalAnatomy(await resolveMany(profile.anatomy, `${profile.ref} conditional anatomy`)),
     mossDescription: profile.mossDescription ? String(await resolveMacros(profile.mossDescription, userId, chatId) || '').trim() : '',
+    attitude: profile.attitude ? String(await resolveMacros(profile.attitude, userId, chatId) || '').trim() : '',
     partialFeatures: normalizePartialFeatures(await Promise.all((profile.partialFeatures || []).map(async (feature) => ({
       name: await resolveMacros(feature.name, userId, chatId),
       tags: await resolveMany(feature.tags, `${profile.ref} partial feature`),
@@ -19653,6 +19657,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           sheet: {
             countTag: text(sheet.countTag, 40), subject: text(sheet.subject, 200), always: text(sheet.always),
             appearance: text(sheet.appearance), outfit: text(sheet.outfit), anatomy: text(sheet.anatomy), moss: text(sheet.moss, 1500),
+            attitude: text(sheet.attitude, 200),
           },
           name: text(shared.name, 80), title: text(shared.title, 120), updatedAt: Number(shared.updatedAt) || 0,
         })
@@ -19670,7 +19675,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const text = (value, max = 4000) => typeof value === 'string' ? value.slice(0, max) : ''
         const sheet = {
           countTag: text(given.countTag, 40), subject: text(given.subject, 200), always: text(given.always),
-          appearance: text(given.appearance), outfit: text(given.outfit), anatomy: text(given.anatomy), moss: text(given.moss, 1500),
+          appearance: text(given.appearance), outfit: text(given.outfit), anatomy: text(given.anatomy), moss: text(given.moss, 1500), attitude: text(given.attitude, 200),
         }
         const id = text(input.id, 120); const kind = input.kind === 'persona' ? 'persona' : 'character'; const sentAt = Date.now()
         // Remembered so an update from LumiCast is only accepted for the character that was actually sent.
@@ -21517,6 +21522,7 @@ async function applyFromLumiCast(requesterExtensionId) {
   profile.appearanceTags = text(sheet.appearance); profile.defaultOutfitTags = text(sheet.outfit); profile.anatomyTags = text(sheet.anatomy)
   // LumiCast 0.15.0 and newer send the MOSS description too; an older LumiCast leaves it as it was.
   if (typeof sheet.moss === 'string') profile.mossDescription = text(sheet.moss, 1500)
+  if (typeof sheet.attitude === 'string') profile.attitude = text(sheet.attitude, 200)
   normalizeProfile(profile, profile.appearanceTags || '', sent.kind)
   const updated = { ...entry, profile, updatedAt: Date.now() }
   list[index] = updated
@@ -21552,6 +21558,7 @@ async function addFromLumiCast(requesterExtensionId) {
   profile.countTag = text(sheet.countTag, 40); profile.subject = text(sheet.subject, 200); profile.identityTags = text(sheet.always)
   profile.appearanceTags = text(sheet.appearance); profile.defaultOutfitTags = text(sheet.outfit); profile.anatomyTags = text(sheet.anatomy)
   if (typeof sheet.moss === 'string' && sheet.moss.trim()) profile.mossDescription = text(sheet.moss, 1500)
+  if (typeof sheet.attitude === 'string' && sheet.attitude.trim()) profile.attitude = text(sheet.attitude, 200)
   if (!String(profile.anchor || '').trim()) profile.anchor = name
   normalizeProfile(profile, profile.appearanceTags || '', kind)
   // The anchor stays the real name, so "Vesper 2" is still drawn and found as Vesper.
@@ -21614,7 +21621,7 @@ async function libraryForLumiCast(requesterExtensionId) {
       if (lumiCastLookups.size > 40) lumiCastLookups.delete(lumiCastLookups.keys().next().value)
       entries.push({ asked, name: text(item.name, 80), kind, id: String(item.id), sentAt, sheet: {
         countTag: text(profile.countTag, 40), subject: text(profile.subject, 200), always: text(profile.identityTags),
-        appearance: text(profile.appearanceTags), outfit: text(profile.defaultOutfitTags), anatomy: text(profile.anatomyTags), moss: text(profile.mossDescription, 1500) } })
+        appearance: text(profile.appearanceTags), outfit: text(profile.defaultOutfitTags), anatomy: text(profile.anatomyTags), moss: text(profile.mossDescription, 1500), attitude: text(profile.attitude, 200) } })
     }
   }
   return { entries }
@@ -26294,6 +26301,15 @@ POSE AND EXPRESSION
   them stare at the camera. When two people look at each other, give each
   "looking at [name]". Every face that shows also gets at least one face cue;
   never leave "expression" empty unless the face is hidden.
+- ATTITUDE (on some character sheets): how this person usually comes across.
+  Use it only where the story leaves their posture and face open, and show it
+  in one or two small cues, never all at once: how they stand or sit (weight
+  on one hip, leaning back at ease, arms crossed, chin raised, head tilted)
+  and one face cue (a smirk, half-closed eyes, a raised eyebrow). Pick
+  different cues from picture to picture. The moment always wins: fear, pain,
+  grief, surprise, sleep, a struggle, or anything the story says about their
+  face or body replaces it. Never a caricature: no winking, no pin-up or model
+  poses, no posing for the camera unless the story has them do it.
 - At the height of passion add 2-3 of: flushed cheeks, heavy blush, panting,
   heavy breathing, eyes rolled back, sweating, trembling lips, ahegao.
 - When the face cannot be seen in this picture (turned away, from behind, buried
@@ -26557,6 +26573,7 @@ function simpleContext(profiles, memory, card, { banned = '', fantasy = false } 
       if (body.length) lines.push('  BODY (reference only, already handled): ' + body.join(', '))
     }
     if ((profile.anatomy || []).length) lines.push('  ANATOMY (reference only, already handled): ' + animaTagList(profile.anatomy).join(', '))
+    if (profile.attitude) lines.push('  ATTITUDE (a light guide, see the rule): ' + profile.attitude)
     lines.push(...simpleOutfitLines(simpleOutfitFor(profile, key, memory, card, profiles)))
     lines.push(...simpleHairLines(simpleHairFor(profile, key, memory)))
     blocks.push(lines.join('\n'))

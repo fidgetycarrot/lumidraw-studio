@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.40.3'
+  const EXTENSION_VERSION = '1.41.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -485,7 +485,7 @@ function realSetup(ctx) {
         const profile = entry.profile || {}
         const fields = [['.ld-persona-ed-count', profile.countTag], ['.ld-persona-ed-subject', profile.subject], ['.ld-persona-ed-identity', profile.identityTags],
           ['.ld-persona-ed-tags', profile.appearanceTags], ['.ld-persona-ed-outfit', profile.defaultOutfitTags], ['.ld-persona-ed-anatomy', profile.anatomyTags],
-          ['.ld-persona-ed-moss', profile.mossDescription]]
+          ['.ld-persona-ed-moss', profile.mossDescription], ['.ld-persona-ed-attitude', profile.attitude]]
         for (const [selector, value] of fields) { const node = $(selector); if (node) node.value = value || '' }
         setStatus('.ld-persona-ed-status', `Updated from LumiCast and saved: “${entry.name || 'this character'}”.`, 'good')
       }
@@ -1558,6 +1558,7 @@ the diner = diner, booth seating, formica table, neon sign | aliases: the diner,
             <div><span class="ld-label">Always include (Direct mode)</span><input class="ld-persona-ed-identity" placeholder="futanari" /><div class="ld-hint">Non-negotiable identity tags. Direct mode restores these if the parser drops them. Stable futanari in Permanent appearance is also locked automatically.</div></div>
             <div><span class="ld-label">Permanent appearance tags</span><textarea class="ld-persona-ed-tags" style="min-height:58px"></textarea></div>
             <div><span class="ld-label">Description for MOSS (plain English)</span><textarea class="ld-persona-ed-moss" style="min-height:74px" placeholder="a slender, petite young man with a delicately feminine face: porcelain-pale skin, jet-black hair in an asymmetrical bob, amber eyes with long dark lashes…"></textarea><div class="ld-hint">Face and body only, each trait once. Clothes, pose and expression still come from the story. MOSS presets use this word for word instead of the tags above; Anima ignores it. Leave empty to build it from the tags.</div></div>
+            <div><span class="ld-label">Attitude (how they come across)</span><input class="ld-persona-ed-attitude" placeholder="teasing, confident, sultry, likes being looked at" /><div class="ld-hint">A few plain words. A light guide for how they stand and what their face does when the story leaves it open. Never pasted into the prompt.</div></div>
             <div><span class="ld-label">Default outfit tags</span><textarea class="ld-persona-ed-outfit" style="min-height:48px"></textarea></div>
             <div class="ld-persona-ed-alternates"></div>
             <div><span class="ld-label">Default appearance state</span><input class="ld-persona-ed-default-state" placeholder="Default" /></div>
@@ -2846,6 +2847,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const identityInput = sharedEditor.querySelector('.ld-persona-ed-identity')
       const tagsInput = sharedEditor.querySelector('.ld-persona-ed-tags')
       const mossInput = sharedEditor.querySelector('.ld-persona-ed-moss')
+      const attitudeInput = sharedEditor.querySelector('.ld-persona-ed-attitude')
       const outfitInput = sharedEditor.querySelector('.ld-persona-ed-outfit')
       const alternatesBox = sharedEditor.querySelector('.ld-persona-ed-alternates')
       const defaultStateInput = sharedEditor.querySelector('.ld-persona-ed-default-state')
@@ -2882,6 +2884,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         'Face, hair, eyes, skin, and body in plain English. MOSS presets use this word-for-word. Leave empty to fall back to your Anima tags.'))
       tabMoss.appendChild(field('Default outfit', outfitInput,
         'What this character wears when the story has not specified another outfit (comma-separated items).'))
+      if (attitudeInput) tabMoss.appendChild(field('Attitude (how they come across)', attitudeInput,
+        'A few plain words, like “teasing, confident, sultry”. A light guide for posture and face when the story leaves them open. Never pasted into the prompt.'))
       const looksDrawer = details('Named outfits / looks & conditional anatomy', 'Optional recurring outfits triggered by story cues and NSFW/conditional anatomy.')
       looksDrawer.el.style.marginTop = '6px'
       looksDrawer.body.appendChild(field('Named looks (clothing)', looksInput,
@@ -5002,6 +5006,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       anatomyTags: $('.ld-persona-ed-anatomy').value.trim(),
       anatomyMode: $('.ld-persona-ed-anatomy-mode').value || 'relevant',
       mossDescription: $('.ld-persona-ed-moss') ? $('.ld-persona-ed-moss').value.trim() : '',
+      attitude: $('.ld-persona-ed-attitude') ? $('.ld-persona-ed-attitude').value.trim() : '',
       alternateAppearances: readAlternateAppearances('.ld-persona-ed-alternates'),
     }
   }
@@ -5024,6 +5029,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     $('.ld-persona-ed-anatomy').value = value.anatomyTags || ''
     $('.ld-persona-ed-anatomy-mode').value = value.anatomyMode || 'relevant'
     if ($('.ld-persona-ed-moss')) $('.ld-persona-ed-moss').value = value.mossDescription || ''
+    if ($('.ld-persona-ed-attitude')) $('.ld-persona-ed-attitude').value = value.attitude || ''
     writeAlternateAppearances('.ld-persona-ed-alternates', value.alternateAppearances, () => ({
       subject: $('.ld-persona-ed-subject').value,
       identityTags: $('.ld-persona-ed-identity').value,
@@ -10281,7 +10287,7 @@ ${entry.prompt || ''}`.trim()
       const sheet = {
         countTag: value('.ld-persona-ed-count'), subject: value('.ld-persona-ed-subject'), always: value('.ld-persona-ed-identity'),
         appearance: value('.ld-persona-ed-tags'), outfit: value('.ld-persona-ed-outfit'), anatomy: value('.ld-persona-ed-anatomy'),
-        moss: value('.ld-persona-ed-moss'),
+        moss: value('.ld-persona-ed-moss'), attitude: value('.ld-persona-ed-attitude'),
       }
       if (!Object.values(sheet).some(v => v.trim())) throw new Error('This character has no tags to send yet.')
       const name = value('.ld-persona-ed-name') || value('.ld-persona-ed-anchor') || 'This character'
@@ -10306,6 +10312,7 @@ ${entry.prompt || ''}`.trim()
         ['.ld-persona-ed-identity', got.sheet.always, 'always include'], ['.ld-persona-ed-tags', got.sheet.appearance, 'appearance'],
         ['.ld-persona-ed-outfit', got.sheet.outfit, 'outfit'], ['.ld-persona-ed-anatomy', got.sheet.anatomy, 'anatomy'],
         ['.ld-persona-ed-moss', got.sheet.moss, 'MOSS description'],
+        ['.ld-persona-ed-attitude', got.sheet.attitude, 'attitude'],
       ]
       const filled = []
       for (const [selector, value, label] of fields) {
