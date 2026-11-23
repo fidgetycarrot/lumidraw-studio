@@ -11783,8 +11783,10 @@ function directGroupYouthCoded(value) {
 
 function neutralizeDirectGroupYouthText(value) {
   return String(value || '')
-    .replace(/\byoung adult (?:male|man)\b/gi, 'adult man')
-    .replace(/\byoung adult (?:female|woman)\b/gi, 'adult woman')
+    // 1.41.1: "young adult" keeps both words. It still says adult, and it lets
+    // a character read as early twenties instead of older.
+    .replace(/\byoung adult (?:male|man)\b/gi, 'young adult man')
+    .replace(/\byoung adult (?:female|woman)\b/gi, 'young adult woman')
     .replace(/\byoung man\b/gi, 'adult man')
     .replace(/\byoung woman\b/gi, 'adult woman')
     .replace(/\b(?:youthful(?: face)?|boyish|girlish)\b/gi, '')
@@ -29158,9 +29160,17 @@ function compileNovelaiImage(image, ctx) {
   const pipes = !(ctx.preset && ctx.preset.config && ctx.preset.config.novelaiBoxes === true)
   // "the man on the left" works against a feminine character: he is a femboy.
   const feminine = subject => subject.count === '1boy' && /\b(?:trap|otoko ?no ?ko|otokonoko|femboy|feminine (?:male|boy)|girly boy)\b/i.test(subject.identity.join(', '))
+  // "man" becomes "femboy"; a phrase with no such word ("young adult
+  // half-elf") gets "femboy" after its age word (1.41.1).
+  const femboyed = phrase => {
+    const text = String(phrase || '')
+    if (/\bfemboy\b/i.test(text)) return text
+    if (/\b(?:man|male|boy|guy)\b/i.test(text)) return text.replace(/\b(?:man|male|boy|guy)\b/i, 'femboy')
+    return /\badult\b/i.test(text) ? text.replace(/\badult\b/i, 'adult femboy') : ('femboy ' + text).trim()
+  }
   const short = subject => {
     const word = String(subject.phrase || NOVELAI_COUNT_WORD[subject.count] || 'person').replace(/^(?:adult|mature|middle-aged|young adult)\s+/i, '')
-    return pipes && feminine(subject) ? word.replace(/\b(?:man|male|boy|guy)\b/i, 'femboy') : word
+    return pipes && feminine(subject) ? femboyed(word) : word
   }
   const shorts = subjects.map(short)
   // Every way the story may name someone: full name, sheet name, label, and
@@ -29269,7 +29279,7 @@ function compileNovelaiImage(image, ctx) {
   const boxes = !!(ctx.preset && ctx.preset.config && ctx.preset.config.novelaiBoxes === true)
   const lines = subjects.map((subject, index) => {
     const spot = novelaiSpotWords(subject, total)
-    const phrase = !boxes && feminine(subject) ? String(subject.phrase || '').replace(/\b(?:man|male|boy|guy)\b/i, 'femboy') : subject.phrase
+    const phrase = !boxes && feminine(subject) ? femboyed(subject.phrase) : subject.phrase
     const tags = uniqueStrings([boxes ? NOVELAI_COUNT_WORD[subject.count] || '' : subject.count, phrase, ...subject.identity, ...(subject.shownAnatomy || []),
       ...unnamed([...subject.outfit, ...subject.pose, ...subject.expression], subject), ...tagsFor.get(subject)].filter(Boolean))
     return { subject, index, spot, text: boxes ? `Character${spot ? ' (' + spot + ')' : ''}: ${tags.join(', ')}` : '| ' + tags.join(', ') }
