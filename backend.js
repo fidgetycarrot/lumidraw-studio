@@ -80,6 +80,7 @@ const DEFAULT_SETTINGS = {
   storyPromptMigrated: false, // one-time copy of legacy preset prompt fields into Story settings
   storyQualityTags: '',
   storyPromptPrefix: '',
+  storyPromptEnd: '',
   storyNegativePrompt: '',
   storyBannedTags: '',
   storySceneAnchor: '',
@@ -975,6 +976,7 @@ function storyPresetFor(preset, settings) {
     ...preset,
     ...presetOwnPrompt(preset, settings),
     promptPrefix: String(settings.storyPromptPrefix || ''),
+    promptEnd: String(settings.storyPromptEnd || ''),
     bannedTags: String(settings.storyBannedTags || ''),
     sceneAnchor: String(settings.storySceneAnchor || ''),
   }
@@ -19719,7 +19721,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           port: Number(payload.port) || prev.port || DEFAULT_SETTINGS.port,
         }
         if (payload.swarmUrl !== undefined) settings.swarmUrl = swarmBaseUrl({ swarmUrl: payload.swarmUrl })
-        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserRequestOverrides', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel', 'storyQualityTags', 'storyPromptPrefix', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor']) {
+        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserRequestOverrides', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel', 'storyQualityTags', 'storyPromptPrefix', 'storyPromptEnd', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor']) {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
         if (payload.bridgePort !== undefined) settings.bridgePort = Number(payload.bridgePort) || DEFAULT_SETTINGS.bridgePort
@@ -29107,6 +29109,13 @@ function compileStoryImage(image, ctx) {
   for (const entry of image.names || []) if (entry.result) compiled.debug.notes.push(`Name "${entry.name}" → ${entry.result}.`)
   // What is remembered can differ from what was sent to the image model.
   for (const subject of compiled.subjects || []) if (subject.outfitState) { subject.outfit = subject.outfitState; delete subject.outfitState }
+  // 1.42.0: the Story tab's "End of prompt" goes last, after everything else,
+  // the way Eric had been adding it by hand.
+  const end = String((ctx.preset && ctx.preset.promptEnd) || '').trim()
+  if (end && typeof compiled.prompt === 'string' && !compiled.prompt.includes(end)) {
+    compiled.prompt = compiled.prompt.replace(/[\s,]+$/, '') + (compiled.prompt.includes('\n') ? '\n' : ', ') + end
+    compiled.debug.notes.push('Added the End of prompt text at the very end.')
+  }
   return compiled
 }
 

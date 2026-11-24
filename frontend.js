@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.41.2'
+  const EXTENSION_VERSION = '1.42.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2527,6 +2527,10 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     storyPrefix.className = 'ld-story-prefix'
     storyPrefix.rows = 2
     storyPrefix.placeholder = 'Optional text/tags added before the scene'
+    const storyEnd = document.createElement('textarea')
+    storyEnd.className = 'ld-story-end'
+    storyEnd.rows = 2
+    storyEnd.placeholder = 'Optional text added at the very end of every story picture’s prompt'
     const storyNegative = document.createElement('textarea')
     storyNegative.className = 'ld-story-negative'
     storyNegative.rows = 2
@@ -2645,6 +2649,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     promptGrid.appendChild(field('Quality tags (always included)', storyQuality))
     promptGrid.appendChild(field('Negative prompt (Anima)', storyNegative))
     promptGrid.appendChild(field('Prompt prefix', storyPrefix))
+    promptGrid.appendChild(field('End of prompt', storyEnd))
     storyAnimaBox.appendChild(promptGrid)
     const artistInput = $('.ld-artist-index')
     if (artistInput) {
@@ -10950,6 +10955,7 @@ ${entry.prompt || ''}`.trim()
       useLoomLedger: $('.ld-use-loom-ledger').checked,
       storyQualityTags: $('.ld-story-quality') ? $('.ld-story-quality').value : '',
       storyPromptPrefix: $('.ld-story-prefix') ? $('.ld-story-prefix').value : '',
+      storyPromptEnd: $('.ld-story-end') ? $('.ld-story-end').value : '',
       storyNegativePrompt: $('.ld-story-negative') ? $('.ld-story-negative').value : '',
       storyBannedTags: $('.ld-story-banned') ? $('.ld-story-banned').value : '',
       storySceneAnchor: $('.ld-story-scene-anchor') ? $('.ld-story-scene-anchor').value : '',
@@ -11087,7 +11093,7 @@ ${entry.prompt || ''}`.trim()
       pushSettings('Settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
     }, 900)
   }
-  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-temperature', '.ld-parser-overrides', '.ld-parser-maxtokens', '.ld-story-quality', '.ld-story-prefix', '.ld-story-negative', '.ld-story-banned', '.ld-story-scene-anchor', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port', '.ld-cloud-host', '.ld-cloud-port', '.ld-cloud-model']) {
+  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-temperature', '.ld-parser-overrides', '.ld-parser-maxtokens', '.ld-story-quality', '.ld-story-prefix', '.ld-story-end', '.ld-story-negative', '.ld-story-banned', '.ld-story-scene-anchor', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port', '.ld-cloud-host', '.ld-cloud-port', '.ld-cloud-model']) {
     const el = $(sel)
     if (el) el.addEventListener('input', () => {
       clearTimeout(settingsSaveTimer)
@@ -11547,6 +11553,7 @@ ${entry.prompt || ''}`.trim()
       $('.ld-protocol').value = settings.protocol || defaults.protocol || ''
       if ($('.ld-story-quality')) $('.ld-story-quality').value = settings.storyQualityTags || ''
       if ($('.ld-story-prefix')) $('.ld-story-prefix').value = settings.storyPromptPrefix || ''
+      if ($('.ld-story-end')) $('.ld-story-end').value = settings.storyPromptEnd || ''
       if ($('.ld-story-negative')) $('.ld-story-negative').value = settings.storyNegativePrompt || ''
       if ($('.ld-story-banned')) $('.ld-story-banned').value = settings.storyBannedTags || ''
       if ($('.ld-story-scene-anchor')) $('.ld-story-scene-anchor').value = settings.storySceneAnchor || ''
