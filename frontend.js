@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.42.2'
+  const EXTENSION_VERSION = '1.42.3'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -7860,6 +7860,9 @@ ${entry.prompt || ''}`.trim()
     .ld-reasons { position:absolute; left:8px; right:8px; bottom:42px; display:flex; flex-wrap:wrap; gap:5px; justify-content:flex-end; z-index:2; }
     .ld-reasons button { font-size:12px; padding:5px 10px; border:1px solid rgba(255,255,255,.25); }
     .ld-reasons button.ld-on { background:#8b5cf6; border-color:#8b5cf6; }
+    .ld-reasons .ld-mark-note { flex:1 1 100%; box-sizing:border-box; border-radius:8px; border:1px solid rgba(255,255,255,.3);
+      background:rgba(15,15,20,.8); color:#fff; font:13px/1.3 system-ui, sans-serif; padding:7px 10px; outline:none; }
+    .ld-reasons .ld-mark-note:focus { border-color:#8b5cf6; }
     .ld-chat-image {
       display:block; width:100%; max-width:100%; height:auto; max-height:none;
       object-fit:contain; box-sizing:border-box; border-radius:8px; cursor:pointer;
@@ -8044,7 +8047,38 @@ ${entry.prompt || ''}`.trim()
   }
   function keepReasons(item) {
     clearTimeout(reasonTimers.get(item))
+    // Never hide while a note is being typed (1.42.3).
+    const note = item.querySelector('.ld-mark-note')
+    if (note && document.activeElement === note) return
     reasonTimers.set(item, setTimeout(() => hideReasons(item), 6000))
+  }
+  // 1.42.3: "Other" opens a small box for a few words about what is off.
+  // Saved on Enter or when the box loses focus; Escape closes it.
+  async function saveMarkNote(url, text) {
+    const before = markedByUrl.get(url)
+    if (!before || String(before.note || '') === text) return
+    markedByUrl.set(url, { ...before, note: text })
+    try { takeMarks((await call('mark_note', { imageUrl: url, note: text }, 120000)).marks) } catch (error) { console.warn('[Lumi Studio] note not saved:', error && error.message) }
+  }
+  function showNoteBox(item, url) {
+    const row = item.querySelector('.ld-reasons')
+    if (!row || row.querySelector('.ld-mark-note')) return
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.className = 'ld-mark-note'
+    input.placeholder = 'What’s off? (Enter to save)'
+    input.maxLength = 300
+    input.value = (markedByUrl.get(url) || {}).note || ''
+    for (const type of ['click', 'mousedown', 'pointerdown', 'keyup', 'keypress', 'input']) input.addEventListener(type, event => event.stopPropagation())
+    input.addEventListener('keydown', event => {
+      event.stopPropagation()
+      if (event.key === 'Enter') { event.preventDefault(); saveMarkNote(url, input.value.trim()); hideReasons(item) }
+      else if (event.key === 'Escape') { event.preventDefault(); hideReasons(item) }
+    })
+    input.addEventListener('focus', () => clearTimeout(reasonTimers.get(item)))
+    input.addEventListener('blur', () => { saveMarkNote(url, input.value.trim()); keepReasons(item) })
+    row.appendChild(input)
+    setTimeout(() => { try { input.focus() } catch {} }, 0)
   }
   function showReasons(item, url) {
     hideReasons(item)
@@ -8062,6 +8096,7 @@ ${entry.prompt || ''}`.trim()
     item.appendChild(row)
     const bar = item.querySelector('.ld-rate')
     if (bar) bar.classList.add('ld-open')
+    if (mark && (mark.reasons || []).includes('Other')) showNoteBox(item, url)
     keepReasons(item)
   }
   async function onRateClick(event) {
@@ -8082,6 +8117,8 @@ ${entry.prompt || ''}`.trim()
       if (reasons.has(reason)) reasons.delete(reason); else reasons.add(reason)
       markedByUrl.set(url, { ...before, reasons: MARK_REASONS.filter(name => reasons.has(name)) })
       paintMarks()
+      if (reason === 'Other' && reasons.has('Other')) showNoteBox(item, url)
+      else if (reason === 'Other') { const note = item.querySelector('.ld-mark-note'); if (note) note.remove() }
       keepReasons(item)
       try { takeMarks((await call('mark_reason', { imageUrl: url, reason }, 120000)).marks) } catch (error) { console.warn('[Lumi Studio] reason not saved:', error && error.message) }
       return
@@ -10203,7 +10240,7 @@ ${entry.prompt || ''}`.trim()
       img.addEventListener('click', () => { if (findHistoryImage(mark.url)) openLightbox(mark.url); else openLightboxForChatOnly(mark.url) })
       const label = document.createElement('div')
       label.style.cssText = 'font-size:12px;opacity:.85'
-      label.textContent = (mark.rating === 'up' ? '👍' : '👎') + (mark.reasons && mark.reasons.length ? ' ' + mark.reasons.join(', ') : '')
+      label.textContent = (mark.rating === 'up' ? '👍' : '👎') + (mark.reasons && mark.reasons.length ? ' ' + mark.reasons.join(', ') : '') + (mark.note ? ' — “' + mark.note + '”' : '')
       const remove = document.createElement('button')
       remove.className = 'ld-x'
       remove.type = 'button'
@@ -10227,6 +10264,7 @@ ${entry.prompt || ''}`.trim()
       const thumb = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(mark.thumb || '') ? '<img alt="Marked picture" src="' + mark.thumb + '">' : '<p><i>No saved picture.</i></p>'
       return '<section><h2>' + (index + 1) + '. ' + (mark.rating === 'up' ? '👍 Liked' : '👎 Something off') +
         (mark.reasons && mark.reasons.length ? ': ' + escape(mark.reasons.join(', ')) : '') + '</h2>' +
+        (mark.note ? '<p><b>Note:</b> ' + escape(mark.note) + '</p>' : '') +
         '<p>Marked ' + escape(new Date(mark.at || 0).toLocaleString()) + (report.version ? ' · LS ' + escape(report.version) : '') + '</p>' + thumb +
         (mark.problem ? '<p><b>Report problem:</b> ' + escape(mark.problem) + '</p>' : '') +
         (highlights.length ? '<ul>' + highlights.map(line => '<li>' + escape(line) + '</li>').join('') + '</ul>' : '') +

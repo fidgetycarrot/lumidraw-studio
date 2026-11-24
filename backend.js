@@ -16608,7 +16608,19 @@ function marksTask(work) {
   marksQueue = run.catch(() => {})
   return run
 }
-const markSummary = list => list.map(({ id, url, rating, reasons, at, chatId, messageId }) => ({ id, url, rating, reasons: reasons || [], at, chatId, messageId }))
+const markSummary = list => list.map(({ id, url, rating, reasons, note, at, chatId, messageId }) => ({ id, url, rating, reasons: reasons || [], note: note || '', at, chatId, messageId }))
+
+// A few words about what is off, typed under "Other" (1.42.3).
+async function setMarkNote(userId, payload) {
+  const url = String(payload.imageUrl || '')
+  const list = await readMarks(userId)
+  const found = list.find(mark => mark.url === url)
+  if (found) {
+    found.note = String(payload.note || '').replace(/\s+/g, ' ').trim().slice(0, 300)
+    await markStore(userId).set(MARKS_FILE, list)
+  }
+  return { marks: markSummary(list) }
+}
 
 async function setMark(userId, payload) {
   const url = String(payload.imageUrl || '')
@@ -16623,7 +16635,7 @@ async function setMark(userId, payload) {
       try { await store.set(markFile(found.id), null) } catch { /* best effort */ }
     }
   } else if (found) {
-    if (found.rating !== rating) { found.rating = rating; found.reasons = [] }
+    if (found.rating !== rating) { found.rating = rating; found.reasons = []; found.note = '' }
   } else {
     const id = 'mk' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
     let report = null, problem = ''
@@ -19925,6 +19937,10 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }
       case 'mark_reason': {
         reply = ok(payload, requestId, await marksTask(() => setMarkReason(userId, payload)))
+        break
+      }
+      case 'mark_note': {
+        reply = ok(payload, requestId, await marksTask(() => setMarkNote(userId, payload)))
         break
       }
       case 'mark_get': {
