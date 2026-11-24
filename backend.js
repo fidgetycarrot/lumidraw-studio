@@ -26200,7 +26200,10 @@ THE PLACE — kept the same every time the story returns to it.
   bedroom". Each room is its own place with its own look.
 - "place.looks": what is always true of how it looks: what it is built of, its
   colours, size and shape, and two or three things that mark it out (a long
-  oak bar, a cracked stained-glass window). Never people, light, weather, time
+  oak bar, a cracked stained-glass window). When the story says how big it is
+  or how it is laid out ("thirty feet of matting", "a bed big enough for
+  four", "a low narrow cellar"), start with that as plain tags: "spacious
+  room", "high ceiling", "long narrow room", "cramped". Never people, light, weather, time
   of day or what is happening: those go in "setting". For a room, describe the
   room; never the building's outside ("two-story house", "brick building"):
   an image model draws those words as a house in the picture.
@@ -26208,6 +26211,10 @@ THE PLACE — kept the same every time the story returns to it.
   not describe it differently in "setting". Lumi Studio adds the saved looks.
 - "setting" is then only this moment: the spot within the place (corner booth,
   doorway), the light, weather, time of day, and things in use right now.
+- The first picture in a place the story has just described (not in KNOWN
+  PLACES): frame it wide enough for the room to show ("full body" or "wide
+  shot"), not a tight crop on the people. The story spent words on the room;
+  the picture should too.
 
 THINGS THAT MATTER — kept the same every time they are shown.
 - "things": up to 2 objects the story turns on that are clearly visible in this
@@ -27679,26 +27686,36 @@ function compileSimpleImage(image, ctx) {
       // The moment's own tags (the light, the weather, the corner they are in)
       // are kept; the place's look fills the rest.
       const moment = simpleTidySetting(setting.filter(tag => !has.has(normalizeIdentityText(tag))), sceneryOnly ? 10 : 6)
-      const room = sceneryOnly ? 14 : 10
-      setting = simpleTidySetting([...looks.slice(0, Math.max(4, room - moment.length)), ...moment], room)
+      // 1.42.1: room for all of a place's saved look (up to 6) next to the
+      // moment; the sixth look (the Reverie's bed) used to be cut.
+      const room = sceneryOnly ? 14 : 12
+      setting = simpleTidySetting([...looks.slice(0, Math.max(6, room - moment.length)), ...moment], room)
       placeUsed = { key: known ? known.key : simplePlaceKey(placeName), name: known ? known.name : placeName, looks, first: !known }
       notes.push(known ? `Place “${known.name}”: drawn before, so its saved look was used (${looks.join(', ')}).`
         : `Place “${placeName}”: first picture here. Its look is now remembered for this chat (${looks.join(', ')}).`)
       if (settingSource === 'unknown') settingSource = 'remembered place'
     }
   }
-  // Things that matter: saved the first time, reused after (1.34.0). Their
-  // look goes first in the setting, so a cluttered room cannot crowd it out.
+  // Things that matter: saved the first time, reused after (1.34.0).
+  // 1.42.1: in a picture of people, a thing is a prop: its first two look tags
+  // go after the room, in room of their own. Seven tags for a folio and a key
+  // at the front had pushed the steam and the bed out of the Reverie's new
+  // gym-bedroom, and drawn the props big in the foreground. With nobody in
+  // the picture the thing may be the subject, so its full look goes first.
   const thingsUsed = []
   for (const thing of image.things || []) {
     const known = simpleThingFor(memory, thing.name)
     const looks = applyBannedToList(known ? known.looks : thing.looks, banned).slice(0, 5)
     if (!looks.length) continue
     thingsUsed.push({ key: known ? known.key : simplePlaceKey(thing.name), name: known ? known.name : thing.name, looks, first: !known })
-    notes.push(known ? `Thing “${known.name}”: drawn before, so its saved look was used (${looks.join(', ')}).`
+    notes.push(known ? `Thing “${known.name}”: drawn before, so its saved look was used (${(sceneryOnly ? looks : looks.slice(0, 2)).join(', ')}).`
       : `Thing “${thing.name}”: first picture of it. Its look is now remembered for this chat (${looks.join(', ')}).`)
   }
-  if (thingsUsed.length) setting = simpleTidySetting([...thingsUsed.flatMap(thing => thing.looks), ...setting], 14)
+  if (thingsUsed.length) {
+    setting = sceneryOnly
+      ? simpleTidySetting([...thingsUsed.flatMap(thing => thing.looks), ...setting], 14)
+      : simpleTidySetting([...setting, ...thingsUsed.flatMap(thing => thing.looks.slice(0, 2))], setting.length + 4)
+  }
   // 1.37.2: a place saved as the whole house ("two-story suburban house,
   // wooden banister staircase, …") was added to every room, and NovelAI drew
   // the outside of a house in the upstairs hallway. Indoors, words for a whole
