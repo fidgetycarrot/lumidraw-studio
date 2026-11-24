@@ -26702,6 +26702,18 @@ This picture is drawn by NovelAI, which puts each person on their own spot.
   front, never someone far behind the others. If the moment has people far
   apart, pick the one who matters and frame on them.
   "framing" and every "position" must then agree with "shot".
+- "room": one plain sentence, at most 40 words, of the place as the camera
+  sees it in this shot, near to far: what is right behind or beside the
+  people, then what is further back, with the size the story gives ("a long,
+  wide room", "across the room", "against the far wall"). Only what would be
+  in view from where the camera is, not everything the place holds. The
+  light, steam or weather can be in it. Take it from the story's own
+  description, and keep it in line with KNOWN PLACES. No people, and nothing
+  the story has not shown. "Behind them the long cedar room opens out: a
+  steaming sunken tub and a huge leather bed on one side, black rubber matting
+  and an iron power rack across the room, caged lamps glowing under oak
+  beams." Leave it empty for a close-up where the place barely shows, and for
+  a picture with no people in it (the summary already describes the place).
 - "position": left, center or right for every person, as the camera sees
   them, whenever they are side by side in the frame (this includes a driver
   and passenger seen from the front). Leave it empty for everyone only when
@@ -26713,7 +26725,9 @@ This picture is drawn by NovelAI, which puts each person on their own spot.
   sitting together use "upper body" or "cowboy shot". Use "full body" when feet,
   legs or the whole pose matter. Use "wide shot" only when the place itself or
   the distance between people is the point: someone across the room, arriving
-  in a doorway, a fight, a big landscape.
+  in a doorway, a fight, a big landscape. Exception: the first picture in a
+  place the story has just described is framed wide enough for the room to
+  show (see THE PLACE).
 `
 
 // 1.29.0: pictures of a place or a thing on its own. The story's people do
@@ -27069,6 +27083,7 @@ function parseSimpleImages(raw, maxImages = 2, maxSubjects = 2, allowNoPeople = 
       aspect: String(item.aspect || '').trim(),
       scene_summary: String(item.scene_summary || '').replace(/\s+/g, ' ').trim().slice(0, 300),
       shot: String(item.shot || '').replace(/\s+/g, ' ').trim().slice(0, 260),
+      room: String(item.room || '').replace(/\s+/g, ' ').trim().slice(0, 400),
       cutaway: SIMPLE_CUTAWAYS.includes(String(item.cutaway || '').trim().toLowerCase()) ? String(item.cutaway).trim().toLowerCase() : '',
       framing: simpleTags(item.framing, 3),
       composition: SIMPLE_COMPOSITIONS.includes(String(item.composition || '').trim().toLowerCase()) ? String(item.composition).trim().toLowerCase() : '',
@@ -29358,6 +29373,12 @@ function compileNovelaiImage(image, ctx) {
   if (adult) header.push('nsfw')
   const main = [header.join(', '), [...compiled.parts.framing, ...compiled.setting].join(', '), summary ? summary + '.' : '']
     .map(part => String(part || '').trim()).filter(Boolean)
+  // 1.43.0: the place as the camera sees it, as one sentence. A list of the
+  // room's things gave NovelAI no size or layout, and the Reverie's long
+  // cedar gym-bedroom came out as a cramped box; with the sentence the tub,
+  // bed, matting and rack all showed.
+  const roomLine = subjects.length ? nameless(outsideless(image.room || '')).replace(/[.\s]+$/, '') : ''
+  if (roomLine) { main.push(roomLine + '.'); notes.push('The room, as the camera sees it: ' + roomLine) }
   // With "|" nothing else says where people are, so one plain sentence does:
   // "From left to right: the femboy with honey brown hair, the man with dark
   // hair, the elf femboy with silver-blonde hair." Hair tells them apart.

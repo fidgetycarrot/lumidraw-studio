@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.42.3'
+  const EXTENSION_VERSION = '1.43.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
