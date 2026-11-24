@@ -13,3 +13,6 @@ Eric: "not everything needs to be visible… the bed and squat rack are on diffe
 - **Clear rules for what the room sentence can show.** The parser works out where the people stand and which way the camera faces; only the part of the place behind them in that direction shows. What's on the other side, beside the camera or behind it, doesn't, however much the story says about it. At most two objects, near then far.
 - **A place's saved look is now only what's true from any spot in it:** walls, floor, ceiling, colours, size, light fittings. Single objects in one part of the room (a bed, a bar, a tub, a rack) are no longer saved as its look; they go in the room sentence when they're in view.
 - **Places already saved with their furniture:** when there's a room sentence, only the first three saved looks (what the place is made of) are used, so the bed, tub and rack aren't put in every picture.
+
+## 1.43.2
+- **Light from things out of view.** A strong light the story puts outside the frame (a glowing orb, a fire, a neon sign, sun through a window behind the camera) goes in the room sentence by its light alone: its colour, the side it comes from, what it falls on. The thing itself isn't drawn. The same light also goes in the setting as a short tag ("blue light from the left").

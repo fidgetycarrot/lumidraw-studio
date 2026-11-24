@@ -26716,6 +26716,13 @@ This picture is drawn by NovelAI, which puts each person on their own spot.
      back behind them", "against the far wall").
   The light, steam or weather can be in it. From the story's own description,
   in line with KNOWN PLACES; no people, nothing the story has not shown.
+  4. Light from things out of view still shows. A strong light the story puts
+     outside the frame (a glowing orb, a fire, a neon sign, sun through a
+     window behind the camera) is described by its light alone: its colour,
+     the side it comes from, what it falls on ("cold blue light spilling in
+     from the left across the matting and their faces"). Never the thing
+     itself, since it is not in view. Put the same light, as a short tag, in
+     "setting" too ("blue light from the left").
   Example: the story puts a tub and a bed on the left of a cedar room and a
   heavy bag and power rack on the right; Mark stands at the heavy bag and the
   camera faces him and the right-hand side: "Behind them the long cedar room
