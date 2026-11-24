@@ -7,3 +7,9 @@
 - Left out for close-ups where the place barely shows, and for pictures with nobody in them (their summary already describes the place).
 - The place's tags stay as they are, so the room still looks the same from picture to picture.
 - The framing rule now points to the wide first shot for a newly described place, instead of overriding it.
+
+## 1.43.1
+Eric: "not everything needs to be visible… the bed and squat rack are on different ends of the room."
+- **Clear rules for what the room sentence can show.** The parser works out where the people stand and which way the camera faces; only the part of the place behind them in that direction shows. What's on the other side, beside the camera or behind it, doesn't, however much the story says about it. At most two objects, near then far.
+- **A place's saved look is now only what's true from any spot in it:** walls, floor, ceiling, colours, size, light fittings. Single objects in one part of the room (a bed, a bar, a tub, a rack) are no longer saved as its look; they go in the room sentence when they're in view.
+- **Places already saved with their furniture:** when there's a room sentence, only the first three saved looks (what the place is made of) are used, so the bed, tub and rack aren't put in every picture.

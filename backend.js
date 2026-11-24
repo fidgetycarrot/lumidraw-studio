@@ -26214,9 +26214,12 @@ THE PLACE — kept the same every time the story returns to it.
   Inside a building, the place is the ROOM or area the picture is in, not the
   whole building: "Oak Lane kitchen", "Oak Lane upstairs hall", "Riley's
   bedroom". Each room is its own place with its own look.
-- "place.looks": what is always true of how it looks: what it is built of, its
-  colours, size and shape, and two or three things that mark it out (a long
-  oak bar, a cracked stained-glass window). When the story says how big it is
+- "place.looks": what is true of how it looks from ANY spot inside it: what
+  its walls, floor and ceiling are made of, its colours, its size and shape,
+  and the kind of light fittings. Never a single object that stands in one
+  part of it (a bed, a bar, a tub, a rack, a desk, a fireplace): those are only
+  seen when the camera faces them, so they go in "room" for the pictures where
+  they are in view. When the story says how big it is
   or how it is laid out ("thirty feet of matting", "a bed big enough for
   four", "a low narrow cellar"), start with that as plain tags: "spacious
   room", "high ceiling", "long narrow room", "cramped". Never people, light, weather, time
@@ -26702,18 +26705,24 @@ This picture is drawn by NovelAI, which puts each person on their own spot.
   front, never someone far behind the others. If the moment has people far
   apart, pick the one who matters and frame on them.
   "framing" and every "position" must then agree with "shot".
-- "room": one plain sentence, at most 40 words, of the place as the camera
-  sees it in this shot, near to far: what is right behind or beside the
-  people, then what is further back, with the size the story gives ("a long,
-  wide room", "across the room", "against the far wall"). Only what would be
-  in view from where the camera is, not everything the place holds. The
-  light, steam or weather can be in it. Take it from the story's own
-  description, and keep it in line with KNOWN PLACES. No people, and nothing
-  the story has not shown. "Behind them the long cedar room opens out: a
-  steaming sunken tub and a huge leather bed on one side, black rubber matting
-  and an iron power rack across the room, caged lamps glowing under oak
-  beams." Leave it empty for a close-up where the place barely shows, and for
-  a picture with no people in it (the summary already describes the place).
+- "room": one plain sentence, at most 35 words, of the place as the camera
+  sees it in this shot. Work it out like this:
+  1. Where the people stand in the place, and which way the camera faces.
+  2. The part of the place behind them in that direction is all that shows.
+     What is on the far side of the people from that, beside the camera or
+     behind it, does NOT show, however much the story says about it.
+  3. Name at most TWO objects from that part, the ones the story makes most
+     of, near then far, with the size the story gives ("the long room runs
+     back behind them", "against the far wall").
+  The light, steam or weather can be in it. From the story's own description,
+  in line with KNOWN PLACES; no people, nothing the story has not shown.
+  Example: the story puts a tub and a bed on the left of a cedar room and a
+  heavy bag and power rack on the right; Mark stands at the heavy bag and the
+  camera faces him and the right-hand side: "Behind them the long cedar room
+  runs back over black rubber matting to an iron power rack, caged lamps
+  glowing under oak beams." The tub and the bed are not in view, so they are
+  not in it. Leave "room" empty for a close-up where the place barely shows,
+  and for a picture with no people in it.
 - "position": left, center or right for every person, as the camera sees
   them, whenever they are side by side in the frame (this includes a driver
   and passenger seen from the front). Leave it empty for everyone only when
@@ -27732,7 +27741,13 @@ function compileSimpleImage(image, ctx) {
       // 1.42.1: room for all of a place's saved look (up to 6) next to the
       // moment; the sixth look (the Reverie's bed) used to be cut.
       const room = sceneryOnly ? 14 : 12
-      setting = simpleTidySetting([...looks.slice(0, Math.max(6, room - moment.length)), ...moment], room)
+      // 1.43.1: with a room sentence saying what is in view, only the first
+      // three looks (what the place is made of) go in. A place saved with its
+      // furniture (the Reverie wing's tub, bed and rack) had put every piece in
+      // every picture, whichever way the camera faced.
+      const viewed = !sceneryOnly && String(image.room || '').trim() && presetUsesNovelai(ctx.preset)
+      setting = simpleTidySetting([...looks.slice(0, viewed ? 3 : Math.max(6, room - moment.length)), ...moment], room)
+      if (viewed && looks.length > 3) notes.push(`Place “${known ? known.name : placeName}”: the room sentence says what is in view, so only its first three looks were used (${looks.slice(0, 3).join(', ')}).`)
       placeUsed = { key: known ? known.key : simplePlaceKey(placeName), name: known ? known.name : placeName, looks, first: !known }
       notes.push(known ? `Place “${known.name}”: drawn before, so its saved look was used (${looks.join(', ')}).`
         : `Place “${placeName}”: first picture here. Its look is now remembered for this chat (${looks.join(', ')}).`)
