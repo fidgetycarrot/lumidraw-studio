@@ -11,3 +11,6 @@
 ## 1.41.1
 - "Young adult" in a role phrase now stays "young adult" (it used to be cut to "adult"). It still says adult, and lets a character read as early twenties.
 - A femboy whose role phrase has no "man" in it ("half-elf", "young adult half-elf") now gets "femboy" added after the age word: "young adult femboy half-elf". Before, the femboy word was only swapped in for "man".
+
+## 1.41.2
+- Studio's **Use prompt** now loads the picture's undesired content too, not just the prompt.

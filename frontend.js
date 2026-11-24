@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.41.1'
+  const EXTENSION_VERSION = '1.41.2'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -6517,7 +6517,13 @@ ${entry.prompt || ''}`.trim()
     const item = naiCurrent(); if (!item || !item.entry) return
     $('.ld-nai-prompt').value = item.entry.prompt || ''
     naiSet('.ld-prompt', $('.ld-nai-prompt').value, ['input'])
-    setStatus('.ld-nai-status', 'Loaded this picture’s prompt.', 'good')
+    // 1.41.2: the undesired prompt comes along too, when the picture saved one.
+    const hasNegative = typeof item.entry.negativePrompt === 'string'
+    if (hasNegative) {
+      $('.ld-nai-negative').value = item.entry.negativePrompt
+      naiSet('.ld-negative', item.entry.negativePrompt, ['input'])
+    }
+    setStatus('.ld-nai-status', hasNegative ? 'Loaded this picture’s prompt and undesired content.' : 'Loaded this picture’s prompt. It has no saved undesired content.', 'good')
   })
   $('.ld-nai-to-chat').addEventListener('click', () => { const item = naiCurrent(); if (item) appendToChat(item.image, item.entry) })
   {
