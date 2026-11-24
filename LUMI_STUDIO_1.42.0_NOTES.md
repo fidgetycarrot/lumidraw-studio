@@ -9,3 +9,7 @@ From the Reverie's new cedar-and-iron gym-bedroom, which came out as a cramped w
 - **All of a place's saved look fits.** Room for all six place tags next to the moment's own (the light, the steam).
 - **Size and layout.** The parser is asked to start a place's look with its size or shape when the story gives it ("spacious room", "high ceiling", "long narrow room").
 - **First picture in a newly described place is framed wide** (full body or wide shot), so the room the story just described shows.
+
+## 1.42.2
+From Eric's 👎 on Illya's ear close-up (red hair, head "out of frame").
+- A close detail shot of **any part of the head** (ear, hair, neck, cheek, eyes, mouth) keeps that person's hair, ears, eyes and marks, and is no longer "head out of frame". It counts when it's in their own pose, when the summary names the part as theirs ("Illya's long pointed ear"), or when they're the only person drawn and the shot is of a head part. Hands, feet and the person on the receiving end still leave the head out.

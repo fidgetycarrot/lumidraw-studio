@@ -27353,7 +27353,19 @@ function simpleDetailTrim(subject, image, notes) {
   // they kiss.
   const own = subject.pose.join(', ').toLowerCase().replace(/\breceiv\w*\s+\w+/g, ' ')
   const myName = subject.raw && subject.raw.name
+  // 1.42.2: any part of the head counts, not only the mouth. A close-up of
+  // Illya's ear being stroked was sent as "head out of frame" with his hair
+  // and ears trimmed, and NovelAI gave him red hair. The head part can be in
+  // this person's own pose, or the summary can name it as theirs ("Illya's
+  // long pointed ear"), or they are the only person drawn and the shot is of
+  // a head part.
+  const HEAD = /\b(?:ears?|hair|neck|nape|cheeks?|jaw|chin|forehead|nose|lips?|mouth|tongue|eyes?|eyelashes|face|temples?|horns?)\b/
+  const names = uniqueStrings([myName, String(myName || '').split(/\s+/)[0]].filter(name => name && name.length > 2))
+  const theirs = names.some(name => new RegExp(escapeRegExp(name.toLowerCase()) + "(?:'s|’s)(?:\\s+[\\w-]+){0,4}?\\s+" + HEAD.source.slice(2, -2) + '\\b').test(said))
+  const onlyOne = (image.subjects || []).length <= 1
   const face = /\b(?:mouth|lips?|tongue|kiss\w*|fellatio|blowjob|cunnilingus|oral|lick\w*|suck\w*|face|cheeks?|deepthroat)\b/.test(own) ||
+    HEAD.test(own.replace(/\bhand\w*\b.*$/, '')) || theirs ||
+    (onlyOne && HEAD.test([image.scene_summary, image.shot].join(' ').toLowerCase())) ||
     (image.interactions || []).some(act => (/^(?:fellatio|cunnilingus|blowjob|oral)/i.test(String(act.act || '')) && act.actor === myName) ||
       (/^kiss/i.test(String(act.act || '')) && [act.actor, act.recipient].includes(myName)))
   const keepIdentity = subject.identity.filter(tag => /\b(?:skin|tan|tanned|dark-skinned|pale|tattoo|nail polish|nails|trap|otoko ?no ?ko|otokonoko|femboy|androgynous|futanari)\b/i.test(tag) ||
