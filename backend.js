@@ -5316,6 +5316,7 @@ async function absorbCastDeclarations(messages, targetIndex, preset, chatId = ''
   const boundCast = await castForChat(chatId)
   let castIds = Array.isArray((boundCast || {}).castLibraryIds)
     ? boundCast.castLibraryIds.slice() : []
+  const addedIds = []
   for (const entry of declared) {
     const key = normalizeIdentityText(entry.name)
     const existing = characters.find((item) => normalizeIdentityText(item && item.name) === key)
@@ -5348,11 +5349,15 @@ async function absorbCastDeclarations(messages, targetIndex, preset, chatId = ''
     })
     castIds.push(id)
     added.push(entry.name)
+    addedIds.push(id)
   }
   if (!added.length && !skipped.length) return { added, skipped }
   if (added.length) {
     characters.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
     await saveCharacters(characters)
+    // 1.45.1: characters a story makes get a portrait too, like ones you save.
+    const userId = await recallUserId()
+    for (const newId of addedIds) autoPortrait(userId || '', 'character', newId)
   }
   const nextIds = uniqueStrings(castIds)
   if (boundCast) {

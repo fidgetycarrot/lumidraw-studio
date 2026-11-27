@@ -18,3 +18,6 @@ Library, step two: stories, tidy-up, archive, and presets by app.
 
 ## Presets by app
 - The preset list is grouped by app (NovelAI, Draw Things, SwarmUI…). The app of the preset in use comes first and opens; the others fold up. Click a group to open or fold it; that's remembered. Everything opens while you search.
+
+## 1.45.1
+- Characters a story makes get a portrait automatically too (when the Settings switch is on), not only ones saved by hand, from LumiCast or from Paige.
