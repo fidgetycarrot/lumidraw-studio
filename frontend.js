@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.46.0'
+  const EXTENSION_VERSION = '1.47.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -1978,6 +1978,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             <button class="ld-btn ld-lightbox-report">Troubleshooting…</button>
             <button class="ld-btn ld-lightbox-fix">Fix this image…</button>
             <button class="ld-btn ld-lightbox-caption" title="Open this picture in Caption">Caption this</button>
+            <button class="ld-btn ld-lightbox-avatar" title="Use this picture as a card’s or persona’s avatar in Lumiverse">Use as avatar…</button>
             <button class="ld-btn ld-lightbox-insert" title="Adds a SECOND copy of this image at the top of the latest story message. Not needed after a regeneration — that already replaced the image in place.">Add copy to chat</button>
             <button class="ld-btn ld-primary ld-lightbox-done">Done</button>
           </div>
@@ -2319,6 +2320,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       .ld-wall-fold-head b{color:#cdd6f0}
       .ld-wall-fold-head .ld-btn{margin-left:auto}
       .ld-wall-fold-body{margin-top:10px}
+      .ld-avatar-h{margin:6px 0 0;color:#cdd6f0;font-size:13px}
+      .ld-avatar-face{width:84px;height:84px;border-radius:50%}
+      .ld-avatar-pick{width:92px}
+      .ld-avatar-tag{font-size:11px;color:#a5b4fc;text-align:center}
+      .ld-avatar-preview img{width:180px;height:180px;border-radius:50%;object-fit:cover;border:1px solid #2e364e;display:block}
+      .ld-avatar-confirm .ld-row .ld-btn{width:auto}
+      .ld-avatar-shade{z-index:2147483000!important}
       .ld-wall-picker-shade{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center}
       .ld-wall-picker{background:#141824;border:1px solid #2e364e;border-radius:14px;padding:16px;width:min(760px,92vw);max-height:80vh;overflow:auto;display:flex;flex-direction:column;gap:12px}
       .ld-wall-pick{background:none;border:0;padding:0;cursor:pointer;width:84px;color:inherit}
@@ -6309,6 +6317,203 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     note.textContent = `${clashes.length === 1 ? `One ${noun}` : `${clashes.length} ${noun}s`} from Paige had a name you already used: ${clashes.map((e) => `“${e.name}” (same name as “${e.nameClash}”)`).join(', ')}. Open ${clashes.length === 1 ? 'it' : 'each one'} and give ${clashes.length === 1 ? 'it' : 'them'} a new name so you can tell them apart.`
     list.appendChild(note)
   }
+  // ---------- Avatars (1.47.0) ----------
+  // Any Lumi Studio picture can become a Lumiverse card's or persona's
+  // avatar. The upload is the same one Lumiverse's own editors make: a square
+  // crop for the avatar slot plus the full picture. Before replacing, a copy of
+  // the old avatar is kept (Lumiverse deletes it) so "Put back" works.
+  async function avatarBlob(url) {
+    const res = await fetch(url, { credentials: 'same-origin' })
+    if (!res.ok) return null
+    const blob = await res.blob()
+    return blob && blob.size ? blob : null
+  }
+  function blobBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || '').replace(/^data:[^,]*,/, ''))
+      reader.onerror = () => reject(new Error('Could not read the picture.'))
+      reader.readAsDataURL(blob)
+    })
+  }
+  // Square crop for the avatar slot: tall pictures keep the top (where the
+  // head is), wide ones keep the middle.
+  async function avatarSquare(blob) {
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image()
+      const src = URL.createObjectURL(blob)
+      el.onload = () => { URL.revokeObjectURL(src); resolve(el) }
+      el.onerror = () => { URL.revokeObjectURL(src); reject(new Error('Could not open the picture.')) }
+      el.src = src
+    })
+    const w = img.naturalWidth, h = img.naturalHeight
+    const side = Math.min(w, h)
+    const x = w > h ? Math.round((w - side) / 2) : 0
+    const y = h > w ? Math.round(Math.min(h - side, h * 0.04)) : 0
+    const out = Math.min(side, 768)
+    const canvas = document.createElement('canvas')
+    canvas.width = out; canvas.height = out
+    canvas.getContext('2d').drawImage(img, x, y, side, side, 0, 0, out, out)
+    return await new Promise((resolve, reject) => canvas.toBlob(b => b ? resolve(b) : reject(new Error('Could not crop the picture.')), 'image/png'))
+  }
+  async function uploadAvatar(target, id, crop, full) {
+    const form = new FormData()
+    form.append('avatar', new File([crop], 'avatar.png', { type: crop.type || 'image/png' }))
+    if (full) form.append('original_avatar', new File([full], 'original.' + ((full.type || '').split('/')[1] || 'png'), { type: full.type || 'image/png' }))
+    let res = null
+    try { res = await fetch(`/api/v1/${target === 'card' ? 'characters' : 'personas'}/${encodeURIComponent(id)}/avatar`, { method: 'POST', credentials: 'include', body: form }) } catch { res = null }
+    if (res && res.ok) return
+    // Cards also have the official extension call; it takes one picture, so
+    // it gets the square.
+    if (target === 'card') { await call('avatar_set_card', { id, data: await blobBase64(crop), mime: crop.type || 'image/png' }, 60000); return }
+    let why = ''
+    try { const body = await res.json(); why = body && body.error || '' } catch { /* no body */ }
+    throw new Error(why || `Lumiverse refused the upload${res ? ` (${res.status})` : ''}.`)
+  }
+  async function keepOldAvatar(target, id, name, backups) {
+    if (backups && backups[target + ':' + id]) return
+    const now = await call('avatar_current', { target, id }, 30000)
+    let original = now.originalUrl ? await avatarBlob(now.originalUrl).catch(() => null) : null
+    const crop = now.cropUrl ? await avatarBlob(now.cropUrl).catch(() => null) : null
+    // Older avatars live outside the image library; Lumiverse's own avatar
+    // address still finds them.
+    if (!original && !crop) original = await avatarBlob(`/api/v1/${target === 'card' ? 'characters' : 'personas'}/${encodeURIComponent(id)}/avatar${target === 'card' ? '' : '?variant=original'}`).catch(() => null)
+    if (!original && !crop) return
+    await call('avatar_backup', { target, id, name,
+      original: original ? await blobBase64(original) : '', originalMime: original ? original.type : '',
+      crop: crop ? await blobBase64(crop) : '', cropMime: crop ? crop.type : '' }, 120000)
+  }
+  async function putBackAvatar(target, id) {
+    const res = await call('avatar_backup_get', { target, id }, 30000)
+    const backup = res.backup
+    if (!backup) throw new Error('There’s no old avatar saved for this one.')
+    const original = backup.original ? await avatarBlob(backup.original.url) : null
+    const crop = backup.crop ? await avatarBlob(backup.crop.url) : null
+    if (!original && !crop) throw new Error('The saved copy of the old avatar is gone.')
+    await uploadAvatar(target, id, crop || original, crop ? original : null)
+    await call('avatar_backup_clear', { target, id }, 30000)
+  }
+  function avatarThumbUrl(target, id) { return `/api/v1/${target === 'card' ? 'characters' : 'personas'}/${encodeURIComponent(id)}/avatar?size=sm` }
+  // The picker. `url` is the picture; `who` names the face it came from, if
+  // any, so their story cards and same-named personas come first.
+  async function openAvatarPicker(url, who = {}) {
+    const shade = document.createElement('div'); shade.className = 'ld-wall-picker-shade ld-avatar-shade'
+    const box = document.createElement('div'); box.className = 'ld-wall-picker ld-avatar-picker'
+    box.appendChild(Object.assign(document.createElement('div'), { className: 'ld-subtitle', textContent: 'Use as avatar' }))
+    const status = Object.assign(document.createElement('div'), { className: 'ld-status', textContent: 'Loading your cards and personas…' })
+    box.appendChild(status)
+    const close = document.createElement('button'); close.type = 'button'; close.className = 'ld-btn ld-compact'; close.style.width = 'auto'; close.style.alignSelf = 'flex-start'; close.textContent = 'Close'
+    close.addEventListener('click', () => shade.remove())
+    shade.addEventListener('click', event => { if (event.target === shade) shade.remove() })
+    shade.appendChild(box)
+    ;(document.querySelector('.ld-lightbox.ld-open') || $('.ld-panel') || document.body).appendChild(shade)
+    let data
+    try { data = await call('avatar_targets', { chatId: who.chatId || activeChatIdFromCtx() || '' }, 60000) }
+    catch (error) { status.textContent = error.message; status.className = 'ld-status ld-err'; box.appendChild(close); return }
+    status.textContent = ''
+    const storyCards = new Set(who.storyKeys || [])
+    const name = String(who.name || '').trim().toLowerCase()
+    const first = name.split(/\s+/)[0] || ''
+    const nameHit = item => name && (item.name.toLowerCase() === name || (first.length > 2 && item.name.toLowerCase().split(/\s+/).includes(first)))
+    const rank = (item, target) => {
+      if (target === 'card' ? item.id === data.chatCardId : item.id === data.chatPersonaId) return 0
+      if (target === 'card' && storyCards.has(item.id)) return 1
+      if (nameHit(item)) return 2
+      return 3
+    }
+    const tag = (item, target) => {
+      const r = rank(item, target)
+      return r === 0 ? 'this chat' : r === 1 ? 'their story' : r === 2 ? 'same name' : ''
+    }
+    const search = document.createElement('input'); search.type = 'search'; search.className = 'ld-wall-search'; search.placeholder = 'Find a card or persona…'
+    const sections = document.createElement('div')
+    box.append(search, sections, close)
+    const draw = () => {
+      sections.replaceChildren()
+      const words = search.value.toLowerCase().split(/\s+/).filter(Boolean)
+      for (const [target, label, list] of [['card', 'Character cards', data.cards], ['persona', 'Personas', data.personas]]) {
+        const hits = list.filter(item => words.every(word => item.name.toLowerCase().includes(word)))
+          .sort((a, b) => rank(a, target) - rank(b, target) || a.name.localeCompare(b.name))
+        const shown = words.length ? hits.slice(0, 60) : hits.slice(0, 18)
+        sections.appendChild(Object.assign(document.createElement('h4'), { className: 'ld-avatar-h', textContent: label }))
+        const row = document.createElement('div'); row.className = 'ld-wall-row'
+        for (const item of shown) {
+          const tile = document.createElement('button'); tile.type = 'button'; tile.className = 'ld-wall-pick ld-avatar-pick'
+          const face = document.createElement('div'); face.className = 'ld-wall-face ld-avatar-face'
+          const initial = () => face.replaceChildren(Object.assign(document.createElement('div'), { className: 'ld-wall-initial', textContent: item.name.charAt(0).toUpperCase() }))
+          if (item.hasAvatar) { const img = document.createElement('img'); img.src = avatarThumbUrl(target, item.id); img.alt = ''; img.loading = 'lazy'; img.onerror = initial; face.appendChild(img) } else initial()
+          const t = tag(item, target)
+          tile.append(face, Object.assign(document.createElement('div'), { className: 'ld-wall-name', textContent: item.name }))
+          if (t) tile.appendChild(Object.assign(document.createElement('div'), { className: 'ld-avatar-tag', textContent: t }))
+          tile.addEventListener('click', () => confirmAvatar(target, item))
+          row.appendChild(tile)
+        }
+        if (!shown.length) row.appendChild(Object.assign(document.createElement('div'), { className: 'ld-status', textContent: words.length ? 'No matches.' : 'None yet.' }))
+        sections.appendChild(row)
+        if (hits.length > shown.length) sections.appendChild(Object.assign(document.createElement('div'), { className: 'ld-help', textContent: `${hits.length - shown.length} more. Search to find them.` }))
+      }
+    }
+    search.addEventListener('input', draw)
+    draw()
+    setTimeout(() => { try { search.focus() } catch {} }, 0)
+    let picture = null
+    async function confirmAvatar(target, item) {
+      sections.replaceChildren(); search.style.display = 'none'
+      const step = document.createElement('div'); step.className = 'ld-avatar-confirm'
+      const preview = document.createElement('div'); preview.className = 'ld-avatar-preview'
+      const say = Object.assign(document.createElement('div'), { className: 'ld-status', textContent: 'Making the square…' })
+      step.append(preview, say)
+      sections.appendChild(step)
+      try {
+        if (!picture) {
+          const full = await avatarBlob(url)
+          if (!full) throw new Error('Could not load the picture.')
+          picture = { full, crop: await avatarSquare(full) }
+        }
+        const img = document.createElement('img'); img.src = URL.createObjectURL(picture.crop); img.alt = ''
+        preview.appendChild(img)
+      } catch (error) { say.textContent = error.message; say.className = 'ld-status ld-err'; return }
+      const had = data.backups && data.backups[target + ':' + item.id]
+      say.textContent = target === 'card'
+        ? `This becomes the avatar of the card “${item.name}”, beside every message in its chats.${had ? '' : ' The current one is kept so you can put it back.'}`
+        : `This becomes the avatar of the persona “${item.name}”.${had ? '' : ' The current one is kept so you can put it back.'}`
+      const buttons = document.createElement('div'); buttons.className = 'ld-row'; buttons.style.marginTop = '10px'
+      const go = document.createElement('button'); go.type = 'button'; go.className = 'ld-btn ld-primary'; go.textContent = `Use for ${item.name}`
+      const back = document.createElement('button'); back.type = 'button'; back.className = 'ld-btn'; back.textContent = 'Pick another'
+      back.addEventListener('click', () => { search.style.display = ''; draw() })
+      buttons.append(go, back)
+      step.appendChild(buttons)
+      go.addEventListener('click', async () => {
+        go.disabled = true; back.disabled = true
+        say.className = 'ld-status'; say.textContent = 'Saving…'
+        try {
+          await keepOldAvatar(target, item.id, item.name, data.backups)
+          await uploadAvatar(target, item.id, picture.crop, picture.full)
+          item.hasAvatar = true
+          data.backups = (await call('avatar_targets', { chatId: '' }, 60000).catch(() => data)).backups || data.backups
+          say.className = 'ld-status ld-good'
+          say.textContent = `Done. ${item.name} has the new avatar.`
+          buttons.replaceChildren()
+          if (data.backups && data.backups[target + ':' + item.id]) {
+            const undo = document.createElement('button'); undo.type = 'button'; undo.className = 'ld-btn'; undo.textContent = 'Put back the old one'
+            undo.addEventListener('click', async () => {
+              undo.disabled = true; say.className = 'ld-status'; say.textContent = 'Putting it back…'
+              try { await putBackAvatar(target, item.id); delete data.backups[target + ':' + item.id]; say.className = 'ld-status ld-good'; say.textContent = `${item.name} has the old avatar again.`; undo.remove() }
+              catch (error) { undo.disabled = false; say.className = 'ld-status ld-err'; say.textContent = error.message }
+            })
+            buttons.appendChild(undo)
+          }
+          const done = document.createElement('button'); done.type = 'button'; done.className = 'ld-btn ld-primary'; done.textContent = 'Done'
+          done.addEventListener('click', () => shade.remove())
+          buttons.appendChild(done)
+        } catch (error) {
+          go.disabled = false; back.disabled = false
+          say.className = 'ld-status ld-err'; say.textContent = 'Could not set the avatar: ' + error.message
+        }
+      })
+    }
+  }
+
   // ---------- Library wall (1.46.0) ----------
   // Characters and personas as faces, grouped by story. A story is a card in
   // Lumiverse; the most recently played comes first, stories not played in a
@@ -6511,6 +6716,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const act = (label, title, run) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.title = title; b.addEventListener('click', event => { event.stopPropagation(); run() }); menu.appendChild(b) }
     act('Open', 'Open the sheet', () => openPersonaEditor(item.id, kind))
     if (!item.archived) act(url ? 'New face' : 'Make face', 'Draw a portrait from the sheet as it is now', () => makePortraits(kind, [item.id]))
+    if (url && !item.archived) act('Avatar…', 'Use this portrait as a card’s or persona’s avatar in Lumiverse', () => openAvatarPicker(url, { name: item.name, storyKeys: libStories.filter(s => s[kind === 'character' ? 'characters' : 'personas'].includes(item.id) && !String(s.key).startsWith('name:')).map(s => s.key) }))
     if (storyKey) act('Not here', 'Take them out of this story', () => wallLink(kind, item.id, '', storyKey))
     act(item.archived ? 'Bring back' : 'Archive', item.archived ? 'Show them in the Library again' : 'Hide them. Nothing is deleted.', () => archiveEntries(kind, [item.id], !item.archived))
     if (item.archived) act('Delete', 'Delete for good', () => wallDelete(kind, item))
@@ -8290,6 +8496,12 @@ ${entry.prompt || ''}`.trim()
     closeLightbox()
     setMainView('caption')
     setCaptionPicture(url, 'from the picture viewer')
+  })
+
+  $('.ld-lightbox-avatar').addEventListener('click', () => {
+    const item = lightboxItems[lightboxIndex]
+    const url = item && item.image && item.image.url
+    if (url) openAvatarPicker(url, {})
   })
 
   $('.ld-lightbox-fix').addEventListener('click', () => {

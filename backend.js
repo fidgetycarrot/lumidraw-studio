@@ -16899,6 +16899,53 @@ function guessStoryLater(userId, kind, id) {
 // The first chat with a card whose story already has people linked to it gets
 // those people as its cast, and the persona too when exactly one is linked.
 const storyCastChecked = new Set()
+// ---- Avatars (1.47.0): a Lumi Studio picture as a card's or persona's
+// avatar. The upload itself happens in the panel (same upload Lumiverse's own
+// editors use, so the full picture and the square crop are both kept). Here:
+// the list of cards and personas, a copy of the avatar being replaced (Lumiverse
+// deletes it), and the official card call as a fallback.
+const AVATAR_BACKUPS_FILE = 'avatar_backups.json'
+async function getAvatarBackups() { const v = await spindle.storage.getJson(AVATAR_BACKUPS_FILE, { fallback: {} }); return v && typeof v === 'object' && !Array.isArray(v) ? v : {} }
+async function apiList(api, userId) {
+  if (!api || typeof api.list !== 'function') return []
+  for (const args of [[{ limit: 1000, userId }], [{ limit: 1000 }, userId], []]) {
+    try { const res = await api.list(...args); const data = Array.isArray(res) ? res : res && Array.isArray(res.data) ? res.data : null; if (data) return data } catch { /* next shape */ }
+  }
+  return []
+}
+async function apiGet(api, id, userId) {
+  if (!api || typeof api.get !== 'function' || !id) return null
+  for (const args of [[id, userId], [id]]) { try { const v = await api.get(...args); if (v) return v } catch { /* next shape */ } }
+  return null
+}
+const imageApiUrl = id => id ? '/api/v1/images/' + encodeURIComponent(id) : ''
+async function avatarTargets(userId, chatId) {
+  const cards = (await apiList(spindle.characters, userId)).filter(c => c && c.id).map(c => ({ id: String(c.id), name: String(c.name || 'Unnamed'), hasAvatar: !!c.image_id }))
+  const personas = (await apiList(spindle.personas, userId)).filter(p => p && p.id).map(p => ({ id: String(p.id), name: String(p.name || 'Unnamed'), hasAvatar: !!(p.image_id || p.avatar_path) }))
+  let chatCardId = '', chatPersonaId = ''
+  if (chatId) { try { const o = await chatOccupants(userId, chatId); chatCardId = o.characterId || ''; chatPersonaId = o.personaId || '' } catch { /* no chat info */ } }
+  const backups = await getAvatarBackups()
+  return { cards, personas, chatCardId, chatPersonaId, backups: Object.fromEntries(Object.entries(backups).map(([k, v]) => [k, { at: v.at }])) }
+}
+async function avatarCurrent(userId, target, id) {
+  if (target === 'card') {
+    const c = await apiGet(spindle.characters, id, userId)
+    if (!c) throw new Error('That card is gone.')
+    return { originalUrl: imageApiUrl(c.image_id), cropUrl: imageApiUrl(c.extensions && c.extensions.avatar_crop_image_id) }
+  }
+  const p = await apiGet(spindle.personas, id, userId)
+  if (!p) throw new Error('That persona is gone.')
+  return { originalUrl: imageApiUrl(p.image_id), cropUrl: imageApiUrl(p.metadata && p.metadata.avatar_crop_image_id) }
+}
+async function uploadBase64Image(userId, b64, mime, name) {
+  const bytes = Uint8Array.from(Buffer.from(String(b64 || ''), 'base64'))
+  if (!bytes.length) return null
+  const opts = { data: bytes, filename: `${name}-${Date.now()}.${mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png'}`, mime_type: mime || 'image/png' }
+  let dto
+  try { dto = await spindle.images.upload({ ...opts, userId }) } catch { dto = await spindle.images.upload(opts, userId) }
+  return dto && dto.url ? { id: dto.id, url: dto.url } : null
+}
+
 async function castFromStoryLinks(chatId) {
   const chat = String(chatId || '').trim()
   if (!chat || storyCastChecked.has(chat)) return null
@@ -20296,6 +20343,53 @@ spindle.onFrontendMessage(async (payload, userId) => {
       case 'library_stories': {
         if (payload.fresh) libraryStoriesCache = { at: 0, userId: '', value: null }
         reply = ok(payload, requestId, { stories: await libraryStories(userId) })
+        break
+      }
+      case 'avatar_targets': {
+        reply = ok(payload, requestId, await avatarTargets(userId, String(payload.chatId || '')))
+        break
+      }
+      case 'avatar_current': {
+        reply = ok(payload, requestId, await avatarCurrent(userId, payload.target === 'card' ? 'card' : 'persona', String(payload.id || '')))
+        break
+      }
+      case 'avatar_backup': {
+        // Keep the avatar from before Lumi Studio first changed it; later
+        // changes don't replace that copy, so "Put back" always means the
+        // one you had.
+        const target = payload.target === 'card' ? 'card' : 'persona'
+        const key = target + ':' + String(payload.id || '')
+        const backups = await getAvatarBackups()
+        if (!backups[key]) {
+          const original = payload.original ? await uploadBase64Image(userId, payload.original, payload.originalMime, 'avatar-backup') : null
+          const crop = payload.crop ? await uploadBase64Image(userId, payload.crop, payload.cropMime, 'avatar-backup-crop') : null
+          if (original || crop) {
+            backups[key] = { name: String(payload.name || '').slice(0, 200), original, crop, at: Date.now() }
+            await spindle.storage.setJson(AVATAR_BACKUPS_FILE, backups, { indent: 2 })
+          }
+        }
+        reply = ok(payload, requestId, { saved: !!backups[key] })
+        break
+      }
+      case 'avatar_backup_get': {
+        const backups = await getAvatarBackups()
+        reply = ok(payload, requestId, { backup: backups[(payload.target === 'card' ? 'card' : 'persona') + ':' + String(payload.id || '')] || null })
+        break
+      }
+      case 'avatar_backup_clear': {
+        const backups = await getAvatarBackups()
+        delete backups[(payload.target === 'card' ? 'card' : 'persona') + ':' + String(payload.id || '')]
+        await spindle.storage.setJson(AVATAR_BACKUPS_FILE, backups, { indent: 2 })
+        reply = ok(payload, requestId, {})
+        break
+      }
+      case 'avatar_set_card': {
+        const api = spindle.characters
+        if (!api || typeof api.setAvatar !== 'function') throw new Error('This Lumiverse can’t change card avatars from an extension.')
+        const mime = String(payload.mime || 'image/png')
+        const avatar = { data: Uint8Array.from(Buffer.from(String(payload.data || ''), 'base64')), filename: 'avatar.' + (mime === 'image/jpeg' ? 'jpg' : 'png'), mime_type: mime }
+        await api.setAvatar(String(payload.id || ''), avatar, userId)
+        reply = ok(payload, requestId, {})
         break
       }
       case 'library_link': {
