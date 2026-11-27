@@ -16683,6 +16683,91 @@ function autoPortrait(userId, kind, id) {
   getSettings().then(settings => { if (settings.portraitAuto !== false && id) queuePortrait(userId, kind, id) }).catch(() => {})
 }
 
+// ---------- Library stories and tidy-up (1.45.0) ---------------------------
+// A story is a character card in Lumiverse: every chat with that card is part
+// of it. Who belongs: the chats' casts, the persona each chat is played as, and
+// characters a story made in those chats.
+let libraryStoriesCache = { at: 0, userId: '', value: null }
+async function chatInfoFor(userId, chatId) {
+  const chatsApi = spindle.chats
+  if (!chatsApi || typeof chatsApi.get !== 'function') return null
+  for (const args of [[chatId, userId], [{ chatId, userId }], [chatId]]) {
+    try {
+      const chat = await chatsApi.get(...args)
+      if (chat && typeof chat === 'object') {
+        const when = chat.updated_at || chat.updatedAt || chat.last_message_at || chat.created_at || chat.createdAt || 0
+        const at = typeof when === 'number' ? (when < 1e12 ? when * 1000 : when) : Date.parse(when) || 0
+        return { name: String(chat.name || chat.title || ''), characterId: String(chat.characterId || chat.character_id ||
+          (Array.isArray(chat.characterIds) && chat.characterIds[0]) || ''), at }
+      }
+    } catch { /* next shape */ }
+  }
+  return null
+}
+async function cardNameFor(userId, id) {
+  const api = spindle.characters
+  if (!api || typeof api.get !== 'function' || !id) return ''
+  for (const args of [[id, userId], [{ id, userId }], [id]]) {
+    try { const card = await api.get(...args); if (card && card.name) return String(card.name) } catch { /* next shape */ }
+  }
+  return ''
+}
+async function libraryStories(userId) {
+  if (libraryStoriesCache.value && libraryStoriesCache.userId === userId && Date.now() - libraryStoriesCache.at < 60000) return libraryStoriesCache.value
+  const [castMap, personaMap, casts, characters] = [await getChatCastMap(), await getChatPersonaMap(), await getCasts(), await getCharacters()]
+  const chatIds = uniqueStrings([...Object.keys(castMap), ...Object.keys(personaMap),
+    ...characters.map(item => item && item.profile && item.profile.declaredInChat).filter(Boolean)])
+  const stories = new Map()
+  const names = new Map()
+  for (const chatId of chatIds) {
+    const info = await chatInfoFor(userId, chatId)
+    if (!info) continue // a chat that no longer exists is not a story
+    if (info.characterId && !names.has(info.characterId)) names.set(info.characterId, await cardNameFor(userId, info.characterId))
+    const key = info.characterId || chatId
+    const title = (info.characterId && names.get(info.characterId)) || info.name || 'A chat'
+    const story = stories.get(key) || { key, title, chats: 0, lastAt: 0, characters: new Set(), personas: new Set() }
+    story.chats++
+    story.lastAt = Math.max(story.lastAt, info.at || 0)
+    const cast = casts.find(item => item && item.id === castMap[chatId])
+    if (cast) {
+      if (cast.characterLibraryId) story.characters.add(cast.characterLibraryId)
+      for (const id of cast.castLibraryIds || []) story.characters.add(id)
+      if (cast.personaLibraryId) story.personas.add(cast.personaLibraryId)
+    }
+    const persona = personaMap[chatId]
+    if (persona) story.personas.add(typeof persona === 'string' ? persona : String(persona.id || ''))
+    for (const item of characters) if (item && item.profile && item.profile.declaredInChat === chatId) story.characters.add(item.id)
+    stories.set(key, story)
+  }
+  const value = [...stories.values()].filter(story => story.characters.size || story.personas.size)
+    .sort((a, b) => b.lastAt - a.lastAt)
+    .map(story => ({ ...story, characters: [...story.characters], personas: [...story.personas] }))
+  libraryStoriesCache = { at: Date.now(), userId, value }
+  return value
+}
+
+// Archive: hidden from the Library lists, never deleted, still usable where
+// it is already linked. One tap brings it back.
+async function setArchived(kind, id, archived) {
+  if (kind === 'preset') {
+    const presets = await getPresets()
+    const index = presets.findIndex(item => item && item.name === id)
+    if (index < 0) throw new Error('That preset is gone.')
+    if (archived) presets[index] = { ...presets[index], archived: Date.now() }
+    else { const copy = { ...presets[index] }; delete copy.archived; presets[index] = copy }
+    await savePresets(presets)
+    return { presets }
+  }
+  const list = kind === 'persona' ? await getPersonas() : await getCharacters()
+  const index = list.findIndex(item => item && item.id === id)
+  if (index < 0) throw new Error('That sheet is gone.')
+  if (archived) list[index] = { ...list[index], archived: Date.now() }
+  else { const copy = { ...list[index] }; delete copy.archived; list[index] = copy }
+  if (kind === 'persona') { await savePersonas(list); return { personas: list } }
+  await saveCharacters(list)
+  return { characters: list }
+}
+
 // ---------- marked pictures (1.39.0) ----------------------------------------
 // A quick 👍 or 👎 on a chat picture, with optional reasons, so a picture with
 // a small problem can be noted without leaving the scene. The full
@@ -20031,6 +20116,19 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'library_stories': {
+        if (payload.fresh) libraryStoriesCache = { at: 0, userId: '', value: null }
+        reply = ok(payload, requestId, { stories: await libraryStories(userId) })
+        break
+      }
+      case 'library_archive': {
+        const kind = ['character', 'persona', 'preset'].includes(payload.kind) ? payload.kind : 'character'
+        const ids = Array.isArray(payload.ids) ? payload.ids.map(String) : [String(payload.id || '')]
+        let out = {}
+        for (const id of ids.filter(Boolean)) out = await setArchived(kind, id, payload.archived !== false)
+        reply = ok(payload, requestId, out)
+        break
+      }
       case 'portrait_make': {
         const kind = payload.kind === 'persona' ? 'persona' : 'character'
         const ids = Array.isArray(payload.ids) ? payload.ids.map(String) : [String(payload.id || '')]

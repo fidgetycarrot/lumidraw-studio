@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.44.0'
+  const EXTENSION_VERSION = '1.45.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -2261,6 +2261,18 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       .ld-lib-sub{font-size:12.5px;font-weight:500;color:#93c5fd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .ld-lib-tags{font-size:12.5px;line-height:1.45;color:#9aa6be;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
       .ld-lib-actions{display:flex;gap:7px;justify-content:flex-end;margin-top:auto;padding-top:4px}
+      .ld-lib-stories{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+      .ld-lib-story{border:1px solid #2e364e;background:#141824;color:#cdd6f0;border-radius:999px;padding:5px 12px;font:600 12px/1.2 system-ui,sans-serif;cursor:pointer;width:auto}
+      .ld-lib-story:hover{border-color:#5548e8}
+      .ld-lib-story.ld-on{background:#2a2350;border-color:#8b5cf6;color:#fff}
+      .ld-lib-story .ld-lib-story-n{opacity:.65;font-weight:500;margin-left:5px}
+      .ld-lib-group{grid-column:1/-1;display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 2px 2px;color:#cdd6f0;font:650 13px/1.2 system-ui,sans-serif;user-select:none}
+      .ld-lib-group .ld-lib-group-n{opacity:.6;font-weight:500}
+      .ld-lib-tidy{grid-column:1/-1;border:1px solid #6b5317;background:#1d1a10;border-radius:10px;padding:10px 12px;margin-top:10px}
+      .ld-lib-tidy h4{margin:8px 0 4px;font-size:13px}
+      .ld-lib-tidy-row{display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid #2e2a1a;font-size:13px}
+      .ld-lib-tidy-row span{flex:1;min-width:0}
+      .ld-lib-tidy-row .ld-btn,.ld-lib-tidy .ld-btn{width:auto}
       .ld-lib-top{display:flex;gap:11px;align-items:flex-start;min-width:0}
       .ld-lib-top>.ld-lib-main{flex:1;min-width:0}
       .ld-lib-face{flex:0 0 64px;height:86px;border-radius:8px;overflow:hidden;background:#1d2233;border:1px solid #2e364e;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;position:relative;cursor:pointer}
@@ -5726,13 +5738,13 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   })()
   function libFilterFor(kind) {
     const saved = libFilters[kind] || {}
-    libFilters[kind] = { q: saved.q || '', sort: saved.sort || 'az', hideStory: !!saved.hideStory }
+    libFilters[kind] = { q: saved.q || '', sort: saved.sort || 'az', hideStory: !!saved.hideStory, story: saved.story || '' }
     return libFilters[kind]
   }
   function saveLibFilters() {
     try {
       const keep = {}
-      for (const [kind, value] of Object.entries(libFilters)) keep[kind] = { sort: value.sort, hideStory: value.hideStory }
+      for (const [kind, value] of Object.entries(libFilters)) keep[kind] = { sort: value.sort, hideStory: value.hideStory, story: value.story }
       localStorage.setItem(LIB_FILTER_KEY, JSON.stringify(keep))
     } catch { /* best effort */ }
   }
@@ -5750,6 +5762,23 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const filter = libFilterFor(kind)
     const words = filter.q.toLowerCase().split(/\s+/).filter(Boolean)
     let rows = items.map((item, index) => ({ item, index }))
+    // 1.45.0: archived entries only show under "Archived"; a story chip shows
+    // only that story's people.
+    if (filter.story === '__archived') rows = rows.filter(row => row.item && row.item.archived)
+    else {
+      rows = rows.filter(row => !(row.item && row.item.archived))
+      if (filter.story && (kind === 'character' || kind === 'persona')) {
+        const field = kind === 'character' ? 'characters' : 'personas'
+        if (filter.story === '__none') {
+          const anywhere = new Set(libStories.flatMap(story => story[field]))
+          rows = rows.filter(row => !anywhere.has(row.item.id))
+        } else {
+          const story = libStories.find(item => item.key === filter.story)
+          const members = new Set(story ? story[field] : [])
+          rows = story ? rows.filter(row => members.has(row.item.id)) : rows
+        }
+      }
+    }
     if (filter.hideStory) rows = rows.filter(row => !isStory(row.item))
     if (words.length) rows = rows.filter(row => {
       const text = (nameOf(row.item) + ' ' + textOf(row.item)).toLowerCase()
@@ -5817,7 +5846,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
   // Characters from Paige whose name was already taken are saved as "Name 2" and marked until renamed.
   const NEEDS_NEW_NAME = 'needs a new name'
-  function libItem({ name, badges = [], sub = '', tags = '', active = false, faded = false, onOpen, onEdit, onDelete, editLabel = 'Edit', deleteTitle = 'Delete', face = null, tips = [] }) {
+  function libItem({ name, badges = [], sub = '', tags = '', active = false, faded = false, onOpen, onEdit, onDelete, editLabel = 'Edit', deleteTitle = 'Delete', face = null, tips = [], archived = false, onArchive = null }) {
     const item = document.createElement('div')
     item.className = 'ld-preset-item ld-lib-item' + (active ? ' ld-active' : '')
     const main = document.createElement('div')
@@ -5874,7 +5903,15 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     del.textContent = 'Delete'
     del.title = deleteTitle
     del.addEventListener('click', (event) => { event.stopPropagation(); onDelete() })
-    actions.append(edit, del)
+    if (onArchive) {
+      const arch = document.createElement('button')
+      arch.className = 'ld-btn ld-compact'
+      arch.type = 'button'
+      arch.textContent = archived ? 'Bring back' : 'Archive'
+      arch.title = archived ? 'Show it in the list again' : 'Hide it from the list. Nothing is deleted, and it still works where it is linked.'
+      arch.addEventListener('click', (event) => { event.stopPropagation(); onArchive() })
+      actions.append(edit, arch, del)
+    } else actions.append(edit, del)
     if (face) {
       const top = document.createElement('div')
       top.className = 'ld-lib-top'
@@ -5957,6 +5994,148 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     clearTimeout(checkupTimer)
     checkupTimer = setTimeout(refreshCheckup, 400)
   }, true)
+  // ---- Stories, archive and tidy-up (1.45.0)
+  var libStories = []
+  var libStoriesLoaded = false
+  async function loadLibStories(fresh = false) {
+    try {
+      const res = await call('library_stories', { fresh }, 60000)
+      libStories = Array.isArray(res.stories) ? res.stories : []
+      libStoriesLoaded = true
+      renderCharacterList(); renderPersonaList()
+    } catch { libStoriesLoaded = true }
+  }
+  function storyChips(kind, list, rerender, entries) {
+    const host = list.parentNode
+    if (!host) return
+    let row = host.querySelector(`.ld-lib-stories[data-kind="${kind}"]`)
+    if (!row) {
+      row = document.createElement('div')
+      row.className = 'ld-lib-stories'
+      row.dataset.kind = kind
+      const bar = host.querySelector(`.ld-lib-toolbar[data-kind="${kind}"]`)
+      host.insertBefore(row, bar || list)
+    }
+    if (!libStoriesLoaded) { loadLibStories(); }
+    const field = kind === 'character' ? 'characters' : 'personas'
+    const live = entries.filter(item => item && !item.archived)
+    const ids = new Set(live.map(item => item.id))
+    const filter = libFilterFor(kind)
+    const chips = [['', 'All', live.length]]
+    for (const story of libStories) {
+      const n = story[field].filter(id => ids.has(id)).length
+      if (n) chips.push([story.key, story.title, n])
+    }
+    const anywhere = new Set(libStories.flatMap(story => story[field]))
+    const loose = live.filter(item => !anywhere.has(item.id)).length
+    if (libStoriesLoaded && loose && libStories.length) chips.push(['__none', 'Not in a story', loose])
+    const archivedCount = entries.filter(item => item && item.archived).length
+    if (archivedCount) chips.push(['__archived', 'Archived', archivedCount])
+    if (filter.story && !chips.some(chip => chip[0] === filter.story)) filter.story = ''
+    row.replaceChildren(...chips.map(([key, label, n]) => {
+      const chip = document.createElement('button')
+      chip.type = 'button'
+      chip.className = 'ld-lib-story' + (filter.story === key ? ' ld-on' : '')
+      chip.append(document.createTextNode(label), Object.assign(document.createElement('span'), { className: 'ld-lib-story-n', textContent: String(n) }))
+      chip.addEventListener('click', () => { libFilterFor(kind).story = key; saveLibFilters(); rerender() })
+      return chip
+    }))
+  }
+  async function archiveEntries(kind, ids, archived = true) {
+    const status = kind === 'character' ? '.ld-charlib-status' : kind === 'persona' ? '.ld-persona-status' : '.ld-preset-status'
+    try {
+      const res = await call('library_archive', { kind, ids, archived }, 30000)
+      if (Array.isArray(res.characters)) characters = res.characters
+      if (Array.isArray(res.personas)) personas = res.personas
+      if (Array.isArray(res.presets)) presets = res.presets
+      if (kind === 'character') renderCharacterList(); else if (kind === 'persona') renderPersonaList(); else renderPresetList()
+      setStatus(status, archived ? `Archived ${ids.length}. Find ${ids.length === 1 ? 'it' : 'them'} under “Archived” to bring ${ids.length === 1 ? 'it' : 'them'} back.` : 'Back in the list.', 'good')
+    } catch (error) { setStatus(status, error.message, 'err') }
+  }
+  // Suggestions only; nothing is archived until a button is pressed.
+  function tidySuggestions(kind) {
+    const MONTH = 30 * 24 * 3600 * 1000
+    const old = item => !item.updatedAt || Date.now() - item.updatedAt > MONTH
+    if (kind === 'preset') {
+      const active = presets.find(item => item && item.name === activePreset)
+      const app = active ? rendererName(active.config || {}) : ''
+      const rows = presets.filter(item => item && !item.archived && item.name !== activePreset && old(item) && rendererName(item.config || {}) !== app)
+        .map(item => ({ id: item.name, name: item.name, why: `${rendererName(item.config || {})}, not used in a month` }))
+      return rows.length ? [{ title: `Presets for apps you’re not using${app ? ` (you’re on ${app})` : ''}`, rows }] : []
+    }
+    const list = (kind === 'character' ? characters : personas).filter(item => item && !item.archived)
+    const field = kind === 'character' ? 'characters' : 'personas'
+    const key = item => String((item.profile && item.profile.anchor) || item.name || '').trim().toLowerCase()
+    const groups = []
+    const dupRows = [], seen = new Set()
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      const a = list[i], b = list[j]
+      const an = String(a.name || '').trim().toLowerCase(), bn = String(b.name || '').trim().toLowerCase()
+      const same = key(a) && key(a) === key(b) || an === bn || (an.length > 3 && bn.startsWith(an + ' ')) || (bn.length > 3 && an.startsWith(bn + ' '))
+      if (!same) continue
+      // Never suggest one a story uses. If both are in stories they're two
+      // different people who share a name; if neither is, suggest the one
+      // edited longer ago.
+      const inStory = new Set(libStories.flatMap(story => story[field]))
+      const aIn = inStory.has(a.id), bIn = inStory.has(b.id)
+      if (aIn && bIn) continue
+      const spare = aIn ? b : bIn ? a : (a.updatedAt || 0) <= (b.updatedAt || 0) ? a : b
+      const keep = spare === a ? b : a
+      if (seen.has(spare.id)) continue
+      seen.add(spare.id)
+      dupRows.push({ id: spare.id, name: spare.name, why: aIn || bIn ? `looks like “${keep.name}”, which a story uses` : `looks like “${keep.name}”, which was edited more recently` })
+    }
+    if (dupRows.length) groups.push({ title: 'Likely duplicates', rows: dupRows })
+    if (libStoriesLoaded && libStories.length) {
+      const anywhere = new Set(libStories.flatMap(story => story[field]))
+      const loose = list.filter(item => !anywhere.has(item.id) && old(item) && !seen.has(item.id))
+        .map(item => ({ id: item.id, name: item.name, why: 'not in any story, not edited in a month' }))
+      if (loose.length) groups.push({ title: 'Not in any story', rows: loose })
+    }
+    return groups
+  }
+  function tidyButton(bar, kind, list) {
+    if (!bar || bar.querySelector('.ld-lib-tidy-btn')) return
+    const b = document.createElement('button')
+    b.type = 'button'; b.className = 'ld-btn ld-compact ld-lib-tidy-btn'; b.textContent = 'Tidy up'
+    b.title = 'Suggest things to archive. Nothing changes until you press Archive.'
+    b.addEventListener('click', () => {
+      const host = list.parentNode
+      const open = host.querySelector(`.ld-lib-tidy[data-kind="${kind}"]`)
+      if (open) { open.remove(); return }
+      const panel = document.createElement('div')
+      panel.className = 'ld-lib-tidy'
+      panel.dataset.kind = kind
+      const groups = tidySuggestions(kind)
+      const head = document.createElement('div')
+      head.innerHTML = '<b>Tidy up</b>'
+      head.appendChild(Object.assign(document.createElement('div'), { className: 'ld-help',
+        textContent: groups.length ? 'Archive hides an entry from these lists. Nothing is deleted, it still works where it’s linked, and “Archived” brings it back.' : 'Nothing to tidy. Everything here looks in use.' }))
+      panel.appendChild(head)
+      for (const group of groups) {
+        panel.appendChild(Object.assign(document.createElement('h4'), { textContent: `${group.title} (${group.rows.length})` }))
+        for (const row of group.rows) {
+          const line = document.createElement('div'); line.className = 'ld-lib-tidy-row'
+          const text = document.createElement('span'); text.innerHTML = ''; text.append(Object.assign(document.createElement('b'), { textContent: row.name }), document.createTextNode(' — ' + row.why))
+          const arch = document.createElement('button'); arch.type = 'button'; arch.className = 'ld-btn ld-compact'; arch.textContent = 'Archive'
+          arch.addEventListener('click', () => { archiveEntries(kind, [row.id]); line.remove() })
+          line.append(text, arch)
+          panel.appendChild(line)
+        }
+        if (group.rows.length > 1) {
+          const all = document.createElement('button'); all.type = 'button'; all.className = 'ld-btn ld-compact'; all.style.marginTop = '6px'
+          all.textContent = `Archive all ${group.rows.length}`
+          all.addEventListener('click', () => { archiveEntries(kind, group.rows.map(row => row.id)); panel.remove() })
+          panel.appendChild(all)
+        }
+      }
+      const close = document.createElement('button'); close.type = 'button'; close.className = 'ld-btn ld-compact'; close.style.marginTop = '8px'; close.style.marginLeft = '6px'
+      close.textContent = 'Close'; close.addEventListener('click', () => panel.remove())
+      panel.appendChild(close)
+      host.insertBefore(panel, list)
+    })
+    bar.insertBefore(b, bar.querySelector('.ld-lib-count'))
+  }
   function facesButton(bar, kind) {
     if (!bar || bar.querySelector('.ld-lib-faces')) return
     const b = document.createElement('button')
@@ -6086,6 +6265,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (!list) return
     const bar = libToolbar('character', list, renderCharacterList, { noun: 'character', storyToggle: true })
     facesButton(bar, 'character')
+    tidyButton(bar, 'character', list)
+    storyChips('character', list, renderCharacterList, characters)
     list.innerHTML = ''
     if (!characters.length) {
       list.innerHTML = '<div class="ld-status">No saved characters yet. Use “＋ New” above, or Fill from LumiCast in the editor.</div>'
@@ -6112,6 +6293,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         faded: story,
         face: faceFor('character', character),
         tips: sheetCheckup(profile).tips,
+        archived: !!character.archived,
+        onArchive: () => archiveEntries('character', [character.id], !character.archived),
         onOpen: () => openPersonaEditor(character.id, 'character'),
         onEdit: () => openPersonaEditor(character.id, 'character'),
         deleteTitle: 'Delete this saved character',
@@ -6136,6 +6319,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     if (!list) return
     const bar = libToolbar('persona', list, renderPersonaList, { noun: 'persona' })
     facesButton(bar, 'persona')
+    tidyButton(bar, 'persona', list)
+    storyChips('persona', list, renderPersonaList, personas)
     list.innerHTML = ''
     if (!personas.length) {
       list.innerHTML = '<div class="ld-status">No saved personas yet.</div>'
@@ -6156,6 +6341,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         tags: libFirstTags(profile),
         face: faceFor('persona', persona),
         tips: sheetCheckup(profile).tips,
+        archived: !!persona.archived,
+        onArchive: () => archiveEntries('persona', [persona.id], !persona.archived),
         onOpen: () => openPersonaEditor(persona.id),
         onEdit: () => openPersonaEditor(persona.id),
         deleteTitle: 'Delete this saved persona',
@@ -6178,6 +6365,23 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const list = $('.ld-preset-list')
     if (!list) return
     const bar = libToolbar('preset', list, renderPresetList, { noun: 'preset' })
+    tidyButton(bar, 'preset', list)
+    // Archived presets get their own chip, like characters (1.45.0).
+    {
+      const host = list.parentNode
+      let row = host && host.querySelector('.ld-lib-stories[data-kind="preset"]')
+      const archivedCount = presets.filter(item => item && item.archived).length
+      const filter = libFilterFor('preset')
+      if (!archivedCount && filter.story === '__archived') filter.story = ''
+      if (host && !row) { row = document.createElement('div'); row.className = 'ld-lib-stories'; row.dataset.kind = 'preset'; host.insertBefore(row, bar || list) }
+      if (row) row.replaceChildren(...(archivedCount ? [['', 'In use and ready', presets.length - archivedCount], ['__archived', 'Archived', archivedCount]] : []).map(([key, label, n]) => {
+        const chip = document.createElement('button'); chip.type = 'button'
+        chip.className = 'ld-lib-story' + (filter.story === key ? ' ld-on' : '')
+        chip.append(document.createTextNode(label), Object.assign(document.createElement('span'), { className: 'ld-lib-story-n', textContent: String(n) }))
+        chip.addEventListener('click', () => { libFilterFor('preset').story = key; saveLibFilters(); renderPresetList() })
+        return chip
+      }))
+    }
     list.innerHTML = ''
     if (!presets.length) {
       list.innerHTML = '<div class="ld-status">No presets yet.</div>'
@@ -6190,11 +6394,35 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     })
     libCount(bar, shown.length, presets.length, 'preset')
     if (!shown.length) libEmptyMatch(list, 'preset')
-    for (const p of shown) {
+    // 1.45.0: grouped by app. The app of the preset in use opens; the others
+    // stay folded unless you're searching. Your choice is remembered.
+    const groupOf = p => rendererName(p.config || {})
+    const activeApp = (() => { const a = presets.find(item => item && item.name === activePreset); return a ? groupOf(a) : '' })()
+    let folds = {}
+    try { folds = JSON.parse(localStorage.getItem('lumidraw.presetGroups.v1') || '{}') || {} } catch { folds = {} }
+    const searching = !!libFilterFor('preset').q.trim()
+    const apps = [...new Set(shown.map(groupOf))].sort((a, b) => (b === activeApp) - (a === activeApp) || a.localeCompare(b))
+    for (const app of apps) {
+      const members = shown.filter(p => groupOf(p) === app)
+      const open = searching || apps.length === 1 || (app in folds ? folds[app] : app === activeApp)
+      const head = document.createElement('div')
+      head.className = 'ld-lib-group'
+      head.append(document.createTextNode((open ? '▾ ' : '▸ ') + app), Object.assign(document.createElement('span'), { className: 'ld-lib-group-n', textContent: `${members.length}` }))
+      if (apps.length > 1) {
+        head.addEventListener('click', () => {
+          folds[app] = !open
+          try { localStorage.setItem('lumidraw.presetGroups.v1', JSON.stringify(folds)) } catch { /* best effort */ }
+          renderPresetList()
+        })
+        list.appendChild(head)
+      }
+      if (open) for (const p of members) list.appendChild(presetCard(p))
+    }
+    function presetCard(p) {
       const c = p.config || {}
       const size = c.width && c.height ? `${c.width}×${c.height}` : ''
       const loras = (c.loras || []).length
-      list.appendChild(libItem({
+      return libItem({
         name: p.name,
         badges: [p.name === activePreset ? 'in use' : '', rendererName(c), p.promptStyle === 'moss' ? 'MOSS prompts' : ''],
         sub: c.model || '',
@@ -6212,7 +6440,9 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
             renderPresetList(); renderPresetSelect()
           } catch (e) { setStatus('.ld-preset-status', e.message, 'err') }
         },
-      }))
+        archived: !!p.archived,
+        onArchive: p.name === activePreset && !p.archived ? null : () => archiveEntries('preset', [p.name], !p.archived),
+      })
     }
   }
 
