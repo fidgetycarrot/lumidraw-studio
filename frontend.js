@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.45.2'
+  const EXTENSION_VERSION = '1.46.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -448,6 +448,11 @@ function realSetup(ctx) {
     }
     if (payload.type === 'portrait_progress') {
       receivePortraitProgress(payload)
+      return
+    }
+    if (payload.type === 'library_story_guess') {
+      loadLibStories(true)
+      setStatus(payload.kind === 'persona' ? '.ld-persona-status' : '.ld-charlib-status', `Filed under ${payload.story}: their name came up there.`, 'good')
       return
     }
     if (payload.type === 'image_placements_changed' || payload.type === 'image_placement_upserted') {
@@ -2273,6 +2278,50 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       .ld-lib-tidy-row{display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid #2e2a1a;font-size:13px}
       .ld-lib-tidy-row span{flex:1;min-width:0}
       .ld-lib-tidy-row .ld-btn,.ld-lib-tidy .ld-btn{width:auto}
+      .ld-wall-bar{display:flex;align-items:center;gap:8px;margin-top:12px}
+      .ld-wall-search{flex:0 1 280px;padding:7px 11px;border-radius:8px;border:1px solid #2e364e;background:#0b0d13;color:#d8e1f5}
+      .ld-wall-count{margin-left:auto;color:#7d86a3;font-size:12px}
+      .ld-wall-more{position:relative}
+      .ld-wall-more>.ld-btn{width:auto;padding:5px 12px}
+      .ld-wall-menu{display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:20;background:#161b28;border:1px solid #2e364e;border-radius:10px;padding:5px;min-width:210px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+      .ld-wall-menu.ld-open{display:flex;flex-direction:column}
+      .ld-wall-menu button{background:none;border:0;color:#d8e1f5;text-align:left;padding:8px 10px;border-radius:7px;cursor:pointer;font:13px system-ui,sans-serif}
+      .ld-wall-menu button:hover{background:#232a3d}
+      .ld-wall{display:block!important;margin-top:6px}
+      .ld-wall-story{margin-top:18px;border-radius:12px;padding:2px 4px 4px;border:1px dashed transparent}
+      .ld-wall-story.ld-drop,.ld-wall-fold.ld-drop{border-color:#8b5cf6;background:rgba(139,92,246,.07)}
+      .ld-wall-story-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
+      .ld-wall-story-head b{font-size:15px;color:#fff}
+      .ld-wall-story-head span{color:#7d86a3;font-size:12.5px}
+      .ld-wall-pin{margin-left:auto;background:none;border:0;cursor:pointer;opacity:.25;font-size:13px;width:auto;padding:2px 4px}
+      .ld-wall-story:hover .ld-wall-pin{opacity:.6}
+      .ld-wall-pin.ld-on{opacity:1!important}
+      .ld-wall-row{display:flex;flex-wrap:wrap;gap:14px}
+      .ld-wall-tile{width:118px}
+      .ld-wall-face{position:relative;width:118px;height:158px;border-radius:10px;overflow:hidden;border:1px solid #2e364e;background:#1d2233;cursor:pointer;display:flex;align-items:center;justify-content:center}
+      .ld-wall-face:hover{border-color:#8b5cf6}
+      .ld-wall-face img{width:100%;height:100%;object-fit:cover;object-position:top}
+      .ld-wall-face-small{width:84px;height:112px}
+      .ld-wall-initial{font:600 34px/1 system-ui,sans-serif;color:#59617c}
+      .ld-wall-wait{font-size:12px;color:#a5b4fc}
+      .ld-wall-dot{position:absolute;top:6px;right:6px;background:#f59e0b;color:#1b1300;font:700 11px/18px system-ui;min-width:18px;height:18px;border-radius:9px;text-align:center;cursor:help}
+      .ld-wall-guess{position:absolute;top:6px;left:6px;background:#334155;color:#e2e8f0;font:700 11px/18px system-ui;width:18px;height:18px;border-radius:50%;text-align:center;cursor:help}
+      .ld-wall-hover{position:absolute;left:5px;right:5px;bottom:5px;display:none;flex-wrap:wrap;gap:4px}
+      .ld-wall-face:hover .ld-wall-hover{display:flex}
+      .ld-wall-hover button{flex:1 1 45%;background:rgba(15,15,20,.85);color:#fff;border:0;border-radius:6px;font:11px/1.2 system-ui,sans-serif;padding:5px 2px;cursor:pointer}
+      .ld-wall-hover button:hover{background:#4f46e5}
+      .ld-wall-name{margin-top:6px;font-size:13px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#d8e1f5}
+      .ld-wall-clash{color:#fcd34d}
+      .ld-wall-add{width:118px;height:158px;border-radius:10px;border:1px dashed #3a4360;background:transparent;color:#7d86a3;font-size:28px;cursor:pointer}
+      .ld-wall-add:hover{border-color:#8b5cf6;color:#c4b5fd}
+      .ld-wall-fold{margin-top:20px;border:1px solid #222838;border-radius:10px;padding:10px 14px}
+      .ld-wall-fold-head{display:flex;align-items:center;gap:10px;cursor:pointer;color:#9aa4c0}
+      .ld-wall-fold-head b{color:#cdd6f0}
+      .ld-wall-fold-head .ld-btn{margin-left:auto}
+      .ld-wall-fold-body{margin-top:10px}
+      .ld-wall-picker-shade{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center}
+      .ld-wall-picker{background:#141824;border:1px solid #2e364e;border-radius:14px;padding:16px;width:min(760px,92vw);max-height:80vh;overflow:auto;display:flex;flex-direction:column;gap:12px}
+      .ld-wall-pick{background:none;border:0;padding:0;cursor:pointer;width:84px;color:inherit}
       .ld-lib-top{display:flex;gap:11px;align-items:flex-start;min-width:0}
       .ld-lib-top>.ld-lib-main{flex:1;min-width:0}
       .ld-lib-face{flex:0 0 64px;height:86px;border-radius:8px;overflow:hidden;background:#1d2233;border:1px solid #2e364e;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;position:relative;cursor:pointer}
@@ -6260,104 +6309,279 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     note.textContent = `${clashes.length === 1 ? `One ${noun}` : `${clashes.length} ${noun}s`} from Paige had a name you already used: ${clashes.map((e) => `“${e.name}” (same name as “${e.nameClash}”)`).join(', ')}. Open ${clashes.length === 1 ? 'it' : 'each one'} and give ${clashes.length === 1 ? 'it' : 'them'} a new name so you can tell them apart.`
     list.appendChild(note)
   }
-  function renderCharacterList() {
-    const list = $('.ld-charlib-list')
+  // ---------- Library wall (1.46.0) ----------
+  // Characters and personas as faces, grouped by story. A story is a card in
+  // Lumiverse; the most recently played comes first, stories not played in a
+  // month fold into "Older stories", pinned ones stay up top. Drag a face onto
+  // a story, or use the ＋ at the end of a row, to add them to it.
+  var wallOpen = (() => { try { return JSON.parse(localStorage.getItem('lumidraw.wallFolds.v1') || '{}') || {} } catch { return {} } })()
+  function saveWallFolds() { try { localStorage.setItem('lumidraw.wallFolds.v1', JSON.stringify(wallOpen)) } catch { /* best effort */ } }
+  var wallQuery = { character: '', persona: '' }
+  function whenText(at) {
+    if (!at) return ''
+    const days = Math.floor((Date.now() - at) / 86400000)
+    if (days <= 0) return 'today'
+    if (days === 1) return 'yesterday'
+    if (days < 14) return `${days} days ago`
+    if (days < 60) return `${Math.round(days / 7)} weeks ago`
+    return `${Math.round(days / 30)} months ago`
+  }
+  function wallEntries(kind) { return kind === 'character' ? characters : personas }
+  function renderWall(kind) {
+    const list = kind === 'character' ? $('.ld-charlib-list') : $('.ld-persona-list')
     if (!list) return
-    const bar = libToolbar('character', list, renderCharacterList, { noun: 'character', storyToggle: true })
-    facesButton(bar, 'character')
-    tidyButton(bar, 'character', list)
-    storyChips('character', list, renderCharacterList, characters)
-    list.innerHTML = ''
-    if (!characters.length) {
-      list.innerHTML = '<div class="ld-status">No saved characters yet. Use “＋ New” above, or Fill from LumiCast in the editor.</div>'
-      libCount(bar, 0, 0, 'character')
-      renderCharacterLinkSelect($('.ld-ed-char-link') ? $('.ld-ed-char-link').value : '')
-      renderCastEditor()
+    const host = list.parentNode
+    for (const old of host.querySelectorAll(`.ld-lib-toolbar[data-kind="${kind}"], .ld-lib-stories[data-kind="${kind}"]`)) old.remove()
+    list.classList.remove('ld-lib-grid')
+    list.classList.add('ld-wall')
+    const card = list.closest('.ld-card')
+    if (card) card.classList.add('ld-lib-list-card')
+    if (!libStoriesLoaded) loadLibStories()
+    const entries = wallEntries(kind)
+    const field = kind === 'character' ? 'characters' : 'personas'
+    const noun = kind === 'character' ? 'character' : 'persona'
+    // Bar: search, ⋯ menu.
+    let bar = host.querySelector(`.ld-wall-bar[data-kind="${kind}"]`)
+    if (!bar) {
+      bar = document.createElement('div')
+      bar.className = 'ld-wall-bar'; bar.dataset.kind = kind
+      const search = document.createElement('input')
+      search.type = 'search'; search.className = 'ld-wall-search'; search.placeholder = `Find a ${noun}…`
+      search.addEventListener('input', () => { wallQuery[kind] = search.value; renderWall(kind) })
+      const more = document.createElement('div'); more.className = 'ld-wall-more'
+      const moreBtn = document.createElement('button'); moreBtn.type = 'button'; moreBtn.className = 'ld-btn ld-compact'; moreBtn.textContent = '⋯'; moreBtn.title = 'More'
+      const menu = document.createElement('div'); menu.className = 'ld-wall-menu'
+      const item = (label, title, run) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.title = title; b.addEventListener('click', () => { menu.classList.remove('ld-open'); run() }); menu.appendChild(b) }
+      item('Make missing portraits', 'Draw a portrait for everyone who has none, one at a time in the background', async () => {
+        try { const res = await call('portrait_missing', {}, 30000); setStatus(kind === 'character' ? '.ld-charlib-status' : '.ld-persona-status', res.queued ? `Drawing ${res.queued} portrait${res.queued === 1 ? '' : 's'} in the background.` : 'Everyone already has a portrait.', 'good') }
+        catch (error) { setStatus(kind === 'character' ? '.ld-charlib-status' : '.ld-persona-status', error.message, 'err') }
+      })
+      item('Tidy up', 'Suggest things to archive', () => openTidy(kind, list))
+      item('Look for stories again', 'Check the chats again for who belongs where', () => loadLibStories(true))
+      moreBtn.addEventListener('click', event => { event.stopPropagation(); menu.classList.toggle('ld-open') })
+      document.addEventListener('click', () => menu.classList.remove('ld-open'))
+      more.append(moreBtn, menu)
+      const status = document.createElement('span'); status.className = 'ld-wall-count'
+      bar.append(search, more, status)
+      host.insertBefore(bar, list)
+    }
+    list.replaceChildren()
+    const live = entries.filter(item => item && !item.archived)
+    bar.querySelector('.ld-wall-count').textContent = `${live.length} ${noun}${live.length === 1 ? '' : 's'}`
+    if (!entries.length) {
+      list.appendChild(Object.assign(document.createElement('div'), { className: 'ld-status', textContent: kind === 'character' ? 'No saved characters yet. Use “＋ New” above, or make them in Paige.' : 'No saved personas yet.' }))
       return
     }
-    clashNotice(list, characters, 'character')
-    const shown = libVisible('character', characters, {
-      nameOf: (c) => c.name || '', textOf: (c) => libProfileText(c.profile), isStory: (c) => !!(c.profile && c.profile.declaredByStory) })
-    libCount(bar, shown.length, characters.length, 'character')
-    if (!shown.length) libEmptyMatch(list, 'character')
-    for (const character of shown) {
-      const profile = character.profile || {}
-      // TELLING TWO "FANNY PRICE"S APART: say which one a story made, and show
-      // tags, because the tags are the whole difference between them.
-      const story = !!profile.declaredByStory
-      list.appendChild(libItem({
-        name: character.name || 'Unnamed character',
-        badges: [character.nameClash ? NEEDS_NEW_NAME : '', story ? 'story-made' : '', profile.mossDescription && String(profile.mossDescription).trim() ? 'MOSS' : '', profile.countTag || '', libLooksBadge(profile)],
-        sub: [profile.anchor && profile.anchor !== character.name ? profile.anchor : '', profile.subject || ''].filter(Boolean).join(' · '),
-        tags: libFirstTags(profile),
-        faded: story,
-        face: faceFor('character', character),
-        tips: sheetCheckup(profile).tips,
-        archived: !!character.archived,
-        onArchive: () => archiveEntries('character', [character.id], !character.archived),
-        onOpen: () => openPersonaEditor(character.id, 'character'),
-        onEdit: () => openPersonaEditor(character.id, 'character'),
-        deleteTitle: 'Delete this saved character',
-        onDelete: async () => {
-          if (!confirm(`Delete saved character “${character.name}”? Presets linked to it fall back to their own stored copy, and it leaves any casts that include it.`)) return
-          try {
-            const result = await call('delete_character', { id: character.id })
-            refreshCastAddList()
-            characters = result.characters || []
-            renderCharacterList()
-            setStatus('.ld-charlib-status', `Deleted “${character.name}”.`, 'good')
-          } catch (error) { setStatus('.ld-charlib-status', error.message, 'err') }
-        },
-      }))
+    clashNotice(list, entries, noun)
+    const byId = new Map(entries.filter(Boolean).map(item => [item.id, item]))
+    const query = wallQuery[kind].trim().toLowerCase()
+    if (query) {
+      const words = query.split(/\s+/)
+      const hits = entries.filter(item => item && words.every(word => (String(item.name || '') + ' ' + libProfileText(item.profile)).toLowerCase().includes(word)))
+      const row = wallRow(kind, hits.map(item => ({ item, storyKey: '' })), null)
+      list.appendChild(hits.length ? row : Object.assign(document.createElement('div'), { className: 'ld-status', textContent: `No ${noun}s match “${wallQuery[kind]}”.` }))
+      return
     }
+    const MONTH = 30 * 86400000
+    const stories = libStories.filter(story => story[field].some(id => byId.has(id) && !byId.get(id).archived))
+    const recent = stories.filter(story => story.pinned || story.notPlayed || Date.now() - story.lastAt < MONTH)
+    const older = stories.filter(story => !recent.includes(story))
+    for (const story of recent) list.appendChild(wallStory(kind, story, byId))
+    const anywhere = new Set(libStories.flatMap(story => story[field]))
+    const loose = live.filter(item => !anywhere.has(item.id))
+    if (older.length) {
+      const fold = wallFold(kind, 'older', `Older stories`, `${older.length} not played in a month`)
+      for (const story of older) fold.body.appendChild(wallStory(kind, story, byId))
+      list.appendChild(fold.el)
+    }
+    if (loose.length) {
+      const fold = wallFold(kind, 'loose', 'Not in a story', `${loose.length} ${loose.length === 1 ? noun : noun + 's'}`, '__none')
+      const find = document.createElement('button'); find.type = 'button'; find.className = 'ld-btn ld-compact'; find.style.width = 'auto'
+      find.textContent = 'Find their stories'; find.title = 'Look through your chats for their names and file each one where it fits'
+      find.addEventListener('click', async event => {
+        event.stopPropagation()
+        find.disabled = true; find.textContent = 'Looking…'
+        try {
+          const res = await call('library_guess', { kind, ids: loose.map(item => item.id) }, 300000)
+          if (Array.isArray(res.stories)) libStories = res.stories
+          if (Array.isArray(res.characters)) characters = res.characters
+          if (Array.isArray(res.personas)) personas = res.personas
+          renderWall(kind)
+          setStatus(kind === 'character' ? '.ld-charlib-status' : '.ld-persona-status', res.found.length ? `Filed ${res.found.length}: ${res.found.map(hit => `${(byId.get(hit.id) || {}).name} → ${hit.story}`).join(', ')}.` : 'No clear matches. Drag them onto a story to file them.', res.found.length ? 'good' : '')
+        } catch (error) { find.disabled = false; find.textContent = 'Find their stories'; setStatus(kind === 'character' ? '.ld-charlib-status' : '.ld-persona-status', error.message, 'err') }
+      })
+      fold.head.appendChild(find)
+      fold.body.appendChild(wallRow(kind, loose.map(item => ({ item, storyKey: '' })), null))
+      list.appendChild(fold.el)
+    }
+    const archived = entries.filter(item => item && item.archived)
+    if (archived.length) {
+      const fold = wallFold(kind, 'archived', 'Archived', String(archived.length))
+      fold.body.appendChild(wallRow(kind, archived.map(item => ({ item, storyKey: '' })), null))
+      list.appendChild(fold.el)
+    }
+  }
+  function wallFold(kind, name, title, meta, dropKey = null) {
+    const el = document.createElement('div'); el.className = 'ld-wall-fold'
+    const key = kind + ':' + name
+    const head = document.createElement('div'); head.className = 'ld-wall-fold-head'
+    const open = !!wallOpen[key]
+    head.append(Object.assign(document.createElement('b'), { textContent: (open ? '▾ ' : '▸ ') + title }), Object.assign(document.createElement('span'), { textContent: meta }))
+    head.addEventListener('click', () => { wallOpen[key] = !open; saveWallFolds(); renderWall(kind) })
+    const body = document.createElement('div'); body.className = 'ld-wall-fold-body'
+    if (!open) body.style.display = 'none'
+    el.append(head, body)
+    if (dropKey !== null) wallDropTarget(el, kind, dropKey)
+    return { el, head, body }
+  }
+  function wallStory(kind, story, byId) {
+    const field = kind === 'character' ? 'characters' : 'personas'
+    const section = document.createElement('section'); section.className = 'ld-wall-story'
+    const head = document.createElement('div'); head.className = 'ld-wall-story-head'
+    const played = kind === 'character' && story.personas.length ? (personas.find(item => item && item.id === story.personas[0]) || {}).name : ''
+    const meta = [played ? `played as ${played}` : '', story.notPlayed ? 'not played yet' : whenText(story.lastAt)].filter(Boolean).join(' · ')
+    const pin = document.createElement('button'); pin.type = 'button'; pin.className = 'ld-wall-pin' + (story.pinned ? ' ld-on' : '')
+    pin.textContent = story.pinned ? '📌' : '📌'; pin.title = story.pinned ? 'Unpin: let this story move with the others' : 'Pin: keep this story at the top'
+    pin.addEventListener('click', async () => {
+      try { const res = await call('library_pin', { key: story.key, pinned: !story.pinned }, 30000); libStories = res.stories || libStories; renderCharacterList(); renderPersonaList() } catch { /* nothing changed */ }
+    })
+    head.append(Object.assign(document.createElement('b'), { textContent: story.title }), Object.assign(document.createElement('span'), { textContent: meta }), pin)
+    section.appendChild(head)
+    const members = story[field].map(id => byId.get(id)).filter(item => item && !item.archived)
+    section.appendChild(wallRow(kind, members.map(item => ({ item, storyKey: story.key })), story))
+    wallDropTarget(section, kind, story.key)
+    return section
+  }
+  function wallDropTarget(el, kind, storyKey) {
+    el.addEventListener('dragover', event => { if (wallDragging && wallDragging.kind === kind) { event.preventDefault(); el.classList.add('ld-drop') } })
+    el.addEventListener('dragleave', () => el.classList.remove('ld-drop'))
+    el.addEventListener('drop', event => {
+      el.classList.remove('ld-drop')
+      if (!wallDragging || wallDragging.kind !== kind) return
+      event.preventDefault()
+      const { id, fromKey } = wallDragging
+      wallDragging = null
+      if (storyKey === fromKey) return
+      wallLink(kind, id, storyKey === '__none' ? '' : storyKey, fromKey)
+    })
+  }
+  var wallDragging = null
+  async function wallLink(kind, id, storyKey, fromKey = '') {
+    const status = kind === 'character' ? '.ld-charlib-status' : '.ld-persona-status'
+    try {
+      const res = await call('library_link', { kind, id, storyKey, fromKey }, 60000)
+      if (Array.isArray(res.stories)) libStories = res.stories
+      if (Array.isArray(res.characters)) characters = res.characters
+      if (Array.isArray(res.personas)) personas = res.personas
+      renderCharacterList(); renderPersonaList()
+      const name = (wallEntries(kind).find(item => item && item.id === id) || {}).name || 'They'
+      const story = libStories.find(item => item.key === storyKey)
+      setStatus(status, storyKey ? `${name} is now in ${story ? story.title : 'that story'}.` : `${name} is no longer in that story.`, 'good')
+    } catch (error) { setStatus(status, error.message, 'err') }
+  }
+  function wallRow(kind, rows, story) {
+    const row = document.createElement('div'); row.className = 'ld-wall-row'
+    for (const { item, storyKey } of rows) row.appendChild(wallTile(kind, item, storyKey, story))
+    if (story) {
+      const add = document.createElement('button'); add.type = 'button'; add.className = 'ld-wall-add'; add.textContent = '＋'
+      add.title = `Add someone to ${story.title}`
+      add.addEventListener('click', () => openWallPicker(kind, story))
+      row.appendChild(add)
+    }
+    return row
+  }
+  function wallTile(kind, item, storyKey, story) {
+    const tile = document.createElement('div'); tile.className = 'ld-wall-tile'
+    tile.draggable = !item.archived
+    tile.addEventListener('dragstart', event => { wallDragging = { kind, id: item.id, fromKey: storyKey }; try { event.dataTransfer.setData('text/plain', item.id) } catch {} })
+    tile.addEventListener('dragend', () => { wallDragging = null })
+    const face = document.createElement('div'); face.className = 'ld-wall-face'
+    const drawing = portraitDrawing.has(kind + ':' + item.id)
+    const url = item.portrait && item.portrait.url
+    if (drawing) face.appendChild(Object.assign(document.createElement('div'), { className: 'ld-wall-wait', textContent: 'Drawing…' }))
+    else if (url) {
+      const img = document.createElement('img'); img.src = previewUrl(url, 'sm'); img.alt = item.name || ''; img.loading = 'lazy'; img.draggable = false
+      face.appendChild(img)
+    } else face.appendChild(Object.assign(document.createElement('div'), { className: 'ld-wall-initial', textContent: String(item.name || '?').trim().charAt(0).toUpperCase() }))
+    const tips = sheetCheckup(item.profile || {}).tips
+    if (tips.length) face.appendChild(Object.assign(document.createElement('span'), { className: 'ld-wall-dot', textContent: String(tips.length), title: tips.join('\n') }))
+    if (story && (story.guessed || []).includes(item.id)) face.appendChild(Object.assign(document.createElement('span'), { className: 'ld-wall-guess', textContent: '?', title: `Added because their name came up in ${story.title}. Use “Not here” if that’s wrong.` }))
+    // Hover menu.
+    const menu = document.createElement('div'); menu.className = 'ld-wall-hover'
+    const act = (label, title, run) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.title = title; b.addEventListener('click', event => { event.stopPropagation(); run() }); menu.appendChild(b) }
+    act('Open', 'Open the sheet', () => openPersonaEditor(item.id, kind))
+    if (!item.archived) act(url ? 'New face' : 'Make face', 'Draw a portrait from the sheet as it is now', () => makePortraits(kind, [item.id]))
+    if (storyKey) act('Not here', 'Take them out of this story', () => wallLink(kind, item.id, '', storyKey))
+    act(item.archived ? 'Bring back' : 'Archive', item.archived ? 'Show them in the Library again' : 'Hide them. Nothing is deleted.', () => archiveEntries(kind, [item.id], !item.archived))
+    if (item.archived) act('Delete', 'Delete for good', () => wallDelete(kind, item))
+    face.appendChild(menu)
+    face.addEventListener('click', () => openPersonaEditor(item.id, kind))
+    const name = document.createElement('div'); name.className = 'ld-wall-name'; name.textContent = item.name || 'Unnamed'
+    if (item.nameClash) { name.classList.add('ld-wall-clash'); name.title = 'Another saved entry already had this name. Open it and give it a new name.' }
+    const role = story && story.roles && story.roles[item.id]
+    if (role === 'lead') name.title = (name.title ? name.title + '\n' : '') + 'Lead'
+    tile.append(face, name)
+    return tile
+  }
+  async function wallDelete(kind, item) {
+    if (!confirm(`Delete “${item.name}” for good? This can’t be undone.`)) return
+    const status = kind === 'character' ? '.ld-charlib-status' : '.ld-persona-status'
+    try {
+      const result = await call(kind === 'character' ? 'delete_character' : 'delete_persona', { id: item.id })
+      refreshCastAddList()
+      if (kind === 'character') characters = result.characters || []; else personas = result.personas || []
+      renderCharacterList(); renderPersonaList()
+      setStatus(status, `Deleted “${item.name}”.`, 'good')
+    } catch (error) { setStatus(status, error.message, 'err') }
+  }
+  function openWallPicker(kind, story) {
+    const field = kind === 'character' ? 'characters' : 'personas'
+    const inStory = new Set(story[field])
+    const choices = wallEntries(kind).filter(item => item && !item.archived && !inStory.has(item.id))
+    const shade = document.createElement('div'); shade.className = 'ld-wall-picker-shade'
+    const box = document.createElement('div'); box.className = 'ld-wall-picker'
+    const title = Object.assign(document.createElement('div'), { className: 'ld-subtitle', textContent: `Add to ${story.title}` })
+    const search = document.createElement('input'); search.type = 'search'; search.className = 'ld-wall-search'; search.placeholder = 'Find someone…'
+    const grid = document.createElement('div'); grid.className = 'ld-wall-row'
+    const draw = () => {
+      const words = search.value.toLowerCase().split(/\s+/).filter(Boolean)
+      grid.replaceChildren(...choices.filter(item => words.every(word => (String(item.name || '') + ' ' + libProfileText(item.profile)).toLowerCase().includes(word))).map(item => {
+        const tile = document.createElement('button'); tile.type = 'button'; tile.className = 'ld-wall-pick'
+        const face = document.createElement('div'); face.className = 'ld-wall-face ld-wall-face-small'
+        if (item.portrait && item.portrait.url) { const img = document.createElement('img'); img.src = previewUrl(item.portrait.url, 'sm'); img.alt = ''; face.appendChild(img) }
+        else face.appendChild(Object.assign(document.createElement('div'), { className: 'ld-wall-initial', textContent: String(item.name || '?').charAt(0).toUpperCase() }))
+        tile.append(face, Object.assign(document.createElement('div'), { className: 'ld-wall-name', textContent: item.name || '' }))
+        tile.addEventListener('click', () => { shade.remove(); wallLink(kind, item.id, story.key) })
+        return tile
+      }))
+      if (!grid.children.length) grid.appendChild(Object.assign(document.createElement('div'), { className: 'ld-status', textContent: 'Nobody else to add.' }))
+    }
+    search.addEventListener('input', draw)
+    const close = document.createElement('button'); close.type = 'button'; close.className = 'ld-btn ld-compact'; close.style.width = 'auto'; close.textContent = 'Close'
+    close.addEventListener('click', () => shade.remove())
+    shade.addEventListener('click', event => { if (event.target === shade) shade.remove() })
+    box.append(title, search, grid, close)
+    shade.appendChild(box)
+    ;($('.ld-panel') || document.body).appendChild(shade)
+    draw()
+    setTimeout(() => { try { search.focus() } catch {} }, 0)
+  }
+  function openTidy(kind, list) {
+    const host = list.parentNode
+    const open = host.querySelector(`.ld-lib-tidy[data-kind="${kind}"]`)
+    if (open) { open.remove(); return }
+    const fake = document.createElement('div')
+    tidyButton(fake, kind, list)
+    const button = fake.querySelector('.ld-lib-tidy-btn')
+    if (button) button.click()
+  }
+  function renderCharacterList() {
+    renderWall('character')
     renderCharacterLinkSelect($('.ld-ed-char-link') ? $('.ld-ed-char-link').value : '')
     renderCastEditor()
   }
-
   function renderPersonaList() {
-    const list = $('.ld-persona-list')
-    if (!list) return
-    const bar = libToolbar('persona', list, renderPersonaList, { noun: 'persona' })
-    facesButton(bar, 'persona')
-    tidyButton(bar, 'persona', list)
-    storyChips('persona', list, renderPersonaList, personas)
-    list.innerHTML = ''
-    if (!personas.length) {
-      list.innerHTML = '<div class="ld-status">No saved personas yet.</div>'
-      libCount(bar, 0, 0, 'persona')
-      renderPersonaLinkSelect($('.ld-ed-persona-link') ? $('.ld-ed-persona-link').value : '')
-      return
-    }
-    clashNotice(list, personas, 'persona')
-    const shown = libVisible('persona', personas, { nameOf: (p) => p.name || '', textOf: (p) => libProfileText(p.profile) })
-    libCount(bar, shown.length, personas.length, 'persona')
-    if (!shown.length) libEmptyMatch(list, 'persona')
-    for (const persona of shown) {
-      const profile = persona.profile || {}
-      list.appendChild(libItem({
-        name: persona.name || 'Unnamed persona',
-        badges: [persona.nameClash ? NEEDS_NEW_NAME : '', profile.mossDescription && String(profile.mossDescription).trim() ? 'MOSS' : '', profile.countTag || '', libLooksBadge(profile)],
-        sub: [profile.anchor && profile.anchor !== persona.name ? profile.anchor : '', profile.subject || ''].filter(Boolean).join(' · '),
-        tags: libFirstTags(profile),
-        face: faceFor('persona', persona),
-        tips: sheetCheckup(profile).tips,
-        archived: !!persona.archived,
-        onArchive: () => archiveEntries('persona', [persona.id], !persona.archived),
-        onOpen: () => openPersonaEditor(persona.id),
-        onEdit: () => openPersonaEditor(persona.id),
-        deleteTitle: 'Delete this saved persona',
-        onDelete: async () => {
-          if (!confirm(`Delete saved persona “${persona.name}”? Presets linked to it fall back to their own stored copy.`)) return
-          try {
-            const result = await call('delete_persona', { id: persona.id })
-            refreshCastAddList()
-            personas = result.personas || []
-            renderPersonaList()
-            setStatus('.ld-persona-status', `Deleted “${persona.name}”.`, 'good')
-          } catch (error) { setStatus('.ld-persona-status', error.message, 'err') }
-        },
-      }))
-    }
+    renderWall('persona')
     renderPersonaLinkSelect($('.ld-ed-persona-link') ? $('.ld-ed-persona-link').value : '')
   }
 

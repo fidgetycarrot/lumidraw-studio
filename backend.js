@@ -7142,7 +7142,8 @@ async function writeCastIds(preset, chatId, ids) {
 }
 
 async function castSourceFor(preset, chatId) {
-  const cast = await castForChat(chatId)
+  let cast = await castForChat(chatId)
+  if (!cast) { try { cast = await castFromStoryLinks(chatId) } catch (error) { spindle.log.warn('[lumidraw] story cast: ' + error.message) } }
   if (!cast) return unboundStorySource(preset)
   return {
     ...preset,
@@ -16730,8 +16731,9 @@ async function libraryStories(userId) {
     if (info.characterId && !names.has(info.characterId)) names.set(info.characterId, await cardNameFor(userId, info.characterId))
     const key = info.characterId || chatId
     const title = (info.characterId && names.get(info.characterId)) || info.name || 'A chat'
-    const story = stories.get(key) || { key, title, chats: 0, lastAt: 0, characters: new Set(), personas: new Set() }
+    const story = stories.get(key) || { key, title, chats: 0, lastAt: 0, characters: new Set(), personas: new Set(), chatIds: [] }
     story.chats++
+    story.chatIds.push(chatId)
     story.lastAt = Math.max(story.lastAt, info.at || 0)
     const cast = casts.find(item => item && item.id === castMap[chatId])
     if (cast) {
@@ -16744,11 +16746,181 @@ async function libraryStories(userId) {
     for (const item of characters) if (item && item.profile && item.profile.declaredInChat === chatId) story.characters.add(item.id)
     stories.set(key, story)
   }
+  // 1.46.0: characters and personas linked to a story (by Paige, LumiCast, a
+  // name match or by hand) join it, even a story with no chat yet.
+  const personas = await getPersonas()
+  const roles = new Map()
+  const guessed = new Set()
+  for (const [field, list] of [['characters', characters], ['personas', personas]]) {
+    for (const item of list) {
+      const link = item && item.storyLink
+      if (!link || !link.cardId) continue
+      // A link sent with only a card name (no id) joins the played story of
+      // that name, once there is one.
+      if (link.cardId.startsWith('name:') && !stories.has(link.cardId)) {
+        const named = [...stories.values()].find(story => !story.notPlayed && String(story.title || '').trim().toLowerCase() === link.cardId.slice(5))
+        if (named) { addLinked(named, field, item, link); continue }
+      }
+      let story = stories.get(link.cardId)
+      if (!story) {
+        story = { key: link.cardId, title: link.cardName || (await cardNameFor(userId, link.cardId)) || 'A story not played yet',
+          chats: 0, lastAt: 0, characters: new Set(), personas: new Set(), chatIds: [], notPlayed: true }
+        stories.set(link.cardId, story)
+      }
+      addLinked(story, field, item, link)
+    }
+  }
+  function addLinked(story, field, item, link) {
+    story[field].add(item.id)
+    if (link.role) roles.set(story.key + ':' + item.id, link.role)
+    if (link.source === 'name') guessed.add(story.key + ':' + item.id)
+  }
+  const settings = await getSettings()
+  const pinned = new Set(Array.isArray(settings.libraryPinned) ? settings.libraryPinned : [])
+  const rank = { lead: 0, regular: 1, minor: 2 }
+  const byId = new Map([...characters, ...personas].filter(Boolean).map(item => [item.id, item]))
   const value = [...stories.values()].filter(story => story.characters.size || story.personas.size)
-    .sort((a, b) => b.lastAt - a.lastAt)
-    .map(story => ({ ...story, characters: [...story.characters], personas: [...story.personas] }))
-  libraryStoriesCache = { at: Date.now(), userId, value }
+    .sort((a, b) => (pinned.has(b.key) - pinned.has(a.key)) || ((b.notPlayed ? Date.now() : b.lastAt) - (a.notPlayed ? Date.now() : a.lastAt)))
+    .map(story => {
+      const order = ids => [...ids].sort((a, b) => {
+        const ra = rank[roles.get(story.key + ':' + a)] ?? 1.5, rb = rank[roles.get(story.key + ':' + b)] ?? 1.5
+        return ra - rb || String((byId.get(a) || {}).name || '').localeCompare(String((byId.get(b) || {}).name || ''))
+      })
+      const roleOf = {}, guessedIds = []
+      for (const id of [...story.characters, ...story.personas]) {
+        if (roles.has(story.key + ':' + id)) roleOf[id] = roles.get(story.key + ':' + id)
+        if (guessed.has(story.key + ':' + id)) guessedIds.push(id)
+      }
+      return { ...story, characters: order(story.characters), personas: order(story.personas), roles: roleOf, guessed: guessedIds, pinned: pinned.has(story.key) }
+    })
+  libraryStoriesCache = { at: Date.now(), userId, value, chatsByKey: new Map([...stories.values()].map(story => [story.key, story.chatIds || []])) }
   return value
+}
+
+// A story link as Paige or LumiCast send it: {cardId, cardName, role}.
+function storyLinkFrom(raw, source) {
+  if (!raw || typeof raw !== 'object') return null
+  const cardId = String(raw.cardId || raw.card_id || '').trim().slice(0, 200)
+  const cardName = String(raw.cardName || raw.card_name || '').trim().slice(0, 200)
+  if (!cardId && !cardName) return null
+  const role = ['lead', 'regular', 'minor'].includes(String(raw.role || '').toLowerCase()) ? String(raw.role).toLowerCase() : ''
+  return { cardId: cardId || 'name:' + cardName.toLowerCase(), cardName, ...(role ? { role } : {}), source, at: Date.now() }
+}
+
+// Link (or unlink) someone to a story by hand. A character joins the cast of
+// every chat in that story, so LS draws them when they show up; unlinking
+// takes them back out of those casts.
+async function linkToStory(userId, kind, id, storyKey, fromKey = '') {
+  const list = kind === 'persona' ? await getPersonas() : await getCharacters()
+  const index = list.findIndex(item => item && item.id === id)
+  if (index < 0) throw new Error('That sheet is gone.')
+  libraryStoriesCache = { at: 0, userId: '', value: null }
+  const stories = await libraryStories(userId)
+  const chatsByKey = libraryStoriesCache.chatsByKey || new Map()
+  const entry = { ...list[index] }
+  const oldKey = fromKey || (entry.storyLink && entry.storyLink.cardId) || ''
+  if (storyKey) {
+    const story = stories.find(item => item.key === storyKey)
+    entry.storyLink = { cardId: storyKey, cardName: story ? story.title : '', ...(entry.storyLink && entry.storyLink.cardId === storyKey && entry.storyLink.role ? { role: entry.storyLink.role } : {}), source: 'hand', at: Date.now() }
+  } else delete entry.storyLink
+  list[index] = entry
+  if (kind === 'persona') await savePersonas(list); else await saveCharacters(list)
+  if (kind === 'character') {
+    const casts = await getCasts()
+    const castMap = await getChatCastMap()
+    let changed = false
+    const edit = (key, add) => {
+      for (const chatId of chatsByKey.get(key) || []) {
+        const cast = casts.find(item => item && item.id === castMap[chatId])
+        if (!cast) continue
+        const ids = Array.isArray(cast.castLibraryIds) ? cast.castLibraryIds : []
+        const next = add ? uniqueStrings([...ids, id]) : ids.filter(other => other !== id)
+        if (next.length !== ids.length) { cast.castLibraryIds = next; changed = true }
+      }
+    }
+    if (oldKey && oldKey !== storyKey) edit(oldKey, false)
+    if (storyKey) edit(storyKey, true)
+    if (changed) await saveCasts(casts)
+  }
+  libraryStoriesCache = { at: 0, userId: '', value: null }
+  return { [kind === 'persona' ? 'personas' : 'characters']: list, stories: await libraryStories(userId) }
+}
+
+// Idea 1: a new character with no story is looked for by name in each story's
+// recent chat messages. Exactly one story mentioning them is a match; none or
+// several, and they stay "Not in a story". Shown as a guess you can undo.
+const GUESS_SKIP = new Set(['hope', 'grace', 'joy', 'will', 'may', 'mae', 'mark', 'faith', 'summer', 'dawn', 'rose', 'ivy', 'iris', 'sky', 'hunter', 'page', 'steve'])
+async function guessStoryFor(userId, kind, id) {
+  const list = kind === 'persona' ? await getPersonas() : await getCharacters()
+  const entry = list.find(item => item && item.id === id)
+  if (!entry || entry.storyLink || entry.archived) return null
+  libraryStoriesCache = { at: 0, userId: '', value: null }
+  const stories = await libraryStories(userId)
+  const field = kind === 'persona' ? 'personas' : 'characters'
+  if (stories.some(story => story[field].includes(id))) return null
+  const full = String((entry.profile && entry.profile.anchor) || entry.name || '').trim()
+  const first = full.split(/\s+/)[0]
+  // A two-word name is matched whole; a one-word name needs two mentions and
+  // must not be an everyday word.
+  const pattern = full.includes(' ') ? new RegExp('\\b' + escapeRegExp(full) + '\\b') : (first.length >= 3 && !GUESS_SKIP.has(first.toLowerCase()) ? new RegExp('\\b' + escapeRegExp(first) + '\\b', 'g') : null)
+  if (!pattern) return null
+  const hits = []
+  for (const story of stories) {
+    let found = false
+    for (const chatId of (story.chatIds || []).slice(0, 4)) {
+      let fetched
+      try { fetched = await fetchMessages(userId, chatId) } catch { continue }
+      const text = (fetched.messages || []).slice(-80).map(message => String(messageBits(message).content || '')).join('\n')
+      const count = (text.match(pattern) || []).length
+      if (full.includes(' ') ? count >= 1 : count >= 2) { found = true; break }
+    }
+    if (found) hits.push(story)
+    if (hits.length > 1) return null
+  }
+  if (hits.length !== 1) return null
+  const fresh = kind === 'persona' ? await getPersonas() : await getCharacters()
+  const index = fresh.findIndex(item => item && item.id === id)
+  if (index < 0 || fresh[index].storyLink) return null
+  fresh[index] = { ...fresh[index], storyLink: { cardId: hits[0].key, cardName: hits[0].title, source: 'name', at: Date.now() } }
+  if (kind === 'persona') await savePersonas(fresh); else await saveCharacters(fresh)
+  libraryStoriesCache = { at: 0, userId: '', value: null }
+  spindle.log.info(`[lumidraw] ${kind} "${fresh[index].name}" filed under "${hits[0].title}": their name came up there`)
+  return hits[0]
+}
+function guessStoryLater(userId, kind, id) {
+  if (!userId) return
+  setTimeout(() => {
+    guessStoryFor(userId, kind, id).then(story => {
+      if (story) notifyFrontend(userId, 'library_story_guess', { kind, id, story: story.title })
+    }).catch(error => spindle.log.warn('[lumidraw] story guess failed: ' + error.message))
+  }, 1500)
+}
+
+// The first chat with a card whose story already has people linked to it gets
+// those people as its cast, and the persona too when exactly one is linked.
+const storyCastChecked = new Set()
+async function castFromStoryLinks(chatId) {
+  const chat = String(chatId || '').trim()
+  if (!chat || storyCastChecked.has(chat)) return null
+  storyCastChecked.add(chat)
+  const userId = await recallUserId()
+  const info = await chatInfoFor(userId || '', chat)
+  if (!info || !info.characterId) return null
+  const rank = { lead: 0, regular: 1, minor: 2 }
+  const cardName = String((await cardNameFor(userId || '', info.characterId)) || '').trim().toLowerCase()
+  const linkedHere = item => item && !item.archived && item.storyLink && (item.storyLink.cardId === info.characterId || (cardName && item.storyLink.cardId === 'name:' + cardName))
+  const linked = (await getCharacters()).filter(linkedHere)
+    .sort((a, b) => (rank[a.storyLink.role] ?? 1.5) - (rank[b.storyLink.role] ?? 1.5))
+  if (!linked.length) return null
+  const cast = await createChatLocalCast(chat)
+  const casts = await getCasts()
+  const index = casts.findIndex(item => item && item.id === cast.id)
+  if (index >= 0) { casts[index] = { ...casts[index], castLibraryIds: uniqueStrings([...(casts[index].castLibraryIds || []), ...linked.map(item => item.id)]) }; await saveCasts(casts) }
+  const personas = (await getPersonas()).filter(linkedHere)
+  if (personas.length === 1 && !(await getChatPersonaMap())[chat]) await bindChatToPersona(chat, personas[0].id)
+  spindle.log.info(`[lumidraw] first chat with a linked story: cast set to ${linked.map(item => item.name).join(', ')}`)
+  libraryStoriesCache = { at: 0, userId: '', value: null }
+  return index >= 0 ? casts[index] : cast
 }
 
 // Archive: hidden from the Library lists, never deleted, still usable where
@@ -20126,6 +20298,29 @@ spindle.onFrontendMessage(async (payload, userId) => {
         reply = ok(payload, requestId, { stories: await libraryStories(userId) })
         break
       }
+      case 'library_link': {
+        const kind = payload.kind === 'persona' ? 'persona' : 'character'
+        reply = ok(payload, requestId, await linkToStory(userId, kind, String(payload.id || ''), String(payload.storyKey || ''), String(payload.fromKey || '')))
+        break
+      }
+      case 'library_guess': {
+        const kind = payload.kind === 'persona' ? 'persona' : 'character'
+        const ids = Array.isArray(payload.ids) ? payload.ids.map(String) : []
+        const found = []
+        for (const id of ids.slice(0, 80)) { const story = await guessStoryFor(userId, kind, id); if (story) found.push({ id, story: story.title }) }
+        libraryStoriesCache = { at: 0, userId: '', value: null }
+        reply = ok(payload, requestId, { found, stories: await libraryStories(userId), [kind === 'persona' ? 'personas' : 'characters']: kind === 'persona' ? await getPersonas() : await getCharacters() })
+        break
+      }
+      case 'library_pin': {
+        const settings = await getSettings()
+        const pins = new Set(Array.isArray(settings.libraryPinned) ? settings.libraryPinned : [])
+        if (payload.pinned) pins.add(String(payload.key || '')); else pins.delete(String(payload.key || ''))
+        await spindle.storage.setJson(SETTINGS_FILE, { ...settings, libraryPinned: [...pins].filter(Boolean) }, { indent: 2 })
+        libraryStoriesCache = { at: 0, userId: '', value: null }
+        reply = ok(payload, requestId, { stories: await libraryStories(userId) })
+        break
+      }
       case 'library_archive': {
         const kind = ['character', 'persona', 'preset'].includes(payload.kind) ? payload.kind : 'character'
         const ids = Array.isArray(payload.ids) ? payload.ids.map(String) : [String(payload.id || '')]
@@ -20536,13 +20731,15 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (before && before.nameClash && String(before.name || '').trim() === name) entry.nameClash = before.nameClash
         if (before && before.portrait) entry.portrait = before.portrait
         if (before && before.archived) entry.archived = before.archived
+        if (before && before.storyLink) entry.storyLink = before.storyLink
+        if (before && before.storyLinkSent) entry.storyLinkSent = before.storyLinkSent
         const index = personas.findIndex((item) => item && item.id === id)
         if (index >= 0) personas[index] = entry
         else personas.push(entry)
         personas.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
         await savePersonas(personas)
         try { await syncSimpleCastOnSheetSave(profileInput, 'persona') } catch { /* best-effort */ }
-        if (!before) autoPortrait(userId, 'persona', id)
+        if (!before) { autoPortrait(userId, 'persona', id); guessStoryLater(userId, 'persona', id) }
         reply = ok(payload, requestId, { personas, entry })
         break
       }
@@ -20570,13 +20767,15 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (before && before.nameClash && String(before.name || '').trim() === name) entry.nameClash = before.nameClash
         if (before && before.portrait) entry.portrait = before.portrait
         if (before && before.archived) entry.archived = before.archived
+        if (before && before.storyLink) entry.storyLink = before.storyLink
+        if (before && before.storyLinkSent) entry.storyLinkSent = before.storyLinkSent
         const index = characters.findIndex((item) => item && item.id === id)
         if (index >= 0) characters[index] = entry
         else characters.push(entry)
         characters.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
         await saveCharacters(characters)
         try { await syncSimpleCastOnSheetSave(profileInput, 'character') } catch { /* best-effort */ }
-        if (!before) autoPortrait(userId, 'character', id)
+        if (!before) { autoPortrait(userId, 'character', id); guessStoryLater(userId, 'character', id) }
         reply = ok(payload, requestId, { characters, entry })
         break
       }
@@ -21794,6 +21993,12 @@ async function applyFromLumiCast(requesterExtensionId) {
   if (typeof sheet.attitude === 'string') profile.attitude = text(sheet.attitude, 200)
   normalizeProfile(profile, profile.appearanceTags || '', sent.kind)
   const updated = { ...entry, profile, updatedAt: Date.now() }
+  const updatedLink = storyLinkFrom(result.story, 'lumicast')
+  // Eric's own drag wins: an update that repeats the story LC sent before
+  // doesn't undo it. A story LC hasn't sent before replaces it.
+  const lastSent = entry.storyLinkSent || ''
+  if (updatedLink && !(entry.storyLink && entry.storyLink.source === 'hand' && lastSent === updatedLink.cardId)) updated.storyLink = updatedLink
+  if (updatedLink) updated.storyLinkSent = updatedLink.cardId
   list[index] = updated
   if (sent.kind === 'character') await saveCharacters(list); else await savePersonas(list)
   spindle.sendToFrontend({ type: 'lumicast_applied', kind: sent.kind, entry: updated, [sent.kind === 'character' ? 'characters' : 'personas']: list }, sent.userId || undefined)
@@ -21833,10 +22038,16 @@ async function addFromLumiCast(requesterExtensionId) {
   // The anchor stays the real name, so "Vesper 2" is still drawn and found as Vesper.
   const entry = { id: `${kind}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, name: saveName, profile, updatedAt: Date.now(),
     ...(saveName !== name ? { nameClash: name } : {}) }
+  // 1.46.0: Paige (through LumiCast) or LumiCast itself can say which story the
+  // character belongs to and their role in it, so they file themselves.
+  const link = storyLinkFrom(shared.story, 'paige')
+  if (link) { entry.storyLink = link; entry.storyLinkSent = link.cardId }
   list.push(entry)
   list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
   if (kind === 'character') await saveCharacters(list); else await savePersonas(list)
   autoPortrait(shared.userId || '', kind, entry.id)
+  if (!entry.storyLink) guessStoryLater(shared.userId || '', kind, entry.id)
+  libraryStoriesCache = { at: 0, userId: '', value: null }
   // The same message as LumiCast's update, so an open Lumi Studio panel shows the new or changed entry.
   spindle.sendToFrontend({ type: 'lumicast_applied', kind, entry, [kind === 'character' ? 'characters' : 'personas']: list }, shared.userId || undefined)
   spindle.log.info(`[lumidraw] added ${kind} "${entry.name}" from Paige through LumiCast`)
