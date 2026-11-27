@@ -21,3 +21,6 @@ Library, step two: stories, tidy-up, archive, and presets by app.
 
 ## 1.45.1
 - Characters a story makes get a portrait automatically too (when the Settings switch is on), not only ones saved by hand, from LumiCast or from Paige.
+
+## 1.45.2
+- Portraits ask for "solo". Without it, NovelAI drew some characters twice side by side (Margot, Preston, Vivian, Martha).

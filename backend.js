@@ -16619,7 +16619,7 @@ async function portraitPrompt(userId, kind, entry) {
   const style = String(settings.portraitStyle || '').trim()
   const usePreset = { ...preset, ...(style ? { qualityTags: style } : {}), promptPrefix: '' }
   const parsed = parseSimpleImages(JSON.stringify({ images: [{ anchor: 'library portrait', rating: 'safe', aspect: '2:3',
-    scene_summary: `${name} stands for a portrait.`, framing: ['upper body', 'portrait'], setting: ['simple background'],
+    scene_summary: `${name} stands alone for a portrait.`, framing: ['solo', 'upper body', 'portrait'], setting: ['simple background'],
     subjects: [{ name, pose: ['standing'], expression: ['light smile', 'looking at viewer'] }], relations: [], interactions: [] }] }), 1, 1, false)
   const image = parsed.images && parsed.images[0]
   if (!image) throw new Error('Could not set up the portrait.')
