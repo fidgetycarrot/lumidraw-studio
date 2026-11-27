@@ -2,7 +2,7 @@
 // Injects a launcher button + studio panel styled with Lumiverse theme
 // variables. All traffic goes through the backend module.
 
-  const EXTENSION_VERSION = '1.43.2'
+  const EXTENSION_VERSION = '1.44.0'
 
 function lumidrawSimTrackerSummary(reference) {
   const d = reference && reference.diagnostic
@@ -444,6 +444,10 @@ function realSetup(ctx) {
     }
     if (payload.type === 'renderer_progress') {
       receiveRendererPreview(payload)
+      return
+    }
+    if (payload.type === 'portrait_progress') {
+      receivePortraitProgress(payload)
       return
     }
     if (payload.type === 'image_placements_changed' || payload.type === 'image_placement_upserted') {
@@ -2257,6 +2261,22 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       .ld-lib-sub{font-size:12.5px;font-weight:500;color:#93c5fd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .ld-lib-tags{font-size:12.5px;line-height:1.45;color:#9aa6be;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
       .ld-lib-actions{display:flex;gap:7px;justify-content:flex-end;margin-top:auto;padding-top:4px}
+      .ld-lib-top{display:flex;gap:11px;align-items:flex-start;min-width:0}
+      .ld-lib-top>.ld-lib-main{flex:1;min-width:0}
+      .ld-lib-face{flex:0 0 64px;height:86px;border-radius:8px;overflow:hidden;background:#1d2233;border:1px solid #2e364e;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;position:relative;cursor:pointer}
+      .ld-lib-face img{width:100%;height:100%;object-fit:cover;object-position:top}
+      .ld-lib-face-initial{font:600 22px/1 system-ui,sans-serif;color:#8a93ad}
+      .ld-lib-face .ld-btn{width:auto;padding:2px 7px;font-size:11px}
+      .ld-lib-face-wait{font-size:11px;color:#a5b4fc;text-align:center;padding:0 4px}
+      .ld-lib-face-new{position:absolute;bottom:3px;left:3px;right:3px;opacity:0;transition:opacity .15s;font-size:10px!important;padding:2px 0!important;background:rgba(15,15,20,.75)!important}
+      .ld-lib-face:hover .ld-lib-face-new{opacity:1}
+      .ld-lib-badge-tips{background:#3b2f12!important;color:#fcd34d!important;border-color:#6b5317!important;cursor:help}
+      .ld-checkup{border:1px solid #2e364e;border-radius:10px;padding:10px 12px;margin:8px 0;background:#141824}
+      .ld-checkup-head{display:flex;gap:12px;align-items:flex-start}
+      .ld-checkup-face{flex:0 0 96px;height:128px;border-radius:8px;overflow:hidden;background:#1d2233;display:flex;align-items:center;justify-content:center;font-size:12px;color:#8a93ad;text-align:center}
+      .ld-checkup-face img{width:100%;height:100%;object-fit:cover;object-position:top}
+      .ld-checkup ul{margin:6px 0 0;padding-left:18px}
+      .ld-checkup li{margin:3px 0}
       .ld-lib-actions .ld-btn{width:auto}
       .ld-lib-editing .ld-lib-list-card{display:none!important}
       .ld-lib-back{margin-bottom:10px;width:auto}
@@ -3173,6 +3193,17 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       const marked = section('marked')
       if (marksCard) marked.appendChild(marksCard)
       for (const node of [swarmCard, nanoCard, novelaiCard, gelCard, dtCloudCard, drawThingsCard, bridgeCard, cloudCard]) if (node) apps.appendChild(node)
+      // 1.44.0: Library portraits.
+      const portraitCard = card('Library portraits', 'The pictures on Library cards, drawn from each sheet with the preset in use. On NovelAI they’re a size your plan makes for free.')
+      const portraitStyle = make('textarea', 'ld-portrait-style')
+      portraitStyle.rows = 3
+      portraitStyle.placeholder = 'Leave empty to use your story style'
+      portraitCard.appendChild(field('Portrait style', portraitStyle, 'Style tags for portraits only, in place of your story style.'))
+      const portraitAuto = make('input', 'ld-portrait-auto')
+      portraitAuto.type = 'checkbox'
+      portraitAuto.checked = true
+      portraitCard.appendChild(checkbox(portraitAuto, 'Make a portrait when a new character or persona is saved', 'Turn this off to make them only when you press Make.'))
+      apps.appendChild(portraitCard)
       parserSection.appendChild(parserBinding)
       chat.appendChild(display)
       if (helpCard) help.appendChild(helpCard)
@@ -5683,6 +5714,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       ? `Editing reusable ${libEditorKind}.`
       : `Create a reusable ${libEditorKind} that can be linked into multiple presets.`)
     if ($('.ld-persona-editor').scrollIntoView) $('.ld-persona-editor').scrollIntoView({ block: 'start' })
+    refreshCheckup()
   }
 
   // ---------- Library lists · 1.9.2
@@ -5785,7 +5817,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
   }
   // Characters from Paige whose name was already taken are saved as "Name 2" and marked until renamed.
   const NEEDS_NEW_NAME = 'needs a new name'
-  function libItem({ name, badges = [], sub = '', tags = '', active = false, faded = false, onOpen, onEdit, onDelete, editLabel = 'Edit', deleteTitle = 'Delete' }) {
+  function libItem({ name, badges = [], sub = '', tags = '', active = false, faded = false, onOpen, onEdit, onDelete, editLabel = 'Edit', deleteTitle = 'Delete', face = null, tips = [] }) {
     const item = document.createElement('div')
     item.className = 'ld-preset-item ld-lib-item' + (active ? ' ld-active' : '')
     const main = document.createElement('div')
@@ -5806,6 +5838,14 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
       title.appendChild(chip)
     }
     main.appendChild(title)
+    // 1.44.0: the check-up's tips, as one badge; the list shows on hover.
+    if (tips.length) {
+      const chip = document.createElement('span')
+      chip.className = 'ld-lib-badge ld-lib-badge-tips'
+      chip.textContent = `${tips.length} tip${tips.length === 1 ? '' : 's'}`
+      chip.title = tips.join('\n')
+      title.appendChild(chip)
+    }
     if (sub) {
       const line = document.createElement('div')
       line.className = 'ld-lib-sub'
@@ -5835,8 +5875,187 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     del.title = deleteTitle
     del.addEventListener('click', (event) => { event.stopPropagation(); onDelete() })
     actions.append(edit, del)
-    item.append(main, actions)
+    if (face) {
+      const top = document.createElement('div')
+      top.className = 'ld-lib-top'
+      top.append(libFace(face, name), main)
+      item.append(top, actions)
+    } else item.append(main, actions)
     return item
+  }
+  // ---- Library portraits (1.44.0)
+  var portraitDrawing = new Set()
+  function libFace({ url = '', drawing = false, onMake, onView }, name) {
+    const box = document.createElement('div')
+    box.className = 'ld-lib-face'
+    const button = (label, cls, title) => {
+      const b = document.createElement('button')
+      b.type = 'button'; b.className = 'ld-btn ld-compact ' + cls; b.textContent = label; if (title) b.title = title
+      b.addEventListener('click', event => { event.stopPropagation(); onMake() })
+      return b
+    }
+    if (drawing) {
+      box.appendChild(Object.assign(document.createElement('div'), { className: 'ld-lib-face-wait', textContent: 'Drawing…' }))
+    } else if (url) {
+      const img = document.createElement('img')
+      img.src = previewUrl(url, 'sm'); img.alt = name + ' portrait'; img.loading = 'lazy'
+      img.onerror = () => { img.remove(); box.prepend(Object.assign(document.createElement('div'), { className: 'ld-lib-face-initial', textContent: (name || '?').trim().charAt(0).toUpperCase() })) }
+      box.appendChild(img)
+      box.appendChild(button('New', 'ld-lib-face-new', 'Draw a new portrait from the sheet as it is now'))
+      box.title = 'Click to see it bigger'
+      box.addEventListener('click', event => { event.stopPropagation(); onView() })
+    } else {
+      box.appendChild(Object.assign(document.createElement('div'), { className: 'ld-lib-face-initial', textContent: (name || '?').trim().charAt(0).toUpperCase() }))
+      box.appendChild(button('Make', '', 'Draw a portrait from this sheet'))
+      box.addEventListener('click', event => { event.stopPropagation(); onMake() })
+    }
+    return box
+  }
+  function faceFor(kind, entry) {
+    const id = entry.id
+    return {
+      url: entry.portrait && entry.portrait.url || '',
+      drawing: portraitDrawing.has(kind + ':' + id),
+      onView: () => { if (entry.portrait && entry.portrait.url) openLightboxForChatOnly(entry.portrait.url) },
+      onMake: () => makePortraits(kind, [id]),
+    }
+  }
+  async function makePortraits(kind, ids) {
+    for (const id of ids) portraitDrawing.add(kind + ':' + id)
+    rerenderLibraryKind(kind)
+    try { await call('portrait_make', { kind, ids }, 30000) }
+    catch (error) {
+      for (const id of ids) portraitDrawing.delete(kind + ':' + id)
+      rerenderLibraryKind(kind)
+      setStatus(kind === 'character' ? '.ld-charlib-status' : '.ld-persona-status', 'Could not start the portrait: ' + error.message, 'err')
+    }
+  }
+  function rerenderLibraryKind(kind) {
+    if (kind === 'character') renderCharacterList(); else renderPersonaList()
+    refreshCheckup()
+  }
+  function receivePortraitProgress(payload) {
+    const kind = payload.kind === 'persona' ? 'persona' : 'character'
+    const key = kind + ':' + payload.id
+    if (payload.state === 'drawing') portraitDrawing.add(key)
+    else portraitDrawing.delete(key)
+    if (payload.state === 'done') {
+      if (kind === 'character' && Array.isArray(payload.characters)) characters = payload.characters
+      if (kind === 'persona' && Array.isArray(payload.personas)) personas = payload.personas
+    }
+    rerenderLibraryKind(kind)
+    const waiting = Number(payload.waiting) || 0
+    const status = kind === 'character' ? '.ld-charlib-status' : '.ld-persona-status'
+    if (payload.state === 'failed') setStatus(status, 'A portrait failed: ' + (payload.error || 'unknown error'), 'err')
+    else if (payload.state === 'drawing') setStatus(status, `Drawing a portrait${waiting ? `, ${waiting} more waiting` : ''}…`)
+    else if (payload.state === 'done' && !waiting) setStatus(status, 'Portraits are done.', 'good')
+  }
+  var checkupTimer = null
+  document.addEventListener('input', event => {
+    const target = event.target
+    if (!target || !target.closest || !target.closest('.ld-persona-editor')) return
+    clearTimeout(checkupTimer)
+    checkupTimer = setTimeout(refreshCheckup, 400)
+  }, true)
+  function facesButton(bar, kind) {
+    if (!bar || bar.querySelector('.ld-lib-faces')) return
+    const b = document.createElement('button')
+    b.type = 'button'; b.className = 'ld-btn ld-compact ld-lib-faces'; b.textContent = 'Make missing portraits'
+    b.title = 'Draw a portrait for every character and persona that has none, one at a time in the background'
+    b.addEventListener('click', async () => {
+      const status = kind === 'character' ? '.ld-charlib-status' : '.ld-persona-status'
+      try {
+        const res = await call('portrait_missing', {}, 30000)
+        setStatus(status, res.queued ? `Drawing ${res.queued} portrait${res.queued === 1 ? '' : 's'} in the background. You can keep using Lumi Studio.` : 'Everyone already has a portrait.', 'good')
+      } catch (error) { setStatus(status, error.message, 'err') }
+    })
+    bar.insertBefore(b, bar.querySelector('.ld-lib-count'))
+  }
+
+  // ---- Sheet check-up (1.44.0): gentle tips, never changes anything.
+  var CHECKUP_BODY = /\b(?:breasts?|chest|hips?|waist|thighs?|ass|butt|buttocks|rear|curvy|curves|slim|slender|petite|muscular|muscles?|toned|broad shoulders|abs|plump|chubby|hourglass|voluptuous|busty|skinny|athletic|build|figure|frame|long legs|tall|stocky|bulky)\b/i
+  var CHECKUP_SMALL = /\b(?:slim|slender|skinny|thin|narrow waist|slim waist|small waist|tiny waist)\b/i
+  var CHECKUP_BIG = /\b(?:curvy|voluptuous|wide hips|thick thighs|(?:large|huge|gigantic|big) (?:natural )?breasts|heavy curves|plump|busty|hourglass|(?:large|huge|big) (?:ass|butt)|heavy rear)\b/i
+  var CHECKUP_FACE = /\b(?:hair|bangs|sidelocks?|ponytail|braids?|twintails|bun|eyes|eyelashes|eyebrows|mole|freckles|lips|lipstick|makeup|eyeliner|glasses|eyewear|earrings?|scar|ears|horns?|beard|stubble|tattoo|piercing|choker)\b/i
+  function checkupTags(profile) {
+    const text = [libTagText(profile.identityTags), libTagText(profile.appearanceTags)].join(',')
+    return text.split(',').map(tag => tag.replace(/^\s*-?\d*\.?\d+::|::\s*$/g, '').replace(/^\(|:\s*-?\d*\.?\d+\)$|\)$/g, '').trim()).filter(Boolean)
+  }
+  function sheetCheckup(profile) {
+    const p = profile || {}
+    const raw = [libTagText(p.identityTags), libTagText(p.appearanceTags)].join(',')
+    const tags = checkupTags(p)
+    const tips = []
+    const body = tags.filter(tag => CHECKUP_BODY.test(tag))
+    if (body.length > 5) tips.push(`${body.length} body tags. Three or four strong ones work best; more push the figure and twist the pose to show it off.`)
+    const small = tags.find(tag => CHECKUP_SMALL.test(tag)), big = tags.find(tag => CHECKUP_BIG.test(tag))
+    if (small && big) tips.push(`“${small}” pulls against “${big}”. NovelAI pushes the gap to an extreme.`)
+    const back = tags.find(tag => /\b(?:ass|butt|buttocks|rear)\b/i.test(tag))
+    if (back) tips.push(`“${back}” makes NovelAI turn them around to show it.`)
+    if (/(^|,)\s*large (?:natural )?breasts\s*(,|$)/i.test(raw)) tips.push('Plain “large breasts” comes out big on NovelAI. Try “1.3::medium breasts::”.')
+    // Said twice: the same tag again, or one tag inside another ("glasses" and
+    // "thin metal-framed reading glasses"). "grey hair" and "long hair" are
+    // two different things, so sharing a last word is not enough.
+    const repeats = []
+    const all = [...tags, ...String(libTagText(p.defaultOutfitTags)).split(',').map(t => t.trim()).filter(Boolean)]
+    const words = all.map(tag => tag.toLowerCase().split(/[\s-]+/).filter(Boolean))
+    for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+      const [a, b] = words[i].length <= words[j].length ? [words[i], words[j]] : [words[j], words[i]]
+      if (a[a.length - 1] !== b[b.length - 1] || a.join(' ').length < 4) continue
+      if (a.every(word => b.includes(word))) repeats.push(`${all[i]} / ${all[j]}`)
+    }
+    if (repeats.length) tips.push(`Said twice: ${repeats.slice(0, 3).join('; ')}.`)
+    const long = tags.filter(tag => tag.split(/\s+/).length >= 5)
+    if (long.length) tips.push(`Long phrases NovelAI may not know as tags: ${long.slice(0, 2).map(t => `“${t}”`).join(', ')}.`)
+    const face = tags.filter(tag => CHECKUP_FACE.test(tag))
+    if (face.length < 4) tips.push(`Only ${face.length} face and hair detail${face.length === 1 ? '' : 's'}. A distinctive haircut, marks or makeup are what make someone recognisable.`)
+    const soft = []
+    if (!String(p.attitude || '').trim()) soft.push('No Attitude line. A few words for how they come across help their face and pose.')
+    return { tips, soft }
+  }
+  function refreshCheckup() {
+    const editor = $('.ld-persona-editor')
+    if (!editor || editor.style.display === 'none') return
+    let box = editor.querySelector('.ld-checkup')
+    if (!box) {
+      box = document.createElement('div')
+      box.className = 'ld-checkup'
+      const back = editor.querySelector('.ld-lib-back')
+      editor.insertBefore(box, back ? back.nextSibling : editor.firstChild)
+    }
+    const kind = libEditorKind === 'character' ? 'character' : 'persona'
+    const entry = personaEditorId ? (kind === 'character' ? characters : personas).find(item => item && item.id === personaEditorId) : null
+    let profile = {}
+    try { profile = libraryPersonaProfile() } catch { profile = entry && entry.profile || {} }
+    const { tips, soft } = sheetCheckup(profile)
+    box.replaceChildren()
+    const head = document.createElement('div'); head.className = 'ld-checkup-head'
+    const faceBox = document.createElement('div'); faceBox.className = 'ld-checkup-face'
+    const drawing = entry && portraitDrawing.has(kind + ':' + entry.id)
+    if (drawing) faceBox.textContent = 'Drawing…'
+    else if (entry && entry.portrait && entry.portrait.url) {
+      const img = document.createElement('img'); img.src = previewUrl(entry.portrait.url, 'sm'); img.alt = 'Portrait'
+      faceBox.appendChild(img)
+    } else faceBox.textContent = entry ? 'No portrait yet' : 'Save first, then make a portrait'
+    const side = document.createElement('div'); side.style.flex = '1'
+    side.appendChild(Object.assign(document.createElement('div'), { className: 'ld-subtitle', textContent: 'Sheet check-up' }))
+    const all = [...tips, ...soft]
+    if (!all.length) side.appendChild(Object.assign(document.createElement('div'), { className: 'ld-help', textContent: 'Looks lean and distinctive. Nothing to suggest.' }))
+    else {
+      const ul = document.createElement('ul')
+      for (const tip of all) ul.appendChild(Object.assign(document.createElement('li'), { textContent: tip }))
+      side.appendChild(ul)
+    }
+    if (entry && !drawing) {
+      const b = document.createElement('button')
+      b.type = 'button'; b.className = 'ld-btn ld-compact'; b.style.marginTop = '8px'; b.style.width = 'auto'
+      b.textContent = entry.portrait ? 'New portrait from the saved sheet' : 'Make a portrait'
+      b.title = 'Same seed every time, so you can compare before and after. Save your changes first.'
+      b.addEventListener('click', () => makePortraits(kind, [entry.id]))
+      side.appendChild(b)
+    }
+    head.append(faceBox, side)
+    box.appendChild(head)
   }
   function libLooksBadge(profile) {
     const formCount = Array.isArray(profile.appearanceStates) ? profile.appearanceStates.length
@@ -5866,6 +6085,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const list = $('.ld-charlib-list')
     if (!list) return
     const bar = libToolbar('character', list, renderCharacterList, { noun: 'character', storyToggle: true })
+    facesButton(bar, 'character')
     list.innerHTML = ''
     if (!characters.length) {
       list.innerHTML = '<div class="ld-status">No saved characters yet. Use “＋ New” above, or Fill from LumiCast in the editor.</div>'
@@ -5890,6 +6110,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         sub: [profile.anchor && profile.anchor !== character.name ? profile.anchor : '', profile.subject || ''].filter(Boolean).join(' · '),
         tags: libFirstTags(profile),
         faded: story,
+        face: faceFor('character', character),
+        tips: sheetCheckup(profile).tips,
         onOpen: () => openPersonaEditor(character.id, 'character'),
         onEdit: () => openPersonaEditor(character.id, 'character'),
         deleteTitle: 'Delete this saved character',
@@ -5913,6 +6135,7 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
     const list = $('.ld-persona-list')
     if (!list) return
     const bar = libToolbar('persona', list, renderPersonaList, { noun: 'persona' })
+    facesButton(bar, 'persona')
     list.innerHTML = ''
     if (!personas.length) {
       list.innerHTML = '<div class="ld-status">No saved personas yet.</div>'
@@ -5931,6 +6154,8 @@ swim = blue bikini | aliases: the pool"></textarea><div class="ld-hint">A <b>loo
         badges: [persona.nameClash ? NEEDS_NEW_NAME : '', profile.mossDescription && String(profile.mossDescription).trim() ? 'MOSS' : '', profile.countTag || '', libLooksBadge(profile)],
         sub: [profile.anchor && profile.anchor !== persona.name ? profile.anchor : '', profile.subject || ''].filter(Boolean).join(' · '),
         tags: libFirstTags(profile),
+        face: faceFor('persona', persona),
+        tips: sheetCheckup(profile).tips,
         onOpen: () => openPersonaEditor(persona.id),
         onEdit: () => openPersonaEditor(persona.id),
         deleteTitle: 'Delete this saved persona',
@@ -10984,6 +11209,8 @@ ${entry.prompt || ''}`.trim()
       autoCharTags: $('.ld-chartags').checked,
       directMode: storyMode === 'direct',
       chatLeads: $('.ld-chat-leads') ? $('.ld-chat-leads').checked : true,
+      portraitStyle: $('.ld-portrait-style') ? $('.ld-portrait-style').value : '',
+      portraitAuto: $('.ld-portrait-auto') ? $('.ld-portrait-auto').checked : true,
       stripImageDirectives: $('.ld-strip-directives').checked,
       sizeChatImages: $('.ld-size-images') ? $('.ld-size-images').checked : false,
       chatImageWidth: $('.ld-image-width') ? Number($('.ld-image-width').value) || 500 : 500,
@@ -11131,7 +11358,7 @@ ${entry.prompt || ''}`.trim()
       pushSettings('Settings saved.').catch((e) => setStatus('.ld-settings-status', e.message, 'err'))
     }, 900)
   }
-  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-temperature', '.ld-parser-overrides', '.ld-parser-maxtokens', '.ld-story-quality', '.ld-story-prefix', '.ld-story-end', '.ld-story-negative', '.ld-story-banned', '.ld-story-scene-anchor', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port', '.ld-cloud-host', '.ld-cloud-port', '.ld-cloud-model']) {
+  for (const sel of ['.ld-parser-instr', '.ld-protocol', '.ld-parser-model', '.ld-parser-temperature', '.ld-parser-overrides', '.ld-parser-maxtokens', '.ld-story-quality', '.ld-story-prefix', '.ld-story-end', '.ld-portrait-style', '.ld-story-negative', '.ld-story-banned', '.ld-story-scene-anchor', '.ld-host', '.ld-port', '.ld-bridge-host', '.ld-bridge-port', '.ld-cloud-host', '.ld-cloud-port', '.ld-cloud-model']) {
     const el = $(sel)
     if (el) el.addEventListener('input', () => {
       clearTimeout(settingsSaveTimer)
@@ -11142,7 +11369,7 @@ ${entry.prompt || ''}`.trim()
   }
 
   // Story controls save themselves immediately — no Save press needed.
-  for (const sel of ['.ld-mode', '.ld-auto-interval', '.ld-maximg', '.ld-minimg', '.ld-maxsubjects', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-story-break', '.ld-simple-pipeline', '.ld-experimental-scene-core', '.ld-experimental-jev-planner', '.ld-prefer-known-cast-moments']) {
+  for (const sel of ['.ld-mode', '.ld-auto-interval', '.ld-maximg', '.ld-minimg', '.ld-maxsubjects', '.ld-chartags', '.ld-strip-directives', '.ld-parser-engine', '.ld-parser-conn', '.ld-parser-context', '.ld-use-loom-ledger', '.ld-chat-leads', '.ld-portrait-auto', '.ld-story-break', '.ld-simple-pipeline', '.ld-experimental-scene-core', '.ld-experimental-jev-planner', '.ld-prefer-known-cast-moments']) {
     const el = $(sel)
     if (el) el.addEventListener('change', () => {
       if (sel === '.ld-mode') {
@@ -11559,6 +11786,8 @@ ${entry.prompt || ''}`.trim()
       // Direct mode is represented by the main mode selector. The backend
       // still mirrors directMode for compatibility with older saved settings.
       if ($('.ld-chat-leads')) $('.ld-chat-leads').checked = settings.chatLeads !== false
+      if ($('.ld-portrait-style')) $('.ld-portrait-style').value = settings.portraitStyle || ''
+      if ($('.ld-portrait-auto')) $('.ld-portrait-auto').checked = settings.portraitAuto !== false
       $('.ld-strip-directives').checked = settings.stripImageDirectives !== false
       if ($('.ld-size-images')) {
         const width = Number(settings.chatImageWidth) || 500

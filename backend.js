@@ -81,6 +81,8 @@ const DEFAULT_SETTINGS = {
   storyQualityTags: '',
   storyPromptPrefix: '',
   storyPromptEnd: '',
+  portraitStyle: '',      // Library portraits: their own style line; empty = the story style (1.44.0)
+  portraitAuto: true,     // make a portrait when a new character or persona is saved
   storyNegativePrompt: '',
   storyBannedTags: '',
   storySceneAnchor: '',
@@ -3672,6 +3674,7 @@ async function generateNovelaiImages(settings, payload, progress, context = {}) 
   return { images: [bytes.toString('base64')], mime: 'image/' + kind, seed: body.parameters.seed }
 }
 
+let novelaiChain = Promise.resolve()
 async function generateImages(settings, payload, label = 'generation', renderer = 'drawthings', progress = null, context = {}) {
   if (renderer === 'nanogpt') {
     const out = await generateNanoImages(settings, payload, progress, context)
@@ -3679,7 +3682,12 @@ async function generateImages(settings, payload, label = 'generation', renderer 
   }
   if (renderer === 'swarmui') return { images: await generateSwarmImages(settings, payload, progress, context), backend: 'swarmui' }
   if (renderer === 'novelai') {
-    const out = await generateNovelaiImages(settings, payload, progress, context)
+    // One NovelAI picture at a time (1.44.0): NovelAI refuses a second request
+    // while one is running, and Library portraits now run in the background
+    // next to story pictures.
+    const run = novelaiChain.then(() => generateNovelaiImages(settings, payload, progress, context))
+    novelaiChain = run.catch(() => {})
+    const out = await run
     return { images: out.images, backend: 'novelai', mime: out.mime }
   }
   if (renderer === 'dtcloud') {
@@ -16580,6 +16588,101 @@ function setStoryScanStage(scan, stage, note = '') {
 // ---------- Caption (1.35.0) ------------------------------------------------
 // Describe a picture with a vision model, using prompts the user saves and
 // names. Separate from the parser: the parser model may not see pictures.
+// ---------- Library portraits (1.44.0) --------------------------------------
+// A face for each Library card, drawn straight from the sheet with no model
+// call: the portrait style (or the story style), a plain portrait framing and
+// the character's own tags, through the same compiler story pictures use. The
+// same seed every time for a character, so a sheet's before and after can be
+// compared fairly. Portraits never go into picture history or a chat.
+const PORTRAIT_NAI_SIZE = { width: 832, height: 1216 } // within NovelAI's free size
+function portraitSeed(id) {
+  let hash = 2166136261
+  for (const char of String(id || '')) { hash ^= char.charCodeAt(0); hash = Math.imul(hash, 16777619) }
+  return (hash >>> 0) % 4294967000
+}
+async function portraitList(kind) { return kind === 'persona' ? getPersonas() : getCharacters() }
+async function savePortraitList(kind, list) { if (kind === 'persona') await savePersonas(list); else await saveCharacters(list) }
+
+async function portraitPrompt(userId, kind, entry) {
+  const settings = await getSettings()
+  const presets = await getPresets()
+  const preset = storyPresetFor(presets.find(item => item && item.name === settings.activePreset), settings)
+  if (!preset) throw new Error('Pick a preset on the Story tab first; portraits are drawn with it.')
+  const ref = kind === 'persona' ? 'persona' : 'character'
+  const profile = await resolveProfile(normalizeProfile({ ...(entry.profile || {}) }, (entry.profile || {}).appearanceTags || '', ref), userId, '')
+  const name = String(profile.anchor || entry.name || 'Someone').trim()
+  const style = String(settings.portraitStyle || '').trim()
+  const usePreset = { ...preset, ...(style ? { qualityTags: style } : {}), promptPrefix: '' }
+  const parsed = parseSimpleImages(JSON.stringify({ images: [{ anchor: 'library portrait', rating: 'safe', aspect: '2:3',
+    scene_summary: `${name} stands for a portrait.`, framing: ['upper body', 'portrait'], setting: ['simple background'],
+    subjects: [{ name, pose: ['standing'], expression: ['light smile', 'looking at viewer'] }], relations: [], interactions: [] }] }), 1, 1, false)
+  const image = parsed.images && parsed.images[0]
+  if (!image) throw new Error('Could not set up the portrait.')
+  const profiles = { character: ref === 'character' ? profile : null, persona: ref === 'persona' ? profile : null, cast: [] }
+  const compiled = compileStoryImage(image, { preset: usePreset, profiles, memory: {}, card: null, prefix: '' })
+  const novelai = presetUsesNovelai(preset)
+  const dims = novelai ? PORTRAIT_NAI_SIZE : aspectDims(preset.config, '2:3')
+  return { preset, compiled, dims, seed: portraitSeed(entry.id), styleUsed: style ? 'portrait style' : 'story style' }
+}
+
+async function makePortrait(userId, kind, id) {
+  const entry = (await portraitList(kind)).find(item => item && item.id === id)
+  if (!entry || !entry.profile) throw new Error('That sheet is gone.')
+  const { preset, compiled, dims, seed, styleUsed } = await portraitPrompt(userId, kind, entry)
+  const settings = await getSettings()
+  const config = { ...(preset.config || {}), ...dims }
+  const payloadOut = buildPayload({ prompt: compiled.prompt, negativePrompt: compiled.negativePrompt, seed, config, extra: preset.extra })
+  const { images, mime } = await generateImages(settings, payloadOut, 'portrait', imageRenderer(config), null, { userId, imageIndex: 1, imageTotal: 1 })
+  if (!images || !images[0]) throw new Error('The image app sent no picture back.')
+  const type = mime || 'image/png'
+  const opts = { data: Uint8Array.from(Buffer.from(images[0], 'base64')), filename: `lumidraw-portrait-${Date.now()}.${type === 'image/jpeg' ? 'jpg' : type.split('/')[1] || 'png'}`, mime_type: type }
+  let dto
+  try { dto = await spindle.images.upload({ ...opts, userId }) } catch { dto = await spindle.images.upload(opts, userId) }
+  const portrait = { url: dto.url, id: dto.id, seed, at: Date.now(), prompt: payloadOut.prompt, made: 'sheet', style: styleUsed }
+  // Saved onto the entry as it is now, not as it was read, so an edit made
+  // while the picture was drawing is kept.
+  const list = await portraitList(kind)
+  const index = list.findIndex(item => item && item.id === id)
+  if (index < 0) return null
+  list[index] = { ...list[index], portrait }
+  await savePortraitList(kind, list)
+  return { entry: list[index], list }
+}
+
+// One portrait at a time, in the background; the panel hears about each.
+const portraitQueue = []
+const portraitQueued = new Set()
+let portraitRunning = false
+function queuePortrait(userId, kind, id) {
+  const key = kind + ':' + id
+  if (portraitQueued.has(key)) return false
+  portraitQueued.add(key)
+  portraitQueue.push({ userId, kind, id, key })
+  runPortraitQueue()
+  return true
+}
+async function runPortraitQueue() {
+  if (portraitRunning) return
+  portraitRunning = true
+  try {
+    while (portraitQueue.length) {
+      const job = portraitQueue.shift()
+      notifyFrontend(job.userId, 'portrait_progress', { kind: job.kind, id: job.id, state: 'drawing', waiting: portraitQueue.length })
+      try {
+        const done = await makePortrait(job.userId, job.kind, job.id)
+        if (done) notifyFrontend(job.userId, 'portrait_progress', { kind: job.kind, id: job.id, state: 'done', entry: done.entry,
+          [job.kind === 'persona' ? 'personas' : 'characters']: done.list, waiting: portraitQueue.length })
+      } catch (error) {
+        spindle.log.warn(`[lumidraw] portrait for ${job.kind} ${job.id} failed: ${error.message}`)
+        notifyFrontend(job.userId, 'portrait_progress', { kind: job.kind, id: job.id, state: 'failed', error: error.message, waiting: portraitQueue.length })
+      } finally { portraitQueued.delete(job.key) }
+    }
+  } finally { portraitRunning = false }
+}
+function autoPortrait(userId, kind, id) {
+  getSettings().then(settings => { if (settings.portraitAuto !== false && id) queuePortrait(userId, kind, id) }).catch(() => {})
+}
+
 // ---------- marked pictures (1.39.0) ----------------------------------------
 // A quick 👍 or 👎 on a chat picture, with optional reasons, so a picture with
 // a small problem can be noted without leaving the scene. The full
@@ -19733,7 +19836,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           port: Number(payload.port) || prev.port || DEFAULT_SETTINGS.port,
         }
         if (payload.swarmUrl !== undefined) settings.swarmUrl = swarmBaseUrl({ swarmUrl: payload.swarmUrl })
-        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserRequestOverrides', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel', 'storyQualityTags', 'storyPromptPrefix', 'storyPromptEnd', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor']) {
+        for (const k of ['mode', 'parserEngine', 'parserConnection', 'parserModel', 'parserRequestOverrides', 'parserInstruction', 'protocol', 'dtModelsPath', 'bridgeHost', 'cloudHost', 'cloudModel', 'storyQualityTags', 'storyPromptPrefix', 'storyPromptEnd', 'storyNegativePrompt', 'storyBannedTags', 'storySceneAnchor', 'portraitStyle']) {
           if (payload[k] !== undefined) settings[k] = String(payload[k])
         }
         if (payload.bridgePort !== undefined) settings.bridgePort = Number(payload.bridgePort) || DEFAULT_SETTINGS.bridgePort
@@ -19749,6 +19852,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         if (payload.preferKnownCastMoments !== undefined) settings.preferKnownCastMoments = !!payload.preferKnownCastMoments
         if (payload.autoCharTags !== undefined) settings.autoCharTags = !!payload.autoCharTags
         if (payload.chatLeads !== undefined) settings.chatLeads = !!payload.chatLeads
+        if (payload.portraitAuto !== undefined) settings.portraitAuto = !!payload.portraitAuto
         if (payload.useLoomLedger !== undefined) settings.useLoomLedger = !!payload.useLoomLedger
         if (payload.parserMaxTokens !== undefined) settings.parserMaxTokens = Math.max(1200, Math.min(32000, Number(payload.parserMaxTokens) || 12000))
         if (payload.parserTemperature !== undefined) {
@@ -19927,6 +20031,42 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break
       }
 
+      case 'portrait_make': {
+        const kind = payload.kind === 'persona' ? 'persona' : 'character'
+        const ids = Array.isArray(payload.ids) ? payload.ids.map(String) : [String(payload.id || '')]
+        let queued = 0
+        for (const id of ids.filter(Boolean)) if (queuePortrait(userId, kind, id)) queued++
+        reply = ok(payload, requestId, { queued, waiting: portraitQueue.length })
+        break
+      }
+      case 'portrait_missing': {
+        let queued = 0
+        for (const kind of ['character', 'persona']) {
+          for (const entry of await portraitList(kind)) if (entry && entry.id && !entry.portrait && !entry.archived && queuePortrait(userId, kind, entry.id)) queued++
+        }
+        reply = ok(payload, requestId, { queued, waiting: portraitQueue.length })
+        break
+      }
+      case 'portrait_use_picture': {
+        const kind = payload.kind === 'persona' ? 'persona' : 'character'
+        const list = await portraitList(kind)
+        const index = list.findIndex(item => item && item.id === String(payload.id || ''))
+        if (index < 0) throw new Error('That sheet is gone.')
+        const url = String(payload.imageUrl || '')
+        if (!/^\/api\/v1\/images\//.test(url)) throw new Error('That picture can’t be used as a portrait.')
+        list[index] = { ...list[index], portrait: { url, at: Date.now(), made: 'picked' } }
+        await savePortraitList(kind, list)
+        reply = ok(payload, requestId, { entry: list[index], [kind === 'persona' ? 'personas' : 'characters']: list })
+        break
+      }
+      case 'portrait_prompt': {
+        const kind = payload.kind === 'persona' ? 'persona' : 'character'
+        const entry = (await portraitList(kind)).find(item => item && item.id === String(payload.id || ''))
+        if (!entry) throw new Error('That sheet is gone.')
+        const built = await portraitPrompt(userId, kind, entry)
+        reply = ok(payload, requestId, { prompt: built.compiled.prompt, negativePrompt: built.compiled.negativePrompt, seed: built.seed, size: built.dims })
+        break
+      }
       case 'marks_list': {
         reply = ok(payload, requestId, { marks: markSummary(await readMarks(userId)) })
         break
@@ -20291,12 +20431,15 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // A "needs a new name" mark from Paige stays until the entry is renamed.
         const before = personas.find((item) => item && item.id === id)
         if (before && before.nameClash && String(before.name || '').trim() === name) entry.nameClash = before.nameClash
+        if (before && before.portrait) entry.portrait = before.portrait
+        if (before && before.archived) entry.archived = before.archived
         const index = personas.findIndex((item) => item && item.id === id)
         if (index >= 0) personas[index] = entry
         else personas.push(entry)
         personas.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
         await savePersonas(personas)
         try { await syncSimpleCastOnSheetSave(profileInput, 'persona') } catch { /* best-effort */ }
+        if (!before) autoPortrait(userId, 'persona', id)
         reply = ok(payload, requestId, { personas, entry })
         break
       }
@@ -20322,12 +20465,15 @@ spindle.onFrontendMessage(async (payload, userId) => {
         // A "needs a new name" mark from Paige stays until the entry is renamed.
         const before = characters.find((item) => item && item.id === id)
         if (before && before.nameClash && String(before.name || '').trim() === name) entry.nameClash = before.nameClash
+        if (before && before.portrait) entry.portrait = before.portrait
+        if (before && before.archived) entry.archived = before.archived
         const index = characters.findIndex((item) => item && item.id === id)
         if (index >= 0) characters[index] = entry
         else characters.push(entry)
         characters.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
         await saveCharacters(characters)
         try { await syncSimpleCastOnSheetSave(profileInput, 'character') } catch { /* best-effort */ }
+        if (!before) autoPortrait(userId, 'character', id)
         reply = ok(payload, requestId, { characters, entry })
         break
       }
@@ -21587,6 +21733,7 @@ async function addFromLumiCast(requesterExtensionId) {
   list.push(entry)
   list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
   if (kind === 'character') await saveCharacters(list); else await savePersonas(list)
+  autoPortrait(shared.userId || '', kind, entry.id)
   // The same message as LumiCast's update, so an open Lumi Studio panel shows the new or changed entry.
   spindle.sendToFrontend({ type: 'lumicast_applied', kind, entry, [kind === 'character' ? 'characters' : 'personas']: list }, shared.userId || undefined)
   spindle.log.info(`[lumidraw] added ${kind} "${entry.name}" from Paige through LumiCast`)
